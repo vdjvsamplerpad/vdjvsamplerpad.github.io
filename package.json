@@ -1,0 +1,164 @@
+{
+  "name": "vdjv-sampler-pad",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && tsc --project tsconfig.server.json",
+    "generate:electron-icons": "node scripts/generate-electron-icons.js",
+    "build:electron": "npm run generate:electron-icons && cross-env ELECTRON=true vite build && tsc --project tsconfig.server.json",
+    "build:electron:package": "npm run build:electron && electron-builder",
+    "start": "tsx watch scripts/dev.ts",
+    "preview": "vite preview",
+    "electron:dev": "npm run build && electron .",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage",
+    "test:ui": "vitest --ui",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "lint:fix": "eslint . --ext ts,tsx --fix",
+    "type-check": "tsc --noEmit",
+    "dist": "electron-builder",
+    "build:win": "npm run build:electron:package -- --win nsis --x64 --ia32",
+    "cap:init": "npx cap init",
+    "cap:add:android": "npx cap add android",
+    "cap:add:ios": "npx cap add ios",
+    "generate:android-icons": "node scripts/generate-android-icons.js",
+    "cap:sync": "npm run build && npm run generate:android-icons && npx cap sync",
+    "cap:build:android": "npm run cap:sync && cd android && .\\gradlew.bat assembleRelease",
+    "cap:open:android": "npx cap open android",
+    "cap:open:ios": "npx cap open ios",
+    "migrate:github-to-r2": "tsx scripts/migrate-github-assets-to-r2.ts",
+    "hooks:install": "node scripts/install-git-hooks.cjs"
+  },
+  "dependencies": {
+    "@capacitor/filesystem": "^6.0.4",
+    "@radix-ui/react-checkbox": "1.1.3",
+    "@radix-ui/react-dialog": "1.1.5",
+    "@radix-ui/react-label": "2.1.1",
+    "@radix-ui/react-popover": "1.1.5",
+    "@radix-ui/react-progress": "1.1.1",
+    "@radix-ui/react-select": "2.1.5",
+    "@radix-ui/react-slider": "1.2.2",
+    "@radix-ui/react-slot": "1.1.1",
+    "@radix-ui/react-switch": "1.1.2",
+    "@radix-ui/react-toggle": "1.1.1",
+    "@radix-ui/react-tooltip": "1.1.7",
+    "@supabase/supabase-js": "^2.56.0",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "cmdk": "1.1.1",
+    "dotenv": "16.4.7",
+    "esbuild": "0.25.1",
+    "express": "5.1.0",
+    "jszip": "^3.10.1",
+    "lamejs": "^1.2.1",
+    "lucide-react": "0.474.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-router-dom": "^6.28.0",
+    "recharts": "^2.15.4",
+    "tailwind-merge": "3.2.0",
+    "tailwindcss-animate": "1.0.7",
+    "tesseract.js": "^5.1.1"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^6.2.1",
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^6.2.1",
+    "@capacitor/core": "^6.2.1",
+    "@capacitor/ios": "^6.0.0",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/express": "5.0.0",
+    "@types/node": "22.13.5",
+    "@types/react": "19.0.10",
+    "@types/react-dom": "19.0.4",
+    "@vitejs/plugin-react": "4.3.4",
+    "autoprefixer": "10.4.18",
+    "cross-env": "^10.1.0",
+    "electron": "^39.2.7",
+    "electron-builder": "^26.8.1",
+    "eslint": "^10.0.0",
+    "eslint-plugin-react": "^7.22.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-react-refresh": "^0.4.14",
+    "ignore": "7.0.3",
+    "jsdom": "^28.1.0",
+    "png-to-ico": "^2.1.8",
+    "postcss": "8.4.35",
+    "sharp": "^0.33.5",
+    "supabase": "^2.76.14",
+    "tailwindcss": "3.4.17",
+    "terser": "^5.44.1",
+    "tsx": "4.19.3",
+    "typescript": "5.8.2",
+    "vite": "^6.4.1",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "build": {
+    "appId": "com.vdjv.samplerpad.desktop",
+    "productName": "VDJV Sampler Pad",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      {
+        "from": "dist/public",
+        "to": "dist/public",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        }
+      ],
+      "artifactName": "VDJV-Sampler-Pad-Setup-${version}-${arch}.${ext}",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

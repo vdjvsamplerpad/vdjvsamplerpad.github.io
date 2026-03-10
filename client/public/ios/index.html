@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Install on iPhone or iPad | VDJV Sampler Pad</title>
+    <meta
+      name="description"
+      content="Add VDJV Sampler Pad to your iPhone or iPad home screen in a few quick steps."
+    />
+    <meta name="theme-color" content="#dc2626" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="VDJV Sampler Pad" />
+    <link rel="icon" type="image/png" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <style>
+      :root {
+        --bg: #f4f6fa;
+        --card: #ffffff;
+        --line: #d8deea;
+        --text: #111827;
+        --muted: #4b5563;
+        --ios-blue: #007aff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 15% 0%, rgba(0, 122, 255, 0.12), transparent 38%),
+          radial-gradient(circle at 88% 100%, rgba(220, 38, 38, 0.08), transparent 42%),
+          linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
+        font-family: "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+      }
+      main {
+        width: min(760px, 100%);
+        margin: 0 auto;
+        padding: 22px 16px 40px;
+      }
+      .logo-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .logo {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        box-shadow: 0 8px 16px rgba(15, 23, 42, 0.18);
+      }
+      .brand {
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      .badge {
+        display: inline-block;
+        margin: 2px 0 8px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(0, 122, 255, 0.28);
+        background: rgba(0, 122, 255, 0.08);
+        color: #0f4ca3;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(28px, 7.2vw, 42px);
+        line-height: 1.08;
+      }
+      .lead {
+        margin: 0 0 16px;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.5;
+      }
+      .panel {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 16px;
+        box-shadow: 0 18px 40px rgba(17, 24, 39, 0.12);
+      }
+      .share-banner {
+        margin-bottom: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border-radius: 12px;
+        border: 1px solid #d7dce7;
+        background: #f2f4f7;
+        color: #374151;
+        padding: 10px 12px;
+        font-size: 16px;
+      }
+      .share-icon {
+        width: 25px;
+        height: 25px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .share-icon svg {
+        width: 100%;
+        height: 100%;
+      }
+      ol {
+        margin: 0;
+        padding-left: 20px;
+      }
+      li {
+        margin: 0 0 11px;
+        color: #374151;
+        line-height: 1.5;
+      }
+      li strong {
+        color: #111827;
+      }
+      .hint {
+        margin-top: 14px;
+        padding: 11px 12px;
+        border-radius: 12px;
+        border: 1px solid #dce6f7;
+        background: #f7fafe;
+        color: #334155;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+      code {
+        color: #0f4ca3;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      footer {
+        margin-top: 16px;
+        color: #64748b;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="logo-wrap">
+        <img class="logo" src="/assets/logo.png" alt="VDJV logo" />
+        <div class="brand">VDJV Sampler Pad</div>
+      </div>
+      <span class="badge">iOS Install Guide</span>
+      <h1>Add to Home Screen on iPhone or iPad</h1>
+      <p class="lead">You are already on the correct page. Follow these Safari steps.</p>
+      <section class="panel" aria-label="iOS install instructions">
+        <div class="share-banner">
+          <span>Just tap</span>
+          <span class="share-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#007aff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="5" y="8.5" width="14" height="11" rx="2.6"></rect>
+              <path d="M12 14V4.2"></path>
+              <path d="M8.6 7.4 12 4l3.4 3.4"></path>
+            </svg>
+          </span>
+          <span>then "Add to Home Screen"</span>
+        </div>
+        <ol>
+          <li><strong>Tap the Share button</strong> in the Safari toolbar.</li>
+          <li><strong>Scroll and tap "Add to Home Screen".</strong></li>
+          <li><strong>Confirm the app name</strong> and tap <strong>Add</strong>.</li>
+          <li>
+            Launch the new icon from Home Screen. The installed app opens at
+            <code>vdjvsamplerpad.online/</code>.
+          </li>
+        </ol>
+        <div class="hint">
+          If "Add to Home Screen" is missing, switch to Safari (not in-app browser), then refresh this page.
+        </div>
+      </section>
+      <footer>VDJV Sampler Pad install help</footer>
+    </main>
+    <script>
+      if ("serviceWorker" in navigator && location.protocol === "https:") {
+        navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(function () {});
+      }
+    </script>
+  </body>
+</html>

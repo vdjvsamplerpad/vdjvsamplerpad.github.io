@@ -1,0 +1,277 @@
+import * as React from 'react';
+import { edgeFunctionUrl } from '@/lib/edge-api';
+import { runReceiptOcr } from '@/lib/receipt-ocr';
+import {
+    PaymentChannel,
+    PurchaseReceiptState,
+    StoreItem,
+} from '@/components/sampler/onlineStore.types';
+
+type EffectiveUserLike = {
+    id: string;
+    email?: string | null;
+} | null;
+
+type UseOnlineStorePurchaseFlowArgs = {
+    effectiveUser: EffectiveUserLike;
+    selectedItem: StoreItem | null;
+    checkoutMode: boolean;
+    items: StoreItem[];
+    cartItemIds: Set<string>;
+    formChannel: PaymentChannel;
+    formName: string;
+    formRef: string;
+    formNotes: string;
+    formProofFile: File | null;
+    proofOcrSeqRef: React.MutableRefObject<number>;
+    validateProofFile: (file: File) => string | null;
+    formatPhp: (value: number) => string;
+    loadData: () => Promise<void>;
+    showToast: (message: string, type: 'success' | 'error') => void;
+    setProofOcrLoading: React.Dispatch<React.SetStateAction<boolean>>;
+    setSubmitLoading: React.Dispatch<React.SetStateAction<boolean>>;
+    setPurchaseReceipt: React.Dispatch<React.SetStateAction<PurchaseReceiptState | null>>;
+    setSelectedItem: React.Dispatch<React.SetStateAction<StoreItem | null>>;
+    setCheckoutMode: React.Dispatch<React.SetStateAction<boolean>>;
+    setCartItemIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+    setFormName: React.Dispatch<React.SetStateAction<string>>;
+    setFormRef: React.Dispatch<React.SetStateAction<string>>;
+    setFormNotes: React.Dispatch<React.SetStateAction<string>>;
+    setFormProofFile: React.Dispatch<React.SetStateAction<File | null>>;
+};
+
+export function useOnlineStorePurchaseFlow({
+    effectiveUser,
+    selectedItem,
+    checkoutMode,
+    items,
+    cartItemIds,
+    formChannel,
+    formName,
+    formRef,
+    formNotes,
+    formProofFile,
+    proofOcrSeqRef,
+    validateProofFile,
+    formatPhp,
+    loadData,
+    showToast,
+    setProofOcrLoading,
+    setSubmitLoading,
+    setPurchaseReceipt,
+    setSelectedItem,
+    setCheckoutMode,
+    setCartItemIds,
+    setFormName,
+    setFormRef,
+    setFormNotes,
+    setFormProofFile,
+}: UseOnlineStorePurchaseFlowArgs) {
+    const invalidateProofOcr = React.useCallback(() => {
+        proofOcrSeqRef.current += 1;
+        setProofOcrLoading(false);
+    }, [proofOcrSeqRef, setProofOcrLoading]);
+
+    const handleProofUpload = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0] || null;
+        if (!file) {
+            invalidateProofOcr();
+            setFormProofFile(null);
+            setFormRef('');
+            setFormName('');
+            return;
+        }
+        const validationError = validateProofFile(file);
+        if (validationError) {
+            invalidateProofOcr();
+            showToast(validationError, 'error');
+            e.target.value = '';
+            return;
+        }
+        setFormProofFile(file);
+        setFormRef('');
+        setFormName('');
+        if (formChannel !== 'image_proof') {
+            invalidateProofOcr();
+            return;
+        }
+
+        const seq = proofOcrSeqRef.current + 1;
+        proofOcrSeqRef.current = seq;
+        setProofOcrLoading(true);
+        void (async () => {
+            const result = await runReceiptOcr({
+                file,
+                context: 'bank_store',
+                email: String(effectiveUser?.email || ''),
+                subject: selectedItem?.bank?.title || 'bank_store',
+                // Avoid immediate server OCR call; submit flow only escalates to backend OCR when automation is enabled.
+                fallbackToServer: false,
+            });
+            if (proofOcrSeqRef.current !== seq) return;
+            if (result.detected.referenceNo) setFormRef(result.detected.referenceNo);
+            else setFormRef('');
+            if (result.detected.payerName) setFormName(result.detected.payerName);
+            setProofOcrLoading(false);
+        })();
+    }, [
+        effectiveUser?.email,
+        formChannel,
+        proofOcrSeqRef,
+        selectedItem?.bank?.title,
+        invalidateProofOcr,
+        setFormName,
+        setFormProofFile,
+        setFormRef,
+        showToast,
+        validateProofFile,
+    ]);
+
+    const handlePurchaseSubmit = React.useCallback(async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!effectiveUser) return;
+
+        if (formChannel === 'image_proof' && !formProofFile) {
+            showToast('Please upload proof of payment to continue.', 'error');
+            return;
+        }
+        if (formProofFile) {
+            const proofError = validateProofFile(formProofFile);
+            if (proofError) {
+                showToast(proofError, 'error');
+                return;
+            }
+        }
+
+        const purchaseItems: Array<{ bankId: string; catalogItemId: string }> = [];
+        if (checkoutMode) {
+            items.filter(i => cartItemIds.has(i.id) && i.status === 'buy').forEach(i => {
+                purchaseItems.push({ bankId: i.bank_id, catalogItemId: i.id });
+            });
+        } else if (selectedItem) {
+            purchaseItems.push({ bankId: selectedItem.bank_id, catalogItemId: selectedItem.id });
+        }
+        if (purchaseItems.length === 0) return;
+
+        setSubmitLoading(true);
+        let uploadedFileName = '';
+        let finalProofPath = '';
+
+        try {
+            const { supabase } = await import('@/lib/supabase');
+            const session = await supabase.auth.getSession();
+            const token = session.data.session?.access_token;
+
+            if (!token) throw new Error('Please sign in to continue.');
+
+            if (formProofFile) {
+                const ext = formProofFile.name.split('.').pop();
+                uploadedFileName = `${effectiveUser.id}/payment-proof-${Date.now()}.${ext}`;
+
+                const { error } = await supabase.storage
+                    .from('payment-proof')
+                    .upload(uploadedFileName, formProofFile, { upsert: true });
+
+                if (error) throw error;
+                finalProofPath = uploadedFileName;
+            }
+
+            const res = await fetch(edgeFunctionUrl('store-api', 'purchase-request'), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    items: purchaseItems,
+                    paymentChannel: formChannel,
+                    payerName: formName,
+                    referenceNo: formRef,
+                    proofPath: finalProofPath,
+                    notes: formNotes
+                })
+            });
+
+            if (!res.ok) {
+                throw new Error('We could not submit your request. Please try again.');
+            }
+            const submitPayload = await res.json().catch(() => ({}));
+            const submitData = (submitPayload?.data && typeof submitPayload.data === 'object' ? submitPayload.data : submitPayload) as Record<string, unknown>;
+            const requestIds = Array.isArray(submitData.requestIds) ? submitData.requestIds : [];
+            const fallbackRequestId = requestIds.length > 0 ? String(requestIds[0]) : '';
+            const submitStatus = String(submitData.status || 'pending');
+            const isApproved = submitStatus === 'approved';
+            const count = purchaseItems.length;
+            const totalPaid = purchaseItems.reduce((sum, item) => {
+                const storeItem = items.find((row) => row.id === item.catalogItemId);
+                const amount = storeItem?.price_php;
+                return sum + (typeof amount === 'number' && Number.isFinite(amount) ? amount : 0);
+            }, 0);
+            setPurchaseReceipt({
+                amountText: totalPaid > 0 ? formatPhp(totalPaid) : 'To be confirmed',
+                itemCount: count,
+                submittedAt: new Date().toISOString(),
+                receiptNo: String(submitData.receipt_reference || submitData.batchId || fallbackRequestId || 'Pending verification'),
+                paymentReference: String(
+                    submitData.reference_no ||
+                    formRef ||
+                    (formChannel === 'image_proof' ? 'Not detected' : 'Not provided')
+                ),
+                message: isApproved
+                    ? 'Your payment passed verification and your bank access is now approved.'
+                    : 'Your payment was received and is now waiting for admin review. We will email you after the approval check.',
+                status: isApproved ? 'success' : 'pending',
+                statusLabel: isApproved ? 'Approved' : 'Pending Approval',
+            });
+            await loadData();
+            setSelectedItem(null);
+            setCheckoutMode(false);
+            setCartItemIds(new Set());
+            setFormName('');
+            setFormRef('');
+            setFormNotes('');
+            setFormProofFile(null);
+        } catch (err: any) {
+            if (uploadedFileName) {
+                try {
+                    const { supabase } = await import('@/lib/supabase');
+                    await supabase.storage.from('payment-proof').remove([uploadedFileName]);
+                } catch {
+                    // no-op
+                }
+            }
+            showToast(err.message, 'error');
+        } finally {
+            setSubmitLoading(false);
+        }
+    }, [
+        cartItemIds,
+        checkoutMode,
+        effectiveUser,
+        formChannel,
+        formName,
+        formNotes,
+        formProofFile,
+        formRef,
+        formatPhp,
+        items,
+        loadData,
+        selectedItem,
+        setCartItemIds,
+        setCheckoutMode,
+        setFormName,
+        setFormNotes,
+        setFormProofFile,
+        setFormRef,
+        setPurchaseReceipt,
+        setSelectedItem,
+        setSubmitLoading,
+        showToast,
+        validateProofFile,
+    ]);
+
+    return {
+        handleProofUpload,
+        handlePurchaseSubmit,
+    };
+}

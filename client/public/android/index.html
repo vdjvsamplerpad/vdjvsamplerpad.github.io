@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Install on Android | VDJV Sampler Pad</title>
+    <meta
+      name="description"
+      content="Install VDJV Sampler Pad on Android with Chrome or Edge and launch it from your home screen."
+    />
+    <meta name="theme-color" content="#dc2626" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="VDJV Sampler Pad" />
+    <link rel="icon" type="image/png" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <style>
+      :root {
+        --bg: #06120f;
+        --panel: rgba(6, 25, 20, 0.86);
+        --panel-border: rgba(34, 197, 94, 0.42);
+        --text: #ecfdf5;
+        --muted: #bbf7d0;
+        --accent: #22c55e;
+        --accent-2: #16a34a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        font-family: "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
+        background:
+          radial-gradient(circle at 16% 0%, rgba(34, 197, 94, 0.26), transparent 40%),
+          radial-gradient(circle at 92% 96%, rgba(220, 38, 38, 0.2), transparent 43%),
+          linear-gradient(180deg, #0b1f1a 0%, var(--bg) 100%);
+      }
+      main {
+        width: min(760px, 100%);
+        margin: 0 auto;
+        padding: 22px 16px 42px;
+      }
+      .logo-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .logo {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        box-shadow: 0 9px 18px rgba(2, 6, 23, 0.42);
+      }
+      .brand {
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      .badge {
+        display: inline-block;
+        margin: 2px 0 8px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(34, 197, 94, 0.5);
+        background: rgba(34, 197, 94, 0.15);
+        color: #bbf7d0;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(28px, 7.2vw, 42px);
+        line-height: 1.08;
+      }
+      .lead {
+        margin: 0 0 16px;
+        color: #d1fae5;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: 20px;
+        padding: 16px;
+        box-shadow: 0 22px 48px rgba(0, 0, 0, 0.45);
+      }
+      ol {
+        margin: 0;
+        padding-left: 20px;
+      }
+      li {
+        margin: 0 0 11px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      li strong {
+        color: var(--text);
+      }
+      .status {
+        margin-top: 14px;
+        border-radius: 12px;
+        padding: 10px 12px;
+        border: 1px solid rgba(34, 197, 94, 0.35);
+        background: rgba(10, 34, 27, 0.78);
+        color: #d1fae5;
+        font-size: 14px;
+      }
+      .actions {
+        margin-top: 14px;
+      }
+      button {
+        width: 100%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 13px;
+        border: 1px solid rgba(34, 197, 94, 0.7);
+        padding: 13px 14px;
+        font-size: 15px;
+        font-weight: 700;
+        color: #062312;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        cursor: pointer;
+      }
+      button[disabled] {
+        opacity: 0.6;
+        cursor: default;
+      }
+      .hint {
+        margin-top: 14px;
+        padding: 11px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(16, 185, 129, 0.35);
+        background: rgba(6, 29, 22, 0.72);
+        color: #a7f3d0;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+      code {
+        color: #86efac;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      footer {
+        margin-top: 16px;
+        color: #86efac;
+        opacity: 0.88;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="logo-wrap">
+        <img class="logo" src="/assets/logo.png" alt="VDJV logo" />
+        <div class="brand">VDJV Sampler Pad</div>
+      </div>
+      <span class="badge">Android Install Guide</span>
+      <h1>Install VDJV Sampler Pad on Android</h1>
+      <p class="lead">You are already on the install page. Follow these browser steps.</p>
+      <section class="panel" aria-label="Android install instructions">
+        <ol>
+          <li><strong>Tap the browser menu</strong> in Chrome or Edge.</li>
+          <li><strong>Tap "Install app"</strong> (or <strong>Add to Home screen</strong>).</li>
+          <li><strong>Confirm Install</strong> when prompted.</li>
+          <li>
+            Open the installed icon from your launcher. It opens at
+            <code>vdjvsamplerpad.online/</code>.
+          </li>
+        </ol>
+        <p id="installStatus" class="status">Preparing install prompt...</p>
+        <div class="hint">
+          If install is not shown in the menu, refresh this page and wait a few seconds before opening the menu again.
+        </div>
+      </section>
+      <div class="actions">
+        <button id="installButton" disabled>Install VDJV Sampler Pad</button>
+      </div>
+      <footer>
+        VDJV Sampler Pad install help
+      </footer>
+    </main>
+    <script>
+      var installPromptEvent = null;
+      var installButton = document.getElementById("installButton");
+      var installStatus = document.getElementById("installStatus");
+
+      function setStatus(text) {
+        if (installStatus) installStatus.textContent = text;
+      }
+
+      if ("serviceWorker" in navigator && location.protocol === "https:") {
+        navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(function () {});
+      }
+
+      window.addEventListener("beforeinstallprompt", function (event) {
+        event.preventDefault();
+        installPromptEvent = event;
+        if (installButton) installButton.disabled = false;
+        setStatus("Install is available. Tap the install button below.");
+      });
+
+      if (installButton) {
+        installButton.addEventListener("click", function () {
+          if (!installPromptEvent) {
+            setStatus("Use browser menu -> Install app (or Add to Home screen) if no prompt appears.");
+            return;
+          }
+
+          installPromptEvent.prompt();
+          installPromptEvent.userChoice.finally(function () {
+            installPromptEvent = null;
+            installButton.disabled = true;
+            setStatus("If installed, launch the app from your home screen.");
+          });
+        });
+      }
+
+      window.addEventListener("appinstalled", function () {
+        setStatus("Installed successfully. Open it from your home screen.");
+      });
+    </script>
+  </body>
+</html>

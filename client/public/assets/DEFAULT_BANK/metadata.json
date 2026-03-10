@@ -1,0 +1,13 @@
+{
+  "password": false,
+  "transferable": true,
+  "exportable": true,
+  "title": "DEFAULT BANK",
+  "description": "",
+  "color": "#3b82f6",
+  "adminExportToken": "eyJhbGciOiJFUzI1NiIsInR5cCI6IlZESlYtQUVUIiwia2lkIjoiYWRtaW4tZXhwb3J0LXYxIn0.eyJ2IjoxLCJpc3MiOiJ2ZGp2LmFkbWluLWV4cG9ydCIsInN1YiI6IjAyYmU5OGY0LWU5NzQtNDE4My1hMzJiLTE5Njc5YmJlMzI3YyIsImlhdCI6MTc3MzEyMzk4NSwiZXhwIjoxOTMwODAzOTg1LCJraWQiOiJhZG1pbi1leHBvcnQtdjEiLCJiYW5rX2pzb25fc2hhMjU2IjoiMWJmOTg4YzQ2ODA2ZGJmNmQ4NmQ4M2YzM2I2Yzg5MTRmYTU4ZjAzODNhMTQxMWQ0MThkMjMzNmFjZGM0YjVhMSIsImJhbmtfbmFtZSI6IkRFRkFVTFQgQkFOSyIsInBhZF9jb3VudCI6NDgsImFsbG93X2V4cG9ydCI6dHJ1ZX0.wUPSIHmptIkBohkOiTtn4K_lNoIw1hB03vg_a8CuE5BcQc10MCLoOx6C14_rmWHAbb1EIN9QNn2sXVNWnfbIhw",
+  "adminExportTokenKid": "admin-export-v1",
+  "adminExportTokenIssuedAt": "2026-03-10T06:26:25.000Z",
+  "adminExportTokenExpiresAt": "2031-03-09T06:26:25.000Z",
+  "adminExportTokenBankSha256": "1bf988c46806dbf6d86d83f33b6c8914fa58f0383a1411d418d2336acdc4b5a1"
+}

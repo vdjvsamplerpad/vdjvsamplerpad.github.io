@@ -1,0 +1,277 @@
+import type { PadData, SamplerBank } from '../types/sampler';
+import { applyBankContentPolicy } from './useSamplerStore.provenance';
+
+type MediaBackend = 'native' | 'idb';
+type SetState<T> = (value: T | ((prev: T) => T)) => void;
+
+export interface RunRestoreAllFilesInput {
+  user: { id: string } | null;
+}
+
+export interface RunRestoreAllFilesDeps {
+  setIsBanksHydrated: (value: boolean) => void;
+  mediaRestoreRunIdRef: { current: number };
+  startupMediaRestoreInProgressRef: { current: boolean };
+  getLocalStorageItemSafe: (key: string) => string | null;
+  readIdbJsonFallback: (key: string) => Promise<string | null>;
+  storageKey: string;
+  stateStorageKey: string;
+  storageIdbFallbackKey: string;
+  stateIdbFallbackKey: string;
+  getCachedUser: () => { id: string } | null;
+  lastAuthenticatedUserIdRef: { current: string | null };
+  readLastOpenBankId: (ownerId: string | null) => string | null;
+  writeLastOpenBankId: (ownerId: string | null, bankId: string | null) => void;
+  generateId: () => string;
+  setBanks: SetState<SamplerBank[]>;
+  setCurrentBankIdState: SetState<string | null>;
+  setPrimaryBankIdState: SetState<string | null>;
+  setSecondaryBankIdState: SetState<string | null>;
+  dedupeBanksByIdentity: (banks: SamplerBank[]) => {
+    banks: SamplerBank[];
+    removedIdToKeptId: Map<string, string>;
+  };
+  hideProtectedBanksKey: string;
+  pruneBanksForGuestLock: (banks: SamplerBank[]) => SamplerBank[];
+  setHiddenProtectedBanks: (ownerId: string | null, hiddenBanks: SamplerBank[]) => void;
+  isNativeCapacitorPlatform: () => boolean;
+  maxNativeStartupRestorePads: number;
+  yieldToMainThread: () => Promise<void>;
+  restoreFileAccess: (
+    padId: string,
+    type: 'audio' | 'image',
+    storageKey?: string,
+    backend?: MediaBackend
+  ) => Promise<{ url: string | null; storageKey?: string; backend: MediaBackend }>;
+  base64ToBlob: (value: string) => Blob;
+}
+
+export const runRestoreAllFilesPipeline = async (
+  input: RunRestoreAllFilesInput,
+  deps: RunRestoreAllFilesDeps
+): Promise<void> => {
+  const {
+    user,
+  } = input;
+  const {
+    setIsBanksHydrated,
+    mediaRestoreRunIdRef,
+    startupMediaRestoreInProgressRef,
+    getLocalStorageItemSafe,
+    readIdbJsonFallback,
+    storageKey,
+    stateStorageKey,
+    storageIdbFallbackKey,
+    stateIdbFallbackKey,
+    getCachedUser,
+    lastAuthenticatedUserIdRef,
+    readLastOpenBankId,
+    writeLastOpenBankId,
+    generateId,
+    setBanks,
+    setCurrentBankIdState,
+    setPrimaryBankIdState,
+    setSecondaryBankIdState,
+    dedupeBanksByIdentity,
+    hideProtectedBanksKey,
+    pruneBanksForGuestLock,
+    setHiddenProtectedBanks,
+    isNativeCapacitorPlatform,
+    maxNativeStartupRestorePads,
+    yieldToMainThread,
+    restoreFileAccess,
+    base64ToBlob,
+  } = deps;
+
+  setIsBanksHydrated(false);
+  const restoreRunId = mediaRestoreRunIdRef.current + 1;
+  mediaRestoreRunIdRef.current = restoreRunId;
+  startupMediaRestoreInProgressRef.current = false;
+  if (typeof window === 'undefined') return;
+  let savedData = getLocalStorageItemSafe(storageKey);
+  if (!savedData) {
+    savedData = await readIdbJsonFallback(storageIdbFallbackKey);
+  }
+  let savedState = getLocalStorageItemSafe(stateStorageKey);
+  if (!savedState) {
+    savedState = await readIdbJsonFallback(stateIdbFallbackKey);
+  }
+  const ownerId = user?.id || getCachedUser()?.id || lastAuthenticatedUserIdRef.current || null;
+  const lastOpenBankId = readLastOpenBankId(ownerId);
+
+  if (!savedData) {
+    const defaultBank: SamplerBank = { id: generateId(), name: 'Default Bank', defaultColor: '#3b82f6', pads: [], createdAt: new Date(), sortOrder: 0 };
+    setBanks([defaultBank]);
+    setCurrentBankIdState(defaultBank.id);
+    writeLastOpenBankId(ownerId, defaultBank.id);
+    setIsBanksHydrated(true);
+    return;
+  }
+  try {
+    const { banks: savedBanks } = JSON.parse(savedData);
+    let restoredState: { primaryBankId: string | null; secondaryBankId: string | null; currentBankId: string | null } = {
+      primaryBankId: null,
+      secondaryBankId: null,
+      currentBankId: null,
+    };
+    if (savedState) try { restoredState = JSON.parse(savedState); } catch { }
+    if ((!restoredState.currentBankId || typeof restoredState.currentBankId !== 'string') && lastOpenBankId) {
+      restoredState.currentBankId = lastOpenBankId;
+    }
+
+    const applyRestoredState = (nextBanks: SamplerBank[]) => {
+      setBanks(nextBanks);
+      setPrimaryBankIdState(restoredState.primaryBankId);
+      setSecondaryBankIdState(restoredState.secondaryBankId);
+      const currentFromState = restoredState.currentBankId && nextBanks.find((b) => b.id === restoredState.currentBankId)
+        ? restoredState.currentBankId
+        : null;
+      const currentFromLastOpen = !currentFromState && lastOpenBankId && nextBanks.find((b) => b.id === lastOpenBankId)
+        ? lastOpenBankId
+        : null;
+      const resolvedCurrent = currentFromState || currentFromLastOpen || nextBanks[0]?.id || null;
+      setCurrentBankIdState(resolvedCurrent);
+      writeLastOpenBankId(ownerId, resolvedCurrent);
+      setIsBanksHydrated(true);
+    };
+
+    const restorePadMedia = async (pad: PadData): Promise<PadData> => {
+      const restoredPad: PadData = {
+        ...pad,
+        savedHotcuesMs: Array.isArray(pad.savedHotcuesMs)
+          ? (pad.savedHotcuesMs.slice(0, 4) as [number | null, number | null, number | null, number | null])
+          : [null, null, null, null],
+      };
+      try {
+        const restoredAudio = await restoreFileAccess(
+          pad.id,
+          'audio',
+          pad.audioStorageKey,
+          pad.audioBackend
+        );
+        if (restoredAudio.url) restoredPad.audioUrl = restoredAudio.url;
+        if (restoredAudio.storageKey) restoredPad.audioStorageKey = restoredAudio.storageKey;
+        restoredPad.audioBackend = restoredAudio.backend;
+      } catch { }
+      try {
+        const restoredImage = await restoreFileAccess(
+          pad.id,
+          'image',
+          pad.imageStorageKey,
+          pad.imageBackend
+        );
+        if (restoredImage.url) restoredPad.imageUrl = restoredImage.url;
+        if (restoredImage.storageKey) restoredPad.imageStorageKey = restoredImage.storageKey;
+        restoredPad.imageBackend = restoredImage.backend;
+        if (restoredImage.url) restoredPad.hasImageAsset = true;
+        if (!restoredPad.imageUrl && pad.imageData) {
+          try {
+            restoredPad.imageUrl = URL.createObjectURL(base64ToBlob(pad.imageData));
+            restoredPad.imageBackend = 'idb';
+            restoredPad.hasImageAsset = true;
+          } catch { }
+        }
+      } catch { }
+      return restoredPad;
+    };
+
+    const restoreBankMedia = async (bank: SamplerBank): Promise<SamplerBank> => {
+      const restoredPads: PadData[] = [];
+      for (let i = 0; i < bank.pads.length; i += 1) {
+        restoredPads.push(await restorePadMedia(bank.pads[i]));
+        if ((i + 1) % 6 === 0) await yieldToMainThread();
+      }
+      return { ...bank, pads: restoredPads };
+    };
+
+    const prioritizeBanksForMediaRestore = (candidateBanks: SamplerBank[], priorityBankId: string | null): SamplerBank[] => {
+      if (!priorityBankId) return candidateBanks;
+      const first = candidateBanks.filter((bank) => bank.id === priorityBankId);
+      const rest = candidateBanks.filter((bank) => bank.id !== priorityBankId);
+      return [...first, ...rest];
+    };
+
+    let restoredBanks: SamplerBank[] = savedBanks.map((bank: any, index: number) => ({
+      ...bank,
+      createdAt: new Date(bank.createdAt),
+      sortOrder: bank.sortOrder ?? index,
+      pads: (bank.pads || []).map((pad: any, padIndex: number) => ({
+        ...pad,
+        audioUrl: null,
+        imageUrl: null,
+        audioBackend: (pad.audioBackend as MediaBackend | undefined) || (pad.audioStorageKey ? 'native' : 'idb'),
+        imageBackend: (pad.imageBackend as MediaBackend | undefined) || (pad.imageStorageKey ? 'native' : undefined),
+        hasImageAsset: typeof pad.hasImageAsset === 'boolean'
+          ? pad.hasImageAsset
+          : Boolean(pad.imageStorageKey || pad.imageData || (typeof pad.imageUrl === 'string' && pad.imageUrl.length > 0)),
+        fadeInMs: pad.fadeInMs || 0,
+        fadeOutMs: pad.fadeOutMs || 0,
+        startTimeMs: pad.startTimeMs || 0,
+        endTimeMs: pad.endTimeMs || 0,
+        pitch: pad.pitch || 0,
+        tempoPercent: typeof pad.tempoPercent === 'number' ? pad.tempoPercent : 0,
+        keyLock: pad.keyLock !== false,
+        savedHotcuesMs: Array.isArray(pad.savedHotcuesMs)
+          ? (pad.savedHotcuesMs.slice(0, 4) as [number | null, number | null, number | null, number | null])
+          : [null, null, null, null],
+        position: pad.position ?? padIndex,
+      })),
+    }));
+    restoredBanks = dedupeBanksByIdentity(restoredBanks).banks.map((bank) => applyBankContentPolicy(bank));
+
+    const hideProtectedLock =
+      typeof window !== 'undefined' && localStorage.getItem(hideProtectedBanksKey) === '1';
+    if (hideProtectedLock) {
+      const visible = pruneBanksForGuestLock(restoredBanks);
+      setHiddenProtectedBanks(ownerId, restoredBanks.filter(
+        (bank) => !visible.some((visibleBank) => visibleBank.id === bank.id)
+      ));
+      restoredBanks = visible;
+    }
+
+    restoredBanks.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+    const totalPads = restoredBanks.reduce((sum, bank) => sum + bank.pads.length, 0);
+    const eagerRestoreLimit = isNativeCapacitorPlatform() ? maxNativeStartupRestorePads : 1200;
+    const priorityBankId =
+      (restoredState.currentBankId && restoredBanks.some((bank) => bank.id === restoredState.currentBankId))
+        ? restoredState.currentBankId
+        : (lastOpenBankId && restoredBanks.some((bank) => bank.id === lastOpenBankId) ? lastOpenBankId : null);
+    const orderedBanks = prioritizeBanksForMediaRestore(restoredBanks, priorityBankId);
+
+    applyRestoredState(restoredBanks);
+
+    const limitedTargets = priorityBankId
+      ? orderedBanks.filter((bank) => bank.id === priorityBankId).slice(0, 1)
+      : orderedBanks.slice(0, 1);
+    const hydrationTargets = totalPads > eagerRestoreLimit ? limitedTargets : orderedBanks;
+    if (!hydrationTargets.length) return;
+
+    startupMediaRestoreInProgressRef.current = true;
+    try {
+      for (let bankIndex = 0; bankIndex < hydrationTargets.length; bankIndex += 1) {
+        if (mediaRestoreRunIdRef.current !== restoreRunId) return;
+        const hydratedBank = await restoreBankMedia(hydrationTargets[bankIndex]);
+        if (mediaRestoreRunIdRef.current !== restoreRunId) return;
+        setBanks((prev) => {
+          const targetIndex = prev.findIndex((bank) => bank.id === hydratedBank.id);
+          if (targetIndex < 0) return prev;
+          const next = [...prev];
+          next[targetIndex] = applyBankContentPolicy(hydratedBank);
+          return next;
+        });
+        if ((bankIndex + 1) % 2 === 0) await yieldToMainThread();
+      }
+    } finally {
+      if (mediaRestoreRunIdRef.current === restoreRunId) {
+        startupMediaRestoreInProgressRef.current = false;
+      }
+    }
+  } catch {
+    startupMediaRestoreInProgressRef.current = false;
+    const defaultBank: SamplerBank = { id: generateId(), name: 'Default Bank', defaultColor: '#3b82f6', pads: [], createdAt: new Date(), sortOrder: 0 };
+    setBanks([defaultBank]);
+    setCurrentBankIdState(defaultBank.id);
+    writeLastOpenBankId(ownerId, defaultBank.id);
+    setIsBanksHydrated(true);
+  }
+};

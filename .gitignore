@@ -1,0 +1,33 @@
+# Dependencies
+node_modules
+
+# Build Outputs (HUGE FILES - DO NOT UPLOAD)
+dist
+client/dist
+client/dist-*
+build
+release
+
+# Secrets
+.env
+.env.*
+!.env.example
+!supabase/functions/.env.example
+
+# Misc
+.DS_Store
+.vscode
+**/.idea/
+desktop.ini
+client/typecheck.log
+
+# Local archive / junk holding area
+JUNK/
+
+# Local tool output / generated artifacts
+.VSCodeCounter/
+release-snapshots/
+reports/
+testsprite_tests/
+testsprite-preview*.log
+docs/

@@ -1,0 +1,1822 @@
+﻿import * as React from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Checkbox } from '@/components/ui/checkbox';
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import { adminApi, type AccessEntry, type ActiveSessionRow, type AdminAccountRegistrationRequest, type AdminActivityRow, type AdminBank, type AdminDashboardOverview, type AdminUser, type BankAccessEntry, type DefaultBankRelease, type SortDirection } from '@/lib/admin-api';
+import { edgeFunctionUrl } from '@/lib/edge-api';
+import { Edit, Eye, EyeOff, Plus, RefreshCw, Shield, Trash2, UserPlus, Users, Loader2, Store, CreditCard, History, Save, Check, X, Search, Menu } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
+import {
+  ACTIVE_SORT_STORAGE_KEY,
+  HOME_WINDOW_OPTIONS,
+  MS_PER_DAY,
+  PAGE_SIZE,
+  TABS,
+  TAB_CONTENT_TONE_CLASSES,
+  TAB_TONE_CLASSES,
+  colorOptions,
+  isUserBanned,
+  isValidHttpUrl,
+  parseIsoDateOnly,
+  toIsoDateOnly,
+  type ActiveSortBy,
+  type ActivitySortBy,
+  type AdminAccessDialogProps,
+  type AssignmentBankSortBy,
+  type AssignmentUserSortBy,
+  type BankSortBy,
+  type CatalogDraft,
+  type PurchaseRequest,
+  type StoreCatalogSort,
+  type StoreConfigDraft,
+  type StoreMarketingBanner,
+  type TabKey,
+  type UserSortBy,
+  validateStoreBannerFile,
+  validateStoreQrFile,
+} from './AdminAccessDialog.shared';
+import {
+  ExportHealthPieChart,
+  MiniGroupedBarChart,
+  NoticesPortal,
+  Pagination,
+  RevenueAdvancedChart,
+  SortHeader,
+  useNotices,
+} from './AdminAccessDialog.widgets';
+import {
+  AccountRequestsTab,
+  DefaultBankTab,
+  StoreBannersTab,
+  StoreCatalogTab,
+  StoreConfigTab,
+  StoreRequestsTab,
+} from './AdminAccessDialog.tabs';
+import { AdminAccessNonStoreTabs } from './AdminAccessDialog.nonStoreTabs';
+import { AdminAccessDialogModals } from './AdminAccessDialog.dialogs';
+import { useAdminAccessStoreManager } from './AdminAccessDialog.store';
+
+
+
+
+
+export function AdminAccessDialog({
+  open,
+  onOpenChange,
+  theme,
+  defaultBankSourceOptions = [],
+  onPublishDefaultBankRelease,
+}: AdminAccessDialogProps) {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
+  const readStoredActiveSort = React.useCallback((): { sortBy: ActiveSortBy; sortDir: SortDirection } => {
+    if (typeof window === 'undefined') return { sortBy: 'last_seen_at', sortDir: 'desc' };
+    try {
+      const raw = localStorage.getItem(ACTIVE_SORT_STORAGE_KEY);
+      if (!raw) return { sortBy: 'last_seen_at', sortDir: 'desc' };
+      const parsed = JSON.parse(raw) as { sortBy?: string; sortDir?: string };
+      const validSortBy: ActiveSortBy[] = ['user_id', 'email', 'device_name', 'platform', 'last_seen_at'];
+      const sortBy = validSortBy.includes(parsed.sortBy as ActiveSortBy) ? (parsed.sortBy as ActiveSortBy) : 'last_seen_at';
+      const sortDir: SortDirection = parsed.sortDir === 'asc' ? 'asc' : 'desc';
+      return { sortBy, sortDir };
+    } catch {
+      return { sortBy: 'last_seen_at', sortDir: 'desc' };
+    }
+  }, []);
+
+  const initialActiveSort = React.useMemo(() => readStoredActiveSort(), [readStoredActiveSort]);
+  const [tab, setTab] = React.useState<TabKey>('home');
+  const [isNavOpen, setIsNavOpen] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const [info, setInfo] = React.useState('');
+  const { notices, pushNotice, dismiss } = useNotices();
+  const {
+    bannerLoading,
+    bannerUploadingIds,
+    catalogBankOptions,
+    catalogTotalPages,
+    executeStorePublish,
+    expandedStoreRequestId,
+    filteredDrafts,
+    dirtyStoreBannerIds,
+    handleCreateStoreBanner,
+    handleDeleteStoreBanner,
+    handleNewBannerImageChange,
+    nudgeBannerSortOrder,
+    handleSaveStoreBanner,
+    handleStoreBannerImageReplace,
+    handleStoreCatalogUpdate,
+    handleStoreConfigSave,
+    handleStoreAutoApprovalAction,
+    handleStoreQrFileChange,
+    handleStoreRequestAction,
+    handleStoreRequestRetryEmail,
+    hasStoreCatalogFilters,
+    loadStoreCatalog,
+    newBannerImageFile,
+    newBannerImageUrl,
+    newBannerLinkUrl,
+    newBannerPreviewUrl,
+    newBannerSortOrder,
+    pagedDrafts,
+    pagedRequests,
+    reqTotalPages,
+    resetStoreCatalogFilters,
+    resetBannerDraft,
+    setExpandedStoreRequestId,
+    setNewBannerImageFile,
+    setNewBannerImageUrl,
+    setNewBannerLinkUrl,
+    setNewBannerSortOrder,
+    setShowInactiveBanners,
+    setStoreCatalogBankFilter,
+    setStoreCatalogPage,
+    setStoreCatalogPaidFilter,
+    setStoreCatalogPinnedFilter,
+    setStoreCatalogSearch,
+    setStoreCatalogSort,
+    setStoreCatalogStatusFilter,
+    setStoreConfig,
+    setStorePublishDialog,
+    setStoreReqPage,
+    setStoreReqSearch,
+    setStoreRequestFilter,
+    setStoreRequestToReject,
+    setStoreQrFile,
+    showInactiveBanners,
+    showStorePublishDialog,
+    storeBanners,
+    storeBannerStats,
+    storeCatalogBankFilter,
+    storeCatalogPage,
+    storeCatalogPaidFilter,
+    storeCatalogPinnedFilter,
+    storeCatalogSearch,
+    storeCatalogSort,
+    storeCatalogStats,
+    storeCatalogStatusFilter,
+    storeConfig,
+    storeDrafts,
+    storeLoading,
+    storePublishDialog,
+    storeQrPreviewUrl,
+    storeReqPage,
+    storeReqSearch,
+    storeRequestFilter,
+    storeRequestToReject,
+    storeRequests,
+    updateBannerDraft,
+    visibleStoreBanners,
+  } = useAdminAccessStoreManager({ open, isAdmin, tab, pushNotice });
+
+  const [users, setUsers] = React.useState<AdminUser[]>([]);
+  const [usersLoading, setUsersLoading] = React.useState(false);
+  const [usersQuery, setUsersQuery] = React.useState('');
+  const [usersSortBy, setUsersSortBy] = React.useState<UserSortBy>('created_at');
+  const [usersSortDir, setUsersSortDir] = React.useState<SortDirection>('desc');
+  const [assignmentUserSortBy, setAssignmentUserSortBy] = React.useState<AssignmentUserSortBy>('created_at');
+  const [assignmentUserSortDir, setAssignmentUserSortDir] = React.useState<SortDirection>('desc');
+
+  const [banks, setBanks] = React.useState<AdminBank[]>([]);
+  const [banksLoading, setBanksLoading] = React.useState(false);
+  const [banksQuery, setBanksQuery] = React.useState('');
+  const [banksSortBy, setBanksSortBy] = React.useState<BankSortBy>('created_at');
+  const [banksSortDir, setBanksSortDir] = React.useState<SortDirection>('desc');
+  const [assignmentBankSortBy, setAssignmentBankSortBy] = React.useState<AssignmentBankSortBy>('title');
+  const [assignmentBankSortDir, setAssignmentBankSortDir] = React.useState<SortDirection>('asc');
+
+  const [selectedUserId, setSelectedUserId] = React.useState('');
+  const [selectedBankIds, setSelectedBankIds] = React.useState<Set<string>>(new Set());
+  const [accessRows, setAccessRows] = React.useState<AccessEntry[]>([]);
+  const [accessLoading, setAccessLoading] = React.useState(false);
+  const [bulkLoading, setBulkLoading] = React.useState(false);
+
+  const [activeLoading, setActiveLoading] = React.useState(false);
+  const [activeCounts, setActiveCounts] = React.useState({ activeUsers: 0, activeSessions: 0 });
+  const [activeSessions, setActiveSessions] = React.useState<ActiveSessionRow[]>([]);
+  const [activeSortBy, setActiveSortBy] = React.useState<ActiveSortBy>(initialActiveSort.sortBy);
+  const [activeSortDir, setActiveSortDir] = React.useState<SortDirection>(initialActiveSort.sortDir);
+  const [activityLoading, setActivityLoading] = React.useState(false);
+  const [activityRows, setActivityRows] = React.useState<AdminActivityRow[]>([]);
+  const [activityPage, setActivityPage] = React.useState(1);
+  const [activityTotal, setActivityTotal] = React.useState(0);
+  const [activitySearch, setActivitySearch] = React.useState('');
+  const [activitySortBy, setActivitySortBy] = React.useState<ActivitySortBy>('created_at');
+  const [activitySortDir, setActivitySortDir] = React.useState<SortDirection>('desc');
+  const [activityStatusFilter, setActivityStatusFilter] = React.useState<'all' | 'success' | 'failed'>('all');
+  const [activityCategoryFilter, setActivityCategoryFilter] = React.useState<'all' | 'bank_export' | 'backup_recovery'>('all');
+  const [activityPhaseFilter, setActivityPhaseFilter] = React.useState<
+    'all' | 'requested' | 'local_export' | 'remote_upload' | 'backup_export' | 'backup_restore' | 'media_recovery'
+  >('all');
+  const [activityUploadResultFilter, setActivityUploadResultFilter] = React.useState<'all' | 'duplicate_no_change'>('all');
+  const [expandedActivityId, setExpandedActivityId] = React.useState<number | null>(null);
+  const [otherActivityLoading, setOtherActivityLoading] = React.useState(false);
+  const [otherActivityRows, setOtherActivityRows] = React.useState<AdminActivityRow[]>([]);
+  const [otherActivityPage, setOtherActivityPage] = React.useState(1);
+  const [otherActivityTotal, setOtherActivityTotal] = React.useState(0);
+  const [otherActivitySearch, setOtherActivitySearch] = React.useState('');
+  const [otherActivitySortBy, setOtherActivitySortBy] = React.useState<ActivitySortBy>('created_at');
+  const [otherActivitySortDir, setOtherActivitySortDir] = React.useState<SortDirection>('desc');
+  const [otherActivityStatusFilter, setOtherActivityStatusFilter] = React.useState<'all' | 'success' | 'failed'>('all');
+  const [homeLoading, setHomeLoading] = React.useState(false);
+  const [homeData, setHomeData] = React.useState<AdminDashboardOverview | null>(null);
+  const [homeError, setHomeError] = React.useState('');
+  const [homeWindowDays, setHomeWindowDays] = React.useState<number>(7);
+  const [homeFromDate, setHomeFromDate] = React.useState<string>(() => {
+    const today = new Date();
+    const from = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - 6));
+    return toIsoDateOnly(from);
+  });
+  const [homeToDate, setHomeToDate] = React.useState<string>(() => toIsoDateOnly(new Date()));
+  const [homeLastRefresh, setHomeLastRefresh] = React.useState<string | null>(null);
+  const homeFromDateRef = React.useRef(homeFromDate);
+  const homeToDateRef = React.useRef(homeToDate);
+
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [createEmail, setCreateEmail] = React.useState('');
+  const [createPassword, setCreatePassword] = React.useState('');
+  const [showCreatePassword, setShowCreatePassword] = React.useState(false);
+  const [createDisplayName, setCreateDisplayName] = React.useState('');
+  const [createLoading, setCreateLoading] = React.useState(false);
+
+  const [detailsOpen, setDetailsOpen] = React.useState(false);
+  const [detailsUser, setDetailsUser] = React.useState<AdminUser | null>(null);
+  const [editDisplayName, setEditDisplayName] = React.useState('');
+  const [editOwnedBankQuota, setEditOwnedBankQuota] = React.useState('6');
+  const [editOwnedBankPadCap, setEditOwnedBankPadCap] = React.useState('64');
+  const [editDeviceTotalBankCap, setEditDeviceTotalBankCap] = React.useState('120');
+  const [profileSaving, setProfileSaving] = React.useState(false);
+  const [banOpen, setBanOpen] = React.useState(false);
+  const [banHours, setBanHours] = React.useState(24);
+  const [deleteUserOpen, setDeleteUserOpen] = React.useState(false);
+  const [unbanOpen, setUnbanOpen] = React.useState(false);
+  const [resetPasswordOpen, setResetPasswordOpen] = React.useState(false);
+
+  const [editBankOpen, setEditBankOpen] = React.useState(false);
+  const [editBank, setEditBank] = React.useState<AdminBank | null>(null);
+  const [editBankTitle, setEditBankTitle] = React.useState('');
+  const [editBankDesc, setEditBankDesc] = React.useState('');
+  const [editBankColor, setEditBankColor] = React.useState('#3b82f6');
+  const [bankSaving, setBankSaving] = React.useState(false);
+  const [deleteBankOpen, setDeleteBankOpen] = React.useState(false);
+  const [deleteBank, setDeleteBank] = React.useState<AdminBank | null>(null);
+  const [bankAccessOpen, setBankAccessOpen] = React.useState(false);
+  const [bankAccessBank, setBankAccessBank] = React.useState<AdminBank | null>(null);
+  const [bankAccessLoading, setBankAccessLoading] = React.useState(false);
+  const [bankAccessRows, setBankAccessRows] = React.useState<BankAccessEntry[]>([]);
+  const [bankAccessPage, setBankAccessPage] = React.useState(1);
+  const [bankAccessTotal, setBankAccessTotal] = React.useState(0);
+  const [bankAccessSearch, setBankAccessSearch] = React.useState('');
+  const [defaultBankLoading, setDefaultBankLoading] = React.useState(false);
+  const [defaultBankPublishLoading, setDefaultBankPublishLoading] = React.useState(false);
+  const [defaultBankRollbackLoading, setDefaultBankRollbackLoading] = React.useState(false);
+  const [defaultBankCurrentRelease, setDefaultBankCurrentRelease] = React.useState<DefaultBankRelease | null>(null);
+  const [defaultBankReleases, setDefaultBankReleases] = React.useState<DefaultBankRelease[]>([]);
+  const [defaultBankNextVersion, setDefaultBankNextVersion] = React.useState(1);
+  const [defaultBankSourceId, setDefaultBankSourceId] = React.useState('');
+  const [defaultBankReleaseNotes, setDefaultBankReleaseNotes] = React.useState('');
+  const [defaultBankMinAppVersion, setDefaultBankMinAppVersion] = React.useState('');
+
+  const [accountReqFilter, setAccountReqFilter] = React.useState<'pending' | 'history'>('pending');
+  const [accountReqLoading, setAccountReqLoading] = React.useState(false);
+  const [accountReqRows, setAccountReqRows] = React.useState<AdminAccountRegistrationRequest[]>([]);
+  const [accountReqPage, setAccountReqPage] = React.useState(1);
+  const [accountReqTotal, setAccountReqTotal] = React.useState(0);
+  const [accountReqPendingCount, setAccountReqPendingCount] = React.useState(0);
+  const [accountReqHistoryCount, setAccountReqHistoryCount] = React.useState(0);
+  const [accountReqSearch, setAccountReqSearch] = React.useState('');
+  const [accountReqToReject, setAccountReqToReject] = React.useState<{ id: string; message: string } | null>(null);
+  const [accountReqToAssist, setAccountReqToAssist] = React.useState<{ id: string } | null>(null);
+
+  const selectedUser = React.useMemo(() => users.find((u) => u.id === selectedUserId) || null, [users, selectedUserId]);
+  const grantedBankIds = React.useMemo(() => new Set(accessRows.map((r) => r.bank_id)), [accessRows]);
+  const defaultBankSourceChoices = React.useMemo(() => {
+    return defaultBankSourceOptions
+      .filter((option) => option.padCount > 0)
+      .sort((left, right) => {
+        if (left.isDefaultBank !== right.isDefaultBank) return left.isDefaultBank ? -1 : 1;
+        return left.title.localeCompare(right.title, undefined, { sensitivity: 'base' });
+      });
+  }, [defaultBankSourceOptions]);
+
+  const assignmentUsers = React.useMemo(() => {
+    const sorted = [...users].sort((a, b) => {
+      if (assignmentUserSortBy === 'display_name') return String(a.display_name || '').localeCompare(String(b.display_name || ''), undefined, { sensitivity: 'base' });
+      if (assignmentUserSortBy === 'email') return String(a.email || '').localeCompare(String(b.email || ''), undefined, { sensitivity: 'base' });
+      const left = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const right = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return left - right;
+    });
+    return assignmentUserSortDir === 'asc' ? sorted : sorted.reverse();
+  }, [users, assignmentUserSortBy, assignmentUserSortDir]);
+
+  const assignmentBanks = React.useMemo(() => {
+    const sorted = [...banks].sort((a, b) => {
+      if (assignmentBankSortBy === 'title') {
+        return String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' });
+      }
+      if (assignmentBankSortBy === 'status') {
+        const left = grantedBankIds.has(a.id) ? 1 : 0;
+        const right = grantedBankIds.has(b.id) ? 1 : 0;
+        return left - right;
+      }
+      return (a.access_count || 0) - (b.access_count || 0);
+    });
+    return assignmentBankSortDir === 'asc' ? sorted : sorted.reverse();
+  }, [banks, assignmentBankSortBy, assignmentBankSortDir, grantedBankIds]);
+
+  const activeUsersRows = React.useMemo(() => {
+    const map = new Map<string, ActiveSessionRow>();
+    activeSessions.forEach((row) => {
+      const prev = map.get(row.user_id);
+      if (!prev || new Date(row.last_seen_at).getTime() > new Date(prev.last_seen_at).getTime()) {
+        map.set(row.user_id, row);
+      }
+    });
+    const rows = Array.from(map.values());
+    rows.sort((a, b) => {
+      if (activeSortBy === 'user_id') return String(a.user_id || '').localeCompare(String(b.user_id || ''), undefined, { sensitivity: 'base' });
+      if (activeSortBy === 'email') return String(a.email || '').localeCompare(String(b.email || ''), undefined, { sensitivity: 'base' });
+      if (activeSortBy === 'device_name') return String(a.device_name || '').localeCompare(String(b.device_name || ''), undefined, { sensitivity: 'base' });
+      if (activeSortBy === 'platform') {
+        const left = [a.platform, a.browser, a.os].filter(Boolean).join(' / ');
+        const right = [b.platform, b.browser, b.os].filter(Boolean).join(' / ');
+        return left.localeCompare(right, undefined, { sensitivity: 'base' });
+      }
+      const left = new Date(a.last_seen_at).getTime();
+      const right = new Date(b.last_seen_at).getTime();
+      return left - right;
+    });
+    return activeSortDir === 'asc' ? rows : rows.reverse();
+  }, [activeSessions, activeSortBy, activeSortDir]);
+
+  React.useEffect(() => {
+    if (!error) return;
+    pushNotice({ variant: 'error', message: error });
+    setError('');
+  }, [error, pushNotice]);
+
+  React.useEffect(() => {
+    if (!info) return;
+    pushNotice({ variant: 'success', message: info });
+    setInfo('');
+  }, [info, pushNotice]);
+
+  React.useEffect(() => {
+    if (!defaultBankSourceChoices.length) {
+      setDefaultBankSourceId('');
+      return;
+    }
+    if (defaultBankSourceChoices.some((option) => option.id === defaultBankSourceId)) return;
+    setDefaultBankSourceId(defaultBankSourceChoices[0].id);
+  }, [defaultBankSourceChoices, defaultBankSourceId]);
+
+  const refreshUsers = React.useCallback(async () => {
+    setUsersLoading(true);
+    try {
+      const data = await adminApi.listUsers({
+        q: usersQuery,
+        perPage: 300,
+        includeAdmins: false,
+        sortBy: usersSortBy,
+        sortDir: usersSortDir,
+      });
+      setUsers(data.users || []);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load users.');
+    } finally {
+      setUsersLoading(false);
+    }
+  }, [usersQuery, usersSortBy, usersSortDir]);
+
+  const refreshBanks = React.useCallback(async () => {
+    setBanksLoading(true);
+    try {
+      const data = await adminApi.listBanks({
+        q: banksQuery,
+        sortBy: banksSortBy,
+        sortDir: banksSortDir,
+      });
+      setBanks(data.banks || []);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load banks.');
+    } finally {
+      setBanksLoading(false);
+    }
+  }, [banksQuery, banksSortBy, banksSortDir]);
+
+  const refreshDefaultBank = React.useCallback(async () => {
+    setDefaultBankLoading(true);
+    try {
+      const data = await adminApi.getDefaultBankReleaseState();
+      setDefaultBankCurrentRelease(data.currentRelease || null);
+      setDefaultBankReleases(Array.isArray(data.releases) ? data.releases : []);
+      setDefaultBankNextVersion(Math.max(1, Number(data.nextVersion || 1)));
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load default bank release data.');
+      setDefaultBankCurrentRelease(null);
+      setDefaultBankReleases([]);
+      setDefaultBankNextVersion(1);
+    } finally {
+      setDefaultBankLoading(false);
+    }
+  }, []);
+
+  const handlePublishDefaultBankRelease = React.useCallback(async () => {
+    if (!defaultBankSourceId) {
+      setError('Select a loaded source bank first.');
+      return;
+    }
+    if (!onPublishDefaultBankRelease) {
+      setError('Default bank publish is not available in this view.');
+      return;
+    }
+    setDefaultBankPublishLoading(true);
+    try {
+      const message = await onPublishDefaultBankRelease(defaultBankSourceId, {
+        releaseNotes: defaultBankReleaseNotes.trim() || undefined,
+        minAppVersion: defaultBankMinAppVersion.trim() || undefined,
+      });
+      setInfo(message || 'Default bank release published.');
+      setDefaultBankReleaseNotes('');
+      await refreshDefaultBank();
+    } catch (e: any) {
+      setError(e?.message || 'Could not publish default bank release.');
+    } finally {
+      setDefaultBankPublishLoading(false);
+    }
+  }, [
+    defaultBankMinAppVersion,
+    defaultBankReleaseNotes,
+    defaultBankSourceId,
+    onPublishDefaultBankRelease,
+    refreshDefaultBank,
+  ]);
+
+  const handleRollbackDefaultBankRelease = React.useCallback(async (version: number) => {
+    setDefaultBankRollbackLoading(true);
+    try {
+      await adminApi.rollbackDefaultBankRelease(version);
+      setInfo(`Default bank rolled back to v${version}.`);
+      await refreshDefaultBank();
+    } catch (e: any) {
+      setError(e?.message || 'Could not roll back default bank release.');
+    } finally {
+      setDefaultBankRollbackLoading(false);
+    }
+  }, [refreshDefaultBank]);
+
+  React.useEffect(() => {
+    if (!open || !isAdmin) return;
+    if (tab !== 'default_bank') return;
+    void refreshDefaultBank();
+  }, [isAdmin, open, refreshDefaultBank, tab]);
+
+  const refreshAccess = React.useCallback(async (userId: string) => {
+    if (!userId) {
+      setAccessRows([]);
+      return;
+    }
+    setAccessLoading(true);
+    try {
+      const data = await adminApi.getUserAccess(userId);
+      setAccessRows(data.access || []);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load access records.');
+      setAccessRows([]);
+    } finally {
+      setAccessLoading(false);
+    }
+  }, []);
+
+  const refreshActive = React.useCallback(async () => {
+    setActiveLoading(true);
+    try {
+      const data = await adminApi.listActiveSessions({ limit: 300 });
+      setActiveCounts({
+        activeUsers: Number(data?.counts?.activeUsers || 0),
+        activeSessions: Number(data?.counts?.activeSessions || 0),
+      });
+      setActiveSessions(data?.sessions || []);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load active sessions.');
+      setActiveCounts({ activeUsers: 0, activeSessions: 0 });
+      setActiveSessions([]);
+    } finally {
+      setActiveLoading(false);
+    }
+  }, []);
+
+  const refreshActivity = React.useCallback(async () => {
+    setActivityLoading(true);
+    try {
+      const data = await adminApi.listActivity({
+        scope: 'export',
+        eventType: 'bank.export',
+        status: activityStatusFilter === 'all' ? undefined : activityStatusFilter,
+        category: activityCategoryFilter === 'all' ? undefined : activityCategoryFilter,
+        phase: activityPhaseFilter === 'all' ? undefined : activityPhaseFilter,
+        uploadResult: activityUploadResultFilter === 'all' ? undefined : activityUploadResultFilter,
+        q: activitySearch.trim() || undefined,
+        page: activityPage,
+        perPage: PAGE_SIZE,
+        sortBy: activitySortBy,
+        sortDir: activitySortDir,
+      });
+      setActivityRows(Array.isArray(data.activity) ? data.activity : []);
+      setActivityTotal(Number(data.total || 0));
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load activity logs.');
+      setActivityRows([]);
+      setActivityTotal(0);
+    } finally {
+      setActivityLoading(false);
+    }
+  }, [activityCategoryFilter, activityPhaseFilter, activityPage, activitySearch, activitySortBy, activitySortDir, activityStatusFilter, activityUploadResultFilter]);
+
+  const refreshOtherActivity = React.useCallback(async () => {
+    setOtherActivityLoading(true);
+    try {
+      const data = await adminApi.listActivity({
+        scope: 'non_export',
+        status: otherActivityStatusFilter === 'all' ? undefined : otherActivityStatusFilter,
+        q: otherActivitySearch.trim() || undefined,
+        page: otherActivityPage,
+        perPage: PAGE_SIZE,
+        sortBy: otherActivitySortBy,
+        sortDir: otherActivitySortDir,
+      });
+      setOtherActivityRows(Array.isArray(data.activity) ? data.activity : []);
+      setOtherActivityTotal(Number(data.total || 0));
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load other activity logs.');
+      setOtherActivityRows([]);
+      setOtherActivityTotal(0);
+    } finally {
+      setOtherActivityLoading(false);
+    }
+  }, [otherActivityPage, otherActivitySearch, otherActivitySortBy, otherActivitySortDir, otherActivityStatusFilter]);
+
+  const refreshHomeDashboard = React.useCallback(async (range?: { fromDate?: string; toDate?: string }) => {
+    const requestFromDate = (range?.fromDate || homeFromDateRef.current || '').trim();
+    const requestToDate = (range?.toDate || homeToDateRef.current || '').trim();
+    const fromParsed = parseIsoDateOnly(requestFromDate);
+    const toParsed = parseIsoDateOnly(requestToDate);
+    if (!fromParsed || !toParsed) {
+      const message = 'Invalid date range for dashboard.';
+      setHomeError(message);
+      setError(message);
+      return;
+    }
+    if (fromParsed.getTime() > toParsed.getTime()) {
+      const message = 'From date cannot be later than To date.';
+      setHomeError(message);
+      setError(message);
+      return;
+    }
+    const derivedWindowDays = Math.max(1, Math.floor((toParsed.getTime() - fromParsed.getTime()) / MS_PER_DAY) + 1);
+    setHomeLoading(true);
+    try {
+      const data = await adminApi.getDashboardOverview({
+        windowDays: derivedWindowDays,
+        fromDate: requestFromDate,
+        toDate: requestToDate,
+      });
+      setHomeData(data);
+      setHomeWindowDays(Number(data?.windowDays || derivedWindowDays));
+      if (data?.meta?.rangeStartDate) {
+        const nextFrom = String(data.meta.rangeStartDate);
+        homeFromDateRef.current = nextFrom;
+        setHomeFromDate(nextFrom);
+      }
+      if (data?.meta?.rangeEndDate) {
+        const nextTo = String(data.meta.rangeEndDate);
+        homeToDateRef.current = nextTo;
+        setHomeToDate(nextTo);
+      }
+      setHomeLastRefresh(new Date().toISOString());
+      setHomeError('');
+      setError('');
+    } catch (e: any) {
+      const message = e?.message || 'Could not load home dashboard.';
+      setHomeError(message);
+      setError(message);
+    } finally {
+      setHomeLoading(false);
+    }
+  }, []);
+
+  const applyHomePresetRange = React.useCallback((days: number) => {
+    const today = new Date();
+    const end = toIsoDateOnly(today);
+    const from = toIsoDateOnly(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (days - 1))));
+    setHomeWindowDays(days);
+    setHomeFromDate(from);
+    setHomeToDate(end);
+  }, []);
+
+  React.useEffect(() => {
+    homeFromDateRef.current = homeFromDate;
+  }, [homeFromDate]);
+
+  React.useEffect(() => {
+    homeToDateRef.current = homeToDate;
+  }, [homeToDate]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setError('');
+    setInfo('');
+    setSelectedBankIds(new Set());
+    setShowCreatePassword(false);
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) setIsNavOpen(false);
+  }, [open]);
+
+  React.useEffect(() => {
+    setIsNavOpen(false);
+  }, [tab]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    if (tab !== 'assignments' && tab !== 'users') return;
+    const timer = window.setTimeout(() => {
+      void refreshUsers();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [open, tab, refreshUsers]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    if (tab !== 'assignments' && tab !== 'banks') return;
+    const timer = window.setTimeout(() => {
+      void refreshBanks();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [open, tab, refreshBanks]);
+
+  React.useEffect(() => {
+    if (!open || tab !== 'active') return;
+    void refreshActive();
+  }, [open, tab, refreshActive]);
+
+  React.useEffect(() => {
+    if (!open || tab !== 'home') return;
+    const timer = window.setTimeout(() => {
+      void refreshHomeDashboard();
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [open, tab, refreshHomeDashboard]);
+
+  React.useEffect(() => {
+    if (!open || tab !== 'activity') return;
+    const timer = window.setTimeout(() => {
+      void refreshActivity();
+      void refreshOtherActivity();
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [open, tab, refreshActivity, refreshOtherActivity]);
+
+  const loadAccountRegistrationRequests = React.useCallback(async () => {
+    setAccountReqLoading(true);
+    try {
+      const data = await adminApi.listAccountRegistrationRequests({
+        filter: accountReqFilter,
+        q: accountReqSearch.trim() || undefined,
+        page: accountReqPage,
+        perPage: PAGE_SIZE,
+      });
+      setAccountReqRows(Array.isArray(data?.requests) ? data.requests : []);
+      setAccountReqTotal(Number(data?.total || 0));
+      setAccountReqPendingCount(Number(data?.pendingCount || 0));
+      setAccountReqHistoryCount(Number(data?.historyCount || 0));
+    } catch (err: any) {
+      pushNotice({ variant: 'error', message: err?.message || 'Could not load account registration requests. Please try again.' });
+      setAccountReqRows([]);
+      setAccountReqTotal(0);
+      setAccountReqPendingCount(0);
+      setAccountReqHistoryCount(0);
+    } finally {
+      setAccountReqLoading(false);
+    }
+  }, [pushNotice, accountReqFilter, accountReqSearch, accountReqPage]);
+
+  React.useEffect(() => {
+    if (!open || !isAdmin || tab !== 'account_requests') return;
+    const timer = window.setTimeout(() => {
+      void loadAccountRegistrationRequests();
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [open, isAdmin, tab, loadAccountRegistrationRequests]);
+
+  const handleAccountRequestAction = async (
+    id: string,
+    action: 'approve' | 'approve_assisted' | 'reject',
+    rejectionMessage?: string,
+    temporaryPassword?: string
+  ) => {
+    setAccountReqLoading(true);
+    try {
+      const result = await adminApi.accountRegistrationAction(id, {
+        action,
+        rejection_message: action === 'reject' ? (rejectionMessage || '').trim() : undefined,
+        temporary_password: action === 'approve_assisted' ? (temporaryPassword || '') : undefined,
+      });
+      if (action === 'approve_assisted') {
+        pushNotice({
+          variant: 'info',
+          message: 'Account approved without sending email. The user keeps their submitted password.'
+        });
+      } else if (action === 'approve' && result.decision_email_status === 'failed') {
+        const fallbackMsg = result.decision_email_error
+          ? `Account approved. Email was not sent (${result.decision_email_error}). User can log in with submitted password.`
+          : 'Account approved. Email was not sent due to provider limit. User can log in with submitted password.';
+        pushNotice({ variant: 'info', message: fallbackMsg });
+      } else {
+        pushNotice({ variant: 'success', message: action === 'approve' ? 'Account request approved.' : 'Account request rejected.' });
+      }
+      await loadAccountRegistrationRequests();
+    } catch (err: any) {
+      pushNotice({ variant: 'error', message: err?.message || 'Network error updating account request' });
+    } finally {
+      setAccountReqLoading(false);
+    }
+  };
+
+  const handleAccountRequestRetryEmail = async (id: string) => {
+    setAccountReqLoading(true);
+    try {
+      const result = await adminApi.accountRegistrationRetryEmail(id);
+      if (result.decision_email_status === 'sent') {
+        pushNotice({ variant: 'success', message: 'Decision email sent.' });
+      } else if (result.decision_email_status === 'failed') {
+        pushNotice({
+          variant: 'error',
+          message: result.decision_email_error
+            ? `Retry email failed: ${result.decision_email_error}`
+            : 'Retry email failed.'
+        });
+      } else {
+        pushNotice({ variant: 'info', message: 'Email retry skipped.' });
+      }
+      await loadAccountRegistrationRequests();
+    } catch (err: any) {
+      pushNotice({ variant: 'error', message: err?.message || 'Network error retrying decision email' });
+    } finally {
+      setAccountReqLoading(false);
+    }
+  };
+
+  const accountReqTotalPages = Math.max(1, Math.ceil(accountReqTotal / PAGE_SIZE));
+  const bankAccessTotalPages = Math.max(1, Math.ceil(bankAccessTotal / PAGE_SIZE));
+  const activityTotalPages = Math.max(1, Math.ceil(activityTotal / PAGE_SIZE));
+  const otherActivityTotalPages = Math.max(1, Math.ceil(otherActivityTotal / PAGE_SIZE));
+  const homeTrends = React.useMemo(() => {
+    if (homeData?.trends && homeData.trends.length > 0) return homeData.trends;
+    const fallback: AdminDashboardOverview['trends'] = [];
+    const today = new Date();
+    const days = Math.max(1, homeWindowDays);
+    for (let offset = days - 1; offset >= 0; offset -= 1) {
+      const day = new Date(today.getTime() - (offset * 24 * 60 * 60 * 1000));
+      const yyyy = day.getUTCFullYear();
+      const mm = String(day.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(day.getUTCDate()).padStart(2, '0');
+      fallback.push({
+        date: `${yyyy}-${mm}-${dd}`,
+        exportSuccess: 0,
+        exportFailed: 0,
+        authSuccess: 0,
+        authFailed: 0,
+        importTotal: 0,
+        storeRevenueApproved: 0,
+        accountRevenueApproved: 0,
+        totalRevenueApproved: 0,
+        storeBuyersApproved: 0,
+        accountBuyersApproved: 0,
+        importRequests: 0,
+      });
+    }
+    return fallback;
+  }, [homeData, homeWindowDays]);
+  const homePointLabels = React.useMemo(
+    () => homeTrends.map((point) => {
+      const [year, month, day] = point.date.split('-');
+      if (!year || !month || !day) return point.date;
+      return `${month}/${day}`;
+    }),
+    [homeTrends],
+  );
+  const homeExportSuccessSeries = React.useMemo(() => homeTrends.map((point) => Number(point.exportSuccess || 0)), [homeTrends]);
+  const homeExportFailedSeries = React.useMemo(() => homeTrends.map((point) => Number(point.exportFailed || 0)), [homeTrends]);
+  const homeAuthSuccessSeries = React.useMemo(() => homeTrends.map((point) => Number(point.authSuccess || 0)), [homeTrends]);
+  const homeAuthFailedSeries = React.useMemo(() => homeTrends.map((point) => Number(point.authFailed || 0)), [homeTrends]);
+  const homeImportSeries = React.useMemo(() => homeTrends.map((point) => Number(point.importTotal || 0)), [homeTrends]);
+  const homeStoreBuyersSeries = React.useMemo(() => homeTrends.map((point) => Number(point.storeBuyersApproved || 0)), [homeTrends]);
+  const homeAccountBuyersSeries = React.useMemo(() => homeTrends.map((point) => Number(point.accountBuyersApproved || 0)), [homeTrends]);
+  const homeImportRequestsSeries = React.useMemo(() => homeTrends.map((point) => Number(point.importRequests || 0)), [homeTrends]);
+  const homeRangeLabel = React.useMemo(() => {
+    const start = homeData?.meta?.rangeStartDate || homeFromDate || '-';
+    const end = homeData?.meta?.rangeEndDate || homeToDate || '-';
+    return `${start} to ${end}`;
+  }, [homeData, homeFromDate, homeToDate]);
+  const formatHomeMoney = React.useCallback(
+    (value: number) =>
+      new Intl.NumberFormat('en-PH', {
+        style: 'currency',
+        currency: 'PHP',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(Number.isFinite(value) ? value : 0),
+    [],
+  );
+
+  const getActivityMeta = React.useCallback((row: AdminActivityRow): Record<string, unknown> => {
+    if (!row.meta || typeof row.meta !== 'object' || Array.isArray(row.meta)) return {};
+    return row.meta;
+  }, []);
+
+  const getActivityPadNames = React.useCallback((row: AdminActivityRow): string[] => {
+    const meta = getActivityMeta(row);
+    const raw = meta.padNames;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+      .filter(Boolean)
+      .slice(0, 500);
+  }, [getActivityMeta]);
+
+  React.useEffect(() => {
+    if (!expandedActivityId) return;
+    if (!activityRows.some((row) => row.id === expandedActivityId)) {
+      setExpandedActivityId(null);
+    }
+  }, [activityRows, expandedActivityId]);
+
+  const loadBankAccess = React.useCallback(async (bankId: string, page: number, search: string) => {
+    setBankAccessLoading(true);
+    try {
+      const data = await adminApi.getBankAccess(bankId, {
+        page,
+        perPage: PAGE_SIZE,
+        q: search.trim() || undefined,
+      });
+      setBankAccessRows(Array.isArray(data.access) ? data.access : []);
+      setBankAccessTotal(Number(data.total || 0));
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load bank access list.');
+      setBankAccessRows([]);
+      setBankAccessTotal(0);
+    } finally {
+      setBankAccessLoading(false);
+    }
+  }, []);
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem(
+      ACTIVE_SORT_STORAGE_KEY,
+      JSON.stringify({ sortBy: activeSortBy, sortDir: activeSortDir }),
+    );
+  }, [activeSortBy, activeSortDir]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    if (!selectedUserId) {
+      setAccessRows([]);
+      return;
+    }
+    void refreshAccess(selectedUserId);
+  }, [open, selectedUserId, refreshAccess]);
+
+  React.useEffect(() => {
+    if (!open || !bankAccessOpen || !bankAccessBank?.id) return;
+    const timer = window.setTimeout(() => {
+      void loadBankAccess(bankAccessBank.id, bankAccessPage, bankAccessSearch);
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [open, bankAccessOpen, bankAccessBank?.id, bankAccessPage, bankAccessSearch, loadBankAccess]);
+
+  React.useEffect(() => {
+    if (bankAccessPage > bankAccessTotalPages) {
+      setBankAccessPage(bankAccessTotalPages);
+    }
+  }, [bankAccessPage, bankAccessTotalPages]);
+
+  React.useEffect(() => {
+    if (!open || tab !== 'home') return;
+    const timer = window.setInterval(() => void refreshHomeDashboard(), 60000);
+    return () => window.clearInterval(timer);
+  }, [open, tab, refreshHomeDashboard]);
+
+  const toggleUserSort = (next: UserSortBy) => {
+    if (usersSortBy === next) setUsersSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setUsersSortBy(next);
+      setUsersSortDir(next === 'created_at' || next === 'last_sign_in_at' ? 'desc' : 'asc');
+    }
+  };
+
+  const toggleBankSort = (next: BankSortBy) => {
+    if (banksSortBy === next) setBanksSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setBanksSortBy(next);
+      setBanksSortDir(next === 'created_at' || next === 'access_count' ? 'desc' : 'asc');
+    }
+  };
+
+  const toggleAssignmentUserSort = (next: AssignmentUserSortBy) => {
+    if (assignmentUserSortBy === next) {
+      setAssignmentUserSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setAssignmentUserSortBy(next);
+    setAssignmentUserSortDir(next === 'created_at' ? 'desc' : 'asc');
+  };
+
+  const toggleAssignmentBankSort = (next: AssignmentBankSortBy) => {
+    if (assignmentBankSortBy === next) {
+      setAssignmentBankSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setAssignmentBankSortBy(next);
+    setAssignmentBankSortDir(next === 'access_count' ? 'desc' : 'asc');
+  };
+
+  const toggleActiveSort = (next: ActiveSortBy) => {
+    if (activeSortBy === next) {
+      setActiveSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setActiveSortBy(next);
+    setActiveSortDir(next === 'last_seen_at' ? 'desc' : 'asc');
+  };
+
+  const toggleActivitySort = (next: ActivitySortBy) => {
+    if (activitySortBy === next) {
+      setActivitySortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      setActivityPage(1);
+      return;
+    }
+    setActivitySortBy(next);
+    setActivitySortDir(next === 'created_at' ? 'desc' : 'asc');
+    setActivityPage(1);
+  };
+
+  const toggleOtherActivitySort = (next: ActivitySortBy) => {
+    if (otherActivitySortBy === next) {
+      setOtherActivitySortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      setOtherActivityPage(1);
+      return;
+    }
+    setOtherActivitySortBy(next);
+    setOtherActivitySortDir(next === 'created_at' ? 'desc' : 'asc');
+    setOtherActivityPage(1);
+  };
+
+  const toggleSelectBank = (bankId: string) => {
+    setSelectedBankIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(bankId)) next.delete(bankId);
+      else next.add(bankId);
+      return next;
+    });
+  };
+
+  const selectedIds = Array.from(selectedBankIds);
+  const selectedGrantIds = selectedIds.filter((id) => !grantedBankIds.has(id));
+  const selectedRevokeIds = selectedIds.filter((id) => grantedBankIds.has(id));
+  const allGrantIds = banks.filter((b) => !grantedBankIds.has(b.id)).map((b) => b.id);
+  const allRevokeIds = banks.filter((b) => grantedBankIds.has(b.id)).map((b) => b.id);
+
+  const doGrant = async (bankIds: string[]) => {
+    if (!selectedUserId || bankIds.length === 0) return;
+    setBulkLoading(true);
+    try {
+      await adminApi.grantUserAccess(selectedUserId, bankIds);
+      setInfo(`Granted ${bankIds.length} bank(s).`);
+      setSelectedBankIds(new Set());
+      await Promise.all([refreshAccess(selectedUserId), refreshBanks()]);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Access grant failed.');
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const doRevoke = async (bankIds: string[]) => {
+    if (!selectedUserId || bankIds.length === 0) return;
+    setBulkLoading(true);
+    try {
+      await adminApi.revokeUserAccess(selectedUserId, bankIds);
+      setInfo(`Revoked ${bankIds.length} bank(s).`);
+      setSelectedBankIds(new Set());
+      await Promise.all([refreshAccess(selectedUserId), refreshBanks()]);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Access revoke failed.');
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const createUser = async () => {
+    const email = createEmail.trim().toLowerCase();
+    if (!email) {
+      setError('Email is required.');
+      return;
+    }
+    if (!createPassword || createPassword.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    setCreateLoading(true);
+    try {
+      await adminApi.createUser({
+        email,
+        password: createPassword,
+        displayName: createDisplayName.trim() || undefined,
+      });
+      setCreateEmail('');
+      setCreatePassword('');
+      setCreateDisplayName('');
+      setCreateOpen(false);
+      setInfo('User created.');
+      await refreshUsers();
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'User could not be created.');
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
+  const saveUserProfile = async () => {
+    if (!detailsUser) return;
+    const displayName = editDisplayName.trim();
+    if (!displayName) {
+      setError('Display name is required.');
+      return;
+    }
+    const ownedBankQuota = Math.floor(Number(editOwnedBankQuota));
+    const ownedBankPadCap = Math.floor(Number(editOwnedBankPadCap));
+    const deviceTotalBankCap = Math.floor(Number(editDeviceTotalBankCap));
+    if (!Number.isFinite(ownedBankQuota) || ownedBankQuota < 1 || ownedBankQuota > 500) {
+      setError('Bank quota must be between 1 and 500.');
+      return;
+    }
+    if (!Number.isFinite(ownedBankPadCap) || ownedBankPadCap < 1 || ownedBankPadCap > 256) {
+      setError('Pad cap must be between 1 and 256.');
+      return;
+    }
+    if (!Number.isFinite(deviceTotalBankCap) || deviceTotalBankCap < 10 || deviceTotalBankCap > 1000) {
+      setError('Bank cap must be between 10 and 1000.');
+      return;
+    }
+    setProfileSaving(true);
+    try {
+      await adminApi.updateUserProfile(detailsUser.id, {
+        displayName,
+        ownedBankQuota,
+        ownedBankPadCap,
+        deviceTotalBankCap,
+      });
+      setDetailsUser((prev) => (prev ? {
+        ...prev,
+        display_name: displayName,
+        owned_bank_quota: ownedBankQuota,
+        owned_bank_pad_cap: ownedBankPadCap,
+        device_total_bank_cap: deviceTotalBankCap,
+      } : prev));
+      setInfo('User profile updated.');
+      await refreshUsers();
+      if (selectedUserId) await refreshAccess(selectedUserId);
+      setDetailsOpen(false);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Profile could not be updated.');
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const removeUser = async () => {
+    if (!detailsUser) return;
+    try {
+      await adminApi.deleteUser(detailsUser.id);
+      setDeleteUserOpen(false);
+      setDetailsOpen(false);
+      if (selectedUserId === detailsUser.id) setSelectedUserId('');
+      setInfo('User deleted.');
+      await Promise.all([refreshUsers(), refreshBanks()]);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'User could not be deleted.');
+    }
+  };
+
+  const banUser = async () => {
+    if (!detailsUser) return;
+    try {
+      const result = await adminApi.banUser(detailsUser.id, banHours);
+      setDetailsUser((prev) => (prev ? { ...prev, banned_until: result.banned_until || prev.banned_until } : prev));
+      setBanOpen(false);
+      setInfo(`User banned for ${banHours} hour(s).`);
+      await refreshUsers();
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Account restriction could not be applied.');
+    }
+  };
+
+  const unbanUser = async () => {
+    if (!detailsUser) return;
+    try {
+      await adminApi.unbanUser(detailsUser.id);
+      setDetailsUser((prev) => (prev ? { ...prev, banned_until: null } : prev));
+      setInfo('User unbanned.');
+      await refreshUsers();
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Account restriction could not be removed.');
+    }
+  };
+
+  const sendReset = async () => {
+    if (!detailsUser) return;
+    try {
+      await adminApi.resetPassword(detailsUser.id);
+      setInfo('Password reset email sent.');
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Password reset email could not be sent.');
+    }
+  };
+
+  const saveBank = async () => {
+    if (!editBank) return;
+    const title = editBankTitle.trim();
+    if (!title) {
+      setError('Bank title is required.');
+      return;
+    }
+    setBankSaving(true);
+    try {
+      await adminApi.updateBank(editBank.id, { title, description: editBankDesc.trim(), color: editBankColor });
+      setInfo('Bank updated.');
+      setEditBankOpen(false);
+      await refreshBanks();
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to update bank');
+    } finally {
+      setBankSaving(false);
+    }
+  };
+
+  const removeBank = async () => {
+    if (!deleteBank) return;
+    try {
+      await adminApi.deleteBank(deleteBank.id, true);
+      setInfo(`Bank "${deleteBank.title}" archived and access revoked.`);
+      setDeleteBankOpen(false);
+      setDeleteBank(null);
+      await Promise.all([refreshBanks(), selectedUserId ? refreshAccess(selectedUserId) : Promise.resolve()]);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to archive bank');
+    }
+  };
+
+  const openUserDetails = (user: AdminUser) => {
+    setDetailsUser(user);
+    setEditDisplayName(user.display_name || '');
+    setEditOwnedBankQuota(String(user.owned_bank_quota ?? 6));
+    setEditOwnedBankPadCap(String(user.owned_bank_pad_cap ?? 64));
+    setEditDeviceTotalBankCap(String(user.device_total_bank_cap ?? 120));
+    setBanHours(24);
+    setDetailsOpen(true);
+  };
+
+  const openBankAccessDialog = (bank: AdminBank) => {
+    setBankAccessBank(bank);
+    setBankAccessRows([]);
+    setBankAccessTotal(0);
+    setBankAccessSearch('');
+    setBankAccessPage(1);
+    setBankAccessOpen(true);
+  };
+
+  const activeTab = TABS.find((item) => item.key === tab) || TABS[0];
+  const tabToneForKey = (tabKey: TabKey) => (TABS.find((item) => item.key === tabKey) || TABS[0]).tone;
+  const tabButtonClass = (tabKey: TabKey): string => {
+    const config = TABS.find((item) => item.key === tabKey);
+    if (!config) return '';
+    const tone = TAB_TONE_CLASSES[config.tone];
+    const isActive = tab === tabKey;
+    const colorClass = isActive
+      ? (theme === 'dark' ? tone.activeDark : tone.activeLight)
+      : (theme === 'dark' ? tone.inactiveDark : tone.inactiveLight);
+    return `h-9 w-full justify-start px-3 border transition-colors text-left overflow-hidden whitespace-nowrap ${colorClass}`;
+  };
+  const tabPanelToneClass = (tabKey: TabKey): string => {
+    const tone = TAB_CONTENT_TONE_CLASSES[tabToneForKey(tabKey)];
+    return theme === 'dark' ? tone.panelDark : tone.panelLight;
+  };
+  const tabCardToneClass = (tabKey: TabKey): string => {
+    const tone = TAB_CONTENT_TONE_CLASSES[tabToneForKey(tabKey)];
+    return theme === 'dark' ? tone.cardDark : tone.cardLight;
+  };
+  const tabTitleToneClass = (tabKey: TabKey): string => {
+    const tone = TAB_CONTENT_TONE_CLASSES[tabToneForKey(tabKey)];
+    return theme === 'dark' ? tone.textDark : tone.textLight;
+  };
+
+  return (
+    <>
+      <NoticesPortal notices={notices} dismiss={dismiss} theme={theme} />
+
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent aria-describedby={undefined} className={`w-full max-w-[100vw] sm:max-w-[95vw] md:max-w-6xl h-[100dvh] max-h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] overflow-hidden grid grid-rows-[auto_1fr] p-2 sm:p-6 ${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'}`}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Shield className="w-4 h-4" />
+              Admin Access
+            </DialogTitle>
+          </DialogHeader>
+          <div className="min-h-0 h-full overflow-hidden grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-3">
+            <aside className={`hidden lg:flex border rounded p-3 flex-col gap-2 min-h-0 overflow-auto w-[240px] min-w-[240px] max-w-[240px] ${tabCardToneClass(activeTab.key)}`}>
+              <div className="text-sm font-semibold">Navigation</div>
+              <div className={`text-xs rounded border px-2 py-1 min-h-[52px] flex flex-col justify-center overflow-hidden ${tabCardToneClass(activeTab.key)}`}>
+                <span className={`font-medium truncate ${tabTitleToneClass(activeTab.key)}`}>{activeTab.emoji} {activeTab.label}</span>
+                <div className="opacity-75 mt-0.5 truncate whitespace-nowrap" title={activeTab.hint}>{activeTab.hint}</div>
+              </div>
+              <div className="space-y-2">
+                {TABS.map((t) => (
+                  <Button
+                    key={t.key}
+                    size="sm"
+                    variant="outline"
+                    className={tabButtonClass(t.key)}
+                    onClick={() => setTab(t.key)}
+                  >
+                    <span className="mr-2 shrink-0">{t.emoji}</span>
+                    <span className="truncate">{t.label}</span>
+                  </Button>
+                ))}
+              </div>
+            </aside>
+            <div className="min-h-0 h-full overflow-hidden flex flex-col">
+              <div className="lg:hidden mb-2 flex items-center gap-2">
+                <Button type="button" size="sm" variant="outline" className="h-9 px-3" onClick={() => setIsNavOpen(true)}>
+                  <Menu className="w-4 h-4 mr-1" />
+                  Menu
+                </Button>
+                <div className={`flex-1 rounded border px-2 py-1 text-xs ${tabCardToneClass(activeTab.key)}`}>
+                  <span className={`font-medium ${tabTitleToneClass(activeTab.key)}`}>{activeTab.emoji} {activeTab.label}</span>
+                  <span className="opacity-70"> | {activeTab.hint}</span>
+                </div>
+              </div>
+              <AdminAccessNonStoreTabs
+                tab={tab}
+                home={{
+                  theme,
+                  panelClass: tabPanelToneClass('home'),
+                  cardClass: tabCardToneClass('home'),
+                  homeFromDate,
+                  homeToDate,
+                  homeLoading,
+                  homeError,
+                  homeData,
+                  homeRangeLabel,
+                  homeLastRefresh,
+                  homeTrends,
+                  homePointLabels,
+                  homeStoreBuyersSeries,
+                  homeAccountBuyersSeries,
+                  homeImportRequestsSeries,
+                  homeExportSuccessSeries,
+                  homeExportFailedSeries,
+                  homeAuthSuccessSeries,
+                  homeAuthFailedSeries,
+                  homeImportSeries,
+                  onHomeFromDateChange: setHomeFromDate,
+                  onHomeToDateChange: setHomeToDate,
+                  onApplyPresetRange: applyHomePresetRange,
+                  onRefresh: () => void refreshHomeDashboard(),
+                  onOpenAccountRequests: () => setTab('account_requests'),
+                  onOpenStoreRequests: () => setTab('store_requests'),
+                  formatMoney: formatHomeMoney,
+                }}
+                assignments={{
+                  theme,
+                  cardClass: tabCardToneClass('assignments'),
+                  usersLoading,
+                  usersQuery,
+                  assignmentUsers,
+                  assignmentUserSortBy,
+                  assignmentUserSortDir,
+                  selectedUserId,
+                  selectedUser,
+                  accessLoading,
+                  bulkLoading,
+                  selectedGrantIds,
+                  selectedRevokeIds,
+                  allGrantIds,
+                  allRevokeIds,
+                  assignmentBanks,
+                  assignmentBankSortBy,
+                  assignmentBankSortDir,
+                  selectedBankIds,
+                  grantedBankIds,
+                  banksLoading,
+                  onUsersQueryChange: setUsersQuery,
+                  onRefreshUsers: () => void refreshUsers(),
+                  onToggleAssignmentUserSort: toggleAssignmentUserSort,
+                  onSelectUser: setSelectedUserId,
+                  onGrant: (ids) => void doGrant(ids),
+                  onRevoke: (ids) => void doRevoke(ids),
+                  onToggleAssignmentBankSort: toggleAssignmentBankSort,
+                  onToggleBankSelection: toggleSelectBank,
+                }}
+                banks={{
+                  theme,
+                  panelClass: tabPanelToneClass('active'),
+                  banksLoading,
+                  banksQuery,
+                  banks,
+                  banksSortBy,
+                  banksSortDir,
+                  onBanksQueryChange: setBanksQuery,
+                  onRefreshBanks: () => void refreshBanks(),
+                  onToggleBankSort: toggleBankSort,
+                  onOpenBankAccess: openBankAccessDialog,
+                  onEditBank: (bank) => {
+                    setEditBank(bank);
+                    setEditBankTitle(bank.title);
+                    setEditBankDesc(bank.description || '');
+                    setEditBankColor(bank.color || '#3b82f6');
+                    setEditBankOpen(true);
+                  },
+                  onDeleteBank: (bank) => {
+                    setDeleteBank(bank);
+                    setDeleteBankOpen(true);
+                  },
+                }}
+                users={{
+                  theme,
+                  panelClass: tabPanelToneClass('users'),
+                  usersLoading,
+                  usersQuery,
+                  users,
+                  usersSortBy,
+                  usersSortDir,
+                  onUsersQueryChange: setUsersQuery,
+                  onRefreshUsers: () => void refreshUsers(),
+                  onToggleUserSort: toggleUserSort,
+                  onOpenCreateUser: () => setCreateOpen(true),
+                  onOpenUserDetails: openUserDetails,
+                }}
+                active={{
+                  theme,
+                  panelClass: tabPanelToneClass('banks'),
+                  cardClass: tabCardToneClass('active'),
+                  titleClass: tabTitleToneClass('active'),
+                  activeLoading,
+                  activeCounts,
+                  activeUsersRows,
+                  activeSortBy,
+                  activeSortDir,
+                  onRefreshActive: () => void refreshActive(),
+                  onToggleActiveSort: toggleActiveSort,
+                }}
+                activity={{
+                  theme,
+                  panelClass: tabPanelToneClass('activity'),
+                  cardClass: tabCardToneClass('activity'),
+                  activityLoading,
+                  activityRows,
+                  activityPage,
+                  activityTotalPages,
+                  activitySearch,
+                  activitySortBy,
+                  activitySortDir,
+                  activityStatusFilter,
+                  activityCategoryFilter,
+                  activityPhaseFilter,
+                  activityUploadResultFilter,
+                  expandedActivityId,
+                  otherActivityLoading,
+                  otherActivityRows,
+                  otherActivityPage,
+                  otherActivityTotalPages,
+                  otherActivitySearch,
+                  otherActivitySortBy,
+                  otherActivitySortDir,
+                  otherActivityStatusFilter,
+                  getActivityMeta,
+                  getActivityPadNames,
+                  onActivityPageChange: setActivityPage,
+                  onActivitySearchChange: setActivitySearch,
+                  onToggleActivitySort: toggleActivitySort,
+                  onActivityStatusFilterChange: setActivityStatusFilter,
+                  onActivityCategoryFilterChange: setActivityCategoryFilter,
+                  onActivityPhaseFilterChange: setActivityPhaseFilter,
+                  onActivityUploadResultFilterChange: setActivityUploadResultFilter,
+                  onToggleExpandedActivity: (id) => setExpandedActivityId((prev) => prev === id ? null : id),
+                  onRefreshActivity: () => void refreshActivity(),
+                  onOtherActivityPageChange: setOtherActivityPage,
+                  onOtherActivitySearchChange: setOtherActivitySearch,
+                  onToggleOtherActivitySort: toggleOtherActivitySort,
+                  onOtherActivityStatusFilterChange: setOtherActivityStatusFilter,
+                  onRefreshOtherActivity: () => void refreshOtherActivity(),
+                }}
+              />
+
+              {tab === 'default_bank' && (
+                <DefaultBankTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('default_bank')}
+                  loading={defaultBankLoading}
+                  publishLoading={defaultBankPublishLoading}
+                  rollbackLoading={defaultBankRollbackLoading}
+                  currentRelease={defaultBankCurrentRelease}
+                  releases={defaultBankReleases}
+                  nextVersion={defaultBankNextVersion}
+                  sourceOptions={defaultBankSourceChoices}
+                  selectedSourceId={defaultBankSourceId}
+                  releaseNotes={defaultBankReleaseNotes}
+                  minAppVersion={defaultBankMinAppVersion}
+                  onSelectedSourceIdChange={setDefaultBankSourceId}
+                  onReleaseNotesChange={setDefaultBankReleaseNotes}
+                  onMinAppVersionChange={setDefaultBankMinAppVersion}
+                  onRefresh={() => void refreshDefaultBank()}
+                  onPublish={() => void handlePublishDefaultBankRelease()}
+                  onRollback={(version) => void handleRollbackDefaultBankRelease(version)}
+                />
+              )}
+
+              {/* Store Requests Tab */}
+              {tab === 'account_requests' && (
+                <AccountRequestsTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('account_requests')}
+                  cardClass={tabCardToneClass('account_requests')}
+                  filter={accountReqFilter}
+                  search={accountReqSearch}
+                  loading={accountReqLoading}
+                  rows={accountReqRows}
+                  page={accountReqPage}
+                  totalPages={accountReqTotalPages}
+                  pendingCount={accountReqPendingCount}
+                  historyCount={accountReqHistoryCount}
+                  onFilterChange={(nextFilter) => {
+                    setAccountReqFilter(nextFilter);
+                    setAccountReqPage(1);
+                  }}
+                  onSearchChange={(value) => {
+                    setAccountReqSearch(value);
+                    setAccountReqPage(1);
+                  }}
+                  onPageChange={setAccountReqPage}
+                  onApprove={(id) => void handleAccountRequestAction(id, 'approve')}
+                  onAssist={(id) => setAccountReqToAssist({ id })}
+                  onReject={(id) => setAccountReqToReject({ id, message: '' })}
+                  onRetryEmail={(id) => void handleAccountRequestRetryEmail(id)}
+                />
+              )}
+
+              {tab === 'store_requests' && (
+                <StoreRequestsTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('store_requests')}
+                  cardClass={tabCardToneClass('store_requests')}
+                  filter={storeRequestFilter}
+                  search={storeReqSearch}
+                  loading={storeLoading}
+                  rows={pagedRequests}
+                  page={storeReqPage}
+                  totalPages={reqTotalPages}
+                  expandedId={expandedStoreRequestId}
+                  pendingCount={storeRequests.filter((request) => request.status === 'pending').length}
+                  historyCount={storeRequests.filter((request) => request.status !== 'pending').length}
+                  onFilterChange={(nextFilter) => {
+                    setStoreRequestFilter(nextFilter);
+                    setStoreReqPage(1);
+                    setExpandedStoreRequestId(null);
+                  }}
+                  onSearchChange={(value) => {
+                    setStoreReqSearch(value);
+                    setStoreReqPage(1);
+                  }}
+                  onPageChange={setStoreReqPage}
+                  onToggleExpanded={(id) => setExpandedStoreRequestId((prev) => prev === id ? null : id)}
+                  onApprove={(id) => {
+                    void handleStoreRequestAction(id, 'approve');
+                  }}
+                  onReject={(id) => setStoreRequestToReject({ id, message: '' })}
+                  onRetryEmail={(id) => void handleStoreRequestRetryEmail(id)}
+                />
+              )}
+
+              {/* Store Catalog Tab */}
+              {tab === 'store_catalog' && (
+                <StoreCatalogTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('store_catalog')}
+                  loading={storeLoading}
+                  storeDrafts={storeDrafts}
+                  pagedDrafts={pagedDrafts}
+                  page={storeCatalogPage}
+                  totalPages={catalogTotalPages}
+                  search={storeCatalogSearch}
+                  bankFilter={storeCatalogBankFilter}
+                  statusFilter={storeCatalogStatusFilter}
+                  paidFilter={storeCatalogPaidFilter}
+                  pinnedFilter={storeCatalogPinnedFilter}
+                  sort={storeCatalogSort}
+                  bankOptions={catalogBankOptions}
+                  filteredCount={filteredDrafts.length}
+                  stats={storeCatalogStats}
+                  hasFilters={hasStoreCatalogFilters}
+                  onSearchChange={(value) => {
+                    setStoreCatalogSearch(value);
+                    setStoreCatalogPage(1);
+                  }}
+                  onBankFilterChange={(value) => {
+                    setStoreCatalogBankFilter(value);
+                    setStoreCatalogPage(1);
+                  }}
+                  onStatusFilterChange={(value) => {
+                    setStoreCatalogStatusFilter(value);
+                    setStoreCatalogPage(1);
+                  }}
+                  onPaidFilterChange={(value) => {
+                    setStoreCatalogPaidFilter(value);
+                    setStoreCatalogPage(1);
+                  }}
+                  onPinnedFilterChange={(value) => {
+                    setStoreCatalogPinnedFilter(value);
+                    setStoreCatalogPage(1);
+                  }}
+                  onSortChange={(value) => {
+                    setStoreCatalogSort(value);
+                    setStoreCatalogPage(1);
+                  }}
+                  onResetFilters={resetStoreCatalogFilters}
+                  onPageChange={setStoreCatalogPage}
+                  onUpdateDraft={handleStoreCatalogUpdate}
+                  onPublishDraft={showStorePublishDialog}
+                  onReload={loadStoreCatalog}
+                  pushNotice={pushNotice}
+                />
+              )}
+
+              {/* Store Banners Tab */}
+              {tab === 'store_banners' && (
+                <StoreBannersTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('store_banners')}
+                  loading={storeLoading}
+                  bannerLoading={bannerLoading}
+                  banners={visibleStoreBanners}
+                  dirtyBannerIds={dirtyStoreBannerIds}
+                  bannerStats={storeBannerStats}
+                  showInactive={showInactiveBanners}
+                  newBannerPreviewUrl={newBannerPreviewUrl}
+                  newBannerImageUrl={newBannerImageUrl}
+                  newBannerLinkUrl={newBannerLinkUrl}
+                  newBannerSortOrder={newBannerSortOrder}
+                  newBannerHasFile={Boolean(newBannerImageFile)}
+                  bannerUploadingIds={bannerUploadingIds}
+                  onShowInactiveChange={setShowInactiveBanners}
+                  onNewBannerImageUrlChange={setNewBannerImageUrl}
+                  onNewBannerLinkUrlChange={setNewBannerLinkUrl}
+                  onNewBannerSortOrderChange={setNewBannerSortOrder}
+                  onNewBannerFileChange={handleNewBannerImageChange}
+                  onClearNewBannerFile={() => setNewBannerImageFile(null)}
+                  onCreateBanner={() => void handleCreateStoreBanner()}
+                  onReplaceBannerImage={(id, file) => void handleStoreBannerImageReplace(id, file)}
+                  onNudgeBannerSort={nudgeBannerSortOrder}
+                  onUpdateBanner={updateBannerDraft}
+                  onResetBanner={resetBannerDraft}
+                  onSaveBanner={(banner) => void handleSaveStoreBanner(banner)}
+                  onDeleteBanner={(banner) => void handleDeleteStoreBanner(banner)}
+                />
+              )}
+
+              {/* Store Config Tab */}
+              {tab === 'store_config' && (
+                <StoreConfigTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('store_config')}
+                  loading={storeLoading}
+                  storeConfig={storeConfig}
+                  storeQrPreviewUrl={storeQrPreviewUrl}
+                  hasQrImage={Boolean(storeQrPreviewUrl || storeConfig.qr_image_path)}
+                  onStoreConfigChange={setStoreConfig}
+                  onQrFileChange={handleStoreQrFileChange}
+                  onAutoApprovalAction={(target, action) => void handleStoreAutoApprovalAction(target, action)}
+                  onRemoveQr={() => {
+                    setStoreQrFile(null);
+                    setStoreConfig({ ...storeConfig, qr_image_path: '' });
+                  }}
+                  onSave={() => void handleStoreConfigSave()}
+                />
+              )}
+            </div>
+          </div>
+          {isNavOpen && (
+            <div className="lg:hidden fixed inset-0 z-[160] bg-black/55" onClick={() => setIsNavOpen(false)}>
+              <div
+                className={`absolute left-0 top-0 h-full w-[82vw] max-w-[320px] border-r p-3 ${theme === 'dark' ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'}`}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-semibold">Admin Navigation</div>
+                  <Button type="button" size="sm" variant="ghost" className="h-8 px-2" onClick={() => setIsNavOpen(false)}>
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+                <div className={`text-xs rounded border px-2 py-1 mb-2 ${tabCardToneClass(activeTab.key)}`}>
+                  <span className={`font-medium ${tabTitleToneClass(activeTab.key)}`}>{activeTab.emoji} {activeTab.label}</span>
+                  <div className="opacity-75 mt-0.5">{activeTab.hint}</div>
+                </div>
+                <div className="space-y-2 overflow-auto max-h-[calc(100vh-120px)] pr-1">
+                  {TABS.map((t) => (
+                    <Button
+                      key={`mobile-${t.key}`}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className={tabButtonClass(t.key)}
+                      onClick={() => {
+                        setTab(t.key);
+                        setIsNavOpen(false);
+                      }}
+                    >
+                      <span className="mr-2 shrink-0">{t.emoji}</span>
+                      <span className="truncate">{t.label}</span>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <AdminAccessDialogModals
+        theme={theme}
+        create={{
+          open: createOpen,
+          email: createEmail,
+          password: createPassword,
+          showPassword: showCreatePassword,
+          displayName: createDisplayName,
+          loading: createLoading,
+          onOpenChange: setCreateOpen,
+          onEmailChange: setCreateEmail,
+          onPasswordChange: setCreatePassword,
+          onToggleShowPassword: () => setShowCreatePassword((value) => !value),
+          onDisplayNameChange: setCreateDisplayName,
+          onSubmit: () => void createUser(),
+        }}
+        details={{
+          open: detailsOpen,
+          user: detailsUser,
+          displayName: editDisplayName,
+          ownedBankQuota: editOwnedBankQuota,
+          ownedBankPadCap: editOwnedBankPadCap,
+          deviceTotalBankCap: editDeviceTotalBankCap,
+          saving: profileSaving,
+          onOpenChange: setDetailsOpen,
+          onDisplayNameChange: setEditDisplayName,
+          onOwnedBankQuotaChange: setEditOwnedBankQuota,
+          onOwnedBankPadCapChange: setEditOwnedBankPadCap,
+          onDeviceTotalBankCapChange: setEditDeviceTotalBankCap,
+          onSaveProfile: saveUserProfile,
+          onOpenResetPassword: () => setResetPasswordOpen(true),
+          onOpenUnban: () => setUnbanOpen(true),
+          onOpenBan: () => setBanOpen(true),
+          onOpenDeleteUser: () => setDeleteUserOpen(true),
+        }}
+        ban={{
+          open: banOpen,
+          hours: banHours,
+          onOpenChange: setBanOpen,
+          onHoursChange: setBanHours,
+          onConfirm: banUser,
+        }}
+        bankEdit={{
+          open: editBankOpen,
+          title: editBankTitle,
+          description: editBankDesc,
+          color: editBankColor,
+          saving: bankSaving,
+          onOpenChange: setEditBankOpen,
+          onTitleChange: setEditBankTitle,
+          onDescriptionChange: setEditBankDesc,
+          onColorChange: setEditBankColor,
+          onSave: saveBank,
+        }}
+        bankAccess={{
+          open: bankAccessOpen,
+          bank: bankAccessBank,
+          loading: bankAccessLoading,
+          rows: bankAccessRows,
+          page: bankAccessPage,
+          total: bankAccessTotal,
+          totalPages: bankAccessTotalPages,
+          search: bankAccessSearch,
+          onOpenChange: (nextOpen) => {
+            setBankAccessOpen(nextOpen);
+            if (!nextOpen) {
+              setBankAccessBank(null);
+              setBankAccessRows([]);
+              setBankAccessTotal(0);
+              setBankAccessSearch('');
+              setBankAccessPage(1);
+            }
+          },
+          onSearchChange: (value) => {
+            setBankAccessSearch(value);
+            setBankAccessPage(1);
+          },
+          onPageChange: setBankAccessPage,
+        }}
+        confirmations={{
+          deleteUserOpen,
+          unbanOpen,
+          resetPasswordOpen,
+          deleteBankOpen,
+          deleteBank,
+          detailsUser,
+          onDeleteUserOpenChange: setDeleteUserOpen,
+          onUnbanOpenChange: setUnbanOpen,
+          onResetPasswordOpenChange: setResetPasswordOpen,
+          onDeleteBankOpenChange: setDeleteBankOpen,
+          onDeleteUserConfirm: removeUser,
+          onUnbanConfirm: unbanUser,
+          onResetPasswordConfirm: sendReset,
+          onDeleteBankConfirm: removeBank,
+        }}
+        storePublish={{
+          open: storePublishDialog.open,
+          draft: storePublishDialog.draft,
+          loading: storeLoading,
+          onOpenChange: (nextOpen) => {
+            if (!nextOpen) setStorePublishDialog({ open: false, draft: null });
+          },
+          onConfirm: executeStorePublish,
+        }}
+        storeRequestReject={{
+          value: storeRequestToReject,
+          onChange: setStoreRequestToReject,
+          onConfirm: (value) => {
+            handleStoreRequestAction(value.id, 'reject', value.message);
+            setStoreRequestToReject(null);
+          },
+        }}
+        accountRequestReject={{
+          value: accountReqToReject,
+          onChange: setAccountReqToReject,
+          onConfirm: (value) => {
+            const reason = value.message.trim();
+            if (!reason) {
+              pushNotice({ variant: 'error', message: 'Please enter a reason before declining.' });
+              return;
+            }
+            void handleAccountRequestAction(value.id, 'reject', reason);
+            setAccountReqToReject(null);
+          },
+        }}
+        accountAssist={{
+          value: accountReqToAssist,
+          onChange: setAccountReqToAssist,
+          onConfirm: (value) => {
+            void handleAccountRequestAction(value.id, 'approve_assisted');
+            setAccountReqToAssist(null);
+          },
+        }}
+      />
+
+    </>
+  );
+}
+
+
+
