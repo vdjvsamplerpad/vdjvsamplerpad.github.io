@@ -79,7 +79,8 @@ Current intended architecture:
   - Current note: `.env.example` keeps `VITE_ALLOW_REMOTE_SUPABASE_IN_DEV=false`, and this fresh repo currently has no CI workflow configured.
 
 ## 3) Repo Hygiene Before Push
-- [ ] Confirm new repo URL / org / username references are correct
+- [x] Confirm new repo URL / org / username references are correct
+  - Current remote: `https://github.com/vdjvsamplerpad/vdjvsamplerpad.github.io.git`
 - [x] Search for stale old repo, domain, or username references:
   - [x] `rg -n "<old-username>|<old-repo>|<old-domain>|<old-username>\\.github\\.io" .`
   - Result: no stale old repo/domain references were found in active project files; only this checklist contains the placeholder command text.
@@ -93,6 +94,7 @@ Current intended architecture:
 ## 4) Deploy / Hosting Checklist
 - [ ] GitHub repo settings recreated if moving repo
 - [ ] Actions enabled and deployment workflow present
+  - [x] deployment workflow present at `.github/workflows/deploy.yml`
 - [ ] Pages target confirmed:
   - [ ] root site `/`
   - [ ] project path `/<repo>/`
