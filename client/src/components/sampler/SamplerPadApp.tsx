@@ -1800,6 +1800,28 @@ export function SamplerPadApp() {
     setHighlightedPadTarget({ bankId: result.bankId, padId: result.padId });
     closeSearchOverlay();
   }, [closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
+  const handleSearchEdit = React.useCallback((result: SamplerSearchResult) => {
+    setSearchLoadError(null);
+    setPendingSearchLoadPicker(null);
+
+    if (isDualMode) {
+      if (searchScope === 'primary_bank') {
+        setPrimaryBank(result.bankId);
+      } else if (searchScope === 'secondary_bank') {
+        setSecondaryBank(result.bankId);
+      } else if (!visibleSearchBankIds.has(result.bankId)) {
+        setSearchLoadError('Pick Primary Bank or Secondary Bank before editing a pad outside the current view.');
+        return;
+      }
+    } else {
+      setCurrentBank(result.bankId);
+    }
+
+    setPendingSearchPadScroll({ bankId: result.bankId, padId: result.padId });
+    setHighlightedPadTarget({ bankId: result.bankId, padId: result.padId });
+    setEditRequest({ padId: result.padId, token: Date.now() });
+    closeSearchOverlay();
+  }, [closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
 
   const runSearchLoad = React.useCallback(async (result: SamplerSearchResult, channelId: number): Promise<boolean> => {
     if (!result.canLoad) {
@@ -3533,7 +3555,9 @@ export function SamplerPadApp() {
         results={searchResultsState.results}
         totalMatchCount={searchResultsState.total}
         onGo={handleSearchGo}
+        onEdit={handleSearchEdit}
         onLoad={handleSearchLoad}
+        showEditAction={settings.editMode}
         loadTargetSelection={pendingSearchLoadPicker}
         channelStates={channelStates}
         armedLoadChannelId={armedLoadChannelId}

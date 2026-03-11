@@ -31,6 +31,7 @@ interface SamplerPadProps {
   onRelinkMissingPadMedia?: (bankId: string, padId: string, file: File) => Promise<void>;
   onRehydratePadMedia?: (bankId: string, padId: string) => Promise<boolean>;
   onDragStart?: (e: React.DragEvent, pad: PadData, bankId: string) => void;
+  onDragEnd?: () => void;
   onTransferPad?: (padId: string, sourceBankId: string, targetBankId: string) => void;
   availableBanks?: Array<{ id: string; name: string; }>;
   canTransferFromBank?: (bankId: string) => boolean;
@@ -107,6 +108,7 @@ export const SamplerPad = React.memo(function SamplerPad({
   onRelinkMissingPadMedia,
   onRehydratePadMedia,
   onDragStart,
+  onDragEnd,
   onTransferPad,
   availableBanks = [],
   canTransferFromBank,
@@ -333,6 +335,7 @@ export const SamplerPad = React.memo(function SamplerPad({
 
   const handleDragEnd = () => {
     setIsDragging(false);
+    onDragEnd?.();
   };
 
   const handleTransferClick = (e: React.MouseEvent) => {

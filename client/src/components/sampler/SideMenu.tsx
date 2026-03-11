@@ -142,7 +142,7 @@ export function SideMenu({
   onRetryBankMissingMedia,
   defaultBankColor = '#3b82f6',
 }: SideMenuProps) {
-  const logoSrc = '/assets/logo.png';
+  const logoSrc = `${import.meta.env.BASE_URL}assets/logo.png`;
   const [showCreateDialog, setShowCreateDialog] = React.useState(false);
   const [showStoreDialog, setShowStoreDialog] = React.useState(false);
   const [showEditDialog, setShowEditDialog] = React.useState(false);

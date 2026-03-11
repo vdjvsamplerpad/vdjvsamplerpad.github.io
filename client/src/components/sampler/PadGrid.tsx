@@ -3,6 +3,22 @@ import { SamplerPad } from './SamplerPad';
 import { PadData, SamplerBank, StopMode } from './types/sampler';
 import { buildPadSearchAnchorId } from './samplerSearch';
 
+const normalizeSearchHitColor = (value: string | undefined, fallback = '#22d3ee'): string => {
+  if (!value) return fallback;
+  const trimmed = value.trim();
+  const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;
+  if (!/^[0-9a-fA-F]{6}$/.test(body)) return fallback;
+  return `#${body.toLowerCase()}`;
+};
+
+const hexToRgbString = (hex: string): string => {
+  const normalized = normalizeSearchHitColor(hex).slice(1);
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  return `${r} ${g} ${b}`;
+};
+
 export interface PadGridProps {
   pads: PadData[];
   bankId: string;
@@ -188,7 +204,8 @@ export const PadGrid = React.memo(function PadGrid({
     }
   };
 
-  const handlePadDragStartFromPad = (e: React.DragEvent, pad: PadData, sourceBankId: string) => {
+  const handlePadDragStartFromPad = (e: React.DragEvent, pad: PadData, sourceBankId: string, index: number) => {
+    handlePadDragStart(e, index);
     if (onPadDragStart) {
       onPadDragStart(e, pad, sourceBankId);
     }
@@ -199,6 +216,11 @@ export const PadGrid = React.memo(function PadGrid({
     () => [...pads].sort((a, b) => (a.position || 0) - (b.position || 0)),
     [pads]
   );
+  const searchHitColor = React.useMemo(() => {
+    const currentBank = allBanks.find((entry) => entry.id === bankId);
+    return normalizeSearchHitColor(currentBank?.bankMetadata?.color || currentBank?.defaultColor);
+  }, [allBanks, bankId]);
+  const searchHitColorRgb = React.useMemo(() => hexToRgbString(searchHitColor), [searchHitColor]);
 
   // Calculate responsive gap and sizing
   const isMobile = windowWidth < 768;
@@ -206,6 +228,61 @@ export const PadGrid = React.memo(function PadGrid({
   const supportsDesktopDragDrop = !isMobile && !isNativeCapacitor;
   const gap = isMobile ? 'gap-0' : 'gap-1';
   const aspectRatio = 'aspect-square';
+
+  const handlePadDragStart = (e: React.DragEvent, index: number) => {
+    if (!editMode) return;
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handlePadDragOver = (e: React.DragEvent, index: number) => {
+    const hasExternalFiles = Array.from(e.dataTransfer?.types || []).includes('Files');
+    if (hasExternalFiles && onFileUpload) {
+      e.preventDefault();
+      setIsDragOverGrid(true);
+      setDragOverPadTransfer(false);
+      return;
+    }
+
+    if (!editMode || draggedIndex === null) return;
+    e.preventDefault();
+    setDragOverIndex(index);
+  };
+
+  const handlePadDragEnd = () => {
+    if (!editMode) return;
+    if (draggedIndex !== null && dragOverIndex !== null && draggedIndex !== dragOverIndex) {
+      onReorderPads(draggedIndex, dragOverIndex);
+    }
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handlePadDragLeave = (e: React.DragEvent) => {
+    const hasExternalFiles = Array.from(e.dataTransfer?.types || []).includes('Files');
+    if (hasExternalFiles) {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+        setIsDragOverGrid(false);
+      }
+      return;
+    }
+    setDragOverIndex(null);
+  };
+
+  const handlePadDrop = (e: React.DragEvent, index: number) => {
+    if (editMode && draggedIndex !== null) {
+      e.preventDefault();
+      if (draggedIndex !== index) {
+        onReorderPads(draggedIndex, index);
+      }
+      setDraggedIndex(null);
+      setDragOverIndex(null);
+      return;
+    }
+
+    void handleDrop(e);
+    setDragOverIndex(null);
+  };
 
   if (pads.length === 0) {
     return (
@@ -253,46 +330,6 @@ export const PadGrid = React.memo(function PadGrid({
     );
   }
 
-  const handlePadDragStart = (e: React.DragEvent, index: number) => {
-    if (!editMode) return;
-    setDraggedIndex(index);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handlePadDragOver = (e: React.DragEvent, index: number) => {
-    const hasExternalFiles = Array.from(e.dataTransfer?.types || []).includes('Files');
-    if (hasExternalFiles && onFileUpload) {
-      e.preventDefault();
-      setIsDragOverGrid(true);
-      setDragOverPadTransfer(false);
-      return;
-    }
-
-    if (!editMode || draggedIndex === null) return;
-    e.preventDefault();
-    setDragOverIndex(index);
-  };
-
-  const handlePadDragEnd = () => {
-    if (!editMode) return;
-    if (draggedIndex !== null && dragOverIndex !== null && draggedIndex !== dragOverIndex) {
-      onReorderPads(draggedIndex, dragOverIndex);
-    }
-    setDraggedIndex(null);
-    setDragOverIndex(null);
-  };
-
-  const handlePadDragLeave = (e: React.DragEvent) => {
-    const hasExternalFiles = Array.from(e.dataTransfer?.types || []).includes('Files');
-    if (hasExternalFiles) {
-      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-        setIsDragOverGrid(false);
-      }
-      return;
-    }
-    setDragOverIndex(null);
-  };
-
   return (
     <div
       className={`grid ${gap} w-full min-w-0 max-w-full overflow-x-hidden transition-all duration-200 ${dragOverPadTransfer
@@ -330,26 +367,29 @@ export const PadGrid = React.memo(function PadGrid({
           id={buildPadSearchAnchorId(bankId, pad.id)}
           data-bank-id={bankId}
           data-pad-id={pad.id}
-          className={`min-w-0 max-w-full ${aspectRatio} transition-all duration-300 ${
+          className={`relative min-w-0 max-w-full ${aspectRatio} transition-all duration-300 ${
             editMode && dragOverIndex === index ? 'ring-2 ring-blue-400' : ''
             } ${
             highlightedPadId === pad.id
               ? (theme === 'dark'
-                  ? 'ring-4 ring-cyan-300 ring-offset-2 ring-offset-gray-900 scale-[1.01]'
-                  : 'ring-4 ring-cyan-400 ring-offset-2 ring-offset-white scale-[1.01]')
+                  ? 'sampler-search-hit sampler-search-hit-dark ring-4 ring-cyan-300 ring-offset-2 ring-offset-gray-900 scale-[1.02] z-10'
+                  : 'sampler-search-hit sampler-search-hit-light ring-4 ring-cyan-400 ring-offset-2 ring-offset-white scale-[1.02] z-10')
               : ''
             }`}
-          style={{ contain: 'content' }}
-          draggable={editMode}
-          onDragStart={(e) => handlePadDragStart(e, index)}
-          onDragOver={(e) => handlePadDragOver(e, index)}
-          onDrop={(e) => {
-            void handleDrop(e);
-            setDragOverIndex(null);
+          style={{
+            contain: 'content',
+            ['--sampler-search-hit-color' as string]: searchHitColor,
+            ['--sampler-search-hit-rgb' as string]: searchHitColorRgb,
           }}
-          onDragEnd={handlePadDragEnd}
+          onDragOver={(e) => handlePadDragOver(e, index)}
+          onDrop={(e) => handlePadDrop(e, index)}
           onDragLeave={(e) => handlePadDragLeave(e)}
         >
+          {highlightedPadId === pad.id ? (
+            <div className="sampler-search-hit-badge pointer-events-none">
+              Found
+            </div>
+          ) : null}
           <SamplerPad
             pad={pad}
             bankId={bankId}
@@ -368,7 +408,8 @@ export const PadGrid = React.memo(function PadGrid({
             onDuplicatePad={onDuplicatePad}
             onRelinkMissingPadMedia={onRelinkMissingPadMedia}
             onRehydratePadMedia={onRehydratePadMedia}
-            onDragStart={handlePadDragStartFromPad}
+            onDragStart={(e, dragPad, sourceBankId) => handlePadDragStartFromPad(e, dragPad, sourceBankId, index)}
+            onDragEnd={handlePadDragEnd}
             onTransferPad={onTransferPad}
             availableBanks={availableBanks}
             canTransferFromBank={canTransferFromBank}

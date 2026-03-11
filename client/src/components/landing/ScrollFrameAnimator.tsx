@@ -25,6 +25,7 @@ type ScrollFrameAnimatorProps = {
 
 const BATCH_SIZE = 18;
 const AUTOPLAY_DURATION_MS = 2500;
+const TRANSITION_FRAME_TIMEOUT_MS = 1600;
 
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 const easeInOutCubic = (value: number) => (
@@ -81,27 +82,55 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
     active: boolean;
   }>({ frames: [], progress: 0, reversed: false, active: false });
 
+  const getSequenceFrameNumbers = React.useCallback((totalFrames: number) => {
+    const step = tier === 'high' ? 1 : tier === 'medium' ? 2 : 4;
+    const framesToLoad: number[] = [];
+    for (let i = 1; i <= totalFrames; i += step) framesToLoad.push(i);
+    if (framesToLoad[framesToLoad.length - 1] !== totalFrames) framesToLoad.push(totalFrames);
+    return framesToLoad;
+  }, [tier]);
+
+  const loadSequenceFrames = React.useCallback(async (dir: string, totalFrames = 97, highPriorityCount = 0) => {
+    const frameNumbers = getSequenceFrameNumbers(totalFrames);
+    const pad = (n: number) => String(n).padStart(4, '0');
+    const settled = await Promise.allSettled(
+      frameNumbers.map((frameNum, index) => (
+        new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          img.decoding = 'async';
+          let settledOnce = false;
+          const finalize = (handler: () => void) => {
+            if (settledOnce) return;
+            settledOnce = true;
+            window.clearTimeout(timeoutId);
+            handler();
+          };
+          const timeoutId = window.setTimeout(() => {
+            finalize(() => reject(new Error(`Timed out loading ${dir} frame ${frameNum}`)));
+          }, TRANSITION_FRAME_TIMEOUT_MS);
+          if (index < highPriorityCount) {
+            (img as HTMLImageElement & { fetchPriority?: 'high' | 'low' | 'auto' }).fetchPriority = 'high';
+          }
+          img.onload = () => finalize(() => resolve(img));
+          img.onerror = () => finalize(() => reject(new Error(`Failed to load ${dir} frame ${frameNum}`)));
+          img.src = `/frames/${dir}/frame-${pad(frameNum)}.webp`;
+        })
+      ))
+    );
+
+    return settled
+      .filter((result): result is PromiseFulfilledResult<HTMLImageElement> => result.status === 'fulfilled')
+      .map((result) => result.value)
+      .filter((img) => img.width > 0 && img.height > 0);
+  }, [getSequenceFrameNumbers]);
+
   const prefetchSequence = React.useCallback((dir: string) => {
     if (sequenceCacheRef.current[dir]) return; // already init/fetched
     sequenceCacheRef.current[dir] = []; // mark as fetching
-    const step = tier === 'high' ? 1 : tier === 'medium' ? 2 : 4;
-    const framesToLoad: number[] = [];
-    for (let i = 1; i <= 97; i += step) framesToLoad.push(i);
-    if (framesToLoad[framesToLoad.length - 1] !== 97) framesToLoad.push(97);
-
-    const pad = (n: number) => String(n).padStart(4, '0');
-    const promises = framesToLoad.map(frameNum => {
-      return new Promise<HTMLImageElement>((resolve) => {
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = () => resolve(img); // Resolve broken gracefully
-        img.src = `/frames/${dir}/frame-${pad(frameNum)}.webp`;
-      });
+    void loadSequenceFrames(dir).then((frames) => {
+      sequenceCacheRef.current[dir] = frames;
     });
-    Promise.all(promises).then(frames => {
-      sequenceCacheRef.current[dir] = frames.filter(f => f.width > 0);
-    });
-  }, [tier]);
+  }, [loadSequenceFrames]);
 
   const syncProgress = React.useCallback(
     (nextProgress: number) => {
@@ -370,32 +399,21 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
     const config = getTransitionConfig(from, to);
     if (!config) return;
 
-    const step = tier === 'high' ? 1 : tier === 'medium' ? 2 : 4;
-    const totalResourceFrames = 97;
-    const framesToLoad: number[] = [];
-    for (let i = 1; i <= totalResourceFrames; i += step) {
-      framesToLoad.push(i);
-    }
-    if (framesToLoad[framesToLoad.length - 1] !== totalResourceFrames) {
-      framesToLoad.push(totalResourceFrames);
-    }
-
-    const pad = (n: number) => String(n).padStart(4, '0');
-
-    const loadPromises = framesToLoad.map(frameNum => {
-      return new Promise<HTMLImageElement>((resolve, fail) => {
-        const img = new Image();
-        img.decoding = 'async';
-        img.onload = () => resolve(img);
-        img.onerror = () => fail();
-        img.src = `/frames/${config.dir}/frame-${pad(frameNum)}.webp`;
-      });
-    });
-
-    Promise.all(loadPromises).then(loadedFrames => {
+    const startVersionTransition = (loadedFrames: HTMLImageElement[]) => {
       if (cancelled) return;
       loadingVersionTransRef.current = false;
       sequenceCacheRef.current[config.dir] = loadedFrames;
+
+      if (loadedFrames.length < 2) {
+        activeVersionFrameRef.current = loadedFrames[0] || activeVersionFrameRef.current || framesRef.current[frameCount - 1] || null;
+        versionAnimationRef.current = {
+          frames: [],
+          progress: 1,
+          reversed: config.reverse,
+          active: false,
+        };
+        return;
+      }
 
       versionAnimationRef.current = {
         frames: loadedFrames,
@@ -420,7 +438,24 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
         }
       };
       versionTransitionRafRef.current = requestAnimationFrame(tick);
+    };
 
+    const cachedFrames = sequenceCacheRef.current[config.dir];
+    if (cachedFrames && cachedFrames.length > 1) {
+      startVersionTransition(cachedFrames);
+      return;
+    }
+
+    if (config.dir === 'v3-v1') {
+      const mainFrames = framesRef.current.filter((frame): frame is HTMLImageElement => Boolean(frame && frame.width > 0 && frame.height > 0));
+      if (mainFrames.length > 1) {
+        startVersionTransition(mainFrames);
+        return;
+      }
+    }
+
+    void loadSequenceFrames(config.dir, 97, 8).then((loadedFrames) => {
+      startVersionTransition(loadedFrames);
     }).catch(() => {
       loadingVersionTransRef.current = false;
     });
@@ -431,7 +466,7 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
         cancelAnimationFrame(versionTransitionRafRef.current);
       }
     };
-  }, [activeVersion, allowVersionTransitions, overlayVisible, ready, tier]);
+  }, [activeVersion, allowVersionTransitions, frameCount, loadSequenceFrames, overlayVisible, ready, tier]);
 
   React.useEffect(() => {
     if (!ready || !overlayVisible || saveDataMode) return;

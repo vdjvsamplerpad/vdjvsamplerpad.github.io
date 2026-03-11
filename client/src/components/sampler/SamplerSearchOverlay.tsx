@@ -22,7 +22,9 @@ interface SamplerSearchOverlayProps {
   results: SamplerSearchResult[];
   totalMatchCount: number;
   onGo: (result: SamplerSearchResult) => void;
+  onEdit: (result: SamplerSearchResult) => void;
   onLoad: (result: SamplerSearchResult) => void;
+  showEditAction: boolean;
   loadTargetSelection: SamplerSearchResult | null;
   channelStates: ChannelDeckState[];
   armedLoadChannelId: number | null;
@@ -62,7 +64,9 @@ export function SamplerSearchOverlay({
   results,
   totalMatchCount,
   onGo,
+  onEdit,
   onLoad,
+  showEditAction,
   loadTargetSelection,
   channelStates,
   armedLoadChannelId,
@@ -235,6 +239,20 @@ export function SamplerSearchOverlay({
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
+                    {showEditAction ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        className="h-8 px-3 text-xs"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onEdit(result);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    ) : null}
                     <Button
                       type="button"
                       size="sm"
