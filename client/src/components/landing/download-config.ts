@@ -81,6 +81,33 @@ export const DEFAULT_LANDING_DOWNLOAD_CONFIG: LandingDownloadConfig = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const canonicalizeInstallGuideLink = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return trimmed;
+
+  const canonicalizePath = (pathname: string): string | null => {
+    const normalized = pathname.trim().toLowerCase();
+    if (normalized === '/ios' || normalized === '/ios/') return '/ios/';
+    if (normalized === '/android' || normalized === '/android/') return '/android/';
+    return null;
+  };
+
+  const pathMatch = canonicalizePath(trimmed);
+  if (pathMatch) return pathMatch;
+
+  if (!/^https?:\/\//i.test(trimmed)) return trimmed;
+
+  try {
+    const parsed = new URL(trimmed);
+    const canonicalPath = canonicalizePath(parsed.pathname);
+    if (!canonicalPath) return trimmed;
+    parsed.pathname = canonicalPath;
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+};
+
 const cloneDefaultConfig = (): LandingDownloadConfig => ({
   downloadLinks: JSON.parse(JSON.stringify(DEFAULT_DOWNLOAD_LINKS)) as Record<VersionKey, Record<PlatformKey, string>>,
   platformDescriptions: JSON.parse(JSON.stringify(DEFAULT_PLATFORM_DESCRIPTIONS)) as Record<VersionKey, Record<PlatformKey, string>>,
@@ -102,7 +129,7 @@ export const normalizeLandingDownloadConfig = (input: unknown): LandingDownloadC
 
     PLATFORM_OPTIONS.forEach((platform) => {
       if (versionLinks && typeof versionLinks[platform] === 'string') {
-        next.downloadLinks[version][platform] = versionLinks[platform].trim();
+        next.downloadLinks[version][platform] = canonicalizeInstallGuideLink(versionLinks[platform]);
       }
       if (versionPlatformDescriptions && typeof versionPlatformDescriptions[platform] === 'string') {
         next.platformDescriptions[version][platform] = versionPlatformDescriptions[platform].trim();
