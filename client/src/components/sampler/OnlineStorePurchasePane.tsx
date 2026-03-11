@@ -60,6 +60,42 @@ export function OnlineStorePurchasePane({
     setFormNotes,
     onCancel,
 }: OnlineStorePurchasePaneProps) {
+    const renderPrice = (item: StoreItem) => {
+        if (!item.is_paid) return <span>Free</span>;
+        if (item.price_php === null) return <span>Price to be announced</span>;
+        const hasPromotion = Boolean(
+            item.has_active_promotion
+            && typeof item.original_price_php === 'number'
+            && item.original_price_php > item.price_php,
+        );
+        if (!hasPromotion) return <span>PHP {item.price_php.toLocaleString()}</span>;
+        return (
+            <span className="inline-flex items-center gap-2 flex-wrap justify-end">
+                <span className="opacity-60 line-through text-xs">PHP {Number(item.original_price_php || 0).toLocaleString()}</span>
+                <span>PHP {item.price_php.toLocaleString()}</span>
+                {item.promotion_badge ? (
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                        item.promotion_type === 'flash_sale'
+                            ? 'bg-rose-500/15 text-rose-400'
+                            : 'bg-sky-500/15 text-sky-400'
+                    }`}>
+                        {item.promotion_badge}
+                    </span>
+                ) : null}
+            </span>
+        );
+    };
+
+    const renderPromotionMeta = (item: StoreItem | null) => {
+        if (!item?.has_active_promotion) return null;
+        if (item.promotion_type !== 'flash_sale' || !item.promotion_ends_at) return null;
+        return (
+            <div className={`text-[11px] mt-1 ${isDark ? 'text-rose-300' : 'text-rose-700'}`}>
+                Sale ends {new Date(item.promotion_ends_at).toLocaleString()}
+            </div>
+        );
+    };
+
     return (
         <div className="max-w-xl mx-auto space-y-8">
             {checkoutMode && cartItems.length > 0 && (
@@ -69,7 +105,7 @@ export function OnlineStorePurchasePane({
                         {cartItems.map(ci => (
                             <div key={ci.id} className={`flex items-center justify-between py-1 text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
                                 <span className="truncate">{ci.bank.title}</span>
-                                <span className="shrink-0 font-medium">{ci.is_paid ? (ci.price_php !== null ? `PHP ${ci.price_php.toLocaleString()}` : 'Price to be announced') : 'Free'}</span>
+                                <span className="shrink-0 font-medium text-right">{renderPrice(ci)}</span>
                             </div>
                         ))}
                         <div className={`border-t pt-1 mt-1 flex justify-between font-semibold text-sm ${isDark ? 'border-gray-700 text-white' : 'border-gray-200 text-gray-900'}`}>
@@ -84,20 +120,13 @@ export function OnlineStorePurchasePane({
                     <h3 className={`font-semibold text-sm mb-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>Selected Bank</h3>
                     <div className={`flex items-center justify-between py-1 text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
                         <span className="truncate">{selectedItem.bank.title}</span>
-                        <span className="shrink-0 font-medium">
-                            {selectedItem.is_paid
-                                ? (selectedItem.price_php !== null ? `PHP ${selectedItem.price_php.toLocaleString()}` : 'Price to be announced')
-                                : 'Free'}
-                        </span>
+                        <span className="shrink-0 font-medium text-right">{renderPrice(selectedItem)}</span>
                     </div>
                     <div className={`border-t pt-1 mt-1 flex justify-between font-semibold text-sm ${isDark ? 'border-gray-700 text-white' : 'border-gray-200 text-gray-900'}`}>
                         <span>Total</span>
-                        <span>
-                            {selectedItem.is_paid
-                                ? (selectedItem.price_php !== null ? `PHP ${selectedItem.price_php.toLocaleString()}` : 'Price to be announced')
-                                : 'Free'}
-                        </span>
+                        <span>{renderPrice(selectedItem)}</span>
                     </div>
+                    {renderPromotionMeta(selectedItem)}
                 </div>
             )}
             <div className={`p-5 rounded-xl border ${isDark ? 'bg-gray-800/50 border-gray-700' : 'bg-white border-gray-200'} shadow-sm`}>

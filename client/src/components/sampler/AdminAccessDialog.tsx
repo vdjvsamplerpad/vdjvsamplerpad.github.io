@@ -9,6 +9,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { adminApi, type AccessEntry, type ActiveSessionRow, type AdminAccountRegistrationRequest, type AdminActivityRow, type AdminBank, type AdminDashboardOverview, type AdminUser, type BankAccessEntry, type DefaultBankRelease, type LandingDownloadConfig, type SortDirection } from '@/lib/admin-api';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { DEFAULT_LANDING_DOWNLOAD_CONFIG, normalizeLandingDownloadConfig } from '@/components/landing/download-config';
+import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig, type SamplerAppConfig } from './samplerAppConfig';
 import { Edit, Eye, EyeOff, Plus, RefreshCw, Shield, Trash2, UserPlus, Users, Loader2, Store, CreditCard, History, Save, Check, X, Search, Menu } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import {
@@ -53,8 +54,10 @@ import {
   AccountRequestsTab,
   DefaultBankTab,
   LandingDownloadTab,
+  SamplerDefaultsTab,
   StoreBannersTab,
   StoreCatalogTab,
+  StorePromotionsTab,
   StoreConfigTab,
   StoreRequestsTab,
 } from './AdminAccessDialog.tabs';
@@ -114,11 +117,15 @@ export function AdminAccessDialog({
     handleStoreCatalogUpdate,
     handleStoreConfigSave,
     handleStoreAutoApprovalAction,
+    persistStorePromotion,
+    deleteStorePromotion,
+    editStorePromotion,
     handleStoreQrFileChange,
     handleStoreRequestAction,
     handleStoreRequestRetryEmail,
     hasStoreCatalogFilters,
     loadStoreCatalog,
+    loadStorePromotions,
     newBannerImageFile,
     newBannerImageUrl,
     newBannerLinkUrl,
@@ -129,6 +136,7 @@ export function AdminAccessDialog({
     reqTotalPages,
     resetStoreCatalogFilters,
     resetBannerDraft,
+    resetStorePromotionForm,
     setExpandedStoreRequestId,
     setNewBannerImageFile,
     setNewBannerImageUrl,
@@ -143,6 +151,7 @@ export function AdminAccessDialog({
     setStoreCatalogSort,
     setStoreCatalogStatusFilter,
     setStoreConfig,
+    setStorePromotionForm,
     setStorePublishDialog,
     setStoreReqPage,
     setStoreReqSearch,
@@ -164,6 +173,10 @@ export function AdminAccessDialog({
     storeConfig,
     storeDrafts,
     storeLoading,
+    storePromotionForm,
+    storePromotionStats,
+    storePromotions,
+    editingPromotionId,
     storePublishDialog,
     storeQrPreviewUrl,
     storeReqPage,
@@ -286,6 +299,11 @@ export function AdminAccessDialog({
   const [landingDownloadSaving, setLandingDownloadSaving] = React.useState(false);
   const [landingDownloadConfig, setLandingDownloadConfig] = React.useState<LandingDownloadConfig>(() =>
     normalizeLandingDownloadConfig(DEFAULT_LANDING_DOWNLOAD_CONFIG)
+  );
+  const [samplerDefaultsLoading, setSamplerDefaultsLoading] = React.useState(false);
+  const [samplerDefaultsSaving, setSamplerDefaultsSaving] = React.useState(false);
+  const [samplerDefaultsConfig, setSamplerDefaultsConfig] = React.useState<SamplerAppConfig>(() =>
+    normalizeSamplerAppConfig(DEFAULT_SAMPLER_APP_CONFIG)
   );
 
   const [accountReqFilter, setAccountReqFilter] = React.useState<'pending' | 'history'>('pending');
@@ -509,6 +527,35 @@ export function AdminAccessDialog({
     }
   }, [landingDownloadConfig]);
 
+  const refreshSamplerDefaultsConfig = React.useCallback(async () => {
+    setSamplerDefaultsLoading(true);
+    try {
+      const data = await adminApi.getSamplerAppConfig();
+      setSamplerDefaultsConfig(normalizeSamplerAppConfig(data.config));
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load sampler defaults.');
+      setSamplerDefaultsConfig(normalizeSamplerAppConfig(DEFAULT_SAMPLER_APP_CONFIG));
+    } finally {
+      setSamplerDefaultsLoading(false);
+    }
+  }, []);
+
+  const handleSaveSamplerDefaultsConfig = React.useCallback(async () => {
+    setSamplerDefaultsSaving(true);
+    try {
+      const normalized = normalizeSamplerAppConfig(samplerDefaultsConfig);
+      const data = await adminApi.saveSamplerAppConfig(normalized);
+      setSamplerDefaultsConfig(normalizeSamplerAppConfig(data.config));
+      setInfo('Sampler defaults saved.');
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not save sampler defaults.');
+    } finally {
+      setSamplerDefaultsSaving(false);
+    }
+  }, [samplerDefaultsConfig]);
+
   React.useEffect(() => {
     if (!open || !isAdmin) return;
     if (tab !== 'default_bank') return;
@@ -520,6 +567,12 @@ export function AdminAccessDialog({
     if (tab !== 'landing_download') return;
     void refreshLandingDownloadConfig();
   }, [isAdmin, open, refreshLandingDownloadConfig, tab]);
+
+  React.useEffect(() => {
+    if (!open || !isAdmin) return;
+    if (tab !== 'sampler_defaults') return;
+    void refreshSamplerDefaultsConfig();
+  }, [isAdmin, open, refreshSamplerDefaultsConfig, tab]);
 
   const refreshAccess = React.useCallback(async (userId: string) => {
     if (!userId) {
@@ -1246,9 +1299,9 @@ export function AdminAccessDialog({
   const openUserDetails = (user: AdminUser) => {
     setDetailsUser(user);
     setEditDisplayName(user.display_name || '');
-    setEditOwnedBankQuota(String(user.owned_bank_quota ?? 6));
-    setEditOwnedBankPadCap(String(user.owned_bank_pad_cap ?? 64));
-    setEditDeviceTotalBankCap(String(user.device_total_bank_cap ?? 120));
+    setEditOwnedBankQuota(String(user.owned_bank_quota ?? samplerDefaultsConfig.quotaDefaults.ownedBankQuota));
+    setEditOwnedBankPadCap(String(user.owned_bank_pad_cap ?? samplerDefaultsConfig.quotaDefaults.ownedBankPadCap));
+    setEditDeviceTotalBankCap(String(user.device_total_bank_cap ?? samplerDefaultsConfig.quotaDefaults.deviceTotalBankCap));
     setBanHours(24);
     setDetailsOpen(true);
   };
@@ -1292,7 +1345,7 @@ export function AdminAccessDialog({
       <NoticesPortal notices={notices} dismiss={dismiss} theme={theme} />
 
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent aria-describedby={undefined} className={`w-full max-w-[100vw] sm:max-w-[95vw] md:max-w-6xl h-[100dvh] max-h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] overflow-hidden grid grid-rows-[auto_1fr] p-2 sm:p-6 ${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'}`}>
+        <DialogContent aria-describedby={undefined} className={`w-full max-w-[100vw] sm:max-w-[95vw] md:max-w-[92vw] 2xl:max-w-[1800px] h-[100dvh] max-h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] overflow-hidden grid grid-rows-[auto_1fr] p-2 sm:p-6 ${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'}`}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Shield className="w-4 h-4" />
@@ -1321,7 +1374,7 @@ export function AdminAccessDialog({
                 ))}
               </div>
             </aside>
-            <div className="min-h-0 h-full overflow-hidden flex flex-col">
+            <div className="min-h-0 h-full overflow-y-auto flex flex-col pr-0 lg:pr-1">
               <div className="lg:hidden mb-2 flex items-center gap-2">
                 <Button type="button" size="sm" variant="outline" className="h-9 px-3" onClick={() => setIsNavOpen(true)}>
                   <Menu className="w-4 h-4 mr-1" />
@@ -1524,6 +1577,20 @@ export function AdminAccessDialog({
                 />
               )}
 
+              {tab === 'sampler_defaults' && (
+                <SamplerDefaultsTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('sampler_defaults')}
+                  loading={samplerDefaultsLoading}
+                  saving={samplerDefaultsSaving}
+                  config={samplerDefaultsConfig}
+                  onConfigChange={setSamplerDefaultsConfig}
+                  onRefresh={() => void refreshSamplerDefaultsConfig()}
+                  onReset={() => setSamplerDefaultsConfig(normalizeSamplerAppConfig(DEFAULT_SAMPLER_APP_CONFIG))}
+                  onSave={() => void handleSaveSamplerDefaultsConfig()}
+                />
+              )}
+
               {/* Store Requests Tab */}
               {tab === 'account_requests' && (
                 <AccountRequestsTab
@@ -1593,6 +1660,7 @@ export function AdminAccessDialog({
                   theme={theme}
                   panelClass={tabPanelToneClass('store_catalog')}
                   loading={storeLoading}
+                  storeConfig={storeConfig}
                   storeDrafts={storeDrafts}
                   pagedDrafts={pagedDrafts}
                   page={storeCatalogPage}
@@ -1633,10 +1701,30 @@ export function AdminAccessDialog({
                   }}
                   onResetFilters={resetStoreCatalogFilters}
                   onPageChange={setStoreCatalogPage}
+                  onStoreConfigChange={setStoreConfig}
+                  onSaveStoreConfig={() => void handleStoreConfigSave()}
                   onUpdateDraft={handleStoreCatalogUpdate}
                   onPublishDraft={showStorePublishDialog}
                   onReload={loadStoreCatalog}
                   pushNotice={pushNotice}
+                />
+              )}
+
+              {tab === 'store_promotions' && (
+                <StorePromotionsTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('store_promotions')}
+                  loading={storeLoading}
+                  promotions={storePromotions}
+                  stats={storePromotionStats}
+                  catalogDrafts={storeDrafts}
+                  editingPromotionId={editingPromotionId}
+                  form={storePromotionForm}
+                  onFormChange={setStorePromotionForm}
+                  onEdit={editStorePromotion}
+                  onReset={resetStorePromotionForm}
+                  onSave={persistStorePromotion}
+                  onDelete={(promotionId) => void deleteStorePromotion(promotionId)}
                 />
               )}
 

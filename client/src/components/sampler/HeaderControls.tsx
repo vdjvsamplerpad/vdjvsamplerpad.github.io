@@ -1,6 +1,6 @@
 ﻿import * as React from 'react';
 import { Button } from '@/components/ui/button';
-import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X } from 'lucide-react';
+import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search } from 'lucide-react';
 import type { SamplerBank, StopMode } from './types/sampler';
 import { createPortal } from 'react-dom';
 import { getCachedUser, useAuth } from '@/hooks/useAuth';
@@ -28,6 +28,7 @@ interface HeaderControlsProps {
   globalMuted: boolean;
   sideMenuOpen: boolean;
   mixerOpen: boolean;
+  searchOpen: boolean;
   channelLoadArmed: boolean;
   theme: 'light' | 'dark';
   windowWidth: number;
@@ -37,6 +38,7 @@ interface HeaderControlsProps {
   onStopAll: () => void;
   onToggleSideMenu: () => void;
   onToggleMixer: () => void;
+  onToggleSearch: () => void;
   onCancelChannelLoad: () => void;
   onToggleTheme: () => void;
   onExitDualMode: () => void;
@@ -194,6 +196,7 @@ export function HeaderControls({
   globalMuted,
   sideMenuOpen,
   mixerOpen,
+  searchOpen,
   channelLoadArmed,
   theme,
   windowWidth,
@@ -203,6 +206,7 @@ export function HeaderControls({
   onStopAll,
   onToggleSideMenu,
   onToggleMixer,
+  onToggleSearch,
   onCancelChannelLoad,
   onToggleTheme,
   onExitDualMode,
@@ -310,6 +314,37 @@ export function HeaderControls({
     window.addEventListener('vdjv-open-about', handleOpenAbout as EventListener);
     return () => window.removeEventListener('vdjv-open-about', handleOpenAbout as EventListener);
   }, []);
+
+  React.useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      const element = target as HTMLElement | null;
+      if (!element) return false;
+      const tagName = element.tagName;
+      return (
+        element.isContentEditable ||
+        tagName === 'INPUT' ||
+        tagName === 'TEXTAREA' ||
+        tagName === 'SELECT'
+      );
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (windowWidth < 1024) return;
+      const normalizedKey = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && normalizedKey === 'k') {
+        if (isEditableTarget(event.target)) return;
+        event.preventDefault();
+        onToggleSearch();
+        return;
+      }
+      if (normalizedKey === 'escape' && searchOpen) {
+        onToggleSearch();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onToggleSearch, searchOpen, windowWidth]);
 
   // Show greeting notification when user logs in
   React.useEffect(() => {
@@ -519,6 +554,26 @@ export function HeaderControls({
           >
             <Pencil className="w-4 h-4" />
             {!isMobileScreen && (isMobileScreen ? '' : editMode ? 'Exit Edit' : 'Edit')}
+          </Button>
+
+          {/* Search Button */}
+          <Button
+            onClick={onToggleSearch}
+            variant="outline"
+            size={isMobileScreen ? "sm" : "default"}
+            className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${
+              searchOpen
+                ? theme === 'dark'
+                  ? 'bg-cyan-500 border-cyan-400 text-cyan-100'
+                  : 'bg-cyan-50 border-cyan-300 text-cyan-700'
+                : theme === 'dark'
+                  ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-cyan-500 hover:border-cyan-400 hover:text-cyan-100'
+                  : 'bg-white border-gray-300 text-gray-700 hover:bg-cyan-50 hover:border-cyan-300 hover:text-cyan-700'
+            }`}
+            title={isMobileScreen ? 'Search pads' : 'Search pads (Ctrl/Cmd+K)'}
+          >
+            <Search className="w-4 h-4" />
+            {!isMobileScreen && 'Search'}
           </Button>
 
           {/* Mute/Unmute Button */}

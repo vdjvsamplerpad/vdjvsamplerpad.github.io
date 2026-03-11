@@ -3,11 +3,13 @@
   "transferable": true,
   "exportable": true,
   "title": "DEFAULT BANK",
-  "description": "",
-  "color": "#3b82f6",
-  "adminExportToken": "eyJhbGciOiJFUzI1NiIsInR5cCI6IlZESlYtQUVUIiwia2lkIjoiYWRtaW4tZXhwb3J0LXYxIn0.eyJ2IjoxLCJpc3MiOiJ2ZGp2LmFkbWluLWV4cG9ydCIsInN1YiI6IjAyYmU5OGY0LWU5NzQtNDE4My1hMzJiLTE5Njc5YmJlMzI3YyIsImlhdCI6MTc3MzEyMzk4NSwiZXhwIjoxOTMwODAzOTg1LCJraWQiOiJhZG1pbi1leHBvcnQtdjEiLCJiYW5rX2pzb25fc2hhMjU2IjoiMWJmOTg4YzQ2ODA2ZGJmNmQ4NmQ4M2YzM2I2Yzg5MTRmYTU4ZjAzODNhMTQxMWQ0MThkMjMzNmFjZGM0YjVhMSIsImJhbmtfbmFtZSI6IkRFRkFVTFQgQkFOSyIsInBhZF9jb3VudCI6NDgsImFsbG93X2V4cG9ydCI6dHJ1ZX0.wUPSIHmptIkBohkOiTtn4K_lNoIw1hB03vg_a8CuE5BcQc10MCLoOx6C14_rmWHAbb1EIN9QNn2sXVNWnfbIhw",
+  "description": "This is the Default/Main Bank of the VDJV Sampler Pad v1",
+  "color": "#1e1e1e",
+  "thumbnailUrl": "https://bdwtvnvqlgvphxuibqqp.supabase.co/storage/v1/object/public/store-assets/bank-thumbnails/mmk5vbfq2lhni8b0uaf/1773259589195-f8ab8f29.webp",
+  "thumbnailAssetPath": "thumbnail/bank-thumbnail.webp",
+  "adminExportToken": "eyJhbGciOiJFUzI1NiIsInR5cCI6IlZESlYtQUVUIiwia2lkIjoiYWRtaW4tZXhwb3J0LXYxIn0.eyJ2IjoxLCJpc3MiOiJ2ZGp2LmFkbWluLWV4cG9ydCIsInN1YiI6IjAyYmU5OGY0LWU5NzQtNDE4My1hMzJiLTE5Njc5YmJlMzI3YyIsImlhdCI6MTc3MzI2MDE1MiwiZXhwIjoxOTMwOTQwMTUyLCJraWQiOiJhZG1pbi1leHBvcnQtdjEiLCJiYW5rX2pzb25fc2hhMjU2IjoiMjMxOGI0OWRlYzczN2ZlZTBkNTBhNWI1ZjYyYzc2ODMwNjYwM2Q2OWYzMmVmMmZlNGFkM2UzMjNjYmY3NzYyNCIsImJhbmtfbmFtZSI6IkRFRkFVTFQgQkFOSyIsInBhZF9jb3VudCI6NTAsImFsbG93X2V4cG9ydCI6dHJ1ZX0.TZyHOMFe98voGE3B_DgBUAnUEDdBEk26BuPhnrZehPiv6q3JXwoxSSn8-EATSYqpaViuydnPfrqowhJuPo0A-g",
   "adminExportTokenKid": "admin-export-v1",
-  "adminExportTokenIssuedAt": "2026-03-10T06:26:25.000Z",
-  "adminExportTokenExpiresAt": "2031-03-09T06:26:25.000Z",
-  "adminExportTokenBankSha256": "1bf988c46806dbf6d86d83f33b6c8914fa58f0383a1411d418d2336acdc4b5a1"
+  "adminExportTokenIssuedAt": "2026-03-11T20:15:52.000Z",
+  "adminExportTokenExpiresAt": "2031-03-10T20:15:52.000Z",
+  "adminExportTokenBankSha256": "2318b49dec737fee0d50a5b5f62c768306603d69f32ef2fe4ad3e323cbf77624"
 }

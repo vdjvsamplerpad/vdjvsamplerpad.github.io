@@ -37,12 +37,18 @@ export interface SamplerStore {
   addPad: (
     file: File,
     bankId?: string,
-    options?: { defaultTriggerMode?: PadData['triggerMode'] }
+    options?: {
+      defaultTriggerMode?: PadData['triggerMode'];
+      padDefaults?: Partial<Pick<PadData, 'playbackMode' | 'volume' | 'gainDb' | 'fadeInMs' | 'fadeOutMs' | 'pitch' | 'tempoPercent' | 'keyLock'>>;
+    }
   ) => Promise<void>;
   addPads: (
     files: File[],
     bankId?: string,
-    options?: { defaultTriggerMode?: PadData['triggerMode'] }
+    options?: {
+      defaultTriggerMode?: PadData['triggerMode'];
+      padDefaults?: Partial<Pick<PadData, 'playbackMode' | 'volume' | 'gainDb' | 'fadeInMs' | 'fadeOutMs' | 'pitch' | 'tempoPercent' | 'keyLock'>>;
+    }
   ) => Promise<void>;
   updatePad: (bankId: string, id: string, updatedPad: PadData) => void;
   removePad: (bankId: string, id: string) => void;

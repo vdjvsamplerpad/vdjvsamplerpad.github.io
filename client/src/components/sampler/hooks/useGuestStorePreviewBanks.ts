@@ -117,7 +117,7 @@ const normalizePreviewItems = (items: unknown): GuestStorePreviewBank[] => {
   return normalized.slice(0, GUEST_STORE_PREVIEW_LIMIT);
 };
 
-const fetchGuestPreviewBanks = async (): Promise<GuestStorePreviewBank[]> => {
+const fetchGuestPreviewBanks = async (): Promise<{ items: GuestStorePreviewBank[]; maintenanceEnabled: boolean }> => {
   const params = new URLSearchParams();
   params.set('page', '1');
   params.set('perPage', String(GUEST_STORE_PREVIEW_LIMIT));
@@ -133,13 +133,22 @@ const fetchGuestPreviewBanks = async (): Promise<GuestStorePreviewBank[]> => {
     throw new Error(`Preview catalog request failed (${response.status})`);
   }
   const payload = await response.json().catch(() => ({}));
-  return normalizePreviewItems(isObjectRecord(payload) ? payload.items : []);
+  const maintenanceEnabled = Boolean(
+    isObjectRecord(payload)
+    && isObjectRecord(payload.maintenance)
+    && payload.maintenance.enabled === true,
+  );
+  return {
+    items: maintenanceEnabled ? [] : normalizePreviewItems(isObjectRecord(payload) ? payload.items : []),
+    maintenanceEnabled,
+  };
 };
 
 export function useGuestStorePreviewBanks(effectiveUser: { id?: string | null } | null) {
   const [isSuppressed, setIsSuppressed] = React.useState<boolean>(() => readSuppressed());
   const [previewBanks, setPreviewBanks] = React.useState<GuestStorePreviewBank[]>(() => {
     if (readSuppressed()) return [];
+    if (typeof navigator !== 'undefined' && navigator.onLine) return [];
     return readCache();
   });
 
@@ -166,9 +175,15 @@ export function useGuestStorePreviewBanks(effectiveUser: { id?: string | null } 
     const load = async () => {
       try {
         const fetched = await fetchGuestPreviewBanks();
-        if (cancelled || fetched.length === 0) return;
-        writeCache(fetched);
-        setPreviewBanks(fetched);
+        if (cancelled) return;
+        if (fetched.maintenanceEnabled) {
+          writeCache([]);
+          setPreviewBanks([]);
+          return;
+        }
+        if (fetched.items.length === 0) return;
+        writeCache(fetched.items);
+        setPreviewBanks(fetched.items);
       } catch {
       }
     };
@@ -185,9 +200,14 @@ export function useGuestStorePreviewBanks(effectiveUser: { id?: string | null } 
     const handleOnline = () => {
       void fetchGuestPreviewBanks()
         .then((fetched) => {
-          if (fetched.length === 0) return;
-          writeCache(fetched);
-          setPreviewBanks(fetched);
+          if (fetched.maintenanceEnabled) {
+            writeCache([]);
+            setPreviewBanks([]);
+            return;
+          }
+          if (fetched.items.length === 0) return;
+          writeCache(fetched.items);
+          setPreviewBanks(fetched.items);
         })
         .catch(() => {
         });

@@ -1,4 +1,5 @@
 import { edgeFunctionUrl, getAuthHeaders } from '@/lib/edge-api';
+import type { SamplerAppConfig } from '@/components/sampler/samplerAppConfig';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -495,5 +496,13 @@ export const adminApi = {
 
   async saveLandingDownloadConfig(input: LandingDownloadConfig) {
     return callStoreApi<{ config: LandingDownloadConfig }>('POST', 'admin/store/landing-config', input);
+  },
+
+  async getSamplerAppConfig() {
+    return callStoreApi<{ config: SamplerAppConfig }>('GET', 'admin/store/sampler-config');
+  },
+
+  async saveSamplerAppConfig(input: SamplerAppConfig) {
+    return callStoreApi<{ config: SamplerAppConfig }>('POST', 'admin/store/sampler-config', input);
   },
 };

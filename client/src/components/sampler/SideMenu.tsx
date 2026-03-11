@@ -102,6 +102,7 @@ interface SideMenuProps {
     remainingOfficial: number;
     remainingUser: number;
   }>;
+  defaultBankColor?: string;
 }
 
 export function SideMenu({
@@ -139,8 +140,9 @@ export function SideMenu({
   onRequestRestoreBackup,
   onRequestRecoverBankFiles,
   onRetryBankMissingMedia,
+  defaultBankColor = '#3b82f6',
 }: SideMenuProps) {
-  const logoSrc = './assets/logo.png';
+  const logoSrc = '/assets/logo.png';
   const [showCreateDialog, setShowCreateDialog] = React.useState(false);
   const [showStoreDialog, setShowStoreDialog] = React.useState(false);
   const [showEditDialog, setShowEditDialog] = React.useState(false);
@@ -494,7 +496,7 @@ export function SideMenu({
       bank: {
         title: bank.name,
         description: bank.bankMetadata?.description || '',
-        color: bank.defaultColor || bank.bankMetadata?.color || '#3b82f6',
+        color: bank.defaultColor || bank.bankMetadata?.color || defaultBankColor,
       }
     };
   }, []);
@@ -583,7 +585,7 @@ export function SideMenu({
   const handleCreateBank = () => {
     if (newBankName.trim()) {
       try {
-        onCreateBank(newBankName.trim(), '#3b82f6');
+        onCreateBank(newBankName.trim(), defaultBankColor);
         setNewBankName('');
         setShowCreateDialog(false);
       } catch (error) {
@@ -1223,7 +1225,7 @@ export function SideMenu({
                 const preview = entry.kind === 'preview' ? entry.preview : null;
                 const bankId = bank?.id || preview?.bankId || '';
                 const bankName = bank?.name || preview?.title || 'Bank Preview';
-                const bankColor = bank?.defaultColor || preview?.color || '#3b82f6';
+                const bankColor = bank?.defaultColor || preview?.color || defaultBankColor;
                 const restoreStatus = !isPreview ? bank?.restoreStatus || null : null;
                 const snapshotTransfer = !isPreview && bank?.bankMetadata?.catalogItemId
                   ? snapshotTransfers[bank.bankMetadata.catalogItemId]

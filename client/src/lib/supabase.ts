@@ -33,8 +33,4 @@ if (isDev && !isLocalSupabaseUrl(supabaseUrl) && !allowRemoteSupabaseInDev) {
     'Blocked remote Supabase in local development. Point VITE_SUPABASE_URL to local Supabase or set VITE_ALLOW_REMOTE_SUPABASE_IN_DEV=true for explicit cloud testing.'
   )
 }
-if (isDev && !isLocalSupabaseUrl(supabaseUrl) && allowRemoteSupabaseInDev) {
-  console.warn(`[supabase] Remote Supabase enabled for local development: ${supabaseUrl}`)
-}
-
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)

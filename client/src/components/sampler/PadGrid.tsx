@@ -1,6 +1,7 @@
 ﻿import * as React from 'react';
 import { SamplerPad } from './SamplerPad';
 import { PadData, SamplerBank, StopMode } from './types/sampler';
+import { buildPadSearchAnchorId } from './samplerSearch';
 
 export interface PadGridProps {
   pads: PadData[];
@@ -37,6 +38,7 @@ export interface PadGridProps {
   onSelectPadForChannelLoad?: (pad: PadData, bankId: string, bankName: string) => void;
   requiresAuthToPlay?: boolean;
   onRequireLogin?: () => void;
+  highlightedPadId?: string | null;
 }
 
 export const PadGrid = React.memo(function PadGrid({
@@ -73,7 +75,8 @@ export const PadGrid = React.memo(function PadGrid({
   channelLoadArmed = false,
   onSelectPadForChannelLoad,
   requiresAuthToPlay = false,
-  onRequireLogin
+  onRequireLogin,
+  highlightedPadId = null
 }: PadGridProps) {
   const [draggedIndex, setDraggedIndex] = React.useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = React.useState<number | null>(null);
@@ -324,7 +327,17 @@ export const PadGrid = React.memo(function PadGrid({
       {sortedPads.map((pad, index) => (
         <div
           key={pad.id}
-          className={`min-w-0 max-w-full ${aspectRatio} ${editMode && dragOverIndex === index ? 'ring-2 ring-blue-400' : ''
+          id={buildPadSearchAnchorId(bankId, pad.id)}
+          data-bank-id={bankId}
+          data-pad-id={pad.id}
+          className={`min-w-0 max-w-full ${aspectRatio} transition-all duration-300 ${
+            editMode && dragOverIndex === index ? 'ring-2 ring-blue-400' : ''
+            } ${
+            highlightedPadId === pad.id
+              ? (theme === 'dark'
+                  ? 'ring-4 ring-cyan-300 ring-offset-2 ring-offset-gray-900 scale-[1.01]'
+                  : 'ring-4 ring-cyan-400 ring-offset-2 ring-offset-white scale-[1.01]')
+              : ''
             }`}
           style={{ contain: 'content' }}
           draggable={editMode}

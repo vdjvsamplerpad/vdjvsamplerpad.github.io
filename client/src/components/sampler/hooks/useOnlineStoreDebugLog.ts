@@ -40,8 +40,6 @@ export function useOnlineStoreDebugLog({
         };
         if (level === 'error') {
             console.error('[BankStoreDownloadDebug]', payload);
-        } else {
-            console.log('[BankStoreDownloadDebug]', payload);
         }
     }, [enabled]);
 

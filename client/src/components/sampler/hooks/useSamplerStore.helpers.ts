@@ -181,5 +181,17 @@ export const trimAudio = async (
   }
 };
 
-export const shouldAttemptTrim = (pad: PadData, mode: ExportAudioMode = 'compact'): boolean =>
-  mode === 'compact' && pad.startTimeMs > 50 && pad.endTimeMs > pad.startTimeMs;
+const BAKED_TRIM_MIN_DELTA_MS = 10000;
+
+export const shouldAttemptTrim = (pad: PadData, mode: ExportAudioMode = 'compact'): boolean => {
+  if (mode !== 'compact') return false;
+  const startMs = Number.isFinite(pad.startTimeMs) ? Math.max(0, pad.startTimeMs) : 0;
+  const endMs = Number.isFinite(pad.endTimeMs) ? Math.max(0, pad.endTimeMs) : 0;
+  if (!(endMs > startMs)) return false;
+
+  const sourceDurationMs = Number.isFinite(pad.audioDurationMs) ? Math.max(0, pad.audioDurationMs || 0) : 0;
+  const hasMeaningfulTrimIn = startMs >= BAKED_TRIM_MIN_DELTA_MS;
+  const hasMeaningfulTrimOut = sourceDurationMs > 0 && (sourceDurationMs - endMs) >= BAKED_TRIM_MIN_DELTA_MS;
+
+  return hasMeaningfulTrimIn || hasMeaningfulTrimOut;
+};

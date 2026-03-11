@@ -5,10 +5,11 @@ import {
     StoreBanner,
     StoreCatalogMeta,
     StoreItem,
+    StoreMaintenanceState,
     StoreSnapshot,
 } from '@/components/sampler/onlineStore.types';
 
-const STORE_SNAPSHOT_VERSION = 5;
+const STORE_SNAPSHOT_VERSION = 6;
 const STORE_SNAPSHOT_FRESH_TTL_MS = 30 * 60 * 1000;
 
 type UseOnlineStoreCatalogDataArgs = {
@@ -24,6 +25,7 @@ type UseOnlineStoreCatalogDataArgs = {
     lastCountQueryRef: React.MutableRefObject<string>;
     bannersRef: React.MutableRefObject<StoreBanner[]>;
     paymentConfigRef: React.MutableRefObject<PaymentConfig | null>;
+    maintenanceRef: React.MutableRefObject<StoreMaintenanceState>;
     storeTotalItemsRef: React.MutableRefObject<number>;
     storeTotalPagesRef: React.MutableRefObject<number>;
     retryUnlockedBankIdsRef: React.MutableRefObject<Set<string>>;
@@ -31,6 +33,7 @@ type UseOnlineStoreCatalogDataArgs = {
     setLoading: React.Dispatch<React.SetStateAction<boolean>>;
     setItems: React.Dispatch<React.SetStateAction<StoreItem[]>>;
     setPaymentConfig: React.Dispatch<React.SetStateAction<PaymentConfig | null>>;
+    setStoreMaintenance: React.Dispatch<React.SetStateAction<StoreMaintenanceState>>;
     setBanners: React.Dispatch<React.SetStateAction<StoreBanner[]>>;
     setBannerIndex: React.Dispatch<React.SetStateAction<number>>;
     setStoreTotalItems: React.Dispatch<React.SetStateAction<number>>;
@@ -63,6 +66,7 @@ export function useOnlineStoreCatalogData({
     lastCountQueryRef,
     bannersRef,
     paymentConfigRef,
+    maintenanceRef,
     storeTotalItemsRef,
     storeTotalPagesRef,
     retryUnlockedBankIdsRef,
@@ -70,6 +74,7 @@ export function useOnlineStoreCatalogData({
     setLoading,
     setItems,
     setPaymentConfig,
+    setStoreMaintenance,
     setBanners,
     setBannerIndex,
     setStoreTotalItems,
@@ -92,7 +97,7 @@ export function useOnlineStoreCatalogData({
         const parseSnapshot = (raw: string | null): StoreSnapshot | null => {
             if (!raw) return null;
             const snapshot: StoreSnapshot = JSON.parse(raw);
-            if (![1, 2, 3, 4, 5].includes(snapshot.version)) return null;
+            if (![1, 2, 3, 4, 5, 6].includes(snapshot.version)) return null;
             if (snapshot.userKey !== userKey) return null;
             return snapshot;
         };
@@ -101,6 +106,7 @@ export function useOnlineStoreCatalogData({
             const isFresh = ageMs <= STORE_SNAPSHOT_FRESH_TTL_MS;
             setItems(snapshot.items || []);
             setPaymentConfig(snapshot.paymentConfig || null);
+            setStoreMaintenance(snapshot.maintenance || { enabled: false, message: null });
             setBanners(Array.isArray(snapshot.banners) ? snapshot.banners : []);
             const cachedTotalRaw = parseFiniteNumber(snapshot.total);
             const cachedPerPageRaw = parseFiniteNumber(snapshot.perPage);
@@ -147,6 +153,7 @@ export function useOnlineStoreCatalogData({
         setItems,
         setOfflineSnapshotTime,
         setPaymentConfig,
+        setStoreMaintenance,
         setStoreTotalItems,
         setStoreTotalPages,
         pushDownloadDebugLog,
@@ -157,6 +164,7 @@ export function useOnlineStoreCatalogData({
     const saveSnapshot = React.useCallback((
         newItems: StoreItem[],
         newConfig: PaymentConfig | null,
+        maintenance: StoreMaintenanceState,
         newBanners: StoreBanner[],
         meta?: { page?: number; perPage?: number; total?: number; totalPages?: number },
     ) => {
@@ -168,6 +176,7 @@ export function useOnlineStoreCatalogData({
                 queryKey: viewQueryKey,
                 items: newItems,
                 paymentConfig: newConfig,
+                maintenance,
                 banners: newBanners,
                 page: meta?.page,
                 perPage: meta?.perPage,
@@ -223,13 +232,14 @@ export function useOnlineStoreCatalogData({
             const shouldFetchConfig = !paymentConfigRef.current;
             const catalogReq = fetch(edgeFunctionUrl('store-api', `catalog?${params.toString()}`), { headers });
             const configReq = shouldFetchConfig
-                ? fetch(edgeFunctionUrl('store-api', 'payment-config'))
+                ? fetch(edgeFunctionUrl('store-api', 'payment-config'), { headers })
                 : Promise.resolve(null);
             const [catalogRes, configRes] = await Promise.all([catalogReq, configReq]);
             if (loadSeqRef.current !== requestSeq) return;
 
             let fetchedItems: StoreItem[] = [];
             let fetchedConfig: PaymentConfig | null = paymentConfigRef.current;
+            let fetchedMaintenance: StoreMaintenanceState = maintenanceRef.current;
             let fetchedBanners: StoreBanner[] = [];
             let shouldReplaceBanners = false;
             let fetchedTotal = storeTotalItemsRef.current;
@@ -243,6 +253,14 @@ export function useOnlineStoreCatalogData({
                     lastCountQueryRef.current = countQueryKey;
                 }
                 fetchedItems = Array.isArray(data.items) ? data.items : [];
+                fetchedMaintenance = data?.maintenance?.enabled
+                    ? {
+                        enabled: true,
+                        message: typeof data?.maintenance?.message === 'string' && data.maintenance.message.trim()
+                            ? data.maintenance.message.trim()
+                            : null,
+                    }
+                    : { enabled: false, message: null };
                 if (Array.isArray(data.banners)) {
                     fetchedBanners = data.banners;
                     shouldReplaceBanners = true;
@@ -294,6 +312,7 @@ export function useOnlineStoreCatalogData({
             const nextBanners = shouldReplaceBanners ? fetchedBanners : bannersRef.current;
             setItems(hydratedItems);
             setPaymentConfig(fetchedConfig);
+            setStoreMaintenance(fetchedMaintenance);
             if (shouldReplaceBanners) {
                 setBanners(fetchedBanners);
                 setBannerIndex(0);
@@ -301,7 +320,7 @@ export function useOnlineStoreCatalogData({
             setStoreTotalItems(Math.floor(fetchedTotal));
             setStoreTotalPages(normalizedTotalPages);
             if (storeSort !== 'downloaded' && normalizedPage !== storePage) setStorePage(normalizedPage);
-            saveSnapshot(hydratedItems, fetchedConfig, nextBanners, {
+            saveSnapshot(hydratedItems, fetchedConfig, fetchedMaintenance, nextBanners, {
                 page: normalizedPage,
                 perPage: requestPerPage,
                 total: fetchedTotal,
@@ -327,6 +346,7 @@ export function useOnlineStoreCatalogData({
         loadSeqRef,
         loadSnapshot,
         paymentConfigRef,
+        maintenanceRef,
         pushDownloadDebugLog,
         retryUnlockedBankIdsRef,
         requestPage,
@@ -338,6 +358,7 @@ export function useOnlineStoreCatalogData({
         setItems,
         setLoading,
         setPaymentConfig,
+        setStoreMaintenance,
         setStorePage,
         setStoreTotalItems,
         setStoreTotalPages,

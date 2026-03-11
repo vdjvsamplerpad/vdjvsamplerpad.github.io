@@ -1,16 +1,20 @@
 import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import type { AdminAccountRegistrationRequest, DefaultBankRelease, LandingDownloadConfig, LandingPlatformKey, LandingVersionKey } from '@/lib/admin-api';
 import { Check, ChevronDown, ChevronUp, EyeOff, Loader2, Plus, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
+import type { SamplerAppConfig, SamplerShortcutAction } from './samplerAppConfig';
 import type {
   AdminDialogTheme,
   CatalogDraft,
   DefaultBankSourceOption,
   StoreConfigDraft,
   StoreMarketingBanner,
+  StorePromotion,
   StoreCatalogSort
 } from './AdminAccessDialog.shared';
 import { CatalogCard, Pagination, ProofImagePreview } from './AdminAccessDialog.widgets';
@@ -108,6 +112,7 @@ interface StoreCatalogTabProps {
   theme: AdminDialogTheme;
   panelClass: string;
   loading: boolean;
+  storeConfig: StoreConfigDraft;
   storeDrafts: CatalogDraft[];
   pagedDrafts: CatalogDraft[];
   page: number;
@@ -130,6 +135,8 @@ interface StoreCatalogTabProps {
   onSortChange: (value: StoreCatalogSort) => void;
   onResetFilters: () => void;
   onPageChange: (page: number) => void;
+  onStoreConfigChange: (next: StoreConfigDraft) => void;
+  onSaveStoreConfig: () => void;
   onUpdateDraft: (id: string, updates: Record<string, any>) => void;
   onPublishDraft: (draft: CatalogDraft) => void;
   onReload: () => void;
@@ -166,6 +173,48 @@ interface StoreBannersTabProps {
   onDeleteBanner: (banner: StoreMarketingBanner) => void;
 }
 
+interface StorePromotionsTabProps {
+  theme: AdminDialogTheme;
+  panelClass: string;
+  loading: boolean;
+  promotions: StorePromotion[];
+  stats: { total: number; active: number; scheduled: number; expired: number; inactive: number };
+  catalogDrafts: CatalogDraft[];
+  editingPromotionId: string | null;
+  form: {
+    name: string;
+    description: string;
+    promotion_type: 'standard' | 'flash_sale';
+    discount_type: 'percent' | 'fixed';
+    discount_value: string;
+    starts_at: string;
+    ends_at: string;
+    timezone: string;
+    badge_text: string;
+    priority: string;
+    is_active: boolean;
+    target_bank_ids: string[];
+  };
+  onFormChange: (next: {
+    name: string;
+    description: string;
+    promotion_type: 'standard' | 'flash_sale';
+    discount_type: 'percent' | 'fixed';
+    discount_value: string;
+    starts_at: string;
+    ends_at: string;
+    timezone: string;
+    badge_text: string;
+    priority: string;
+    is_active: boolean;
+    target_bank_ids: string[];
+  }) => void;
+  onEdit: (promotion: StorePromotion) => void;
+  onReset: () => void;
+  onSave: () => Promise<boolean>;
+  onDelete: (promotionId: string) => void;
+}
+
 interface StoreConfigTabProps {
   theme: AdminDialogTheme;
   panelClass: string;
@@ -188,6 +237,18 @@ interface LandingDownloadTabProps {
   config: LandingDownloadConfig;
   onConfigChange: (next: LandingDownloadConfig) => void;
   onRefresh: () => void;
+  onSave: () => void;
+}
+
+interface SamplerDefaultsTabProps {
+  theme: AdminDialogTheme;
+  panelClass: string;
+  loading: boolean;
+  saving: boolean;
+  config: SamplerAppConfig;
+  onConfigChange: (next: SamplerAppConfig) => void;
+  onRefresh: () => void;
+  onReset: () => void;
   onSave: () => void;
 }
 
@@ -287,28 +348,84 @@ export function LandingDownloadTab({
   onRefresh,
   onSave,
 }: LandingDownloadTabProps) {
+  const isDark = theme === 'dark';
+  const totalPlatformSlots = LANDING_VERSION_OPTIONS.length * LANDING_PLATFORM_OPTIONS.length;
+  const configuredLinkCount = LANDING_VERSION_OPTIONS.reduce((sum, version) => (
+    sum + LANDING_PLATFORM_OPTIONS.filter((platform) => String(config.downloadLinks[version][platform] || '').trim()).length
+  ), 0);
+  const configuredPlatformDescriptionCount = LANDING_VERSION_OPTIONS.reduce((sum, version) => (
+    sum + LANDING_PLATFORM_OPTIONS.filter((platform) => String(config.platformDescriptions[version][platform] || '').trim()).length
+  ), 0);
+
   return (
-    <div className={`border rounded p-3 space-y-3 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <div className="text-sm font-semibold">Landing Download Config</div>
-          <div className="text-xs opacity-70">Manage links, platform descriptions, and version copy without editing frontend files.</div>
+    <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
+      <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white'}`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1">
+            <div className="text-base font-semibold">Landing Download Config</div>
+            <div className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+              Manage version copy, platform descriptions, and download links without touching the landing page source.
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || saving}>
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
+            </Button>
+            <Button size="sm" onClick={onSave} disabled={loading || saving}>
+              {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
+              Save Changes
+            </Button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || saving}>
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
-          </Button>
-          <Button size="sm" onClick={onSave} disabled={loading || saving}>
-            {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
-            Save
-          </Button>
+
+        <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+          <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+            <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Versions</div>
+            <div className="mt-1 text-xl font-semibold">{LANDING_VERSION_OPTIONS.length}</div>
+          </div>
+          <div className={`rounded-xl border p-3 ${isDark ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
+            <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>Links Ready</div>
+            <div className="mt-1 text-xl font-semibold">{configuredLinkCount}/{totalPlatformSlots}</div>
+          </div>
+          <div className={`rounded-xl border p-3 ${isDark ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
+            <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Descriptions</div>
+            <div className="mt-1 text-xl font-semibold">{configuredPlatformDescriptionCount}/{totalPlatformSlots}</div>
+          </div>
+          <div className={`rounded-xl border p-3 ${isDark ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
+            <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Guidance</div>
+            <div className="mt-1 text-xs font-medium">Keep version copy short and platform links explicit.</div>
+          </div>
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto space-y-4 pr-1">
+      <div className="space-y-4 pr-1">
         {LANDING_VERSION_OPTIONS.map((version) => (
-          <div key={version} className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
-            <div className="text-sm font-semibold">{version}</div>
+          <div key={version} className={`rounded-xl border p-4 space-y-3 ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold">{version}</div>
+                <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  {LANDING_PLATFORM_OPTIONS.filter((platform) => String(config.downloadLinks[version][platform] || '').trim()).length}/{LANDING_PLATFORM_OPTIONS.length} platform links configured
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {LANDING_PLATFORM_OPTIONS.map((platform) => {
+                  const hasLink = Boolean(String(config.downloadLinks[version][platform] || '').trim());
+                  return (
+                    <span
+                      key={`${version}-${platform}-status`}
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase border ${
+                        hasLink
+                          ? (isDark ? 'border-emerald-700/60 text-emerald-300 bg-emerald-950/20' : 'border-emerald-300 text-emerald-700 bg-emerald-50')
+                          : (isDark ? 'border-gray-700 text-gray-300 bg-gray-900/30' : 'border-gray-300 text-gray-700 bg-gray-50')
+                      }`}
+                    >
+                      {platform}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
             <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-3">
               <div className="space-y-3">
                 <div className="space-y-1">
@@ -396,6 +513,263 @@ export function LandingDownloadTab({
   );
 }
 
+const SAMPLER_SHORTCUT_FIELDS: Array<{ key: SamplerShortcutAction; label: string }> = [
+  { key: 'stopAll', label: 'Stop All' },
+  { key: 'mixer', label: 'Mixer' },
+  { key: 'editMode', label: 'Edit Mode' },
+  { key: 'mute', label: 'Mute' },
+  { key: 'banksMenu', label: 'Banks Menu' },
+  { key: 'nextBank', label: 'Next Bank' },
+  { key: 'prevBank', label: 'Previous Bank' },
+  { key: 'upload', label: 'Upload' },
+  { key: 'volumeUp', label: 'Volume Up' },
+  { key: 'volumeDown', label: 'Volume Down' },
+  { key: 'padSizeUp', label: 'Pad Size Up' },
+  { key: 'padSizeDown', label: 'Pad Size Down' },
+  { key: 'importBank', label: 'Import Bank' },
+  { key: 'activateSecondary', label: 'Activate Secondary' },
+  { key: 'midiShift', label: 'MIDI Shift' },
+];
+
+const updateSamplerShortcut = (
+  config: SamplerAppConfig,
+  action: SamplerShortcutAction,
+  value: string,
+): SamplerAppConfig => ({
+  ...config,
+  shortcutDefaults: {
+    ...config.shortcutDefaults,
+    [action]: value,
+  },
+});
+
+export function SamplerDefaultsTab({
+  theme,
+  panelClass,
+  loading,
+  saving,
+  config,
+  onConfigChange,
+  onRefresh,
+  onReset,
+  onSave,
+}: SamplerDefaultsTabProps) {
+  const isDark = theme === 'dark';
+  const cardClass = isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white';
+  const mutedText = isDark ? 'text-gray-400' : 'text-gray-600';
+
+  return (
+    <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
+      <div className={`rounded-2xl border p-4 ${cardClass}`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1">
+            <div className="text-base font-semibold">Sampler Defaults</div>
+            <div className={`text-sm ${mutedText}`}>
+              These values seed first-run app behavior, blank default-bank setup, new pad creation, quota fallbacks, and upload limits.
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || saving}>
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
+            </Button>
+            <Button size="sm" variant="outline" onClick={onReset} disabled={loading || saving}>
+              <RotateCcw className="w-3.5 h-3.5 mr-2" />
+              Reset
+            </Button>
+            <Button size="sm" onClick={onSave} disabled={loading || saving}>
+              {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
+              Save Defaults
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-2">
+        <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
+          <div>
+            <div className="text-sm font-semibold">UI Defaults</div>
+            <div className={`text-xs ${mutedText}`}>Used when the app boots without saved settings.</div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>Pad Size Portrait</Label>
+              <Input type="number" min={2} max={8} value={config.uiDefaults.defaultPadSizePortrait} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultPadSizePortrait: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Pad Size Landscape</Label>
+              <Input type="number" min={2} max={16} value={config.uiDefaults.defaultPadSizeLandscape} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultPadSizeLandscape: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Channel Count Mobile</Label>
+              <Input type="number" min={2} max={8} value={config.uiDefaults.defaultChannelCountMobile} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultChannelCountMobile: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Channel Count Desktop</Label>
+              <Input type="number" min={2} max={8} value={config.uiDefaults.defaultChannelCountDesktop} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultChannelCountDesktop: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Master Volume</Label>
+              <Input type="number" min={0} max={1} step="0.05" value={config.uiDefaults.defaultMasterVolume} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultMasterVolume: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Stop Mode</Label>
+              <select value={config.uiDefaults.defaultStopMode} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultStopMode: event.target.value as SamplerAppConfig['uiDefaults']['defaultStopMode'] } })} className={`w-full h-10 rounded-md border px-3 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}>
+                <option value="instant">Instant</option>
+                <option value="fadeout">Fadeout</option>
+                <option value="brake">Brake</option>
+                <option value="backspin">Backspin</option>
+                <option value="filter">Filter</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label>Side Panel Mode</Label>
+              <select value={config.uiDefaults.defaultSidePanelMode} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultSidePanelMode: event.target.value as 'overlay' | 'reflow' } })} className={`w-full h-10 rounded-md border px-3 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}>
+                <option value="overlay">Overlay</option>
+                <option value="reflow">Reflow</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label>Graphics Profile</Label>
+              <select value={config.uiDefaults.defaultGraphicsProfile} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultGraphicsProfile: event.target.value as SamplerAppConfig['uiDefaults']['defaultGraphicsProfile'] } })} className={`w-full h-10 rounded-md border px-3 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}>
+                <option value="auto">Auto</option>
+                <option value="lowest">Lowest</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <label className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${isDark ? 'border-gray-800 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+              <Checkbox checked={config.uiDefaults.defaultHideShortcutLabels} onCheckedChange={(checked) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultHideShortcutLabels: checked === true } })} />
+              <span className="text-sm">Hide shortcut labels by default</span>
+            </label>
+            <label className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${isDark ? 'border-gray-800 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+              <Checkbox checked={config.uiDefaults.defaultAutoPadBankMapping} onCheckedChange={(checked) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultAutoPadBankMapping: checked === true } })} />
+              <span className="text-sm">Auto apply pad/bank mappings</span>
+            </label>
+          </div>
+        </div>
+
+        <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
+          <div>
+            <div className="text-sm font-semibold">Default Bank</div>
+            <div className={`text-xs ${mutedText}`}>Used for empty-state bank creation and default-bank labeling.</div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_160px] gap-3">
+            <div className="space-y-1">
+              <Label>Default Bank Name</Label>
+              <Input value={config.bankDefaults.defaultBankName} onChange={(event) => onConfigChange({ ...config, bankDefaults: { ...config.bankDefaults, defaultBankName: event.target.value } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Default Bank Color</Label>
+              <Input value={config.bankDefaults.defaultBankColor} onChange={(event) => onConfigChange({ ...config, bankDefaults: { ...config.bankDefaults, defaultBankColor: event.target.value } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+          </div>
+        </div>
+
+        <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
+          <div>
+            <div className="text-sm font-semibold">New Pad Template</div>
+            <div className={`text-xs ${mutedText}`}>Applied when users add new audio pads.</div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>Trigger Mode</Label>
+              <select value={config.padDefaults.defaultTriggerMode} onChange={(event) => onConfigChange({ ...config, padDefaults: { ...config.padDefaults, defaultTriggerMode: event.target.value as SamplerAppConfig['padDefaults']['defaultTriggerMode'] } })} className={`w-full h-10 rounded-md border px-3 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}>
+                <option value="toggle">Toggle</option>
+                <option value="hold">Hold</option>
+                <option value="stutter">Stutter</option>
+                <option value="unmute">Unmute</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label>Playback Mode</Label>
+              <select value={config.padDefaults.defaultPlaybackMode} onChange={(event) => onConfigChange({ ...config, padDefaults: { ...config.padDefaults, defaultPlaybackMode: event.target.value as SamplerAppConfig['padDefaults']['defaultPlaybackMode'] } })} className={`w-full h-10 rounded-md border px-3 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}>
+                <option value="once">Once</option>
+                <option value="loop">Loop</option>
+                <option value="stopper">Stopper</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label>Volume</Label>
+              <Input type="number" min={0} max={1} step="0.05" value={config.padDefaults.defaultVolume} onChange={(event) => onConfigChange({ ...config, padDefaults: { ...config.padDefaults, defaultVolume: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Gain dB</Label>
+              <Input type="number" min={-24} max={24} step="0.5" value={config.padDefaults.defaultGainDb} onChange={(event) => onConfigChange({ ...config, padDefaults: { ...config.padDefaults, defaultGainDb: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Fade In ms</Label>
+              <Input type="number" min={0} max={60000} value={config.padDefaults.defaultFadeInMs} onChange={(event) => onConfigChange({ ...config, padDefaults: { ...config.padDefaults, defaultFadeInMs: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Fade Out ms</Label>
+              <Input type="number" min={0} max={60000} value={config.padDefaults.defaultFadeOutMs} onChange={(event) => onConfigChange({ ...config, padDefaults: { ...config.padDefaults, defaultFadeOutMs: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Pitch</Label>
+              <Input type="number" min={-12} max={12} value={config.padDefaults.defaultPitch} onChange={(event) => onConfigChange({ ...config, padDefaults: { ...config.padDefaults, defaultPitch: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Tempo Percent</Label>
+              <Input type="number" min={-50} max={100} value={config.padDefaults.defaultTempoPercent} onChange={(event) => onConfigChange({ ...config, padDefaults: { ...config.padDefaults, defaultTempoPercent: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+          </div>
+          <label className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${isDark ? 'border-gray-800 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+            <Checkbox checked={config.padDefaults.defaultKeyLock} onCheckedChange={(checked) => onConfigChange({ ...config, padDefaults: { ...config.padDefaults, defaultKeyLock: checked === true } })} />
+            <span className="text-sm">Enable key lock by default</span>
+          </label>
+        </div>
+
+        <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
+          <div>
+            <div className="text-sm font-semibold">Quota and Limits</div>
+            <div className={`text-xs ${mutedText}`}>Used as defaults for new accounts and upload admission checks.</div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>Owned Bank Quota</Label>
+              <Input type="number" min={1} max={500} value={config.quotaDefaults.ownedBankQuota} onChange={(event) => onConfigChange({ ...config, quotaDefaults: { ...config.quotaDefaults, ownedBankQuota: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Owned Bank Pad Cap</Label>
+              <Input type="number" min={1} max={256} value={config.quotaDefaults.ownedBankPadCap} onChange={(event) => onConfigChange({ ...config, quotaDefaults: { ...config.quotaDefaults, ownedBankPadCap: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Device Total Bank Cap</Label>
+              <Input type="number" min={10} max={1000} value={config.quotaDefaults.deviceTotalBankCap} onChange={(event) => onConfigChange({ ...config, quotaDefaults: { ...config.quotaDefaults, deviceTotalBankCap: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Max Pad Audio MB</Label>
+              <Input type="number" min={1} max={500} value={Math.round(config.audioLimits.maxPadAudioBytes / 1024 / 1024)} onChange={(event) => onConfigChange({ ...config, audioLimits: { ...config.audioLimits, maxPadAudioBytes: Math.max(1, Number(event.target.value || 0)) * 1024 * 1024 } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1 sm:col-span-2">
+              <Label>Max Pad Audio Duration Seconds</Label>
+              <Input type="number" min={10} max={7200} value={Math.round(config.audioLimits.maxPadAudioDurationMs / 1000)} onChange={(event) => onConfigChange({ ...config, audioLimits: { ...config.audioLimits, maxPadAudioDurationMs: Math.max(10, Number(event.target.value || 0)) * 1000 } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
+        <div>
+          <div className="text-sm font-semibold">Shortcut Defaults</div>
+          <div className={`text-xs ${mutedText}`}>Applied only to fresh settings or reset-to-default flows, not forced on existing users.</div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          {SAMPLER_SHORTCUT_FIELDS.map((field) => (
+            <div key={field.key} className="space-y-1">
+              <Label>{field.label}</Label>
+              <Input value={config.shortcutDefaults[field.key] || ''} onChange={(event) => onConfigChange(updateSamplerShortcut(config, field.key, event.target.value))} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function DefaultBankTab({
   theme,
   panelClass,
@@ -417,7 +791,7 @@ export function DefaultBankTab({
   onRollback,
 }: DefaultBankTabProps) {
   return (
-    <div className={`border rounded p-3 space-y-3 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
+    <div className={`border rounded p-3 space-y-3 overflow-visible lg:h-full lg:min-h-0 lg:flex lg:flex-col lg:overflow-hidden ${panelClass}`}>
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)] gap-3">
         <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
           <div className="flex items-center justify-between gap-2">
@@ -491,7 +865,7 @@ export function DefaultBankTab({
         </div>
       </div>
 
-      <div className={`rounded-lg border p-3 flex-1 min-h-0 flex flex-col ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+      <div className={`rounded-lg border p-3 overflow-visible lg:flex-1 lg:min-h-0 lg:flex lg:flex-col ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
         <div className="flex items-center justify-between gap-2 mb-2">
           <div>
             <div className="text-sm font-semibold">Release History</div>
@@ -500,7 +874,7 @@ export function DefaultBankTab({
           {rollbackLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
         </div>
 
-        <div className="flex-1 min-h-0 overflow-auto rounded border">
+        <div className="overflow-x-auto rounded border lg:flex-1 lg:min-h-0 lg:overflow-auto">
           <table className="w-full text-sm">
             <thead className={theme === 'dark' ? 'bg-gray-800 text-gray-200' : 'bg-gray-50 text-gray-700'}>
               <tr>
@@ -568,7 +942,7 @@ export function AccountRequestsTab({
   onRetryEmail,
 }: AccountRequestsTabProps) {
   return (
-    <div className={`border rounded p-3 space-y-2 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
+    <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
       <div className="flex flex-wrap gap-2 items-center">
         <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
           Pending ({pendingCount})
@@ -583,7 +957,7 @@ export function AccountRequestsTab({
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             placeholder="Search requests..."
-            className={`h-7 pl-7 text-xs w-40 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
+            className={`h-9 w-full pl-8 text-sm sm:w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
           />
         </div>
       </div>
@@ -592,7 +966,7 @@ export function AccountRequestsTab({
         <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div>
       ) : (
         <>
-          <div className="flex-1 min-h-0 overflow-auto space-y-2">
+          <div className="space-y-2">
             {rows.length === 0 ? (
               <p className="text-center py-8 opacity-50 text-sm">No {filter} account registration requests.</p>
             ) : rows.map((req) => (
@@ -708,7 +1082,7 @@ export function StoreRequestsTab({
   onRetryEmail,
 }: StoreRequestsTabProps) {
   return (
-    <div className={`border rounded p-3 space-y-2 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
+    <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
       <div className="flex flex-wrap gap-2 items-center">
         <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
           Pending ({pendingCount})
@@ -723,13 +1097,13 @@ export function StoreRequestsTab({
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             placeholder="Search requests..."
-            className={`h-7 pl-7 text-xs w-40 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
+            className={`h-9 w-full pl-8 text-sm sm:w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
           />
         </div>
       </div>
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <>
-          <div className="flex-1 min-h-0 overflow-auto space-y-2">
+          <div className="space-y-2">
             {rows.length === 0 ? (
               <p className="text-center py-8 opacity-50 text-sm">No {filter} purchase requests.</p>
             ) : rows.map((req) => (
@@ -832,6 +1206,7 @@ export function StoreCatalogTab({
   theme,
   panelClass,
   loading,
+  storeConfig,
   storeDrafts,
   pagedDrafts,
   page,
@@ -854,27 +1229,79 @@ export function StoreCatalogTab({
   onSortChange,
   onResetFilters,
   onPageChange,
+  onStoreConfigChange,
+  onSaveStoreConfig,
   onUpdateDraft,
   onPublishDraft,
   onReload,
   pushNotice,
 }: StoreCatalogTabProps) {
   return (
-    <div className={`border rounded p-3 space-y-2 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
+    <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
       <div className="space-y-2">
         <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Manage store catalog items. Drafts are created automatically during Admin Export.</p>
+        <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-amber-700/40 bg-amber-500/10' : 'border-amber-200 bg-amber-50/80'}`}>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-1">
+              <div className="text-sm font-semibold">Store Maintenance Mode</div>
+              <div className="text-xs opacity-75">
+                Hide the Bank Store for end users and guests while still allowing admins to browse and manage it.
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={onSaveStoreConfig}
+              disabled={loading}
+              className={storeConfig.store_maintenance_enabled ? 'bg-amber-600 hover:bg-amber-700 text-white' : undefined}
+            >
+              {storeConfig.store_maintenance_enabled ? 'Save Maintenance' : 'Save Store Config'}
+            </Button>
+          </div>
+          <div className="flex flex-col gap-3 md:flex-row md:items-start">
+            <label className="flex items-start gap-3 rounded-lg border px-3 py-2 md:min-w-[260px] cursor-pointer">
+              <input
+                type="checkbox"
+                checked={storeConfig.store_maintenance_enabled}
+                onChange={(event) => onStoreConfigChange({
+                  ...storeConfig,
+                  store_maintenance_enabled: event.target.checked,
+                })}
+                className="mt-0.5"
+              />
+              <div className="space-y-0.5">
+                <div className="text-xs font-semibold uppercase tracking-wide opacity-80">Maintenance Enabled</div>
+                <div className="text-xs opacity-70">
+                  End users see a maintenance message instead of catalog banks. Guest sample banks are hidden too.
+                </div>
+              </div>
+            </label>
+            <div className="flex-1 min-w-0 space-y-1">
+              <Label>Maintenance Message</Label>
+              <textarea
+                value={storeConfig.store_maintenance_message}
+                onChange={(event) => onStoreConfigChange({
+                  ...storeConfig,
+                  store_maintenance_message: event.target.value,
+                })}
+                placeholder="Bank Store is under maintenance. Downloads and browsing are temporarily unavailable."
+                className={`w-full min-h-[92px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`}
+              />
+              <div className="text-[11px] opacity-70">Admins bypass maintenance and can still use the store.</div>
+            </div>
+          </div>
+        </div>
         <div className={`rounded-lg border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50/70'}`}>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-2">
             <div className="xl:col-span-2">
               <div className="text-[10px] uppercase tracking-wide opacity-70 mb-1">Search</div>
               <div className="relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
-                <Input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Title or asset name..." className={`h-8 pl-7 text-xs ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`} />
+                <Input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Title or asset name..." className={`h-9 pl-8 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`} />
               </div>
             </div>
             <div>
               <div className="text-[10px] uppercase tracking-wide opacity-70 mb-1">Bank</div>
-              <select value={bankFilter} onChange={(event) => onBankFilterChange(event.target.value)} className={`h-8 w-full rounded-md border px-2 text-xs outline-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
+              <select value={bankFilter} onChange={(event) => onBankFilterChange(event.target.value)} className={`h-9 w-full rounded-md border px-2 text-sm outline-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
                 <option value="all">All banks</option>
                 {bankOptions.map((bankName) => (
                   <option key={bankName} value={bankName}>{bankName}</option>
@@ -883,7 +1310,7 @@ export function StoreCatalogTab({
             </div>
             <div>
               <div className="text-[10px] uppercase tracking-wide opacity-70 mb-1">Status</div>
-              <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as 'all' | 'published' | 'draft')} className={`h-8 w-full rounded-md border px-2 text-xs outline-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
+              <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as 'all' | 'published' | 'draft')} className={`h-9 w-full rounded-md border px-2 text-sm outline-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
                 <option value="all">All status</option>
                 <option value="published">Published</option>
                 <option value="draft">Draft</option>
@@ -891,7 +1318,7 @@ export function StoreCatalogTab({
             </div>
             <div>
               <div className="text-[10px] uppercase tracking-wide opacity-70 mb-1">Pricing</div>
-              <select value={paidFilter} onChange={(event) => onPaidFilterChange(event.target.value as 'all' | 'paid' | 'free')} className={`h-8 w-full rounded-md border px-2 text-xs outline-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
+              <select value={paidFilter} onChange={(event) => onPaidFilterChange(event.target.value as 'all' | 'paid' | 'free')} className={`h-9 w-full rounded-md border px-2 text-sm outline-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
                 <option value="all">All pricing</option>
                 <option value="paid">Paid</option>
                 <option value="free">Free</option>
@@ -937,7 +1364,7 @@ export function StoreCatalogTab({
       </div>
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <>
-          <div className="flex-1 min-h-0 overflow-auto">
+          <div>
             {pagedDrafts.length === 0 ? (
               <div className={`text-center py-12 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
                 <Store className="w-8 h-8 mx-auto mb-2 opacity-30" />
@@ -958,6 +1385,589 @@ export function StoreCatalogTab({
         </>
       )}
     </div>
+  );
+}
+
+export function StorePromotionsTab({
+  theme,
+  panelClass,
+  loading,
+  promotions,
+  stats,
+  catalogDrafts,
+  editingPromotionId,
+  form,
+  onFormChange,
+  onEdit,
+  onReset,
+  onSave,
+  onDelete,
+}: StorePromotionsTabProps) {
+  const isDark = theme === 'dark';
+  const [editorOpen, setEditorOpen] = React.useState(false);
+  const [deleteTarget, setDeleteTarget] = React.useState<StorePromotion | null>(null);
+  const bankOptions = React.useMemo(() => {
+    const byId = new Map<string, string>();
+    catalogDrafts.forEach((draft) => {
+      if (!draft.bank_id) return;
+      if (!byId.has(draft.bank_id)) byId.set(draft.bank_id, draft.bank?.title || 'Unknown Bank');
+    });
+    return Array.from(byId.entries()).map(([id, label]) => ({ id, label })).sort((a, b) => a.label.localeCompare(b.label));
+  }, [catalogDrafts]);
+  const selectedBankCount = form.target_bank_ids.length;
+  const isFlashSale = form.promotion_type === 'flash_sale';
+  const mutedToneClass = isDark ? 'text-gray-400' : 'text-gray-500';
+  const selectedModeToneClass = isFlashSale
+    ? (isDark ? 'border-rose-500/40 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700')
+    : (isDark ? 'border-sky-500/35 bg-sky-500/10 text-sky-100' : 'border-sky-200 bg-sky-50 text-sky-700');
+
+  const handleEditorOpenChange = React.useCallback((open: boolean) => {
+    setEditorOpen(open);
+    if (!open) onReset();
+  }, [onReset]);
+
+  const handleCreate = React.useCallback(() => {
+    onReset();
+    setEditorOpen(true);
+  }, [onReset]);
+
+  const handleEdit = React.useCallback((promotion: StorePromotion) => {
+    onEdit(promotion);
+    setEditorOpen(true);
+  }, [onEdit]);
+
+  const handleSave = React.useCallback(async () => {
+    const ok = await onSave();
+    if (ok) setEditorOpen(false);
+  }, [onSave]);
+
+  return (
+    <StorePromotionsSurface
+      theme={theme}
+      panelClass={panelClass}
+      loading={loading}
+      promotions={promotions}
+      stats={stats}
+      bankOptions={bankOptions}
+      editingPromotionId={editingPromotionId}
+      form={form}
+      onFormChange={onFormChange}
+      editorOpen={editorOpen}
+      onEditorOpenChange={handleEditorOpenChange}
+      onCreate={handleCreate}
+      onEdit={handleEdit}
+      onReset={onReset}
+      onSave={handleSave}
+      deleteTarget={deleteTarget}
+      onDeleteTargetChange={setDeleteTarget}
+      onDelete={onDelete}
+    />
+  );
+
+  return (
+    <div className={`border rounded p-3 space-y-3 overflow-visible lg:h-full lg:min-h-0 lg:flex lg:flex-col lg:overflow-hidden ${panelClass}`}>
+      <div className="flex flex-wrap gap-1.5 text-[11px]">
+        <span className={`px-2 py-0.5 rounded border ${isDark ? 'border-gray-700 text-gray-300' : 'border-gray-300 text-gray-700'}`}>Total {stats.total}</span>
+        <span className={`px-2 py-0.5 rounded border ${isDark ? 'border-emerald-700/60 text-emerald-300' : 'border-emerald-300 text-emerald-700'}`}>Active {stats.active}</span>
+        <span className={`px-2 py-0.5 rounded border ${isDark ? 'border-blue-700/60 text-blue-300' : 'border-blue-300 text-blue-700'}`}>Scheduled {stats.scheduled}</span>
+        <span className={`px-2 py-0.5 rounded border ${isDark ? 'border-amber-700/60 text-amber-300' : 'border-amber-300 text-amber-700'}`}>Expired {stats.expired}</span>
+        <span className={`px-2 py-0.5 rounded border ${isDark ? 'border-rose-700/60 text-rose-300' : 'border-rose-300 text-rose-700'}`}>Inactive {stats.inactive}</span>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[380px_minmax(0,1fr)] gap-3 flex-1 min-h-0">
+        <div className={`rounded-xl border p-3 space-y-3 min-h-0 overflow-auto ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold">{editingPromotionId ? 'Edit Promotion' : 'New Promotion'}</div>
+              <div className="text-xs opacity-70">Discounts stay separate from base catalog price.</div>
+            </div>
+            {editingPromotionId && (
+              <Button size="sm" variant="outline" onClick={onReset}>
+                <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                Reset
+              </Button>
+            )}
+          </div>
+
+          <div className="space-y-1">
+            <Label>Name</Label>
+            <Input value={form.name} onChange={(event) => onFormChange({ ...form, name: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+          </div>
+          <div className="space-y-1">
+            <Label>Description</Label>
+            <textarea value={form.description} onChange={(event) => onFormChange({ ...form, description: event.target.value })} className={`w-full min-h-[80px] rounded-md border p-2 text-sm outline-none resize-y ${isDark ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>Mode</Label>
+              <select value={form.promotion_type} onChange={(event) => onFormChange({ ...form, promotion_type: event.target.value === 'standard' ? 'standard' : 'flash_sale' })} className={`h-9 w-full rounded-md border px-2 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
+                <option value="flash_sale">Flash Sale</option>
+                <option value="standard">Standard</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label>Discount Type</Label>
+              <select value={form.discount_type} onChange={(event) => onFormChange({ ...form, discount_type: event.target.value === 'fixed' ? 'fixed' : 'percent' })} className={`h-9 w-full rounded-md border px-2 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
+                <option value="percent">Percent</option>
+                <option value="fixed">Fixed PHP</option>
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>Discount Value</Label>
+              <Input type="number" min={0} step={form.discount_type === 'percent' ? '0.01' : '1'} value={form.discount_value} onChange={(event) => onFormChange({ ...form, discount_value: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Priority</Label>
+              <Input type="number" min={0} step="1" value={form.priority} onChange={(event) => onFormChange({ ...form, priority: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>Start</Label>
+              <Input type="datetime-local" value={form.starts_at} onChange={(event) => onFormChange({ ...form, starts_at: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>End</Label>
+              <Input type="datetime-local" value={form.ends_at} onChange={(event) => onFormChange({ ...form, ends_at: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>Timezone</Label>
+              <Input value={form.timezone} onChange={(event) => onFormChange({ ...form, timezone: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+            <div className="space-y-1">
+              <Label>Badge</Label>
+              <Input value={form.badge_text} onChange={(event) => onFormChange({ ...form, badge_text: event.target.value })} placeholder="FLASH SALE" className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={form.is_active} onChange={(event) => onFormChange({ ...form, is_active: event.target.checked })} />
+            <span>Promotion enabled</span>
+          </label>
+
+          <div className="space-y-2">
+            <div className="text-sm font-semibold">Target Banks</div>
+            <div className={`max-h-28 overflow-auto rounded-md border p-2 space-y-1 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+              {bankOptions.length === 0 ? (
+                <div className="text-xs opacity-70">No catalog banks available yet.</div>
+              ) : bankOptions.map((bank) => (
+                <label key={bank.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.target_bank_ids.includes(bank.id)}
+                    onChange={(event) => onFormChange({
+                      ...form,
+                      target_bank_ids: event.target.checked
+                        ? [...form.target_bank_ids, bank.id]
+                        : form.target_bank_ids.filter((id) => id !== bank.id),
+                    })}
+                  />
+                  <span>{bank.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={onSave} disabled={loading} className="flex-1">
+              {loading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1" />}
+              {editingPromotionId ? 'Save Promotion' : 'Create Promotion'}
+            </Button>
+            <Button type="button" variant="outline" onClick={onReset} disabled={loading}>
+              Clear
+            </Button>
+          </div>
+        </div>
+
+        <div className={`rounded-xl border p-3 min-h-0 overflow-auto ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+          <div className="text-sm font-semibold mb-3">Existing Promotions</div>
+          {promotions.length === 0 ? (
+            <div className="text-sm opacity-70">No promotions created yet.</div>
+          ) : (
+            <div className="space-y-3">
+              {promotions.map((promotion) => (
+                <div key={promotion.id} className={`rounded-lg border p-3 space-y-2 ${isDark ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="font-semibold">{promotion.name}</div>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${promotion.status === 'active'
+                          ? (isDark ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-100 text-emerald-700')
+                          : promotion.status === 'scheduled'
+                            ? (isDark ? 'bg-blue-500/20 text-blue-300' : 'bg-blue-100 text-blue-700')
+                            : promotion.status === 'expired'
+                              ? (isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700')
+                              : (isDark ? 'bg-rose-500/20 text-rose-300' : 'bg-rose-100 text-rose-700')}`}>
+                          {promotion.status}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${isDark ? 'bg-fuchsia-500/20 text-fuchsia-300' : 'bg-fuchsia-100 text-fuchsia-700'}`}>
+                          {promotion.promotion_type === 'flash_sale' ? 'Flash Sale' : 'Standard'}
+                        </span>
+                      </div>
+                      <div className="text-xs opacity-70 mt-1">
+                        {promotion.discount_type === 'percent' ? `${promotion.discount_value}% off` : `PHP ${promotion.discount_value} off`}
+                        {' • '}
+                        {new Date(promotion.starts_at).toLocaleString()} to {new Date(promotion.ends_at).toLocaleString()}
+                      </div>
+                      {promotion.description ? <div className="text-xs opacity-80 mt-1">{promotion.description}</div> : null}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" onClick={() => onEdit(promotion)}>
+                        Edit
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => onDelete(promotion.id)}>
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(promotion.target_labels || []).map((target) => (
+                      <span key={`${target.type}-${target.id}`} className={`px-2 py-0.5 rounded border text-[11px] ${isDark ? 'border-gray-700 text-gray-300' : 'border-gray-300 text-gray-700'}`}>
+                        {target.type === 'catalog' ? 'Item' : 'Bank'}: {target.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StorePromotionsSurface({
+  theme,
+  panelClass,
+  loading,
+  promotions,
+  stats,
+  bankOptions,
+  editingPromotionId,
+  form,
+  onFormChange,
+  editorOpen,
+  onEditorOpenChange,
+  onCreate,
+  onEdit,
+  onReset,
+  onSave,
+  deleteTarget,
+  onDeleteTargetChange,
+  onDelete,
+}: {
+  theme: AdminDialogTheme;
+  panelClass: string;
+  loading: boolean;
+  promotions: StorePromotion[];
+  stats: { total: number; active: number; scheduled: number; expired: number; inactive: number };
+  bankOptions: Array<{ id: string; label: string }>;
+  editingPromotionId: string | null;
+  form: StorePromotionsTabProps['form'];
+  onFormChange: StorePromotionsTabProps['onFormChange'];
+  editorOpen: boolean;
+  onEditorOpenChange: (open: boolean) => void;
+  onCreate: () => void;
+  onEdit: (promotion: StorePromotion) => void;
+  onReset: () => void;
+  onSave: () => Promise<void>;
+  deleteTarget: StorePromotion | null;
+  onDeleteTargetChange: (promotion: StorePromotion | null) => void;
+  onDelete: (promotionId: string) => void;
+}) {
+  const isDark = theme === 'dark';
+  const selectedBankCount = form.target_bank_ids.length;
+  const isFlashSale = form.promotion_type === 'flash_sale';
+  const mutedToneClass = isDark ? 'text-gray-400' : 'text-gray-500';
+  const selectedModeToneClass = isFlashSale
+    ? (isDark ? 'border-rose-500/40 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700')
+    : (isDark ? 'border-sky-500/35 bg-sky-500/10 text-sky-100' : 'border-sky-200 bg-sky-50 text-sky-700');
+
+  return (
+    <>
+      <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
+        <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white'}`}>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-1">
+              <div className="text-lg font-semibold">Promotions</div>
+              <div className={`text-sm ${mutedToneClass}`}>
+                Schedule temporary discounts without touching the base catalog price. Flash sales feel urgent in the storefront, while standard promotions stay calmer.
+              </div>
+            </div>
+            <Button onClick={onCreate} disabled={loading} className={isDark ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}>
+              <Plus className="w-4 h-4 mr-2" />
+              New Promotion
+            </Button>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-5">
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+              <div className={`text-[11px] uppercase tracking-wide ${mutedToneClass}`}>Total</div>
+              <div className="mt-1 text-xl font-semibold">{stats.total}</div>
+            </div>
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
+              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>Active</div>
+              <div className="mt-1 text-xl font-semibold">{stats.active}</div>
+            </div>
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
+              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Scheduled</div>
+              <div className="mt-1 text-xl font-semibold">{stats.scheduled}</div>
+            </div>
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
+              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Expired</div>
+              <div className="mt-1 text-xl font-semibold">{stats.expired}</div>
+            </div>
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-rose-700/60 bg-rose-500/10' : 'border-rose-200 bg-rose-50'}`}>
+              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-rose-300' : 'text-rose-700'}`}>Inactive</div>
+              <div className="mt-1 text-xl font-semibold">{stats.inactive}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <div className="text-sm font-semibold">Existing Promotions</div>
+              <div className={`text-xs ${mutedToneClass}`}>Create and edit promotions in a dedicated modal instead of reusing the inline form.</div>
+            </div>
+          </div>
+          {promotions.length === 0 ? (
+            <div className={`rounded-xl border border-dashed p-8 text-center ${isDark ? 'border-gray-700 text-gray-400' : 'border-gray-300 text-gray-500'}`}>
+              <div className="text-sm font-medium">No promotions created yet.</div>
+              <div className="text-xs mt-1">Create your first flash sale or scheduled standard discount.</div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {promotions.map((promotion) => (
+                <div key={promotion.id} className={`rounded-xl border p-4 space-y-3 ${isDark ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="font-semibold">{promotion.name}</div>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${promotion.status === 'active'
+                          ? (isDark ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-100 text-emerald-700')
+                          : promotion.status === 'scheduled'
+                            ? (isDark ? 'bg-blue-500/20 text-blue-300' : 'bg-blue-100 text-blue-700')
+                            : promotion.status === 'expired'
+                              ? (isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700')
+                              : (isDark ? 'bg-rose-500/20 text-rose-300' : 'bg-rose-100 text-rose-700')}`}>
+                          {promotion.status}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${promotion.promotion_type === 'flash_sale'
+                          ? (isDark ? 'bg-rose-500/20 text-rose-200' : 'bg-rose-100 text-rose-700')
+                          : (isDark ? 'bg-sky-500/20 text-sky-200' : 'bg-sky-100 text-sky-700')}`}>
+                          {promotion.promotion_type === 'flash_sale' ? 'Flash Sale' : 'Standard'}
+                        </span>
+                        {!promotion.is_active && (
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'}`}>
+                            Disabled
+                          </span>
+                        )}
+                      </div>
+                      <div className={`text-xs mt-1 ${mutedToneClass}`}>
+                        {promotion.discount_type === 'percent' ? `${promotion.discount_value}% off` : `PHP ${promotion.discount_value} off`}
+                        {' • '}
+                        {new Date(promotion.starts_at).toLocaleString()} to {new Date(promotion.ends_at).toLocaleString()}
+                      </div>
+                      {promotion.description ? <div className={`text-xs mt-2 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>{promotion.description}</div> : null}
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <Button size="sm" variant="outline" onClick={() => onEdit(promotion)}>
+                        Edit
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => onDeleteTargetChange(promotion)}>
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(promotion.target_labels || []).map((target) => (
+                      <span key={`${target.type}-${target.id}`} className={`px-2 py-0.5 rounded border text-[11px] ${isDark ? 'border-gray-700 text-gray-300' : 'border-gray-300 text-gray-700'}`}>
+                        Bank: {target.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <Dialog open={editorOpen} onOpenChange={onEditorOpenChange} useHistory={false}>
+        <DialogContent
+          overlayClassName="z-[129]"
+          className={`${isDark ? 'bg-gray-900 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-200'} z-[130] max-h-[92dvh] overflow-y-auto sm:max-w-3xl`}
+          aria-describedby={undefined}
+        >
+          <DialogHeader>
+            <DialogTitle>{editingPromotionId ? 'Edit Promotion' : 'Create Promotion'}</DialogTitle>
+            <DialogDescription className={isDark ? 'text-gray-400' : 'text-gray-500'}>
+              Promotions apply on top of the bank catalog price. Flash sales get stronger urgency in the storefront, while standard promotions keep the presentation softer.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => onFormChange({ ...form, promotion_type: 'flash_sale', badge_text: form.badge_text || 'FLASH SALE' })}
+                className={`rounded-xl border p-4 text-left transition-colors ${isFlashSale ? selectedModeToneClass : (isDark ? 'border-gray-700 bg-gray-950/40 hover:border-rose-500/40' : 'border-gray-200 bg-gray-50 hover:border-rose-200')}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-semibold">Flash Sale</div>
+                  {isFlashSale ? <span className="text-[10px] font-bold uppercase">Selected</span> : null}
+                </div>
+                <div className={`mt-1 text-xs ${isFlashSale ? '' : mutedToneClass}`}>
+                  Urgent promo style with flash-sale treatment and sale-end emphasis in the storefront.
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => onFormChange({ ...form, promotion_type: 'standard', badge_text: form.badge_text === 'FLASH SALE' ? '' : form.badge_text })}
+                className={`rounded-xl border p-4 text-left transition-colors ${!isFlashSale ? selectedModeToneClass : (isDark ? 'border-gray-700 bg-gray-950/40 hover:border-sky-500/40' : 'border-gray-200 bg-gray-50 hover:border-sky-200')}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-semibold">Standard</div>
+                  {!isFlashSale ? <span className="text-[10px] font-bold uppercase">Selected</span> : null}
+                </div>
+                <div className={`mt-1 text-xs ${!isFlashSale ? '' : mutedToneClass}`}>
+                  Regular scheduled sale for softer discount messaging without the flash-sale label.
+                </div>
+              </button>
+            </div>
+
+            <div className={`rounded-xl border p-3 text-xs ${selectedModeToneClass}`}>
+              {isFlashSale
+                ? 'Flash sales work best for short, time-sensitive offers. The storefront shows the flash-sale label and the sale end time.'
+                : 'Standard promotions are better for weekend campaigns, ongoing launches, or regular discounting without urgency-heavy treatment.'}
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1">
+                <Label>Name</Label>
+                <Input value={form.name} onChange={(event) => onFormChange({ ...form, name: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+              </div>
+              <div className="space-y-1">
+                <Label>Badge</Label>
+                <Input value={form.badge_text} onChange={(event) => onFormChange({ ...form, badge_text: event.target.value })} placeholder={isFlashSale ? 'FLASH SALE' : 'WEEKEND SALE'} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label>Description</Label>
+              <textarea value={form.description} onChange={(event) => onFormChange({ ...form, description: event.target.value })} className={`w-full min-h-[88px] rounded-md border p-2 text-sm outline-none resize-y ${isDark ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`} />
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1">
+                <Label>Discount Type</Label>
+                <select value={form.discount_type} onChange={(event) => onFormChange({ ...form, discount_type: event.target.value === 'fixed' ? 'fixed' : 'percent' })} className={`h-9 w-full rounded-md border px-2 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
+                  <option value="percent">Percent</option>
+                  <option value="fixed">Fixed PHP</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label>Discount Value</Label>
+                <Input type="number" min={0} step={form.discount_type === 'percent' ? '0.01' : '1'} value={form.discount_value} onChange={(event) => onFormChange({ ...form, discount_value: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1">
+                <Label>Start</Label>
+                <Input type="datetime-local" value={form.starts_at} onChange={(event) => onFormChange({ ...form, starts_at: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+              </div>
+              <div className="space-y-1">
+                <Label>End</Label>
+                <Input type="datetime-local" value={form.ends_at} onChange={(event) => onFormChange({ ...form, ends_at: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1">
+                <Label>Timezone</Label>
+                <Input value={form.timezone} onChange={(event) => onFormChange({ ...form, timezone: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+              </div>
+              <div className="space-y-1">
+                <Label>Priority</Label>
+                <Input type="number" min={0} step="1" value={form.priority} onChange={(event) => onFormChange({ ...form, priority: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+              </div>
+            </div>
+
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div>
+                  <div className="text-sm font-semibold">Target Banks</div>
+                  <div className={`text-xs ${mutedToneClass}`}>Pick the banks that should receive this promotion.</div>
+                </div>
+                <div className={`text-xs font-semibold ${selectedBankCount > 0 ? (isDark ? 'text-teal-300' : 'text-teal-700') : mutedToneClass}`}>
+                  {selectedBankCount} selected
+                </div>
+              </div>
+              <div className={`max-h-44 overflow-auto rounded-md border p-2 space-y-1 ${isDark ? 'border-gray-700 bg-gray-900/60' : 'border-gray-200 bg-white'}`}>
+                {bankOptions.length === 0 ? (
+                  <div className="text-xs opacity-70">No catalog banks available yet.</div>
+                ) : bankOptions.map((bank) => (
+                  <label key={bank.id} className="flex items-center gap-2 text-xs cursor-pointer rounded px-1.5 py-1 hover:bg-black/5 dark:hover:bg-white/5">
+                    <input
+                      type="checkbox"
+                      checked={form.target_bank_ids.includes(bank.id)}
+                      onChange={(event) => onFormChange({
+                        ...form,
+                        target_bank_ids: event.target.checked
+                          ? [...form.target_bank_ids, bank.id]
+                          : form.target_bank_ids.filter((id) => id !== bank.id),
+                      })}
+                    />
+                    <span>{bank.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={form.is_active} onChange={(event) => onFormChange({ ...form, is_active: event.target.checked })} />
+              <span>Promotion enabled</span>
+            </label>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" onClick={() => onEditorOpenChange(false)} disabled={loading}>
+              Cancel
+            </Button>
+            <Button type="button" variant="outline" onClick={onReset} disabled={loading}>
+              <RotateCcw className="w-3.5 h-3.5 mr-1" />
+              Reset Form
+            </Button>
+            <Button type="button" onClick={() => void onSave()} disabled={loading} className={isDark ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}>
+              {loading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1" />}
+              {editingPromotionId ? 'Save Promotion' : 'Create Promotion'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmationDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) onDeleteTargetChange(null);
+        }}
+        title="Delete Promotion"
+        description={deleteTarget ? `Delete "${deleteTarget.name}"? This removes the promotion from the storefront immediately.` : 'Delete this promotion?'}
+        confirmText="Delete Promotion"
+        variant="destructive"
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          onDelete(deleteTarget.id);
+          onDeleteTargetChange(null);
+        }}
+        theme={theme}
+      />
+    </>
   );
 }
 
@@ -995,36 +2005,53 @@ export function StoreBannersTab({
 
   return (
     <>
-      <div className={`border rounded p-3 space-y-3 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
-        <div className="flex flex-wrap items-start gap-3">
-          <div className="space-y-1">
-            <div className="text-sm font-semibold">Marketing Banners</div>
-            <p className={`text-xs max-w-xl ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-              Manage the slider shown above the Bank Store list. Unsaved banners stay visible here even if you switch them to inactive.
-            </p>
+      <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
+        <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white'}`}>
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="space-y-1">
+              <div className="text-base font-semibold">Marketing Banners</div>
+              <p className={`text-sm max-w-2xl ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+                Manage the rotating banner shown above the Bank Store list. Draft edits stay visible here so you can review before saving.
+              </p>
+            </div>
+            <div className="flex-1" />
+            <label className="flex items-center gap-2 text-xs rounded-md border px-2.5 py-1.5 self-start">
+              <input type="checkbox" checked={showInactive} onChange={(event) => onShowInactiveChange(event.target.checked)} />
+              Show inactive
+            </label>
           </div>
-          <div className="flex-1" />
-          <label className="flex items-center gap-2 text-xs rounded-md border px-2.5 py-1.5 self-start">
-            <input type="checkbox" checked={showInactive} onChange={(event) => onShowInactiveChange(event.target.checked)} />
-            Show inactive
-          </label>
-        </div>
-
-        <div className="flex flex-wrap gap-2 text-[11px]">
-          <span className={`px-2 py-1 rounded-full border ${isDark ? 'border-gray-700 text-gray-300 bg-gray-900/40' : 'border-gray-300 text-gray-700 bg-white'}`}>Total {bannerStats.total}</span>
-          <span className={`px-2 py-1 rounded-full border ${isDark ? 'border-emerald-700/60 text-emerald-300 bg-emerald-950/20' : 'border-emerald-300 text-emerald-700 bg-emerald-50'}`}>Active {bannerStats.active}</span>
-          <span className={`px-2 py-1 rounded-full border ${isDark ? 'border-amber-700/60 text-amber-300 bg-amber-950/20' : 'border-amber-300 text-amber-700 bg-amber-50'}`}>Inactive {bannerStats.inactive}</span>
-          <span className={`px-2 py-1 rounded-full border ${isDark ? 'border-blue-700/60 text-blue-300 bg-blue-950/20' : 'border-blue-300 text-blue-700 bg-blue-50'}`}>Unsaved {bannerStats.dirty}</span>
+          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Total</div>
+              <div className="mt-1 text-xl font-semibold">{bannerStats.total}</div>
+            </div>
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
+              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>Active</div>
+              <div className="mt-1 text-xl font-semibold">{bannerStats.active}</div>
+            </div>
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
+              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Inactive</div>
+              <div className="mt-1 text-xl font-semibold">{bannerStats.inactive}</div>
+            </div>
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
+              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Unsaved</div>
+              <div className="mt-1 text-xl font-semibold">{bannerStats.dirty}</div>
+            </div>
+          </div>
         </div>
 
         {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
-          <div className="flex-1 min-h-0 overflow-auto space-y-4 pr-1">
-            <div className={`rounded-xl border p-4 space-y-3 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+          <div className="pr-1">
+            <div className="space-y-4">
+            <div className={`rounded-xl border p-4 space-y-3 max-w-3xl ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
               <div className="flex items-center gap-2">
                 <Plus className="w-4 h-4" />
-                <div className="text-sm font-semibold">Create New Banner</div>
+                <div>
+                  <div className="text-sm font-semibold">Create New Banner</div>
+                  <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Start with an image, optionally add a link, then choose its position in the slider.</div>
+                </div>
               </div>
-              <div className="grid grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)] gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 <div className={`rounded-lg border overflow-hidden h-32 ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
                   {(newBannerPreviewUrl || newBannerImageUrl) ? (
                     <img src={newBannerPreviewUrl || newBannerImageUrl} alt="New banner preview" className="w-full h-full object-cover" />
@@ -1035,7 +2062,7 @@ export function StoreBannersTab({
                     </div>
                   )}
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3">
                   <div className="space-y-1">
                     <Label>Image URL</Label>
                     <Input value={newBannerImageUrl} onChange={(event) => onNewBannerImageUrlChange(event.target.value)} placeholder="https://..." className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
@@ -1079,6 +2106,7 @@ export function StoreBannersTab({
                 ) : null}
               </div>
 
+            <div className={`rounded-xl border p-4 space-y-3 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
               <div className="space-y-3">
                 {banners.length === 0 ? (
                   <div className={`rounded-lg border border-dashed px-4 py-10 text-center ${isDark ? 'border-gray-700 text-gray-400' : 'border-gray-300 text-gray-500'}`}>
@@ -1123,7 +2151,7 @@ export function StoreBannersTab({
                           <div className="text-[11px] opacity-70">Sort {banner.sort_order}</div>
                         </div>
 
-                        <div className="grid grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)] gap-4">
+                        <div className="grid grid-cols-1 2xl:grid-cols-[220px_minmax(0,1fr)] gap-4">
                           <div className="space-y-2">
                             <div className={`rounded-lg border overflow-hidden h-28 ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
                               <img src={banner.image_url} alt="Banner" className="w-full h-full object-cover" />
@@ -1240,6 +2268,8 @@ export function StoreBannersTab({
                 )}
               </div>
             </div>
+            </div>
+            </div>
           </div>
         )}
       </div>
@@ -1279,6 +2309,8 @@ export function StoreConfigTab({
 }: StoreConfigTabProps) {
   const [confirmAction, setConfirmAction] = React.useState<{ target: 'account' | 'store'; action: 'start' | 'stop' } | null>(null);
   const [nowMs, setNowMs] = React.useState(() => Date.now());
+  const runningAutomationCount = Number(Boolean(storeConfig.account_auto_approve_enabled)) + Number(Boolean(storeConfig.store_auto_approve_enabled));
+  const hasMessengerConfig = Boolean(String(storeConfig.messenger_url || '').trim());
   React.useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 60000);
     return () => window.clearInterval(timer);
@@ -1456,9 +2488,40 @@ export function StoreConfigTab({
   };
 
   return (
-    <div className={`border rounded p-3 h-full min-h-0 overflow-auto ${panelClass}`}>
+    <div className={`border rounded p-3 overflow-visible lg:h-full lg:min-h-0 lg:overflow-auto ${panelClass}`}>
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <div className="space-y-5 max-w-4xl">
+          <div className={`rounded-2xl border p-4 space-y-4 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white/90'}`}>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-1">
+                <div className="text-base font-semibold">Payment and Store Controls</div>
+                <div className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
+                  Configure checkout instructions, payment channels, QR support, automation, and email outcomes from one place.
+                </div>
+              </div>
+              <Button onClick={onSave} disabled={loading} className="w-full sm:w-auto sm:min-w-[220px]">Save Pay Config</Button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+              <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+                <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Account Price</div>
+                <div className="mt-1 text-xl font-semibold">{storeConfig.account_price_php || '0'}</div>
+              </div>
+              <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
+                <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'}`}>Banner Delay</div>
+                <div className="mt-1 text-xl font-semibold">{storeConfig.banner_rotation_ms || '5000'} ms</div>
+              </div>
+              <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
+                <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-emerald-300' : 'text-emerald-700'}`}>Automation</div>
+                <div className="mt-1 text-xl font-semibold">{runningAutomationCount}/2</div>
+              </div>
+              <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
+                <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-amber-300' : 'text-amber-700'}`}>Checkout Support</div>
+                <div className="mt-1 text-xs font-medium">{hasQrImage ? 'QR ready' : 'No QR uploaded'}{hasMessengerConfig ? ' • Messenger ready' : ''}</div>
+              </div>
+            </div>
+          </div>
+
           <div className={`rounded-2xl border p-4 space-y-4 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white/90'}`}>
             <div className="flex flex-col gap-1">
               <div className="text-base font-semibold">Payment Setup</div>
@@ -1563,8 +2626,8 @@ export function StoreConfigTab({
             </div>
           </div>
 
-          <div className="sticky bottom-0 flex justify-end">
-            <Button onClick={onSave} disabled={loading} className="min-w-[220px]">Save Pay Config</Button>
+          <div className="flex justify-end">
+            <Button onClick={onSave} disabled={loading} className="w-full sm:w-auto sm:min-w-[220px]">Save Pay Config</Button>
           </div>
         </div>
       )}

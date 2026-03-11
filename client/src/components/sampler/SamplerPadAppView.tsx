@@ -4,6 +4,7 @@ import { HeaderControls } from './HeaderControls';
 import { Button } from '@/components/ui/button';
 import type { PerformanceTier } from '@/lib/performance-monitor';
 import type { PadData, SamplerBank, StopMode } from './types/sampler';
+import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import type { RemoteSnapshotPromptState } from './hooks/useSamplerStore.snapshotMetadata';
 import type { SideMenu as SideMenuType } from './SideMenu';
 import type { VolumeMixer as VolumeMixerType } from './VolumeMixer';
@@ -91,6 +92,7 @@ interface SamplerPadAppViewProps {
   canTransferFromBank: (bankId: string) => boolean;
   midiEnabled: boolean;
   hideShortcutLabels: boolean;
+  highlightedPadTarget: { bankId: string; padId: string } | null;
   graphicsTier: PerformanceTier;
   editRequest: { padId: string; token: number } | null;
   blockedShortcutKeys: Set<string>;
@@ -219,6 +221,7 @@ export function SamplerPadAppView({
   canTransferFromBank,
   midiEnabled,
   hideShortcutLabels,
+  highlightedPadTarget,
   graphicsTier,
   editRequest,
   blockedShortcutKeys,
@@ -388,9 +391,10 @@ export function SamplerPadAppView({
                     blockedMidiCCs={blockedMidiCCs}
                     channelLoadArmed={channelLoadArmed}
                     onSelectPadForChannelLoad={onSelectPadForChannelLoad}
+                    highlightedPadId={highlightedPadTarget?.bankId === (primaryBankId || '') ? highlightedPadTarget.padId : null}
                     requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
                       displayPrimary &&
-                      (displayPrimary.sourceBankId === defaultBankSourceId || displayPrimary.name === 'Default Bank')
+                      (displayPrimary.sourceBankId === defaultBankSourceId || isDefaultBankIdentity(displayPrimary))
                     )}
                     onRequireLogin={onRequireLogin}
                   />
@@ -442,9 +446,10 @@ export function SamplerPadAppView({
                       blockedMidiCCs={blockedMidiCCs}
                       channelLoadArmed={channelLoadArmed}
                       onSelectPadForChannelLoad={onSelectPadForChannelLoad}
+                      highlightedPadId={highlightedPadTarget?.bankId === (secondaryBankId || '') ? highlightedPadTarget.padId : null}
                       requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
                         displaySecondary &&
-                        (displaySecondary.sourceBankId === defaultBankSourceId || displaySecondary.name === 'Default Bank')
+                        (displaySecondary.sourceBankId === defaultBankSourceId || isDefaultBankIdentity(displaySecondary))
                       )}
                       onRequireLogin={onRequireLogin}
                     />
@@ -499,9 +504,10 @@ export function SamplerPadAppView({
                   blockedMidiCCs={blockedMidiCCs}
                   channelLoadArmed={channelLoadArmed}
                   onSelectPadForChannelLoad={onSelectPadForChannelLoad}
+                  highlightedPadId={highlightedPadTarget?.bankId === (currentBankId || '') ? highlightedPadTarget.padId : null}
                   requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
                     singleBank &&
-                    (singleBank.sourceBankId === defaultBankSourceId || singleBank.name === 'Default Bank')
+                    (singleBank.sourceBankId === defaultBankSourceId || isDefaultBankIdentity(singleBank))
                   )}
                   onRequireLogin={onRequireLogin}
                 />

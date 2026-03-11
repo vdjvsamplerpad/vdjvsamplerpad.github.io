@@ -1,4 +1,5 @@
 import type { PadData, SamplerBank } from '../types/sampler';
+import { isDefaultBankIdentity } from './useSamplerStore.bankIdentity';
 
 type SetState<T> = (value: T | ((prev: T) => T)) => void;
 
@@ -85,7 +86,7 @@ export const runRestoreHiddenProtectedBanksPipeline = (
         .filter((id): id is string => Boolean(id))
     );
     const hasDefaultLikeBank = prev.some(
-      (bank) => bank.sourceBankId === defaultBankSourceId || bank.name === 'Default Bank'
+      (bank) => bank.sourceBankId === defaultBankSourceId || isDefaultBankIdentity(bank)
     );
 
     const toRestore = hidden.filter((bank) => {
@@ -94,7 +95,7 @@ export const runRestoreHiddenProtectedBanksPipeline = (
       if (bank.bankMetadata?.bankId && existingMetadataBankIds.has(bank.bankMetadata.bankId)) return false;
       if (
         hasDefaultLikeBank &&
-        (bank.sourceBankId === defaultBankSourceId || bank.name === 'Default Bank')
+        (bank.sourceBankId === defaultBankSourceId || isDefaultBankIdentity(bank))
       ) {
         return false;
       }
@@ -128,4 +129,3 @@ export const runRestoreHiddenProtectedBanksPipeline = (
     }
   })();
 };
-

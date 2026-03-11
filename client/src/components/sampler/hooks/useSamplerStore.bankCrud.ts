@@ -10,11 +10,24 @@ type QuotaPolicy = {
   ownedBankPadCap: number;
 };
 
+type PadTemplateDefaults = {
+  triggerMode: PadData['triggerMode'];
+  playbackMode: PadData['playbackMode'];
+  volume: number;
+  gainDb: number;
+  fadeInMs: number;
+  fadeOutMs: number;
+  pitch: number;
+  tempoPercent: number;
+  keyLock: boolean;
+};
+
 export const runAddPadPipeline = async (
   input: {
     file: File;
     targetBankId: string | null;
     defaultTriggerMode?: PadData['triggerMode'];
+    padDefaults?: PadTemplateDefaults;
     profileRole?: string | null;
     quotaPolicy: QuotaPolicy;
   },
@@ -42,6 +55,7 @@ export const runAddPadPipeline = async (
     file,
     targetBankId,
     defaultTriggerMode,
+    padDefaults,
     profileRole,
     quotaPolicy,
   } = input;
@@ -77,7 +91,7 @@ export const runAddPadPipeline = async (
   const storedAudio = await storeFile(padId, file, 'audio');
   const maxPosition = targetBank.pads.length > 0 ? Math.max(...targetBank.pads.map((p) => p.position || 0)) : -1;
   const resolvedDurationMs = metadata.audioDurationMs > 0 ? metadata.audioDurationMs : 30000;
-  const triggerMode = defaultTriggerMode || 'toggle';
+  const triggerMode = defaultTriggerMode || padDefaults?.triggerMode || 'toggle';
   const newPad: PadData = {
     id: padId,
     name: trimPadName(file.name.replace(/\.[^/.]+$/, '')),
@@ -87,17 +101,17 @@ export const runAddPadPipeline = async (
     hasImageAsset: false,
     color: targetBank.defaultColor,
     triggerMode,
-    playbackMode: 'once',
-    volume: 1,
-    gainDb: 0,
-    gain: 1.0,
-    fadeInMs: 0,
-    fadeOutMs: 0,
+    playbackMode: padDefaults?.playbackMode || 'once',
+    volume: typeof padDefaults?.volume === 'number' ? padDefaults.volume : 1,
+    gainDb: typeof padDefaults?.gainDb === 'number' ? padDefaults.gainDb : 0,
+    gain: Math.pow(10, ((typeof padDefaults?.gainDb === 'number' ? padDefaults.gainDb : 0) / 20)),
+    fadeInMs: typeof padDefaults?.fadeInMs === 'number' ? padDefaults.fadeInMs : 0,
+    fadeOutMs: typeof padDefaults?.fadeOutMs === 'number' ? padDefaults.fadeOutMs : 0,
     startTimeMs: 0,
     endTimeMs: resolvedDurationMs,
-    pitch: 0,
-    tempoPercent: 0,
-    keyLock: true,
+    pitch: typeof padDefaults?.pitch === 'number' ? padDefaults.pitch : 0,
+    tempoPercent: typeof padDefaults?.tempoPercent === 'number' ? padDefaults.tempoPercent : 0,
+    keyLock: typeof padDefaults?.keyLock === 'boolean' ? padDefaults.keyLock : true,
     position: maxPosition + 1,
     ignoreChannel: false,
     audioBytes: metadata.audioBytes,
@@ -134,6 +148,7 @@ export const runAddPadsPipeline = async (
     files: File[];
     targetBankId: string | null;
     defaultTriggerMode?: PadData['triggerMode'];
+    padDefaults?: PadTemplateDefaults;
     profileRole?: string | null;
     quotaPolicy: QuotaPolicy;
   },
@@ -159,6 +174,7 @@ export const runAddPadsPipeline = async (
     files,
     targetBankId,
     defaultTriggerMode,
+    padDefaults,
     profileRole,
     quotaPolicy,
   } = input;
@@ -195,7 +211,7 @@ export const runAddPadsPipeline = async (
   const batchItems: Array<{ id: string; blob: Blob; type: 'audio' | 'image' }> = [];
   const newPads: PadData[] = [];
   let maxPosition = targetBank.pads.length > 0 ? Math.max(...targetBank.pads.map((p) => p.position || 0)) : -1;
-  const triggerMode = defaultTriggerMode || 'toggle';
+  const triggerMode = defaultTriggerMode || padDefaults?.triggerMode || 'toggle';
 
   for (const file of acceptedFiles) {
     const metadata = await extractMetadataFromFile(file);
@@ -224,17 +240,17 @@ export const runAddPadsPipeline = async (
       hasImageAsset: false,
       color: targetBank.defaultColor,
       triggerMode,
-      playbackMode: 'once',
-      volume: 1,
-      gainDb: 0,
-      gain: 1.0,
-      fadeInMs: 0,
-      fadeOutMs: 0,
+      playbackMode: padDefaults?.playbackMode || 'once',
+      volume: typeof padDefaults?.volume === 'number' ? padDefaults.volume : 1,
+      gainDb: typeof padDefaults?.gainDb === 'number' ? padDefaults.gainDb : 0,
+      gain: Math.pow(10, ((typeof padDefaults?.gainDb === 'number' ? padDefaults.gainDb : 0) / 20)),
+      fadeInMs: typeof padDefaults?.fadeInMs === 'number' ? padDefaults.fadeInMs : 0,
+      fadeOutMs: typeof padDefaults?.fadeOutMs === 'number' ? padDefaults.fadeOutMs : 0,
       startTimeMs: 0,
       endTimeMs: metadata.audioDurationMs > 0 ? metadata.audioDurationMs : 30000,
-      pitch: 0,
-      tempoPercent: 0,
-      keyLock: true,
+      pitch: typeof padDefaults?.pitch === 'number' ? padDefaults.pitch : 0,
+      tempoPercent: typeof padDefaults?.tempoPercent === 'number' ? padDefaults.tempoPercent : 0,
+      keyLock: typeof padDefaults?.keyLock === 'boolean' ? padDefaults.keyLock : true,
       position: maxPosition,
       ignoreChannel: false,
       audioBytes: metadata.audioBytes,
@@ -652,6 +668,8 @@ export const runDeleteBankPipeline = async (
     setSecondaryBankIdState: SetState<string | null>;
     setCurrentBankIdState: SetState<string | null>;
     generateId: () => string;
+    defaultBankName: string;
+    defaultBankColor: string;
   }
 ): Promise<void> => {
   const {
@@ -667,6 +685,8 @@ export const runDeleteBankPipeline = async (
     setSecondaryBankIdState,
     setCurrentBankIdState,
     generateId,
+    defaultBankName,
+    defaultBankColor,
   } = deps;
 
   setBanks((prev) => {
@@ -694,7 +714,15 @@ export const runDeleteBankPipeline = async (
       setCurrentBankIdState(newBanks.length > 0 ? newBanks[0].id : null);
     }
     if (newBanks.length === 0) {
-      const d = { id: generateId(), name: 'Default Bank', defaultColor: '#3b82f6', pads: [], createdAt: new Date(), sortOrder: 0 };
+      const d = {
+        id: generateId(),
+        name: defaultBankName,
+        defaultColor: defaultBankColor,
+        pads: [],
+        createdAt: new Date(),
+        sortOrder: 0,
+        sourceBankId: 'vdjv-default-bank-source',
+      };
       setCurrentBankIdState(d.id);
       return [d];
     }

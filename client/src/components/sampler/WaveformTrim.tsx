@@ -21,6 +21,8 @@ interface WaveformTrimProps {
   onHotcueMarkerChange?: (timeMs: number) => void;
   onCursorTimeChange?: (timeMs: number | null) => void;
   onDurationMeasured?: (durationMs: number) => void;
+  canResetTrim?: boolean;
+  onResetTrim?: () => void;
   graphicsTier?: PerformanceTier;
 }
 
@@ -41,6 +43,8 @@ export function WaveformTrim({
   onHotcueMarkerChange,
   onCursorTimeChange,
   onDurationMeasured,
+  canResetTrim = false,
+  onResetTrim,
   graphicsTier = 'low'
 }: WaveformTrimProps) {
   type DragKind = 'start' | 'end' | 'pan' | 'hotcue';
@@ -117,23 +121,23 @@ export function WaveformTrim({
       align?: CanvasTextAlign;
       y?: number;
     }> = [
-      {
-        key: 'trim-in',
-        label: 'IN',
-        timeMs: renderStartTimeMs,
-        color: '#10b981',
-        align: 'left',
-        y: 4
-      },
-      {
-        key: 'trim-out',
-        label: 'OUT',
-        timeMs: renderEndTimeMs,
-        color: '#ef4444',
-        align: 'right',
-        y: 4
-      }
-    ];
+        {
+          key: 'trim-in',
+          label: 'IN',
+          timeMs: renderStartTimeMs,
+          color: '#10b981',
+          align: 'left',
+          y: 4
+        },
+        {
+          key: 'trim-out',
+          label: 'OUT',
+          timeMs: renderEndTimeMs,
+          color: '#ef4444',
+          align: 'right',
+          y: 4
+        }
+      ];
     if (typeof renderHotcueMarkerMs === 'number' && Number.isFinite(renderHotcueMarkerMs)) {
       entries.push({
         key: 'marker-cue',
@@ -345,7 +349,7 @@ export function WaveformTrim({
 
     const handleTouchStart = (e: TouchEvent) => {
       e.preventDefault();
-        cachedRectRef.current = el.getBoundingClientRect();
+      cachedRectRef.current = el.getBoundingClientRect();
 
       if (e.touches.length === 2) {
         const dist = Math.hypot(
@@ -1061,9 +1065,9 @@ export function WaveformTrim({
         Math.min(
           durationMs,
           hoverMarkerInfo?.timeMs
-            ?? hoverTime
-            ?? renderHotcueMarkerMs
-            ?? renderStartTimeMs
+          ?? hoverTime
+          ?? renderHotcueMarkerMs
+          ?? renderStartTimeMs
         )
       );
       const previewStartMs = previewMode === 'cursor' ? cursorAnchorMs : renderStartTimeMs;
@@ -1162,106 +1166,114 @@ export function WaveformTrim({
   const effectiveDuration = renderEndTimeMs - renderStartTimeMs;
 
   return (
-    <div className="space-y-4 select-none">
-      <div className="space-y-2 text-sm">
-        <div className="grid min-w-0 grid-cols-[auto,minmax(0,1fr),auto,minmax(0,1fr),auto] items-center gap-2">
-          <label className="text-green-500 font-bold text-xs sm:text-sm" htmlFor="trim-row-in">IN</label>
-          <input
-            id="trim-row-in"
-            type="text"
-            inputMode="decimal"
-            pattern="[0-9:.]*"
-            className={`h-8 min-w-0 w-full rounded border border-green-500/60 bg-gray-900 px-2 text-base sm:text-sm text-green-200 outline-none focus:border-green-400 ${trimMarkersLocked ? 'cursor-not-allowed opacity-60' : ''}`}
-            value={trimInInput}
-            disabled={trimMarkersLocked}
-            onChange={(event) => setTrimInInput(sanitizeTrimInput(event.target.value))}
-            onBlur={(event) => applyTrimInInput(event.target.value)}
-            onKeyDown={(event) => handleTrimKeyDown(event, applyTrimInInput)}
-          />
-          <label className="text-red-500 font-bold text-xs sm:text-sm" htmlFor="trim-row-out">OUT</label>
-          <input
-            id="trim-row-out"
-            type="text"
-            inputMode="decimal"
-            pattern="[0-9:.]*"
-            className={`h-8 min-w-0 w-full rounded border border-red-500/60 bg-gray-900 px-2 text-base sm:text-sm text-red-200 outline-none focus:border-red-400 ${trimMarkersLocked ? 'cursor-not-allowed opacity-60' : ''}`}
-            value={trimOutInput}
-            disabled={trimMarkersLocked}
-            onChange={(event) => setTrimOutInput(sanitizeTrimInput(event.target.value))}
-            onBlur={(event) => applyTrimOutInput(event.target.value)}
-            onKeyDown={(event) => handleTrimKeyDown(event, applyTrimOutInput)}
-          />
+    <div className="space-y-2 select-none">
+      <div className="rounded-lg border border-gray-700 bg-gray-900/80 p-2 space-y-2">
+        {/* Top Row: Preview, Trim Inputs, Lock, Reset */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            onClick={handlePreview}
+            variant={isPreviewing ? 'destructive' : 'secondary'}
+            size="sm"
+            className="h-8 w-full sm:w-auto sm:min-w-[70px] gap-1.5 px-3 flex-1 sm:flex-none"
+            disabled={isLoading || effectiveDuration <= 0}
+          >
+            {isPreviewing ? <Square className="h-3.5 w-3.5 text-red-500" /> : <Play className="h-3.5 w-3.5 text-green-500" />}
+            <span className="text-xs font-medium">{isPreviewing ? 'Stop' : 'Play'}</span>
+          </Button>
+
+          <div className="flex items-center flex-1 min-w-[220px] h-8 rounded-md border border-gray-700 bg-gray-950 overflow-hidden">
+            <span className="pl-3 pr-2 text-[10px] font-bold uppercase tracking-wider text-green-500 bg-gray-900/50 h-full flex items-center border-r border-gray-800">IN</span>
+            <input
+              id="trim-row-in"
+              type="text"
+              inputMode="decimal"
+              pattern="[0-9:.]*"
+              className={`h-full w-full min-w-0 bg-transparent px-2 text-center text-xs font-medium text-green-200 outline-none transition-colors ${trimMarkersLocked ? 'opacity-50 cursor-not-allowed' : 'focus:bg-gray-800'}`}
+              value={trimInInput}
+              disabled={trimMarkersLocked}
+              onChange={(event) => setTrimInInput(sanitizeTrimInput(event.target.value))}
+              onBlur={(event) => applyTrimInInput(event.target.value)}
+              onKeyDown={(event) => handleTrimKeyDown(event, applyTrimInInput)}
+            />
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={`h-full rounded-none border-x border-gray-700 px-3 hover:bg-gray-800 transition-colors ${trimMarkersLocked ? 'bg-gray-800/50 text-gray-400' : 'text-gray-300'}`}
+              onClick={handleTrimLockToggle}
+              title={trimMarkersLocked ? 'Unlock markers' : 'Lock markers'}
+            >
+              {trimMarkersLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+            </Button>
+
+            <input
+              id="trim-row-out"
+              type="text"
+              inputMode="decimal"
+              pattern="[0-9:.]*"
+              className={`h-full w-full min-w-0 bg-transparent px-2 text-center text-xs font-medium text-red-200 outline-none transition-colors ${trimMarkersLocked ? 'opacity-50 cursor-not-allowed' : 'focus:bg-gray-800'}`}
+              value={trimOutInput}
+              disabled={trimMarkersLocked}
+              onChange={(event) => setTrimOutInput(sanitizeTrimInput(event.target.value))}
+              onBlur={(event) => applyTrimOutInput(event.target.value)}
+              onKeyDown={(event) => handleTrimKeyDown(event, applyTrimOutInput)}
+            />
+            <span className="pr-3 pl-2 text-[10px] font-bold uppercase tracking-wider text-red-500 bg-gray-900/50 h-full flex items-center border-l border-gray-800">OUT</span>
+          </div>
+
           <Button
             type="button"
-            variant={trimMarkersLocked ? 'default' : 'outline'}
+            variant="ghost"
             size="sm"
-            className="h-8 gap-1 whitespace-nowrap px-2"
-            onClick={handleTrimLockToggle}
-            title={trimMarkersLocked ? 'Unlock trim IN/OUT markers and inputs' : 'Lock trim IN/OUT markers and inputs'}
+            className="h-8 px-2 text-xs text-gray-400 hover:text-white"
+            disabled={!canResetTrim}
+            onClick={onResetTrim}
+            title="Reset Trim"
           >
-            {trimMarkersLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
-            <span className="text-[11px]">{trimMarkersLocked ? 'Locked' : 'Lock'}</span>
+            Reset
           </Button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 rounded-md border border-gray-700 bg-gray-900/70 p-1">
-            <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={() => handleZoomPreset('full')}>
-              Full
-            </Button>
-            <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={() => handleZoomPreset('trim')}>
-              Trim
-            </Button>
-            <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={() => handleZoomPreset('cue')}>
-              Cue
-            </Button>
+        {/* Bottom Row: View Mode, Zoom */}
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-gray-800/60 pt-2">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] uppercase font-semibold tracking-wider text-gray-500 mr-1">Preview</span>
+            <div className="flex gap-0.5 rounded border border-gray-800 bg-gray-950 p-0.5">
+              <button
+                type="button"
+                className={`rounded px-2.5 py-0.5 text-[10px] font-medium transition-colors ${previewMode === 'trim' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+                onClick={() => setPreviewMode('trim')}
+              >
+                Trim
+              </button>
+              <button
+                type="button"
+                className={`rounded px-2.5 py-0.5 text-[10px] font-medium transition-colors ${previewMode === 'cursor' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+                onClick={() => setPreviewMode('cursor')}
+              >
+                Cursor
+              </button>
+            </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => handleZoomPreset('full')}>
-            Reset View
-          </Button>
-          <div className="min-w-[8rem] max-w-[12rem] flex-1">
+
+          <div className="flex flex-wrap items-center gap-2 flex-1 max-w-full sm:max-w-[400px] ml-auto">
+            <div className="flex gap-0.5 rounded border border-gray-800 bg-gray-950 p-0.5">
+              <button className="rounded px-2 py-0.5 text-[10px] font-medium text-gray-400 hover:text-white hover:bg-gray-800 transition-colors" onClick={() => handleZoomPreset('full')}>Full</button>
+              <button className="rounded px-2 py-0.5 text-[10px] font-medium text-gray-400 hover:text-white hover:bg-gray-800 transition-colors" onClick={() => handleZoomPreset('trim')}>Trim</button>
+              <button className="rounded px-2 py-0.5 text-[10px] font-medium text-gray-400 hover:text-white hover:bg-gray-800 transition-colors" onClick={() => handleZoomPreset('cue')}>Cue</button>
+            </div>
             <Slider
               value={[zoom]}
               min={1}
               max={50}
               step={0.1}
               onValueChange={(values) => applyZoomValue(values[0] ?? zoom)}
-              className="w-full cursor-pointer"
+              className="w-full cursor-pointer flex-1"
               aria-label="Waveform zoom"
             />
+            <span className="w-8 text-right text-[10px] font-mono text-gray-400">{zoom.toFixed(1)}x</span>
           </div>
-          <span className="text-xs text-gray-500 bg-gray-900 px-2 py-1 rounded">
-            {zoom.toFixed(1)}x
-          </span>
-          <div className="flex items-center gap-1 rounded-md border border-gray-700 bg-gray-900/70 p-1">
-            <Button
-              type="button"
-              variant={previewMode === 'trim' ? 'default' : 'ghost'}
-              size="sm"
-              className="h-7 px-2 text-[11px]"
-              onClick={() => setPreviewMode('trim')}
-            >
-              Preview Trim
-            </Button>
-            <Button
-              type="button"
-              variant={previewMode === 'cursor' ? 'default' : 'ghost'}
-              size="sm"
-              className="h-7 px-2 text-[11px]"
-              onClick={() => setPreviewMode('cursor')}
-            >
-              From Cursor
-            </Button>
-          </div>
-          <Button
-            onClick={handlePreview}
-            variant={isPreviewing ? 'destructive' : 'outline'}
-            size="sm"
-            className="h-6 w-6 p-0"
-            disabled={isLoading || effectiveDuration <= 0}
-          >
-            {isPreviewing ? <Square className="w-3 h-3 text-red-500" /> : <Play className="w-3 h-3 text-green-500" />}
-          </Button>
         </div>
       </div>
 

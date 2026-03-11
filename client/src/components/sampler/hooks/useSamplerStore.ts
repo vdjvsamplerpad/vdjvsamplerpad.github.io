@@ -78,6 +78,7 @@ import { writeDefaultBankReleaseMetaState } from './useSamplerStore.defaultBankR
 import { runMergeImportedBankMissingMediaPipeline } from './useSamplerStore.mediaMergeRecovery';
 import { useSamplerStoreBankLifecycle } from './useSamplerStore.bankLifecycle';
 import { useSamplerStoreSession } from './useSamplerStore.session';
+import { DEFAULT_SAMPLER_APP_CONFIG, type SamplerAppConfig } from '../samplerAppConfig';
 import {
   runAddPadPipeline,
   runAddPadsPipeline,
@@ -278,7 +279,8 @@ const {
   normalizeBase64Data,
 });
 
-export function useSamplerStore(): SamplerStore {
+export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }): SamplerStore {
+  const samplerConfig = options?.samplerConfig || DEFAULT_SAMPLER_APP_CONFIG;
   const {
     user,
     profile,
@@ -707,6 +709,8 @@ export function useSamplerStore(): SamplerStore {
         readLastOpenBankId,
         writeLastOpenBankId,
         generateId,
+        defaultBankName: samplerConfig.bankDefaults.defaultBankName,
+        defaultBankColor: samplerConfig.bankDefaults.defaultBankColor,
         setBanks,
         setCurrentBankIdState,
         setPrimaryBankIdState,
@@ -723,9 +727,59 @@ export function useSamplerStore(): SamplerStore {
       }
     );
     setStartupRestoreCompleted(true);
-  }, [readLastOpenBankId, setHiddenProtectedBanks, writeLastOpenBankId]);
+  }, [readLastOpenBankId, samplerConfig.bankDefaults.defaultBankColor, samplerConfig.bankDefaults.defaultBankName, setHiddenProtectedBanks, writeLastOpenBankId]);
 
   React.useEffect(() => { restoreAllFiles(); }, [restoreAllFiles]);
+
+  React.useEffect(() => {
+    setBanks((prev) => {
+      let changed = false;
+      const targetName = samplerConfig.bankDefaults.defaultBankName;
+      const targetColor = samplerConfig.bankDefaults.defaultBankColor;
+      const next = prev.map((bank) => {
+        if (!isDefaultBankIdentity(bank) || bank.isLocalDuplicate) return bank;
+        const needsSourceBankId = !bank.sourceBankId;
+        const nextName = targetName;
+        const nextColor = bank.pads.length === 0
+          ? targetColor
+          : bank.defaultColor;
+        const nextMetadataTitle = bank.bankMetadata?.title ?? null;
+        const nextMetadataColor = bank.pads.length === 0
+          ? targetColor
+          : bank.bankMetadata?.color ?? null;
+        const metadataNeedsUpdate = Boolean(
+          bank.bankMetadata &&
+          (
+            nextMetadataTitle !== nextName ||
+            nextMetadataColor !== (bank.bankMetadata?.color ?? null)
+          )
+        );
+        if (
+          bank.name === nextName &&
+          bank.defaultColor === nextColor &&
+          !needsSourceBankId &&
+          !metadataNeedsUpdate
+        ) {
+          return bank;
+        }
+        changed = true;
+        return {
+          ...bank,
+          sourceBankId: bank.sourceBankId || DEFAULT_BANK_SOURCE_ID,
+          name: nextName,
+          defaultColor: nextColor,
+          bankMetadata: bank.bankMetadata
+            ? {
+                ...bank.bankMetadata,
+                title: nextName,
+                color: bank.pads.length === 0 ? targetColor : bank.bankMetadata.color,
+              }
+            : bank.bankMetadata,
+        };
+      });
+      return changed ? next : prev;
+    });
+  }, [samplerConfig.bankDefaults.defaultBankColor, samplerConfig.bankDefaults.defaultBankName]);
 
   React.useEffect(() => {
     if (loading) return;
@@ -887,17 +941,54 @@ export function useSamplerStore(): SamplerStore {
   }, [isDualMode, primaryBankId, secondaryBankId, currentBankId]);
 
   const trimPadName = React.useCallback((name: string) => name.slice(0, 32), []);
+  const samplerAudioLimits = React.useMemo(
+    () => ({
+      maxPadAudioBytes: samplerConfig.audioLimits.maxPadAudioBytes,
+      maxPadAudioDurationMs: samplerConfig.audioLimits.maxPadAudioDurationMs,
+    }),
+    [samplerConfig.audioLimits.maxPadAudioBytes, samplerConfig.audioLimits.maxPadAudioDurationMs],
+  );
+  const checkAdmissionWithDefaults = React.useCallback(
+    (metadata: { audioBytes: number; audioDurationMs: number }) => checkAdmission(metadata, samplerAudioLimits),
+    [samplerAudioLimits],
+  );
 
   const addPad = React.useCallback(async (
     file: File,
     bankId?: string,
-    options?: { defaultTriggerMode?: PadData['triggerMode'] }
+    options?: {
+      defaultTriggerMode?: PadData['triggerMode'];
+      padDefaults?: Partial<Pick<PadData, 'playbackMode' | 'volume' | 'gainDb' | 'fadeInMs' | 'fadeOutMs' | 'pitch' | 'tempoPercent' | 'keyLock'>>;
+    }
   ) => {
     await runAddPadPipeline(
       {
         file,
         targetBankId: getTargetBankId(bankId),
         defaultTriggerMode: options?.defaultTriggerMode,
+        padDefaults: options?.padDefaults
+          ? {
+              triggerMode: options?.defaultTriggerMode || samplerConfig.padDefaults.defaultTriggerMode,
+              playbackMode: options.padDefaults.playbackMode || samplerConfig.padDefaults.defaultPlaybackMode,
+              volume: typeof options.padDefaults.volume === 'number' ? options.padDefaults.volume : samplerConfig.padDefaults.defaultVolume,
+              gainDb: typeof options.padDefaults.gainDb === 'number' ? options.padDefaults.gainDb : samplerConfig.padDefaults.defaultGainDb,
+              fadeInMs: typeof options.padDefaults.fadeInMs === 'number' ? options.padDefaults.fadeInMs : samplerConfig.padDefaults.defaultFadeInMs,
+              fadeOutMs: typeof options.padDefaults.fadeOutMs === 'number' ? options.padDefaults.fadeOutMs : samplerConfig.padDefaults.defaultFadeOutMs,
+              pitch: typeof options.padDefaults.pitch === 'number' ? options.padDefaults.pitch : samplerConfig.padDefaults.defaultPitch,
+              tempoPercent: typeof options.padDefaults.tempoPercent === 'number' ? options.padDefaults.tempoPercent : samplerConfig.padDefaults.defaultTempoPercent,
+              keyLock: typeof options.padDefaults.keyLock === 'boolean' ? options.padDefaults.keyLock : samplerConfig.padDefaults.defaultKeyLock,
+            }
+          : {
+              triggerMode: options?.defaultTriggerMode || samplerConfig.padDefaults.defaultTriggerMode,
+              playbackMode: samplerConfig.padDefaults.defaultPlaybackMode,
+              volume: samplerConfig.padDefaults.defaultVolume,
+              gainDb: samplerConfig.padDefaults.defaultGainDb,
+              fadeInMs: samplerConfig.padDefaults.defaultFadeInMs,
+              fadeOutMs: samplerConfig.padDefaults.defaultFadeOutMs,
+              pitch: samplerConfig.padDefaults.defaultPitch,
+              tempoPercent: samplerConfig.padDefaults.defaultTempoPercent,
+              keyLock: samplerConfig.padDefaults.defaultKeyLock,
+            },
         profileRole: profile?.role,
         quotaPolicy,
       },
@@ -906,7 +997,7 @@ export function useSamplerStore(): SamplerStore {
         setBanks,
         trimPadName,
         extractMetadataFromFile,
-        checkAdmission,
+        checkAdmission: checkAdmissionWithDefaults,
         ensureStorageHeadroom,
         generateId,
         storeFile,
@@ -914,18 +1005,44 @@ export function useSamplerStore(): SamplerStore {
         deletePadMediaArtifacts,
       }
     );
-  }, [getTargetBankId, profile?.role, quotaPolicy.ownedBankPadCap, trimPadName]);
+  }, [checkAdmissionWithDefaults, getTargetBankId, profile?.role, quotaPolicy.ownedBankPadCap, samplerConfig.padDefaults, trimPadName]);
 
   const addPads = React.useCallback(async (
     files: File[],
     bankId?: string,
-    options?: { defaultTriggerMode?: PadData['triggerMode'] }
+    options?: {
+      defaultTriggerMode?: PadData['triggerMode'];
+      padDefaults?: Partial<Pick<PadData, 'playbackMode' | 'volume' | 'gainDb' | 'fadeInMs' | 'fadeOutMs' | 'pitch' | 'tempoPercent' | 'keyLock'>>;
+    }
   ) => {
     await runAddPadsPipeline(
       {
         files,
         targetBankId: getTargetBankId(bankId),
         defaultTriggerMode: options?.defaultTriggerMode,
+        padDefaults: options?.padDefaults
+          ? {
+              triggerMode: options?.defaultTriggerMode || samplerConfig.padDefaults.defaultTriggerMode,
+              playbackMode: options.padDefaults.playbackMode || samplerConfig.padDefaults.defaultPlaybackMode,
+              volume: typeof options.padDefaults.volume === 'number' ? options.padDefaults.volume : samplerConfig.padDefaults.defaultVolume,
+              gainDb: typeof options.padDefaults.gainDb === 'number' ? options.padDefaults.gainDb : samplerConfig.padDefaults.defaultGainDb,
+              fadeInMs: typeof options.padDefaults.fadeInMs === 'number' ? options.padDefaults.fadeInMs : samplerConfig.padDefaults.defaultFadeInMs,
+              fadeOutMs: typeof options.padDefaults.fadeOutMs === 'number' ? options.padDefaults.fadeOutMs : samplerConfig.padDefaults.defaultFadeOutMs,
+              pitch: typeof options.padDefaults.pitch === 'number' ? options.padDefaults.pitch : samplerConfig.padDefaults.defaultPitch,
+              tempoPercent: typeof options.padDefaults.tempoPercent === 'number' ? options.padDefaults.tempoPercent : samplerConfig.padDefaults.defaultTempoPercent,
+              keyLock: typeof options.padDefaults.keyLock === 'boolean' ? options.padDefaults.keyLock : samplerConfig.padDefaults.defaultKeyLock,
+            }
+          : {
+              triggerMode: options?.defaultTriggerMode || samplerConfig.padDefaults.defaultTriggerMode,
+              playbackMode: samplerConfig.padDefaults.defaultPlaybackMode,
+              volume: samplerConfig.padDefaults.defaultVolume,
+              gainDb: samplerConfig.padDefaults.defaultGainDb,
+              fadeInMs: samplerConfig.padDefaults.defaultFadeInMs,
+              fadeOutMs: samplerConfig.padDefaults.defaultFadeOutMs,
+              pitch: samplerConfig.padDefaults.defaultPitch,
+              tempoPercent: samplerConfig.padDefaults.defaultTempoPercent,
+              keyLock: samplerConfig.padDefaults.defaultKeyLock,
+            },
         profileRole: profile?.role,
         quotaPolicy,
       },
@@ -934,7 +1051,7 @@ export function useSamplerStore(): SamplerStore {
         setBanks,
         trimPadName,
         extractMetadataFromFile,
-        checkAdmission,
+        checkAdmission: checkAdmissionWithDefaults,
         ensureStorageHeadroom,
         generateId,
         storeFile,
@@ -943,7 +1060,7 @@ export function useSamplerStore(): SamplerStore {
         saveBatchBlobsToDB,
       }
     );
-  }, [getTargetBankId, profile?.role, quotaPolicy.ownedBankPadCap, trimPadName]);
+  }, [checkAdmissionWithDefaults, getTargetBankId, profile?.role, quotaPolicy.ownedBankPadCap, samplerConfig.padDefaults, trimPadName]);
 
   const updatePad = React.useCallback(async (bankId: string, id: string, updatedPad: PadData) => {
     const existingBank = banks.find((bank) => bank.id === bankId);
@@ -1086,9 +1203,11 @@ export function useSamplerStore(): SamplerStore {
         setSecondaryBankIdState,
         setCurrentBankIdState,
         generateId,
+        defaultBankName: samplerConfig.bankDefaults.defaultBankName,
+        defaultBankColor: samplerConfig.bankDefaults.defaultBankColor,
       }
     );
-  }, [primaryBankId, secondaryBankId, currentBankId]);
+  }, [currentBankId, primaryBankId, samplerConfig.bankDefaults.defaultBankColor, samplerConfig.bankDefaults.defaultBankName, secondaryBankId]);
 
   const duplicateBank = React.useCallback(async (bankId: string, onProgress?: (progress: number) => void): Promise<SamplerBank> => {
     const { runDuplicateBankPipeline } = await import('./useSamplerStore.bankDuplication');
@@ -1359,14 +1478,16 @@ export function useSamplerStore(): SamplerStore {
     const publishedAt = typeof uploaded.release?.publishedAt === 'string' ? uploaded.release.publishedAt : null;
     const defaultBankSource: SamplerBank = {
       ...sourceBank,
-      name: 'Default Bank',
+      name: samplerConfig.bankDefaults.defaultBankName,
+      defaultColor: sourceBank.pads.length === 0 ? samplerConfig.bankDefaults.defaultBankColor : sourceBank.defaultColor,
       sourceBankId: DEFAULT_BANK_SOURCE_ID,
       bankMetadata: {
         ...(sourceBank.bankMetadata || {
           password: false,
           transferable: true,
         }),
-        title: 'Default Bank',
+        title: samplerConfig.bankDefaults.defaultBankName,
+        color: sourceBank.pads.length === 0 ? samplerConfig.bankDefaults.defaultBankColor : sourceBank.bankMetadata?.color,
         defaultBankSource: 'remote',
         defaultBankReleaseVersion: uploaded.version,
         defaultBankReleasePublishedAt: publishedAt || undefined,
@@ -1395,7 +1516,7 @@ export function useSamplerStore(): SamplerStore {
     setDefaultBankSourceRevision((value) => value + 1);
 
     return `Default bank v${uploaded.version} published successfully.`;
-  }, [banks, profile?.role, user]);
+  }, [banks, profile?.role, samplerConfig.bankDefaults.defaultBankColor, samplerConfig.bankDefaults.defaultBankName, user]);
 
   const canTransferFromBank = React.useCallback((bankId: string): boolean => {
     const bank = banks.find(b => b.id === bankId);
@@ -1463,7 +1584,7 @@ export function useSamplerStore(): SamplerStore {
     }
 
     const metadata = await extractMetadataFromFile(file);
-    const admission = checkAdmission(metadata);
+    const admission = checkAdmissionWithDefaults(metadata);
     if (!admission.allowed) {
       throw new Error(admission.message || 'Audio file exceeds supported limits.');
     }
@@ -1665,7 +1786,7 @@ export function useSamplerStore(): SamplerStore {
     persistStoreRecoveryCatalogItemPipeline(runtimeBankId, item, {
       setBanks,
     });
-  }, []);
+  }, [checkAdmissionWithDefaults]);
 
   const resolveStoreRecoveryCatalogItem = React.useCallback(async (bank: SamplerBank): Promise<StoreRecoveryCatalogItem | null> => {
     return resolveStoreRecoveryCatalogItemPipeline(bank, {

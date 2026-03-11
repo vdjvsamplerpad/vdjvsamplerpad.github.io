@@ -193,6 +193,13 @@ interface AdminAccessNonStoreTabsProps {
   activity: ActivityTabProps;
 }
 
+const DESKTOP_FILL_CLASS = 'overflow-visible lg:h-full lg:min-h-0';
+const DESKTOP_FLEX_PANEL_CLASS = 'overflow-visible lg:h-full lg:min-h-0 lg:flex lg:flex-col lg:overflow-hidden';
+const DESKTOP_SCROLL_REGION_CLASS = 'overflow-visible lg:flex-1 lg:min-h-0 lg:overflow-auto';
+const DESKTOP_SECTION_CARD_CLASS = 'overflow-visible lg:min-h-0 lg:flex lg:flex-col';
+const TABLE_SHELL_CLASS = 'border rounded overflow-hidden lg:flex-1 lg:min-h-0 lg:overflow-hidden';
+const TABLE_CONTAINER_CLASS = 'overflow-x-auto lg:h-full lg:overflow-auto';
+
 function HomeTab({
   theme,
   panelClass,
@@ -270,7 +277,7 @@ function HomeTab({
   ];
 
   return (
-    <div className={`border rounded p-3 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
+    <div className={`border rounded p-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
       <div className="flex flex-wrap items-center gap-2">
         <div>
           <div className="text-sm font-semibold">Admin Overview</div>
@@ -302,7 +309,7 @@ function HomeTab({
         </Button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto pr-1 space-y-3">
+      <div className={`${DESKTOP_SCROLL_REGION_CLASS} space-y-3 pr-0 lg:pr-1`}>
         {homeError && (
           <div className={`border rounded p-3 text-sm ${theme === 'dark' ? 'border-red-500/40 bg-red-500/10 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`}>
             {homeError}
@@ -516,8 +523,8 @@ function AssignmentsTab({
   onToggleBankSelection,
 }: AssignmentsTabProps) {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 h-full min-h-0 overflow-hidden">
-      <div className={`border rounded p-3 space-y-2 min-h-0 flex flex-col ${cardClass}`}>
+    <div className={`grid grid-cols-1 gap-3 lg:grid-cols-2 ${DESKTOP_FILL_CLASS} lg:overflow-hidden`}>
+      <div className={`border rounded p-3 space-y-3 ${DESKTOP_SECTION_CARD_CLASS} ${cardClass}`}>
         <div className="flex items-center justify-between">
           <Label>Select User</Label>
           <div className="flex items-center gap-1">
@@ -529,9 +536,9 @@ function AssignmentsTab({
             </Button>
           </div>
         </div>
-        <Input value={usersQuery} onChange={(event) => onUsersQueryChange(event.target.value)} placeholder="Search users..." onKeyDown={(event) => event.key === 'Enter' && onRefreshUsers()} />
-        <div className="flex-1 min-h-0 overflow-hidden border rounded">
-          <Table containerClassName="h-full overflow-auto" className="md:min-w-[680px] block md:table">
+        <Input value={usersQuery} onChange={(event) => onUsersQueryChange(event.target.value)} placeholder="Search users..." onKeyDown={(event) => event.key === 'Enter' && onRefreshUsers()} className="h-9 text-sm" />
+        <div className={TABLE_SHELL_CLASS}>
+          <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[680px] block md:table">
             <TableHeader className="hidden md:table-header-group">
               <TableRow>
                 <TableHead><SortHeader title="User" active={assignmentUserSortBy === 'display_name'} direction={assignmentUserSortDir} onClick={() => onToggleAssignmentUserSort('display_name')} /></TableHead>
@@ -551,7 +558,7 @@ function AssignmentsTab({
         </div>
       </div>
 
-      <div className={`border rounded p-3 space-y-2 min-h-0 flex flex-col ${cardClass}`}>
+      <div className={`border rounded p-3 space-y-3 ${DESKTOP_SECTION_CARD_CLASS} ${cardClass}`}>
         <div className="text-sm">
           <div className="font-medium">Bank Access</div>
           <div className="text-xs opacity-70">
@@ -564,8 +571,8 @@ function AssignmentsTab({
           <Button size="sm" variant="secondary" onClick={() => onGrant(allGrantIds)} disabled={!selectedUserId || allGrantIds.length === 0 || bulkLoading}>Grant All ({allGrantIds.length})</Button>
           <Button size="sm" variant="outline" onClick={() => onRevoke(allRevokeIds)} disabled={!selectedUserId || allRevokeIds.length === 0 || bulkLoading}>Revoke All ({allRevokeIds.length})</Button>
         </div>
-        <div className="flex-1 min-h-0 overflow-hidden border rounded">
-          <Table containerClassName="h-full overflow-auto" className="md:min-w-[860px] block md:table">
+        <div className={TABLE_SHELL_CLASS}>
+          <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[860px] block md:table">
             <TableHeader className="hidden md:table-header-group">
               <TableRow>
                 <TableHead className="w-10" />
@@ -611,7 +618,7 @@ function BanksTab({
   onDeleteBank,
 }: BanksTabProps) {
   return (
-    <div className={`border rounded p-3 space-y-2 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
+    <div className={`border rounded p-3 space-y-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
       <div className="flex flex-wrap gap-2 items-end">
         <div className="flex-1 space-y-1">
           <Label>Search Banks</Label>
@@ -622,8 +629,8 @@ function BanksTab({
           Refresh
         </Button>
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden border rounded">
-        <Table containerClassName="h-full overflow-auto" className="md:min-w-[980px] block md:table">
+      <div className={TABLE_SHELL_CLASS}>
+        <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
           <TableHeader className="hidden md:table-header-group">
             <TableRow>
               <TableHead>Color</TableHead>
@@ -677,7 +684,7 @@ function UsersTab({
   onOpenUserDetails,
 }: UsersTabProps) {
   return (
-    <div className={`border rounded p-3 space-y-2 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
+    <div className={`border rounded p-3 space-y-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
       <div className="flex flex-wrap gap-2 items-end">
         <div className="flex-1 space-y-1">
           <Label>Search Users</Label>
@@ -689,8 +696,8 @@ function UsersTab({
           Refresh
         </Button>
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden border rounded">
-        <Table containerClassName="h-full overflow-auto" className="md:min-w-[980px] block md:table">
+      <div className={TABLE_SHELL_CLASS}>
+        <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
           <TableHeader className="hidden md:table-header-group">
             <TableRow>
               <TableHead><SortHeader title="Display Name" active={usersSortBy === 'display_name'} direction={usersSortDir} onClick={() => onToggleUserSort('display_name')} /></TableHead>
@@ -738,7 +745,7 @@ function ActiveTab({
   onToggleActiveSort,
 }: ActiveTabProps) {
   return (
-    <div className={`border rounded p-3 space-y-2 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
+    <div className={`border rounded p-3 space-y-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
       <div className="flex items-center justify-between">
         <div>
           <Label>Active Users</Label>
@@ -753,8 +760,8 @@ function ActiveTab({
         <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Users</div><div className="text-xl font-semibold">{activeCounts.activeUsers}</div></div>
         <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Sessions</div><div className="text-xl font-semibold">{activeCounts.activeSessions}</div></div>
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden border rounded">
-        <Table containerClassName="h-full overflow-auto" className="md:min-w-[980px] block md:table">
+      <div className={TABLE_SHELL_CLASS}>
+        <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
           <TableHeader className="hidden md:table-header-group">
             <TableRow>
               <TableHead><SortHeader title="User" active={activeSortBy === 'user_id'} direction={activeSortDir} onClick={() => onToggleActiveSort('user_id')} /></TableHead>
@@ -823,42 +830,94 @@ function ActivityTab({
   onOtherActivityStatusFilterChange,
   onRefreshOtherActivity,
 }: ActivityTabProps) {
+  const exportFilterCount = Number(activityCategoryFilter !== 'all')
+    + Number(activityPhaseFilter !== 'all')
+    + Number(activityStatusFilter !== 'all')
+    + Number(activityUploadResultFilter !== 'all')
+    + Number(Boolean(activitySearch.trim()));
+  const otherFilterCount = Number(otherActivityStatusFilter !== 'all') + Number(Boolean(otherActivitySearch.trim()));
+
   return (
-    <div className={`border rounded p-3 space-y-3 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
-      <div className={`border rounded p-2 space-y-2 flex-1 min-h-0 flex flex-col ${cardClass}`}>
-        <div className="text-xs font-semibold opacity-80">Export Activity</div>
-        <div className="flex flex-wrap gap-2 items-center">
-          <Button size="sm" variant={activityCategoryFilter === 'all' ? 'default' : 'outline'} onClick={() => { onActivityCategoryFilterChange('all'); onActivityPhaseFilterChange('all'); onActivityPageChange(1); }}>All Types</Button>
-          <Button size="sm" variant={activityCategoryFilter === 'bank_export' ? 'default' : 'outline'} onClick={() => { onActivityCategoryFilterChange('bank_export'); onActivityPhaseFilterChange('all'); onActivityPageChange(1); }}>Bank Export Only</Button>
-          <Button size="sm" variant={activityCategoryFilter === 'backup_recovery' ? 'default' : 'outline'} onClick={() => { onActivityCategoryFilterChange('backup_recovery'); onActivityPhaseFilterChange('all'); onActivityPageChange(1); }}>Backup/Recovery Only</Button>
-          <div className="w-px h-6 bg-gray-300 dark:bg-gray-700 mx-1" />
-          <Button size="sm" variant={activityPhaseFilter === 'all' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('all'); onActivityPageChange(1); }}>All Export</Button>
-          <Button size="sm" variant={activityPhaseFilter === 'requested' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('requested'); onActivityPageChange(1); }}>Requested</Button>
-          <Button size="sm" variant={activityPhaseFilter === 'local_export' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('local_export'); onActivityPageChange(1); }}>Local Export</Button>
-          <Button size="sm" variant={activityPhaseFilter === 'remote_upload' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('remote_upload'); onActivityPageChange(1); }}>Remote Upload</Button>
-          <Button size="sm" variant={activityPhaseFilter === 'backup_export' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('backup_export'); onActivityPageChange(1); }}>Backup Export</Button>
-          <Button size="sm" variant={activityPhaseFilter === 'backup_restore' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('backup_restore'); onActivityPageChange(1); }}>Backup Restore</Button>
-          <Button size="sm" variant={activityPhaseFilter === 'media_recovery' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('media_recovery'); onActivityPageChange(1); }}>Media Recovery</Button>
-          <div className="w-px h-6 bg-gray-300 dark:bg-gray-700 mx-1" />
-          <Button size="sm" variant={activityStatusFilter === 'all' ? 'default' : 'outline'} onClick={() => { onActivityStatusFilterChange('all'); onActivityPageChange(1); }}>All Status</Button>
-          <Button size="sm" variant={activityStatusFilter === 'success' ? 'default' : 'outline'} onClick={() => { onActivityStatusFilterChange('success'); onActivityPageChange(1); }}>Success</Button>
-          <Button size="sm" variant={activityStatusFilter === 'failed' ? 'default' : 'outline'} onClick={() => { onActivityStatusFilterChange('failed'); onActivityPageChange(1); }}>Failed</Button>
-          <div className="w-px h-6 bg-gray-300 dark:bg-gray-700 mx-1" />
-          <Button size="sm" variant={activityUploadResultFilter === 'all' ? 'default' : 'outline'} onClick={() => { onActivityUploadResultFilterChange('all'); onActivityPageChange(1); }}>All Upload</Button>
-          <Button size="sm" variant={activityUploadResultFilter === 'duplicate_no_change' ? 'default' : 'outline'} onClick={() => { onActivityUploadResultFilterChange('duplicate_no_change'); onActivityPageChange(1); }}>No Change</Button>
-          <div className="flex-1" />
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
-            <Input value={activitySearch} onChange={(event) => { onActivitySearchChange(event.target.value); onActivityPageChange(1); }} placeholder="Search bank/email/event..." className={`h-7 pl-7 text-xs w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`} />
+    <div className={`border rounded p-3 space-y-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
+      <div className={`border rounded p-3 space-y-3 ${DESKTOP_SECTION_CARD_CLASS} ${cardClass}`}>
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="space-y-1">
+            <div className="text-sm font-semibold">Export Activity</div>
+            <div className="text-xs opacity-70">Track export requests, upload stages, and recovery events in a layout that scrolls naturally on mobile.</div>
           </div>
-          <Button variant="outline" size="sm" onClick={onRefreshActivity} disabled={activityLoading}>
-            <RefreshCw className={`w-4 h-4 mr-1 ${activityLoading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-white'}`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-70">Visible</div>
+              <div className="text-base font-semibold">{activityRows.length}</div>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-70">Page</div>
+              <div className="text-base font-semibold">{activityPage}/{activityTotalPages}</div>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-70">Filters</div>
+              <div className="text-base font-semibold">{exportFilterCount}</div>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-70">State</div>
+              <div className="text-sm font-medium">{activityLoading ? 'Loading' : 'Ready'}</div>
+            </div>
+          </div>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-hidden border rounded">
-          <Table containerClassName="h-full overflow-auto" className="md:min-w-[980px] block md:table">
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
+          <div className="space-y-3">
+            <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">Category</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityCategoryFilter === 'all' ? 'default' : 'outline'} onClick={() => { onActivityCategoryFilterChange('all'); onActivityPhaseFilterChange('all'); onActivityPageChange(1); }}>All Types</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityCategoryFilter === 'bank_export' ? 'default' : 'outline'} onClick={() => { onActivityCategoryFilterChange('bank_export'); onActivityPhaseFilterChange('all'); onActivityPageChange(1); }}>Bank Export</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityCategoryFilter === 'backup_recovery' ? 'default' : 'outline'} onClick={() => { onActivityCategoryFilterChange('backup_recovery'); onActivityPhaseFilterChange('all'); onActivityPageChange(1); }}>Backup / Recovery</Button>
+              </div>
+            </div>
+
+            <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">Phase</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityPhaseFilter === 'all' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('all'); onActivityPageChange(1); }}>All Export</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityPhaseFilter === 'requested' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('requested'); onActivityPageChange(1); }}>Requested</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityPhaseFilter === 'local_export' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('local_export'); onActivityPageChange(1); }}>Local Export</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityPhaseFilter === 'remote_upload' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('remote_upload'); onActivityPageChange(1); }}>Remote Upload</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityPhaseFilter === 'backup_export' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('backup_export'); onActivityPageChange(1); }}>Backup Export</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityPhaseFilter === 'backup_restore' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('backup_restore'); onActivityPageChange(1); }}>Backup Restore</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityPhaseFilter === 'media_recovery' ? 'default' : 'outline'} onClick={() => { onActivityPhaseFilterChange('media_recovery'); onActivityPageChange(1); }}>Media Recovery</Button>
+              </div>
+            </div>
+
+            <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">Outcome</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityStatusFilter === 'all' ? 'default' : 'outline'} onClick={() => { onActivityStatusFilterChange('all'); onActivityPageChange(1); }}>All Status</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityStatusFilter === 'success' ? 'default' : 'outline'} onClick={() => { onActivityStatusFilterChange('success'); onActivityPageChange(1); }}>Success</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityStatusFilter === 'failed' ? 'default' : 'outline'} onClick={() => { onActivityStatusFilterChange('failed'); onActivityPageChange(1); }}>Failed</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityUploadResultFilter === 'all' ? 'default' : 'outline'} onClick={() => { onActivityUploadResultFilterChange('all'); onActivityPageChange(1); }}>All Upload</Button>
+                <Button size="sm" className="h-9 px-3 text-xs" variant={activityUploadResultFilter === 'duplicate_no_change' ? 'default' : 'outline'} onClick={() => { onActivityUploadResultFilterChange('duplicate_no_change'); onActivityPageChange(1); }}>No Change</Button>
+              </div>
+            </div>
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">Search</div>
+              <div className="mt-2 relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-50" />
+                <Input value={activitySearch} onChange={(event) => { onActivitySearchChange(event.target.value); onActivityPageChange(1); }} placeholder="Search bank, email, event..." className={`h-9 w-full pl-8 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`} />
+              </div>
+            </div>
+            <Button variant="outline" size="sm" className="h-9 w-full justify-center" onClick={onRefreshActivity} disabled={activityLoading}>
+              <RefreshCw className={`w-4 h-4 mr-1 ${activityLoading ? 'animate-spin' : ''}`} />
+              Refresh Export Activity
+            </Button>
+          </div>
+        </div>
+
+        <div className={TABLE_SHELL_CLASS}>
+          <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
             <TableHeader className="hidden md:table-header-group">
               <TableRow>
                 <TableHead />
@@ -883,7 +942,7 @@ function ActivityTab({
                   <React.Fragment key={row.id}>
                     <TableRow className="flex flex-col md:table-row border border-gray-200 dark:border-gray-800 rounded-lg md:rounded-none md:border-none p-3 md:p-0 relative">
                       <TableCell className="absolute top-3 right-3 md:relative md:top-0 md:right-0 block md:table-cell p-0 md:p-4 border-none md:border-b">
-                        <Button size="sm" variant="outline" className="h-6 px-2" onClick={() => onToggleExpandedActivity(row.id)}>
+                        <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => onToggleExpandedActivity(row.id)}>
                           {expanded ? 'Hide' : 'View'}
                         </Button>
                       </TableCell>
@@ -920,7 +979,7 @@ function ActivityTab({
                               {padNames.length === 0 ? (
                                 <div className="opacity-60">No pad names captured for this event.</div>
                               ) : (
-                                <div className={`max-h-28 overflow-auto rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/60' : 'border-gray-200 bg-white'}`}>
+                                <div className={`max-h-44 overflow-auto rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/60' : 'border-gray-200 bg-white'}`}>
                                   {padNames.map((padName, index) => (
                                     <div key={`${row.id}-${index}`} className="leading-5">{index + 1}. {padName}</div>
                                   ))}
@@ -941,25 +1000,55 @@ function ActivityTab({
         <Pagination page={activityPage} totalPages={activityTotalPages} onPageChange={onActivityPageChange} />
       </div>
 
-      <div className={`border rounded p-2 space-y-2 flex-1 min-h-0 flex flex-col ${cardClass}`}>
-        <div className="text-xs font-semibold opacity-80">Other Activity (Auth / Import / System)</div>
-        <div className="flex flex-wrap gap-2 items-center">
-          <Button size="sm" variant={otherActivityStatusFilter === 'all' ? 'default' : 'outline'} onClick={() => { onOtherActivityStatusFilterChange('all'); onOtherActivityPageChange(1); }}>All Status</Button>
-          <Button size="sm" variant={otherActivityStatusFilter === 'success' ? 'default' : 'outline'} onClick={() => { onOtherActivityStatusFilterChange('success'); onOtherActivityPageChange(1); }}>Success</Button>
-          <Button size="sm" variant={otherActivityStatusFilter === 'failed' ? 'default' : 'outline'} onClick={() => { onOtherActivityStatusFilterChange('failed'); onOtherActivityPageChange(1); }}>Failed</Button>
-          <div className="flex-1" />
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
-            <Input value={otherActivitySearch} onChange={(event) => { onOtherActivitySearchChange(event.target.value); onOtherActivityPageChange(1); }} placeholder="Search user/event/bank..." className={`h-7 pl-7 text-xs w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`} />
+      <div className={`border rounded p-3 space-y-3 ${DESKTOP_SECTION_CARD_CLASS} ${cardClass}`}>
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="space-y-1">
+            <div className="text-sm font-semibold">Other Activity</div>
+            <div className="text-xs opacity-70">Auth, import, and system events with full-width mobile controls and clearer filter state.</div>
           </div>
-          <Button variant="outline" size="sm" onClick={onRefreshOtherActivity} disabled={otherActivityLoading}>
-            <RefreshCw className={`w-4 h-4 mr-1 ${otherActivityLoading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-white'}`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-70">Visible</div>
+              <div className="text-base font-semibold">{otherActivityRows.length}</div>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-70">Page</div>
+              <div className="text-base font-semibold">{otherActivityPage}/{otherActivityTotalPages}</div>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-70">Filters</div>
+              <div className="text-base font-semibold">{otherFilterCount}</div>
+            </div>
+          </div>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-hidden border rounded">
-          <Table containerClassName="h-full overflow-auto" className="md:min-w-[980px] block md:table">
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
+          <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">Status</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button size="sm" className="h-9 px-3 text-xs" variant={otherActivityStatusFilter === 'all' ? 'default' : 'outline'} onClick={() => { onOtherActivityStatusFilterChange('all'); onOtherActivityPageChange(1); }}>All Status</Button>
+              <Button size="sm" className="h-9 px-3 text-xs" variant={otherActivityStatusFilter === 'success' ? 'default' : 'outline'} onClick={() => { onOtherActivityStatusFilterChange('success'); onOtherActivityPageChange(1); }}>Success</Button>
+              <Button size="sm" className="h-9 px-3 text-xs" variant={otherActivityStatusFilter === 'failed' ? 'default' : 'outline'} onClick={() => { onOtherActivityStatusFilterChange('failed'); onOtherActivityPageChange(1); }}>Failed</Button>
+            </div>
+          </div>
+
+          <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">Search</div>
+              <div className="mt-2 relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-50" />
+                <Input value={otherActivitySearch} onChange={(event) => { onOtherActivitySearchChange(event.target.value); onOtherActivityPageChange(1); }} placeholder="Search user, event, bank..." className={`h-9 w-full pl-8 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`} />
+              </div>
+            </div>
+            <Button variant="outline" size="sm" className="h-9 w-full justify-center" onClick={onRefreshOtherActivity} disabled={otherActivityLoading}>
+              <RefreshCw className={`w-4 h-4 mr-1 ${otherActivityLoading ? 'animate-spin' : ''}`} />
+              Refresh Other Activity
+            </Button>
+          </div>
+        </div>
+
+        <div className={TABLE_SHELL_CLASS}>
+          <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
             <TableHeader className="hidden md:table-header-group">
               <TableRow>
                 <TableHead><SortHeader title="Time" active={otherActivitySortBy === 'created_at'} direction={otherActivitySortDir} onClick={() => onToggleOtherActivitySort('created_at')} /></TableHead>

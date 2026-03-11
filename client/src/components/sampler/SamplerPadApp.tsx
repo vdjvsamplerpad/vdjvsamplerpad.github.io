@@ -1,5 +1,6 @@
 ﻿import * as React from 'react';
 import { SamplerPadAppView } from './SamplerPadAppView';
+import { SamplerSearchOverlay } from './SamplerSearchOverlay';
 import {
   SETTINGS_STORAGE_KEY,
   createDefaultSettings,
@@ -24,6 +25,7 @@ import { MidiMessage, useWebMidi } from '@/lib/midi';
 import { DEFAULT_SYSTEM_MAPPINGS, SystemAction, SystemMappings } from '@/lib/system-mappings';
 import type { MidiDeviceProfile } from '@/lib/midi/device-profiles';
 import { performanceMonitor, type PerformanceTier } from '@/lib/performance-monitor';
+import { edgeFunctionUrl } from '@/lib/edge-api';
 import { getCachedUser, useAuth } from '@/hooks/useAuth';
 import { getAudioTelemetry } from '@/lib/audio-telemetry';
 import { getLatestUserSamplerMetadataSnapshot } from '@/lib/user-sampler-snapshot-api';
@@ -32,15 +34,27 @@ import {
   type RemoteSnapshotPromptState,
   type SamplerMetadataSnapshot,
 } from './hooks/useSamplerStore.snapshotMetadata';
+import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
+import { getPadMissingMediaState } from './hooks/useSamplerStore.padHelpers';
 import {
   DECK_LAYOUT_SCHEMA_VERSION,
   normalizeDeckLayoutEntries,
 } from './utils/deck-layout-persistence';
+import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig, type SamplerAppConfig } from './samplerAppConfig';
+import {
+  buildPadSearchAnchorId,
+  getSamplerSearchScopeOptions,
+  normalizeSamplerSearchToken,
+  type SamplerSearchResult,
+  type SamplerSearchScope,
+} from './samplerSearch';
 const PAD_SIZE_MIN = 2;
 const PAD_SIZE_MAX_PORTRAIT = 8;
 const PAD_SIZE_MAX_LANDSCAPE = 16;
-const DEFAULT_PAD_SIZE = 6;
 const DEFAULT_BANK_SOURCE_ID = 'vdjv-default-bank-source';
+const SEARCH_RESULT_LIMIT = 40;
+const SEARCH_INPUT_DEBOUNCE_MS = 120;
+const SEARCH_HIGHLIGHT_CLEAR_MS = 1500;
 const PAD_WARMUP_MAX_PER_BANK = 10;
 const PAD_WARMUP_MAX_TOTAL = 20;
 const PAD_WARMUP_IDLE_DELAY_MS = 120;
@@ -209,7 +223,15 @@ const getTriggerWarmPriority = (mode: PadData['triggerMode']): number => {
   return 3;
 };
 
+type PendingSearchPadScroll = {
+  bankId: string;
+  padId: string;
+};
+
 export function SamplerPadApp() {
+  const [samplerConfig, setSamplerConfig] = React.useState<SamplerAppConfig>(DEFAULT_SAMPLER_APP_CONFIG);
+  const [samplerConfigLoaded, setSamplerConfigLoaded] = React.useState(false);
+  const hadStoredSettingsRef = React.useRef(false);
   const {
     banks,
     startupRestoreCompleted,
@@ -248,7 +270,7 @@ export function SamplerPadApp() {
     rehydratePadMedia,
     rehydrateMissingMediaInBank,
     recoverMissingMediaFromBanks
-  } = useSamplerStore();
+  } = useSamplerStore({ samplerConfig });
 
   const playbackManager = useGlobalPlaybackManager() as ReturnType<typeof useGlobalPlaybackManager> & {
     triggerToggle: (padId: string) => void;
@@ -275,8 +297,8 @@ export function SamplerPadApp() {
   });
   const effectiveAuthUser = user || getCachedUser();
   const defaultSettings = React.useMemo(
-    () => createDefaultSettings(DECK_LAYOUT_SCHEMA_VERSION, DEFAULT_PAD_SIZE),
-    []
+    () => createDefaultSettings(DECK_LAYOUT_SCHEMA_VERSION, samplerConfig),
+    [samplerConfig]
   );
   const settingsSaveTimeoutRef = React.useRef<number | null>(null);
   const settingsLatestRef = React.useRef<AppSettings>(defaultSettings);
@@ -293,6 +315,7 @@ export function SamplerPadApp() {
     try {
       const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
       if (saved) {
+        hadStoredSettingsRef.current = true;
         const parsed = JSON.parse(saved);
         const parsedSettings = { ...(parsed || {}) } as Record<string, unknown>;
         delete parsedSettings.eqSettings;
@@ -305,7 +328,7 @@ export function SamplerPadApp() {
           parsed.padSize,
           PAD_SIZE_MIN,
           PAD_SIZE_MAX_LANDSCAPE,
-          DEFAULT_PAD_SIZE
+          defaultSettings.padSizeLandscape
         );
         const parsedPortraitPadSize = normalizePadSize(
           parsed.padSizePortrait,
@@ -349,6 +372,51 @@ export function SamplerPadApp() {
     }
     return defaultSettings;
   });
+
+  React.useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+
+    fetch(edgeFunctionUrl('store-api', 'sampler-config'), {
+      signal: controller.signal,
+      cache: 'no-store',
+    })
+      .then((response) => response.json().catch(() => ({})))
+      .then((payload) => {
+        if (!active) return;
+        const nextConfig = normalizeSamplerAppConfig(payload?.config || payload?.data?.config || payload?.data || payload);
+        setSamplerConfig(nextConfig);
+      })
+      .catch(() => {
+      })
+      .finally(() => {
+        if (active) setSamplerConfigLoaded(true);
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!samplerConfigLoaded) return;
+    if (hadStoredSettingsRef.current) return;
+    const seededDefaults = createDefaultSettings(DECK_LAYOUT_SCHEMA_VERSION, samplerConfig);
+    setSettings((prev) => ({
+      ...prev,
+      ...seededDefaults,
+      sideMenuOpen: prev.sideMenuOpen,
+      mixerOpen: prev.mixerOpen,
+      channelCollapsedMap: prev.channelCollapsedMap,
+      deckLayout: prev.deckLayout,
+      deckLayoutVersion: DECK_LAYOUT_SCHEMA_VERSION,
+      editMode: prev.editMode,
+      midiEnabled: prev.midiEnabled,
+      midiDeviceProfileId: prev.midiDeviceProfileId,
+    }));
+  }, [samplerConfig, samplerConfigLoaded]);
+
   const [globalMuted, setGlobalMuted] = React.useState(false);
   const [isOnline, setIsOnline] = React.useState(
     () => (typeof navigator === 'undefined' ? true : navigator.onLine)
@@ -374,6 +442,32 @@ export function SamplerPadApp() {
   const [pendingRecoverAddAsNew, setPendingRecoverAddAsNew] = React.useState(false);
   const [editRequest, setEditRequest] = React.useState<{ padId: string; token: number } | null>(null);
   const [editBankRequest, setEditBankRequest] = React.useState<{ bankId: string; token: number } | null>(null);
+  const [searchOpen, setSearchOpen] = React.useState(false);
+  const [searchScope, setSearchScope] = React.useState<SamplerSearchScope>('all_banks');
+  const [searchQuery, setSearchQuery] = React.useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = React.useState('');
+  const [searchLoadError, setSearchLoadError] = React.useState<string | null>(null);
+  const [pendingSearchLoadPicker, setPendingSearchLoadPicker] = React.useState<SamplerSearchResult | null>(null);
+  const [pendingSearchPadScroll, setPendingSearchPadScroll] = React.useState<PendingSearchPadScroll | null>(null);
+  const [highlightedPadTarget, setHighlightedPadTarget] = React.useState<PendingSearchPadScroll | null>(null);
+  const searchScopeOptions = React.useMemo(() => getSamplerSearchScopeOptions(isDualMode), [isDualMode]);
+  React.useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, SEARCH_INPUT_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [searchQuery]);
+  React.useEffect(() => {
+    if (isDualMode) {
+      if (searchScope === 'current_bank') {
+        setSearchScope('visible_banks');
+      }
+      return;
+    }
+    if (searchScope === 'primary_bank' || searchScope === 'secondary_bank' || searchScope === 'visible_banks') {
+      setSearchScope('current_bank');
+    }
+  }, [isDualMode, searchScope]);
   const [armedLoadChannelId, setArmedLoadChannelId] = React.useState<number | null>(null);
   const [pendingChannelLoadConfirm, setPendingChannelLoadConfirm] = React.useState<{
     channelId: number;
@@ -888,9 +982,7 @@ export function SamplerPadApp() {
       }
     }
 
-    const hasLocalUserBanks = banks.some((bank) => bank.remoteSnapshotApplied || (
-      bank.sourceBankId !== DEFAULT_BANK_SOURCE_ID && bank.name !== 'Default Bank'
-    ));
+    const hasLocalUserBanks = banks.some((bank) => bank.remoteSnapshotApplied || !isDefaultBankIdentity(bank));
     if (hasLocalUserBanks) return;
 
     setRemoteSnapshotPrompt(remoteSnapshotAvailable);
@@ -1048,6 +1140,96 @@ export function SamplerPadApp() {
   const audioRecoveryState = playbackManager.getAudioRecoveryState();
   const isIOSClient =
     typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const singleSearchBankId = isDualMode ? null : (currentBankId || null);
+  const visibleSearchBankIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    if (isDualMode) {
+      if (primaryBankId) ids.add(primaryBankId);
+      if (secondaryBankId) ids.add(secondaryBankId);
+    } else if (currentBankId) {
+      ids.add(currentBankId);
+    }
+    return ids;
+  }, [currentBankId, isDualMode, primaryBankId, secondaryBankId]);
+  const flattenedSearchPads = React.useMemo<SamplerSearchResult[]>(() => {
+    const seen = new Set<string>();
+    return banks.flatMap((bank) => {
+      const sortedPads = [...(bank.pads || [])].sort((left, right) => (left.position || 0) - (right.position || 0));
+      return sortedPads.flatMap((pad, padIndex) => {
+        const key = `${bank.id}:${pad.id}`;
+        if (seen.has(key)) return [];
+        seen.add(key);
+        const missingMediaState = getPadMissingMediaState(pad);
+        const audioUrl = typeof pad.audioUrl === 'string' ? pad.audioUrl.trim() : '';
+        const requiresAuthToLoad =
+          !effectiveAuthUser &&
+          (bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isDefaultBankIdentity(bank));
+        const loadAvailability = requiresAuthToLoad
+          ? 'login_required'
+          : (audioUrl && !missingMediaState.missingAudio ? 'ready' : 'missing_audio');
+        return [{
+          key,
+          bankId: bank.id,
+          bankName: bank.name,
+          padId: pad.id,
+          padName: pad.name,
+          bankOrder: typeof bank.sortOrder === 'number' ? bank.sortOrder : 0,
+          padOrder: typeof pad.position === 'number' ? pad.position : padIndex,
+          padNameToken: normalizeSamplerSearchToken(pad.name),
+          bankNameToken: normalizeSamplerSearchToken(bank.name),
+          canLoad: loadAvailability === 'ready',
+          loadAvailability,
+          hasMissingImage: missingMediaState.missingImage,
+        }];
+      });
+    });
+  }, [banks, effectiveAuthUser]);
+  const searchResultsState = React.useMemo(() => {
+    const queryToken = normalizeSamplerSearchToken(debouncedSearchQuery);
+    const filteredByScope = flattenedSearchPads.filter((result) => {
+      if (searchScope === 'current_bank') {
+        return Boolean(singleSearchBankId) && result.bankId === singleSearchBankId;
+      }
+      if (searchScope === 'visible_banks') {
+        return visibleSearchBankIds.has(result.bankId);
+      }
+      if (searchScope === 'primary_bank') {
+        return Boolean(primaryBankId) && result.bankId === primaryBankId;
+      }
+      if (searchScope === 'secondary_bank') {
+        return Boolean(secondaryBankId) && result.bankId === secondaryBankId;
+      }
+      return true;
+    });
+
+    const filteredByQuery = queryToken
+      ? filteredByScope.filter((result) => {
+          return result.padNameToken.includes(queryToken) || result.bankNameToken.includes(queryToken);
+        })
+      : filteredByScope;
+
+    const ranked = [...filteredByQuery].sort((left, right) => {
+      const leftPadIndex = queryToken ? left.padNameToken.indexOf(queryToken) : -1;
+      const rightPadIndex = queryToken ? right.padNameToken.indexOf(queryToken) : -1;
+      const leftBankIndex = queryToken ? left.bankNameToken.indexOf(queryToken) : -1;
+      const rightBankIndex = queryToken ? right.bankNameToken.indexOf(queryToken) : -1;
+      const leftScore = queryToken
+        ? Math.min(leftPadIndex >= 0 ? leftPadIndex : 1000, leftBankIndex >= 0 ? leftBankIndex + 200 : 1000)
+        : 0;
+      const rightScore = queryToken
+        ? Math.min(rightPadIndex >= 0 ? rightPadIndex : 1000, rightBankIndex >= 0 ? rightBankIndex + 200 : 1000)
+        : 0;
+      if (leftScore !== rightScore) return leftScore - rightScore;
+      if (left.bankOrder !== right.bankOrder) return left.bankOrder - right.bankOrder;
+      if (left.padOrder !== right.padOrder) return left.padOrder - right.padOrder;
+      return left.padName.localeCompare(right.padName, undefined, { sensitivity: 'base' });
+    });
+
+    return {
+      total: ranked.length,
+      results: ranked.slice(0, SEARCH_RESULT_LIMIT),
+    };
+  }, [debouncedSearchQuery, flattenedSearchPads, primaryBankId, searchScope, secondaryBankId, singleSearchBankId, visibleSearchBankIds]);
 
   const handleRestoreAudio = React.useCallback(() => {
     playbackManager.preUnlockAudio().catch((unlockError) => {
@@ -1363,8 +1545,8 @@ export function SamplerPadApp() {
         return;
       }
 
-      const maxAudioSizeMB = 50;
-      const maxAudioSizeBytes = maxAudioSizeMB * 1024 * 1024;
+      const maxAudioSizeBytes = samplerConfig.audioLimits.maxPadAudioBytes;
+      const maxAudioSizeMB = Math.max(1, Math.round(maxAudioSizeBytes / 1024 / 1024));
 
       if (file.size > maxAudioSizeBytes) {
         setError(`Audio file is too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum size allowed is ${maxAudioSizeMB}MB. Please use a smaller audio file.`);
@@ -1373,7 +1555,19 @@ export function SamplerPadApp() {
       }
 
       window.dispatchEvent(new Event('vdjv-upload-start'));
-      await addPad(file, targetBankId, { defaultTriggerMode: settings.defaultTriggerMode });
+      await addPad(file, targetBankId, {
+        defaultTriggerMode: settings.defaultTriggerMode,
+        padDefaults: {
+          playbackMode: samplerConfig.padDefaults.defaultPlaybackMode,
+          volume: samplerConfig.padDefaults.defaultVolume,
+          gainDb: samplerConfig.padDefaults.defaultGainDb,
+          fadeInMs: samplerConfig.padDefaults.defaultFadeInMs,
+          fadeOutMs: samplerConfig.padDefaults.defaultFadeOutMs,
+          pitch: samplerConfig.padDefaults.defaultPitch,
+          tempoPercent: samplerConfig.padDefaults.defaultTempoPercent,
+          keyLock: samplerConfig.padDefaults.defaultKeyLock,
+        },
+      });
       window.dispatchEvent(new Event('vdjv-upload-end'));
     } catch (error) {
       window.dispatchEvent(new Event('vdjv-upload-end'));
@@ -1386,7 +1580,7 @@ export function SamplerPadApp() {
       setShowErrorDialog(true);
       throw resolvedError;
     }
-  }, [addPad, settings.defaultTriggerMode, user]);
+  }, [addPad, samplerConfig.audioLimits.maxPadAudioBytes, samplerConfig.padDefaults.defaultFadeInMs, samplerConfig.padDefaults.defaultFadeOutMs, samplerConfig.padDefaults.defaultGainDb, samplerConfig.padDefaults.defaultKeyLock, samplerConfig.padDefaults.defaultPitch, samplerConfig.padDefaults.defaultPlaybackMode, samplerConfig.padDefaults.defaultTempoPercent, samplerConfig.padDefaults.defaultVolume, settings.defaultTriggerMode, user]);
 
   const handleStopAll = React.useCallback(() => {
     // Header STOP ALL should only stop pad-grid playback, not deck channels.
@@ -1505,14 +1699,14 @@ export function SamplerPadApp() {
     pad: PadData,
     bankId: string,
     bankName: string
-  ) => {
+  ): Promise<boolean> => {
     try {
       await playbackManager.registerPad(pad.id, pad, bankId, bankName);
       const loaded = playbackManager.loadPadToChannel(channelId, pad.id);
       if (!loaded) {
         setError(`Failed to load "${pad.name}" into Channel ${channelId}.`);
         setShowErrorDialog(true);
-        return;
+        return false;
       }
       setPendingChannelLoadConfirm(null);
       setArmedLoadChannelId(null);
@@ -1520,9 +1714,11 @@ export function SamplerPadApp() {
         updateSetting('sideMenuOpen', false);
       }
       updateSetting('mixerOpen', true);
+      return true;
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load pad into channel.');
       setShowErrorDialog(true);
+      return false;
     }
   }, [playbackManager, shouldFocusPadsForChannelLoad, updateSetting]);
 
@@ -1537,20 +1733,194 @@ export function SamplerPadApp() {
     void executePadLoadToChannel(channelId, pad, bankId, bankName);
   }, [armedLoadChannelId, executePadLoadToChannel, playbackManager]);
 
+  const closeSearchOverlay = React.useCallback(() => {
+    setSearchOpen(false);
+    setPendingSearchLoadPicker(null);
+    setSearchLoadError(null);
+  }, []);
+
+  const toggleSearchOverlay = React.useCallback(() => {
+    setSearchOpen((prev) => {
+      const next = !prev;
+      if (!next) {
+        setPendingSearchLoadPicker(null);
+        setSearchLoadError(null);
+      }
+      return next;
+    });
+  }, []);
+
+  React.useEffect(() => {
+    if (searchOpen) return;
+    setPendingSearchLoadPicker(null);
+    setSearchLoadError(null);
+  }, [searchOpen]);
+
+  const findSearchTarget = React.useCallback((result: SamplerSearchResult): { bankName: string; bankId: string; pad: PadData } | null => {
+    const bank = banks.find((entry) => entry.id === result.bankId);
+    if (!bank) return null;
+    const pad = bank.pads.find((entry) => entry.id === result.padId);
+    if (!pad) return null;
+    return {
+      bankName: bank.name,
+      bankId: bank.id,
+      pad,
+    };
+  }, [banks]);
+
+  const resolveSearchLoadError = React.useCallback((result: SamplerSearchResult): string => {
+    if (result.loadAvailability === 'login_required') {
+      return 'Sign in before loading this protected pad.';
+    }
+    return 'This pad cannot be loaded because usable audio is missing on this device.';
+  }, []);
+
+  const resolveSearchLoadChannelId = React.useCallback((): number | null => {
+    return armedLoadChannelId;
+  }, [armedLoadChannelId]);
+
+  const handleSearchGo = React.useCallback((result: SamplerSearchResult) => {
+    setSearchLoadError(null);
+    setPendingSearchLoadPicker(null);
+
+    if (isDualMode) {
+      if (searchScope === 'primary_bank') {
+        setPrimaryBank(result.bankId);
+      } else if (searchScope === 'secondary_bank') {
+        setSecondaryBank(result.bankId);
+      } else if (!visibleSearchBankIds.has(result.bankId)) {
+        setSearchLoadError('Pick Primary Bank or Secondary Bank before jumping to a bank outside the current view.');
+        return;
+      }
+    } else {
+      setCurrentBank(result.bankId);
+    }
+
+    setPendingSearchPadScroll({ bankId: result.bankId, padId: result.padId });
+    setHighlightedPadTarget({ bankId: result.bankId, padId: result.padId });
+    closeSearchOverlay();
+  }, [closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
+
+  const runSearchLoad = React.useCallback(async (result: SamplerSearchResult, channelId: number): Promise<boolean> => {
+    if (!result.canLoad) {
+      setSearchLoadError(resolveSearchLoadError(result));
+      return false;
+    }
+
+    const target = findSearchTarget(result);
+    if (!target) {
+      setSearchLoadError('This pad is no longer available in the loaded banks.');
+      return false;
+    }
+
+    const targetChannel = playbackManager.getChannelStates().find((entry) => entry.channelId === channelId);
+    if (targetChannel?.isPlaying) {
+      setPendingChannelLoadConfirm({
+        channelId,
+        pad: target.pad,
+        bankId: target.bankId,
+        bankName: target.bankName,
+      });
+      setPendingSearchLoadPicker(null);
+      closeSearchOverlay();
+      return true;
+    }
+
+    const loaded = await executePadLoadToChannel(channelId, target.pad, target.bankId, target.bankName);
+    if (loaded) {
+      setPendingSearchLoadPicker(null);
+      closeSearchOverlay();
+      return true;
+    }
+
+    setSearchLoadError(`Failed to load "${target.pad.name}" into Channel ${channelId}.`);
+    return false;
+  }, [closeSearchOverlay, executePadLoadToChannel, findSearchTarget, playbackManager, resolveSearchLoadError]);
+
+  const handleSearchLoad = React.useCallback((result: SamplerSearchResult) => {
+    setSearchLoadError(null);
+    if (!result.canLoad) {
+      setSearchLoadError(resolveSearchLoadError(result));
+      return;
+    }
+
+    const preferredChannelId = resolveSearchLoadChannelId();
+    if (preferredChannelId !== null) {
+      void runSearchLoad(result, preferredChannelId);
+      return;
+    }
+
+    setPendingSearchLoadPicker(result);
+  }, [resolveSearchLoadChannelId, resolveSearchLoadError, runSearchLoad]);
+
+  const handleChooseSearchLoadChannel = React.useCallback((channelId: number) => {
+    if (!pendingSearchLoadPicker) return;
+    void runSearchLoad(pendingSearchLoadPicker, channelId);
+  }, [pendingSearchLoadPicker, runSearchLoad]);
+
+  React.useEffect(() => {
+    if (!pendingSearchPadScroll) return;
+    const isVisible =
+      (!isDualMode && currentBankId === pendingSearchPadScroll.bankId) ||
+      (isDualMode && (primaryBankId === pendingSearchPadScroll.bankId || secondaryBankId === pendingSearchPadScroll.bankId));
+    if (!isVisible) return;
+
+    let cancelled = false;
+    let attempt = 0;
+    const anchorId = buildPadSearchAnchorId(pendingSearchPadScroll.bankId, pendingSearchPadScroll.padId);
+
+    const tryScroll = () => {
+      if (cancelled) return;
+      const element = document.getElementById(anchorId);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        setHighlightedPadTarget(pendingSearchPadScroll);
+        setPendingSearchPadScroll(null);
+        return;
+      }
+      attempt += 1;
+      if (attempt < 18) {
+        window.requestAnimationFrame(tryScroll);
+      } else {
+        setPendingSearchPadScroll(null);
+      }
+    };
+
+    window.requestAnimationFrame(tryScroll);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentBankId, isDualMode, pendingSearchPadScroll, primaryBankId, secondaryBankId]);
+
+  React.useEffect(() => {
+    if (!highlightedPadTarget) return;
+    const timeoutId = window.setTimeout(() => {
+      setHighlightedPadTarget((current) => (
+        current?.bankId === highlightedPadTarget.bankId && current.padId === highlightedPadTarget.padId
+          ? null
+          : current
+      ));
+    }, SEARCH_HIGHLIGHT_CLEAR_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [highlightedPadTarget]);
+
   const isPortraitViewport = React.useMemo(() => windowHeight > windowWidth, [windowHeight, windowWidth]);
   const activePadSizeMax = isPortraitViewport ? PAD_SIZE_MAX_PORTRAIT : PAD_SIZE_MAX_LANDSCAPE;
   const activePadSizeRaw = isPortraitViewport ? settings.padSizePortrait : settings.padSizeLandscape;
+  const configuredPadSizeFallback = isPortraitViewport
+    ? samplerConfig.uiDefaults.defaultPadSizePortrait
+    : samplerConfig.uiDefaults.defaultPadSizeLandscape;
   const requiresEvenPadColumns = isDualMode && !isPortraitViewport;
 
   const displayPadSize = React.useMemo(() => {
-    const clamped = normalizePadSize(activePadSizeRaw, PAD_SIZE_MIN, activePadSizeMax, DEFAULT_PAD_SIZE);
+    const clamped = normalizePadSize(activePadSizeRaw, PAD_SIZE_MIN, activePadSizeMax, configuredPadSizeFallback);
     if (!requiresEvenPadColumns || clamped % 2 === 0) return clamped;
     return clamped > PAD_SIZE_MIN ? clamped - 1 : Math.min(activePadSizeMax, clamped + 1);
-  }, [activePadSizeRaw, activePadSizeMax, requiresEvenPadColumns]);
+  }, [activePadSizeRaw, activePadSizeMax, configuredPadSizeFallback, requiresEvenPadColumns]);
 
   const handlePadSizeChange = React.useCallback((requestedSize: number) => {
     const maxForOrientation = isPortraitViewport ? PAD_SIZE_MAX_PORTRAIT : PAD_SIZE_MAX_LANDSCAPE;
-    let nextSize = normalizePadSize(requestedSize, PAD_SIZE_MIN, maxForOrientation, DEFAULT_PAD_SIZE);
+    let nextSize = normalizePadSize(requestedSize, PAD_SIZE_MIN, maxForOrientation, configuredPadSizeFallback);
     if (requiresEvenPadColumns && nextSize % 2 !== 0) {
       nextSize = nextSize > PAD_SIZE_MIN ? nextSize - 1 : Math.min(maxForOrientation, nextSize + 1);
     }
@@ -1560,11 +1930,11 @@ export function SamplerPadApp() {
       padSizePortrait: isPortraitViewport ? nextSize : prev.padSizePortrait,
       padSizeLandscape: isPortraitViewport ? prev.padSizeLandscape : nextSize
     }));
-  }, [isPortraitViewport, requiresEvenPadColumns]);
+  }, [configuredPadSizeFallback, isPortraitViewport, requiresEvenPadColumns]);
 
   const handleResetPadSize = React.useCallback(() => {
-    handlePadSizeChange(DEFAULT_PAD_SIZE);
-  }, [handlePadSizeChange]);
+    handlePadSizeChange(configuredPadSizeFallback);
+  }, [configuredPadSizeFallback, handlePadSizeChange]);
 
   const handlePadSizeIncrease = React.useCallback(() => {
     const step = isDualMode ? 2 : 1;
@@ -2774,7 +3144,7 @@ export function SamplerPadApp() {
   }, [isDualMode, isPhonePortraitScreen]);
 
   const getGridColumns = React.useMemo(() => {
-    const finalSize = normalizePadSize(displayPadSize, PAD_SIZE_MIN, activePadSizeMax, DEFAULT_PAD_SIZE);
+    const finalSize = normalizePadSize(displayPadSize, PAD_SIZE_MIN, activePadSizeMax, configuredPadSizeFallback);
     if (isDualMode && !isPortraitViewport) {
       return Math.max(1, Math.floor(finalSize / 2));
     }
@@ -2923,6 +3293,7 @@ export function SamplerPadApp() {
     onRequestRestoreBackup: handleRestoreBackupPrompt,
     onRequestRecoverBankFiles: handleRecoverBankPrompt,
     onRetryBankMissingMedia: rehydrateMissingMediaInBank,
+    defaultBankColor: samplerConfig.bankDefaults.defaultBankColor,
   };
 
   const volumeMixerProps = {
@@ -2965,6 +3336,7 @@ export function SamplerPadApp() {
     globalMuted,
     sideMenuOpen: settings.sideMenuOpen,
     mixerOpen: settings.mixerOpen,
+    searchOpen,
     channelLoadArmed: armedLoadChannelId !== null,
     theme,
     windowWidth,
@@ -2979,6 +3351,7 @@ export function SamplerPadApp() {
     onStopAll: handleStopAll,
     onToggleSideMenu: () => handleSideMenuToggle(!settings.sideMenuOpen),
     onToggleMixer: () => handleMixerToggle(!settings.mixerOpen),
+    onToggleSearch: toggleSearchOverlay,
     onCancelChannelLoad: handleCancelChannelLoadFromHeader,
     onToggleTheme: toggleTheme,
     onExitDualMode: () => setPrimaryBank(null),
@@ -3039,106 +3412,136 @@ export function SamplerPadApp() {
         id: bank.id,
         title: bank.name,
         padCount: bank.pads.length,
-        isDefaultBank: bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || bank.name === 'Default Bank',
+        isDefaultBank: isDefaultBankIdentity(bank),
       })),
     onPublishDefaultBankRelease: publishDefaultBankRelease
   };
 
   return (
-    <SamplerPadAppView
-      layoutSizeClass={layoutSizeClass}
-      theme={theme}
-      sideMenuProps={sideMenuProps}
-      headerControlsProps={headerControlsProps}
-      volumeMixerProps={volumeMixerProps}
-      showVolumeMixer={true}
-      isIOSClient={isIOSClient}
-      audioRecoveryState={audioRecoveryState}
-      onRestoreAudio={handleRestoreAudio}
-      getMainContentMargin={getMainContentMargin}
-      getMainContentPadding={getMainContentPadding}
-      usePortraitDualStack={usePortraitDualStack}
-      padInteractionLockClass={padInteractionLockClass}
-      isDualMode={isDualMode}
-      displayPrimary={displayPrimary}
-      displaySecondary={displaySecondary}
-      singleBank={singleBank}
-      primaryBankId={primaryBankId}
-      secondaryBankId={secondaryBankId}
-      currentBankId={currentBankId}
-      primaryScrollRef={primaryScrollRef}
-      secondaryScrollRef={secondaryScrollRef}
-      singleScrollRef={singleScrollRef}
-      primaryFallbackScrollRef={primaryFallbackScrollRef}
-      secondaryFallbackScrollRef={secondaryFallbackScrollRef}
-      singleFallbackScrollRef={singleFallbackScrollRef}
-      saveBankScroll={saveBankScroll}
-      allPads={allPads}
-      banks={banks}
-      availableBanks={availableBanks}
-      editMode={settings.editMode}
-      globalMuted={globalMuted}
-      masterVolume={settings.masterVolume}
-      padSize={getGridColumns}
-      stopMode={settings.stopMode}
-      windowWidth={windowWidth}
-      onUpdatePad={handleUpdatePad}
-      onRemovePad={handleRemovePad}
-      onDuplicatePad={handleDuplicatePad}
-      onRelinkMissingPadMedia={relinkPadAudioFromFile}
-      onRehydratePadMedia={rehydratePadMedia}
-      onReorderPads={reorderPads}
-      onFileUpload={handleFileUpload}
-      onPadDragStart={handlePadDragStart}
-      onTransferPad={handleTransferPad}
-      canTransferFromBank={canTransferFromBank}
-      midiEnabled={midi.enabled && midi.accessGranted}
-      hideShortcutLabels={settings.hideShortcutLabels}
-      graphicsTier={effectiveGraphicsTier}
-      editRequest={editRequest}
-      blockedShortcutKeys={blockedShortcutKeys}
-      blockedMidiNotes={blockedMidiNotes}
-      blockedMidiCCs={blockedMidiCCs}
-      channelLoadArmed={armedLoadChannelId !== null}
-      onSelectPadForChannelLoad={handleSelectPadForChannelLoad}
-      hasEffectiveAuthUser={Boolean(effectiveAuthUser)}
-      defaultBankSourceId={DEFAULT_BANK_SOURCE_ID}
-      onRequireLogin={requestDefaultBankLogin}
-      restoreBackupInputRef={restoreBackupInputRef}
-      recoverBankInputRef={recoverBankInputRef}
-      onRestoreBackupFile={handleRestoreBackupFile}
-      onRecoverBankFiles={handleRecoverBankFiles}
-      remoteSnapshotPrompt={remoteSnapshotPrompt}
-      remoteSnapshotRestoreProgress={remoteSnapshotRestoreProgress}
-      onRemoteSnapshotPromptChange={setRemoteSnapshotPrompt}
-      onSkipRemoteSnapshotPrompt={handleSkipRemoteSnapshotPrompt}
-      onApplyRemoteSnapshot={handleApplyRemoteSnapshot}
-      onRestoreFromBackupForRemoteSnapshot={handleRestoreFromBackupForRemoteSnapshot}
-      missingMediaSummary={missingMediaSummary}
-      onMissingMediaSummaryChange={setMissingMediaSummary}
-      onRestoreBackupPrompt={handleRestoreBackupPrompt}
-      onRecoverBankPrompt={handleRecoverBankPrompt}
-      showRecoverBankModeDialog={showRecoverBankModeDialog}
-      onShowRecoverBankModeDialogChange={setShowRecoverBankModeDialog}
-      onChooseRecoverBankMode={handleChooseRecoverBankMode}
-      pendingChannelLoadConfirm={pendingChannelLoadConfirm}
-      onPendingChannelLoadConfirmChange={setPendingChannelLoadConfirm}
-      onConfirmChannelLoad={(pending) => {
-        void executePadLoadToChannel(pending.channelId, pending.pad, pending.bankId, pending.bankName);
-      }}
-      pendingChannelCountConfirm={pendingChannelCountConfirm}
-      onPendingChannelCountConfirmChange={setPendingChannelCountConfirm}
-      onConfirmChannelCountChange={applyChannelCountChange}
-      pendingOfficialPadTransferConfirm={pendingOfficialPadTransferConfirm}
-      onPendingOfficialPadTransferConfirmChange={setPendingOfficialPadTransferConfirm}
-      onConfirmOfficialPadTransfer={(pending) => {
-        commitTransferPad(pending.padId, pending.sourceBankId, pending.targetBankId);
-      }}
-      showErrorDialog={showErrorDialog}
-      onShowErrorDialogChange={setShowErrorDialog}
-      error={error}
-      onErrorClose={handleErrorClose}
-    />
+    <>
+      <SamplerPadAppView
+        layoutSizeClass={layoutSizeClass}
+        theme={theme}
+        sideMenuProps={sideMenuProps}
+        headerControlsProps={headerControlsProps}
+        volumeMixerProps={volumeMixerProps}
+        showVolumeMixer={true}
+        isIOSClient={isIOSClient}
+        audioRecoveryState={audioRecoveryState}
+        onRestoreAudio={handleRestoreAudio}
+        getMainContentMargin={getMainContentMargin}
+        getMainContentPadding={getMainContentPadding}
+        usePortraitDualStack={usePortraitDualStack}
+        padInteractionLockClass={padInteractionLockClass}
+        isDualMode={isDualMode}
+        displayPrimary={displayPrimary}
+        displaySecondary={displaySecondary}
+        singleBank={singleBank}
+        primaryBankId={primaryBankId}
+        secondaryBankId={secondaryBankId}
+        currentBankId={currentBankId}
+        primaryScrollRef={primaryScrollRef}
+        secondaryScrollRef={secondaryScrollRef}
+        singleScrollRef={singleScrollRef}
+        primaryFallbackScrollRef={primaryFallbackScrollRef}
+        secondaryFallbackScrollRef={secondaryFallbackScrollRef}
+        singleFallbackScrollRef={singleFallbackScrollRef}
+        saveBankScroll={saveBankScroll}
+        allPads={allPads}
+        banks={banks}
+        availableBanks={availableBanks}
+        editMode={settings.editMode}
+        globalMuted={globalMuted}
+        masterVolume={settings.masterVolume}
+        padSize={getGridColumns}
+        stopMode={settings.stopMode}
+        windowWidth={windowWidth}
+        onUpdatePad={handleUpdatePad}
+        onRemovePad={handleRemovePad}
+        onDuplicatePad={handleDuplicatePad}
+        onRelinkMissingPadMedia={relinkPadAudioFromFile}
+        onRehydratePadMedia={rehydratePadMedia}
+        onReorderPads={reorderPads}
+        onFileUpload={handleFileUpload}
+        onPadDragStart={handlePadDragStart}
+        onTransferPad={handleTransferPad}
+        canTransferFromBank={canTransferFromBank}
+        midiEnabled={midi.enabled && midi.accessGranted}
+        hideShortcutLabels={settings.hideShortcutLabels}
+        highlightedPadTarget={highlightedPadTarget}
+        graphicsTier={effectiveGraphicsTier}
+        editRequest={editRequest}
+        blockedShortcutKeys={blockedShortcutKeys}
+        blockedMidiNotes={blockedMidiNotes}
+        blockedMidiCCs={blockedMidiCCs}
+        channelLoadArmed={armedLoadChannelId !== null}
+        onSelectPadForChannelLoad={handleSelectPadForChannelLoad}
+        hasEffectiveAuthUser={Boolean(effectiveAuthUser)}
+        defaultBankSourceId={DEFAULT_BANK_SOURCE_ID}
+        onRequireLogin={requestDefaultBankLogin}
+        restoreBackupInputRef={restoreBackupInputRef}
+        recoverBankInputRef={recoverBankInputRef}
+        onRestoreBackupFile={handleRestoreBackupFile}
+        onRecoverBankFiles={handleRecoverBankFiles}
+        remoteSnapshotPrompt={remoteSnapshotPrompt}
+        remoteSnapshotRestoreProgress={remoteSnapshotRestoreProgress}
+        onRemoteSnapshotPromptChange={setRemoteSnapshotPrompt}
+        onSkipRemoteSnapshotPrompt={handleSkipRemoteSnapshotPrompt}
+        onApplyRemoteSnapshot={handleApplyRemoteSnapshot}
+        onRestoreFromBackupForRemoteSnapshot={handleRestoreFromBackupForRemoteSnapshot}
+        missingMediaSummary={missingMediaSummary}
+        onMissingMediaSummaryChange={setMissingMediaSummary}
+        onRestoreBackupPrompt={handleRestoreBackupPrompt}
+        onRecoverBankPrompt={handleRecoverBankPrompt}
+        showRecoverBankModeDialog={showRecoverBankModeDialog}
+        onShowRecoverBankModeDialogChange={setShowRecoverBankModeDialog}
+        onChooseRecoverBankMode={handleChooseRecoverBankMode}
+        pendingChannelLoadConfirm={pendingChannelLoadConfirm}
+        onPendingChannelLoadConfirmChange={setPendingChannelLoadConfirm}
+        onConfirmChannelLoad={(pending) => {
+          void executePadLoadToChannel(pending.channelId, pending.pad, pending.bankId, pending.bankName);
+        }}
+        pendingChannelCountConfirm={pendingChannelCountConfirm}
+        onPendingChannelCountConfirmChange={setPendingChannelCountConfirm}
+        onConfirmChannelCountChange={applyChannelCountChange}
+        pendingOfficialPadTransferConfirm={pendingOfficialPadTransferConfirm}
+        onPendingOfficialPadTransferConfirmChange={setPendingOfficialPadTransferConfirm}
+        onConfirmOfficialPadTransfer={(pending) => {
+          commitTransferPad(pending.padId, pending.sourceBankId, pending.targetBankId);
+        }}
+        showErrorDialog={showErrorDialog}
+        onShowErrorDialogChange={setShowErrorDialog}
+        error={error}
+        onErrorClose={handleErrorClose}
+      />
+
+      <SamplerSearchOverlay
+        open={searchOpen}
+        onOpenChange={(open) => {
+          if (open) {
+            setSearchOpen(true);
+            return;
+          }
+          closeSearchOverlay();
+        }}
+        theme={theme}
+        query={searchQuery}
+        onQueryChange={setSearchQuery}
+        scope={searchScope}
+        scopeOptions={searchScopeOptions}
+        onScopeChange={setSearchScope}
+        results={searchResultsState.results}
+        totalMatchCount={searchResultsState.total}
+        onGo={handleSearchGo}
+        onLoad={handleSearchLoad}
+        loadTargetSelection={pendingSearchLoadPicker}
+        channelStates={channelStates}
+        armedLoadChannelId={armedLoadChannelId}
+        onChooseLoadChannel={handleChooseSearchLoadChannel}
+        onCancelLoadTargetSelection={() => setPendingSearchLoadPicker(null)}
+        errorMessage={searchLoadError}
+      />
+    </>
   );
 
 }

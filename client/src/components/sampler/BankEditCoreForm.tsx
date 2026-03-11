@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { SamplerBank } from './types/sampler';
+import { canAdminExportBankForSession } from './hooks/useSamplerStore.provenance';
 
 type ShortcutAssignment = {
   name: string;
@@ -107,49 +108,54 @@ export function BankEditCoreForm({
   onDuplicate,
   onExportAdmin,
 }: BankEditCoreFormProps) {
-  return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <Label>Bank Color</Label>
-        <div className="flex gap-1 flex-wrap">
-          {colorOptions.map((colorOption) => (
-            <button
-              key={colorOption.value}
-              onClick={() => setDefaultColor(colorOption.value)}
-              className={`w-6 h-6 rounded-full border-2 transition-all ${defaultColor === colorOption.value ? 'border-white scale-110 shadow-lg' : 'border-gray-400'}`}
-              style={{
-                backgroundColor: colorOption.value,
-                color: colorOption.textColor
-              }}
-              title={colorOption.label}
-            />
-          ))}
-        </div>
-      </div>
+  const canUseAdminExport = isAdmin && Boolean(onExportAdmin) && canAdminExportBankForSession(bank);
+  const canShowExportButton = canUseAdminExport || bank.exportable !== false;
 
-      <div className="space-y-2">
-        <Label htmlFor="name">Bank Name</Label>
-        <Input
-          id="name"
-          value={name}
-          onChange={(e) => {
-            if (e.target.value.length <= 18) {
-              setName(e.target.value);
-            }
-          }}
-          placeholder="Enter bank name"
-          className="backdrop-blur-sm"
-          maxLength={24}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck="false"
-          onFocus={(e) => {
-            if (window.innerWidth <= 768) {
-              setTimeout(() => e.target.focus(), 100);
-            }
-          }}
-        />
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="name">Bank Name</Label>
+          <Input
+            id="name"
+            value={name}
+            onChange={(e) => {
+              if (e.target.value.length <= 18) {
+                setName(e.target.value);
+              }
+            }}
+            placeholder="Enter bank name"
+            className="backdrop-blur-sm"
+            maxLength={24}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck="false"
+            onFocus={(e) => {
+              if (window.innerWidth <= 768) {
+                setTimeout(() => e.target.focus(), 100);
+              }
+            }}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label>Bank Color</Label>
+          <div className="flex gap-1 flex-wrap">
+            {colorOptions.map((colorOption) => (
+              <button
+                key={colorOption.value}
+                onClick={() => setDefaultColor(colorOption.value)}
+                className={`w-6 h-6 rounded-full border-2 transition-all ${defaultColor === colorOption.value ? 'border-white scale-110 shadow-lg' : 'border-gray-400'}`}
+                style={{
+                  backgroundColor: colorOption.value,
+                  color: colorOption.textColor
+                }}
+                title={colorOption.label}
+              />
+            ))}
+          </div>
+        </div>
       </div>
 
       {isAdmin && (
@@ -336,10 +342,10 @@ export function BankEditCoreForm({
             <Copy className="w-4 h-4" />
           </Button>
         )}
-        {bank.exportable !== false && (
+        {canShowExportButton && (
           <Button
             onClick={() => {
-              if (isAdmin && onExportAdmin) {
+              if (canUseAdminExport) {
                 onShowAdminExport();
               } else {
                 onExport();
@@ -347,9 +353,9 @@ export function BankEditCoreForm({
             }}
             variant="outline"
             className="px-3"
-            title={isAdmin && onExportAdmin ? 'Export (admin)' : 'Export'}
+            title={canUseAdminExport ? 'Export (admin)' : 'Export'}
           >
-            {isAdmin && onExportAdmin ? <Crown className="w-4 h-4" /> : <Download className="w-4 h-4" />}
+            {canUseAdminExport ? <Crown className="w-4 h-4" /> : <Download className="w-4 h-4" />}
           </Button>
         )}
         {canDelete && (

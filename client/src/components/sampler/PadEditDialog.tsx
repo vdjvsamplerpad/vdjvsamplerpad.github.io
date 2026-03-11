@@ -35,6 +35,7 @@ interface PadEditDialogProps {
 
 const MIN_PAD_GAIN_DB = -24;
 const MAX_PAD_GAIN_DB = 24;
+const COMPACT_BAKED_TRIM_MIN_DELTA_MS = 10000;
 
 const clampPadGainDb = (value: number): number => {
   if (!Number.isFinite(value)) return 0;
@@ -760,6 +761,34 @@ export function PadEditDialog({
   }, [trimDurationMs]);
 
   const hotcueAnchorTime = hotcueMarkerMs;
+  const safeTrimStartMs = React.useMemo(
+    () => Math.max(0, Math.min(startTimeMs[0], trimDurationMs || 0)),
+    [startTimeMs, trimDurationMs],
+  );
+  const safeTrimEndMs = React.useMemo(() => {
+    if (trimDurationMs <= 0) return 0;
+    const candidate = endTimeMs[0] > safeTrimStartMs ? endTimeMs[0] : trimDurationMs;
+    return Math.max(safeTrimStartMs, Math.min(candidate, trimDurationMs));
+  }, [endTimeMs, safeTrimStartMs, trimDurationMs]);
+  const hasTrimApplied = React.useMemo(
+    () => trimDurationMs > 0 && (safeTrimStartMs > 0 || safeTrimEndMs < trimDurationMs),
+    [safeTrimEndMs, safeTrimStartMs, trimDurationMs],
+  );
+  const isCompactBakeCandidate = React.useMemo(() => {
+    if (!hasTrimApplied || trimDurationMs <= 0) return false;
+    const trimInDelta = safeTrimStartMs;
+    const trimOutDelta = Math.max(0, trimDurationMs - safeTrimEndMs);
+    return trimInDelta >= COMPACT_BAKED_TRIM_MIN_DELTA_MS || trimOutDelta >= COMPACT_BAKED_TRIM_MIN_DELTA_MS;
+  }, [hasTrimApplied, safeTrimEndMs, safeTrimStartMs, trimDurationMs]);
+
+  const handleTrimReset = React.useCallback(() => {
+    setStartTimeMs([0]);
+    setEndTimeMs([trimDurationMs > 0 ? trimDurationMs : 0]);
+    setHotcueMarkerMs((prev) => {
+      if (prev === null || trimDurationMs <= 0) return prev;
+      return Math.max(0, Math.min(trimDurationMs, prev));
+    });
+  }, [trimDurationMs]);
 
   // Calculate effective playback duration after start/end time adjustments
   const effectiveDuration = endTimeMs[0] - startTimeMs[0];
@@ -816,7 +845,7 @@ export function PadEditDialog({
             <DialogTitle>Edit Pad Settings</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-6 overflow-y-auto overflow-x-hidden pr-1">
+          <div className="space-y-4 overflow-y-auto overflow-x-hidden pr-1">
             {uploadError && (
               <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
                 {uploadError}
@@ -914,25 +943,54 @@ export function PadEditDialog({
               </p>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="name">Pad Name</Label>
-              <Input
-                id="name"
-                value={name}
-                onChange={(e) => setName(e.target.value.slice(0, 32))}
-                placeholder="Enter pad name"
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck="false"
-                maxLength={32}
-                onFocus={(e) => {
-                  // Prevent immediate focus on mobile
-                  if (window.innerWidth <= 1800) {
-                    setTimeout(() => e.target.focus(), 100);
-                  }
-                }}
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="name">Pad Name</Label>
+                <Input
+                  id="name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value.slice(0, 32))}
+                  placeholder="Enter pad name"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
+                  maxLength={32}
+                  onFocus={(e) => {
+                    // Prevent immediate focus on mobile
+                    if (window.innerWidth <= 1800) {
+                      setTimeout(() => e.target.focus(), 100);
+                    }
+                  }}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Pad Color</Label>
+                <div className="flex gap-1 flex-wrap">
+                  {(showAllColors ? [...primaryPadColors, ...extraPadColors] : primaryPadColors).map((colorOption) => (
+                    <button
+                      key={colorOption.value}
+                      onClick={() => setColor(colorOption.value)}
+                      className={`w-6 h-6 rounded-full border-2 transition-all ${color === colorOption.value ? 'border-white scale-110' : 'border-gray-400'
+                        }`}
+                      style={{ backgroundColor: colorOption.value }}
+                      title={colorOption.label}
+                    />
+                  ))}
+                  {extraPadColors.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-6 px-1.5 text-[10px] ml-1"
+                      onClick={() => setShowAllColors((prev) => !prev)}
+                    >
+                      {showAllColors ? 'Less' : 'More'}
+                    </Button>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className={`grid gap-3 ${midiEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
@@ -987,33 +1045,6 @@ export function PadEditDialog({
                   </div>
                   {midiError && <p className="text-xs text-red-500">{midiError}</p>}
                 </div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label>Pad Color</Label>
-              <div className="flex gap-1 flex-wrap">
-                {(showAllColors ? [...primaryPadColors, ...extraPadColors] : primaryPadColors).map((colorOption) => (
-                  <button
-                    key={colorOption.value}
-                    onClick={() => setColor(colorOption.value)}
-                    className={`w-6 h-6 rounded-full border-2 transition-all ${color === colorOption.value ? 'border-white scale-110' : 'border-gray-400'
-                      }`}
-                    style={{ backgroundColor: colorOption.value }}
-                    title={colorOption.label}
-                  />
-                ))}
-              </div>
-              {extraPadColors.length > 0 && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 px-2 text-[10px]"
-                  onClick={() => setShowAllColors((prev) => !prev)}
-                >
-                  {showAllColors ? 'Show Less' : 'Load More'}
-                </Button>
               )}
             </div>
 
@@ -1094,8 +1125,10 @@ export function PadEditDialog({
 
             {pad.audioUrl && trimDurationMs > 0 && (
               <>
-                <div className="space-y-2">
-                  <Label>Trim In / Trim Out</Label>
+                <div className="space-y-4 pt-2">
+                  <div className="hidden">
+                    <Label>Trim In / Trim Out</Label>
+                  </div>
                   <WaveformTrim
                     audioUrl={pad.audioUrl}
                     startTimeMs={startTimeMs[0]}
@@ -1108,6 +1141,8 @@ export function PadEditDialog({
                     hotcueMarkerMs={hotcueMarkerMs}
                     onHotcueMarkerChange={handleHotcueMarkerChange}
                     onDurationMeasured={handleTrimDurationMeasured}
+                    canResetTrim={hasTrimApplied}
+                    onResetTrim={handleTrimReset}
                   />
                 </div>
 
@@ -1126,9 +1161,12 @@ export function PadEditDialog({
                         <div key={index} className="flex flex-col gap-1">
                           <Button
                             type="button"
-                            variant={hasHotcue ? 'default' : 'outline'}
+                            variant="outline"
                             size="sm"
-                            className={`w-full ${hasHotcue ? 'bg-orange-500 hover:bg-orange-600 text-white border-orange-600' : ''}`}
+                            className={`w-full h-10 font-bold tracking-wider relative overflow-hidden transition-all duration-200 border-2 ${hasHotcue
+                                ? 'bg-amber-400 text-black border-amber-500 hover:bg-amber-300 shadow-[0_0_10px_rgba(251,191,36,0.3)]'
+                                : 'bg-gray-800/80 text-gray-400 border-gray-700 hover:bg-gray-700 hover:text-amber-500'
+                              }`}
                             onClick={() => {
                               const newArr = [...savedHotcues] as [number | null, number | null, number | null, number | null];
                               if (hasHotcue) {
@@ -1140,7 +1178,12 @@ export function PadEditDialog({
                             }}
                             disabled={!hasHotcue && hotcueAnchorTime === null}
                           >
-                            C{index + 1} {hasHotcue ? 'Clear' : 'Set'}
+                            <span className="flex flex-col items-center justify-center leading-none">
+                              <span className="text-[14px]">CUE</span>
+                              <span className={`text-[9px] mt-0.5 ${hasHotcue ? 'text-black/70' : 'text-gray-500'}`}>
+                                {index + 1}
+                              </span>
+                            </span>
                           </Button>
                           <span className="text-[10px] text-center text-gray-400">
                             {hasHotcue ? (savedHotcues[index]! / 1000).toFixed(2) + 's' : 'Empty'}
@@ -1151,66 +1194,57 @@ export function PadEditDialog({
                   </div>
                 </div>
 
-                {/* Fade In Control */}
-                <div className="space-y-2">
-                  <Label
-                    className="cursor-pointer"
-                    onDoubleClick={handleDoubleClickReset(setFadeInMs, 0)}
-                    title="Double-click to reset to 0ms"
-                  >
-                    Fade In: {fadeInMs[0]}ms
-                  </Label>
-                  <Slider
-                    value={fadeInMs}
-                    onValueChange={(value) => {
-                      // Ensure fade in doesn't exceed available duration
-                      const clamped = Math.min(value[0], maxFadeTime);
-                      setFadeInMs([clamped]);
-                    }}
-                    max={maxFadeTime}
-                    min={0}
-                    step={10}
-                    className="w-full cursor-pointer"
-                    onDoubleClick={handleDoubleClickReset(setFadeInMs, 0)}
-                    disabled={maxFadeTime <= 0}
-                  />
-                  <p className="text-xs text-gray-500">
-                    {maxFadeTime > 0
-                      ? `Gradual volume increase at playback start (max ${maxFadeTime}ms)`
-                      : 'Adjust trim settings to enable fade in'
-                    }
-                  </p>
-                </div>
+                {/* Fade Controls */}
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Fade In Control */}
+                  <div className="space-y-2">
+                    <Label
+                      className="cursor-pointer"
+                      onDoubleClick={handleDoubleClickReset(setFadeInMs, 0)}
+                      title="Double-click to reset to 0ms"
+                    >
+                      Fade In: {fadeInMs[0]}ms
+                    </Label>
+                    <Slider
+                      value={fadeInMs}
+                      onValueChange={(value) => {
+                        // Ensure fade in doesn't exceed available duration
+                        const clamped = Math.min(value[0], maxFadeTime);
+                        setFadeInMs([clamped]);
+                      }}
+                      max={maxFadeTime}
+                      min={0}
+                      step={10}
+                      className="w-full cursor-pointer"
+                      onDoubleClick={handleDoubleClickReset(setFadeInMs, 0)}
+                      disabled={maxFadeTime <= 0}
+                    />
+                  </div>
 
-                {/* Fade Out Control */}
-                <div className="space-y-2">
-                  <Label
-                    className="cursor-pointer"
-                    onDoubleClick={handleDoubleClickReset(setFadeOutMs, 0)}
-                    title="Double-click to reset to 0ms"
-                  >
-                    Fade Out: {fadeOutMs[0]}ms
-                  </Label>
-                  <Slider
-                    value={fadeOutMs}
-                    onValueChange={(value) => {
-                      // Ensure fade out doesn't exceed available duration
-                      const clamped = Math.min(value[0], maxFadeTime);
-                      setFadeOutMs([clamped]);
-                    }}
-                    max={maxFadeTime}
-                    min={0}
-                    step={10}
-                    className="w-full cursor-pointer"
-                    onDoubleClick={handleDoubleClickReset(setFadeOutMs, 0)}
-                    disabled={maxFadeTime <= 0}
-                  />
-                  <p className="text-xs text-gray-500">
-                    {maxFadeTime > 0
-                      ? `Gradual volume decrease before playback end (max ${maxFadeTime}ms)`
-                      : 'Adjust trim settings to enable fade out'
-                    }
-                  </p>
+                  {/* Fade Out Control */}
+                  <div className="space-y-2">
+                    <Label
+                      className="cursor-pointer"
+                      onDoubleClick={handleDoubleClickReset(setFadeOutMs, 0)}
+                      title="Double-click to reset to 0ms"
+                    >
+                      Fade Out: {fadeOutMs[0]}ms
+                    </Label>
+                    <Slider
+                      value={fadeOutMs}
+                      onValueChange={(value) => {
+                        // Ensure fade out doesn't exceed available duration
+                        const clamped = Math.min(value[0], maxFadeTime);
+                        setFadeOutMs([clamped]);
+                      }}
+                      max={maxFadeTime}
+                      min={0}
+                      step={10}
+                      className="w-full cursor-pointer"
+                      onDoubleClick={handleDoubleClickReset(setFadeOutMs, 0)}
+                      disabled={maxFadeTime <= 0}
+                    />
+                  </div>
                 </div>
               </>
             )}
@@ -1269,13 +1303,13 @@ export function PadEditDialog({
                 />
                 {isIOS && (
                   <p className="text-xs text-gray-500">
-                    iOS stability mode: tempo and key lock are disabled; use pitch only.
+                    
                   </p>
                 )}
               </div>
             ) : (
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                Key Lock is enabled. Disable it to show manual pitch semitone control.
+                
               </p>
             )}
 

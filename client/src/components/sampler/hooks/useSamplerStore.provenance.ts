@@ -19,6 +19,24 @@ export const isOfficialBankSource = (bank: Partial<SamplerBank> | null | undefin
   );
 };
 
+export const hasOfficialStoreBankSource = (bank: Partial<SamplerBank> | null | undefined): boolean =>
+  Boolean(bank?.bankMetadata?.catalogItemId || bank?.bankMetadata?.bankId);
+
+export const hasOfficialStorePadContent = (bank: Partial<SamplerBank> | null | undefined): boolean =>
+  Array.isArray(bank?.pads) && bank!.pads.some((pad) => getPadContentOrigin(pad) === 'official_store');
+
+export const canAdminExportBankForSession = (bank: Partial<SamplerBank> | null | undefined): boolean => {
+  if (!bank) return false;
+  if (bank.bankMetadata?.defaultBankSource) return false;
+  if (hasOfficialStoreBankSource(bank) || hasOfficialStorePadContent(bank)) return false;
+  if (getExportRestrictionReason(bank) === null) return true;
+  return Boolean(
+    bank.isAdminBank ||
+    bank.bankMetadata?.trustedAdminExport ||
+    (Array.isArray(bank.pads) && bank.pads.some((pad) => getPadContentOrigin(pad) === 'official_admin'))
+  );
+};
+
 export const getExportRestrictionReason = (
   bank: Partial<SamplerBank> | null | undefined
 ): SamplerBank['exportRestrictionReason'] => {

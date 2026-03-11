@@ -28,6 +28,7 @@ export type TabKey =
   | 'home'
   | 'assignments'
   | 'banks'
+  | 'sampler_defaults'
   | 'default_bank'
   | 'users'
   | 'active'
@@ -35,6 +36,7 @@ export type TabKey =
   | 'account_requests'
   | 'store_requests'
   | 'store_catalog'
+  | 'store_promotions'
   | 'store_banners'
   | 'landing_download'
   | 'store_config';
@@ -82,10 +84,12 @@ export const TABS: Array<{
   { key: 'users', label: 'Users', emoji: '👥', hint: 'Manage user accounts and status', tone: 'violet' },
   { key: 'active', label: 'Active', emoji: '🟢', hint: 'Monitor online user sessions', tone: 'cyan' },
   { key: 'activity', label: 'Activity', emoji: '📋', hint: 'Review export/import audit logs', tone: 'amber' },
+  { key: 'sampler_defaults', label: 'Sampler Defaults', emoji: 'SD', hint: 'Control first-run sampler defaults and limits', tone: 'violet' },
   { key: 'account_requests', label: 'Account Requests', emoji: '✅', hint: 'Approve or reject account registration', tone: 'rose' },
   { key: 'store_requests', label: 'Store Requests', emoji: '🛒', hint: 'Handle purchase requests', tone: 'orange' },
   { key: 'store_catalog', label: 'Catalog', emoji: '🏷️', hint: 'Prepare and publish store catalog items', tone: 'teal' },
   { key: 'store_banners', label: 'Banners', emoji: '🖼️', hint: 'Manage marketing banners for store homepage', tone: 'teal' },
+  { key: 'store_promotions', label: 'Promotions', emoji: 'SALE', hint: 'Schedule discounts and flash sales', tone: 'teal' },
   { key: 'default_bank', label: 'Default Bank', emoji: 'DB', hint: 'Publish and roll back versioned default-bank releases', tone: 'teal' },
   { key: 'landing_download', label: 'Landing Download', emoji: 'LD', hint: 'Manage landing page download links and descriptions', tone: 'fuchsia' },
   { key: 'store_config', label: 'Pay Config', emoji: '💳', hint: 'Configure payment details and QR', tone: 'fuchsia' },
@@ -337,6 +341,31 @@ export interface CatalogDraft {
   bank: { title: string };
 }
 
+export interface StorePromotionTargetLabel {
+  type: 'bank' | 'catalog';
+  id: string;
+  label: string;
+}
+
+export interface StorePromotion {
+  id: string;
+  name: string;
+  description?: string | null;
+  promotion_type: 'standard' | 'flash_sale';
+  discount_type: 'percent' | 'fixed';
+  discount_value: number;
+  starts_at: string;
+  ends_at: string;
+  timezone: string;
+  badge_text?: string | null;
+  priority: number;
+  is_active: boolean;
+  status: 'inactive' | 'scheduled' | 'active' | 'expired';
+  target_bank_ids: string[];
+  target_catalog_item_ids: string[];
+  target_labels: StorePromotionTargetLabel[];
+}
+
 export interface StoreMarketingBanner {
   id: string;
   image_url: string;
@@ -355,6 +384,8 @@ export interface StoreConfigDraft {
   qr_image_path: string;
   account_price_php: string;
   banner_rotation_ms: string;
+  store_maintenance_enabled: boolean;
+  store_maintenance_message: string;
   account_auto_approve_enabled: boolean;
   account_auto_approve_mode: 'schedule' | 'countdown' | 'always';
   account_auto_approve_start_hour: string;

@@ -12,6 +12,15 @@ export interface StoreItem {
     is_downloadable?: boolean;
     is_purchased?: boolean;
     price_php: number | null;
+    original_price_php?: number | null;
+    discount_amount_php?: number | null;
+    promotion_id?: string | null;
+    promotion_name?: string | null;
+    promotion_badge?: string | null;
+    promotion_type?: 'standard' | 'flash_sale' | null;
+    promotion_starts_at?: string | null;
+    promotion_ends_at?: string | null;
+    has_active_promotion?: boolean;
     sha256?: string | null;
     thumbnail_path?: string | null;
     status: 'free_download' | 'buy' | 'pending' | 'granted_download' | 'rejected';
@@ -39,7 +48,14 @@ export interface PaymentConfig {
     qr_image_path?: string;
     account_price_php?: number | null;
     banner_rotation_ms?: number | null;
+    store_maintenance_enabled?: boolean;
+    store_maintenance_message?: string | null;
 }
+
+export type StoreMaintenanceState = {
+    enabled: boolean;
+    message: string | null;
+};
 
 export type PaymentChannel = 'image_proof' | 'gcash_manual' | 'maya_manual';
 
@@ -73,7 +89,7 @@ export type StoreDownloadDebugEntry = {
 export const STORE_DOWNLOAD_DEBUG_MAX_ENTRIES = 250;
 
 export type StoreSnapshot = {
-    version: 1 | 2 | 3 | 4 | 5;
+    version: 1 | 2 | 3 | 4 | 5 | 6;
     userKey: string;
     savedAt: number;
     queryKey?: string;
@@ -84,6 +100,7 @@ export type StoreSnapshot = {
     perPage?: number;
     total?: number;
     totalPages?: number;
+    maintenance?: StoreMaintenanceState | null;
 };
 
 export type StoreCatalogMeta = {
@@ -120,3 +137,28 @@ export type PurchaseReceiptState = {
     status?: 'success' | 'pending';
     statusLabel?: string;
 };
+
+export interface StorePromotionTargetLabel {
+    type: 'bank' | 'catalog';
+    id: string;
+    label: string;
+}
+
+export interface StorePromotion {
+    id: string;
+    name: string;
+    description?: string | null;
+    promotion_type: 'standard' | 'flash_sale';
+    discount_type: 'percent' | 'fixed';
+    discount_value: number;
+    starts_at: string;
+    ends_at: string;
+    timezone: string;
+    badge_text?: string | null;
+    priority: number;
+    is_active: boolean;
+    status: 'inactive' | 'scheduled' | 'active' | 'expired';
+    target_bank_ids: string[];
+    target_catalog_item_ids: string[];
+    target_labels: StorePromotionTargetLabel[];
+}

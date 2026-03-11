@@ -46,12 +46,6 @@
       "short_name": "Open",
       "description": "Launch the sampler pad app",
       "url": "/vdjv/"
-    },
-    {
-      "name": "Install Guide",
-      "short_name": "Install",
-      "description": "Open the platform install help page",
-      "url": "/android/"
     }
   ]
 }

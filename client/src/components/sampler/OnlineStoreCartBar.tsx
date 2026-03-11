@@ -28,6 +28,23 @@ export function OnlineStoreCartBar({
     onClearCart,
     onCheckout,
 }: OnlineStoreCartBarProps) {
+    const renderPrice = (item: StoreItem) => {
+        if (!item.is_paid) return <span>Free</span>;
+        if (item.price_php === null) return <span>Price to be announced</span>;
+        const hasPromotion = Boolean(
+            item.has_active_promotion
+            && typeof item.original_price_php === 'number'
+            && item.original_price_php > item.price_php,
+        );
+        if (!hasPromotion) return <span>PHP {item.price_php.toLocaleString()}</span>;
+        return (
+            <span className="inline-flex items-center gap-1.5 flex-wrap justify-end">
+                <span className="opacity-60 line-through text-[10px]">PHP {Number(item.original_price_php || 0).toLocaleString()}</span>
+                <span>PHP {item.price_php.toLocaleString()}</span>
+            </span>
+        );
+    };
+
     return (
         <div className={`shrink-0 border-t px-4 py-2 ${isDark ? 'bg-gray-800/90 border-gray-700' : 'bg-white/90 border-gray-200'}`}>
             {cartViewOpen && (
@@ -42,7 +59,7 @@ export function OnlineStoreCartBar({
                         {cartItems.map(ci => (
                             <div key={ci.id} className={`flex items-center justify-between py-1 text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
                                 <span className="truncate flex-1">{ci.bank.title}</span>
-                                <span className="shrink-0 font-medium ml-2">{ci.is_paid ? (ci.price_php !== null ? `PHP ${ci.price_php.toLocaleString()}` : 'Price to be announced') : 'Free'}</span>
+                                <span className="shrink-0 font-medium ml-2 text-right">{renderPrice(ci)}</span>
                                 <button onClick={() => onRemoveItem(ci.id)} className="ml-2 text-red-400 hover:text-red-500"><X className="w-3 h-3" /></button>
                             </div>
                         ))}

@@ -23,6 +23,8 @@ export interface RunRestoreAllFilesDeps {
   readLastOpenBankId: (ownerId: string | null) => string | null;
   writeLastOpenBankId: (ownerId: string | null, bankId: string | null) => void;
   generateId: () => string;
+  defaultBankName: string;
+  defaultBankColor: string;
   setBanks: SetState<SamplerBank[]>;
   setCurrentBankIdState: SetState<string | null>;
   setPrimaryBankIdState: SetState<string | null>;
@@ -68,6 +70,8 @@ export const runRestoreAllFilesPipeline = async (
     readLastOpenBankId,
     writeLastOpenBankId,
     generateId,
+    defaultBankName,
+    defaultBankColor,
     setBanks,
     setCurrentBankIdState,
     setPrimaryBankIdState,
@@ -100,7 +104,15 @@ export const runRestoreAllFilesPipeline = async (
   const lastOpenBankId = readLastOpenBankId(ownerId);
 
   if (!savedData) {
-    const defaultBank: SamplerBank = { id: generateId(), name: 'Default Bank', defaultColor: '#3b82f6', pads: [], createdAt: new Date(), sortOrder: 0 };
+    const defaultBank: SamplerBank = {
+      id: generateId(),
+      name: defaultBankName,
+      defaultColor: defaultBankColor,
+      pads: [],
+      createdAt: new Date(),
+      sortOrder: 0,
+      sourceBankId: 'vdjv-default-bank-source',
+    };
     setBanks([defaultBank]);
     setCurrentBankIdState(defaultBank.id);
     writeLastOpenBankId(ownerId, defaultBank.id);
@@ -268,7 +280,15 @@ export const runRestoreAllFilesPipeline = async (
     }
   } catch {
     startupMediaRestoreInProgressRef.current = false;
-    const defaultBank: SamplerBank = { id: generateId(), name: 'Default Bank', defaultColor: '#3b82f6', pads: [], createdAt: new Date(), sortOrder: 0 };
+    const defaultBank: SamplerBank = {
+      id: generateId(),
+      name: defaultBankName,
+      defaultColor: defaultBankColor,
+      pads: [],
+      createdAt: new Date(),
+      sortOrder: 0,
+      sourceBankId: 'vdjv-default-bank-source',
+    };
     setBanks([defaultBank]);
     setCurrentBankIdState(defaultBank.id);
     writeLastOpenBankId(ownerId, defaultBank.id);

@@ -2,6 +2,7 @@ import { type GraphicsProfile } from '@/lib/performance-monitor';
 import { DEFAULT_SYSTEM_MAPPINGS, type SystemAction, type SystemMappings } from '@/lib/system-mappings';
 import { type PersistedDeckLayoutEntry } from './utils/deck-layout-persistence';
 import { type PadData, type StopMode } from './types/sampler';
+import { DEFAULT_SAMPLER_APP_CONFIG, type SamplerAppConfig, resolveConfiguredInitialChannelCount } from './samplerAppConfig';
 
 export const SETTINGS_STORAGE_KEY = 'vdjv-sampler-settings';
 
@@ -127,43 +128,44 @@ export const saveMappingFile = async (blob: Blob, fileName: string): Promise<str
   return `Mappings exported to selected path (${fileName})`;
 };
 
-const resolveDefaultChannelCount = (): number => {
-  if (typeof navigator === 'undefined' || typeof window === 'undefined') return 4;
-  const ua = navigator.userAgent || '';
-  const isMobileUA = /Android|iPhone|iPad|iPod/i.test(ua);
-  const isElectron = /Electron/i.test(ua) || Boolean((window as Window & { process?: { versions?: { electron?: string } } }).process?.versions?.electron);
-  return isMobileUA && !isElectron ? 2 : 4;
-};
-
-export const DEFAULT_INITIAL_CHANNEL_COUNT = resolveDefaultChannelCount();
-
 export const createDefaultSettings = (
   deckLayoutVersion: number,
-  defaultPadSize: number
-): AppSettings => ({
-  masterVolume: 1,
-  stopMode: 'instant',
+  config: SamplerAppConfig = DEFAULT_SAMPLER_APP_CONFIG
+): AppSettings => {
+  const initialChannelCount = resolveConfiguredInitialChannelCount(config);
+  const systemMappings = mergeSystemMappings({
+    ...DEFAULT_SYSTEM_MAPPINGS,
+    ...Object.fromEntries(
+      (Object.entries(config.shortcutDefaults) as Array<[SystemAction, string]>).map(([action, key]) => [
+        action,
+        { ...(DEFAULT_SYSTEM_MAPPINGS[action] || {}), key },
+      ])
+    ),
+    channelCount: initialChannelCount,
+  });
+
+  return {
+  masterVolume: config.uiDefaults.defaultMasterVolume,
+  stopMode: config.uiDefaults.defaultStopMode,
   sideMenuOpen: false,
   mixerOpen: false,
-  channelCount: DEFAULT_INITIAL_CHANNEL_COUNT,
+  channelCount: initialChannelCount,
   channelCollapsedMap: {},
   deckLayout: [],
   deckLayoutVersion,
-  sidePanelMode: 'overlay',
+  sidePanelMode: config.uiDefaults.defaultSidePanelMode,
   editMode: false,
-  defaultTriggerMode: 'toggle',
-  padSizePortrait: defaultPadSize,
-  padSizeLandscape: defaultPadSize,
-  hideShortcutLabels: true,
-  autoPadBankMapping: true,
+  defaultTriggerMode: config.padDefaults.defaultTriggerMode,
+  padSizePortrait: config.uiDefaults.defaultPadSizePortrait,
+  padSizeLandscape: config.uiDefaults.defaultPadSizeLandscape,
+  hideShortcutLabels: config.uiDefaults.defaultHideShortcutLabels,
+  autoPadBankMapping: config.uiDefaults.defaultAutoPadBankMapping,
   midiEnabled: false,
   midiDeviceProfileId: null,
-  systemMappings: {
-    ...DEFAULT_SYSTEM_MAPPINGS,
-    channelCount: DEFAULT_INITIAL_CHANNEL_COUNT
-  },
-  graphicsProfile: 'auto'
-});
+  systemMappings,
+  graphicsProfile: config.uiDefaults.defaultGraphicsProfile
+  };
+};
 
 export const mergeSystemMappings = (incoming?: Partial<SystemMappings> | null): SystemMappings => {
   const merged: SystemMappings & { toggleTheme?: unknown } = {

@@ -11,6 +11,7 @@ import {
   createSignedAdminExportToken,
   isAdminExportTokenSigningEnabled,
 } from "../_shared/admin-export-token.ts";
+import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig } from "../_shared/sampler-app-config.ts";
 import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_shared/supabase.ts";
 import { asNumber, asString, asUuid } from "../_shared/validate.ts";
 import { consumeRateLimit } from "../_shared/rate-limit.ts";
@@ -282,6 +283,26 @@ const mapDefaultBankReleaseRow = (row: any) => ({
   deactivatedBy: asUuid(row?.deactivated_by) || null,
 });
 
+const getNormalizedSamplerAppConfig = async (admin: ReturnType<typeof createServiceClient>) => {
+  const { data, error } = await admin
+    .from("sampler_app_config")
+    .select("*")
+    .eq("id", "default")
+    .maybeSingle();
+  if (error) return { error, config: DEFAULT_SAMPLER_APP_CONFIG };
+  return {
+    error: null,
+    config: normalizeSamplerAppConfig({
+      ui_defaults: data?.ui_defaults,
+      bank_defaults: data?.bank_defaults,
+      pad_defaults: data?.pad_defaults,
+      quota_defaults: data?.quota_defaults,
+      audio_limits: data?.audio_limits,
+      shortcut_defaults: data?.shortcut_defaults,
+    }),
+  };
+};
+
 const ensureR2UploadReady = (): string | null => {
   if (!R2_BUCKET) return "R2_BUCKET_NOT_CONFIGURED";
   return null;
@@ -365,6 +386,9 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
 
   const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
   if (error) return fail(500, error.message);
+  const samplerConfigResult = await getNormalizedSamplerAppConfig(admin);
+  if (samplerConfigResult.error) return fail(500, samplerConfigResult.error.message);
+  const quotaDefaults = samplerConfigResult.config.quotaDefaults;
 
   const authUsers = data?.users || [];
   const userIds = authUsers.map((user) => user.id);
@@ -391,9 +415,9 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
       email: user.email || null,
       role,
       display_name: displayName,
-      owned_bank_quota: Number.isFinite(Number(profile?.owned_bank_quota)) ? Number(profile?.owned_bank_quota) : 6,
-      owned_bank_pad_cap: Number.isFinite(Number(profile?.owned_bank_pad_cap)) ? Number(profile?.owned_bank_pad_cap) : 64,
-      device_total_bank_cap: Number.isFinite(Number(profile?.device_total_bank_cap)) ? Number(profile?.device_total_bank_cap) : 120,
+      owned_bank_quota: Number.isFinite(Number(profile?.owned_bank_quota)) ? Number(profile?.owned_bank_quota) : quotaDefaults.ownedBankQuota,
+      owned_bank_pad_cap: Number.isFinite(Number(profile?.owned_bank_pad_cap)) ? Number(profile?.owned_bank_pad_cap) : quotaDefaults.ownedBankPadCap,
+      device_total_bank_cap: Number.isFinite(Number(profile?.device_total_bank_cap)) ? Number(profile?.device_total_bank_cap) : quotaDefaults.deviceTotalBankCap,
       created_at: user.created_at || null,
       last_sign_in_at: user.last_sign_in_at || null,
       banned_until: bannedUntil,
@@ -478,6 +502,9 @@ const createUser = async (body: any, admin: ReturnType<typeof createServiceClien
   if (!password || password.length < 6) return badRequest("Password must be at least 6 characters");
 
   const displayName = displayNameInput || email.split("@")[0] || "User";
+  const samplerConfigResult = await getNormalizedSamplerAppConfig(admin);
+  if (samplerConfigResult.error) return fail(500, samplerConfigResult.error.message);
+  const quotaDefaults = samplerConfigResult.config.quotaDefaults;
   const { data: created, error: createErr } = await admin.auth.admin.createUser({
     email,
     password,
@@ -495,9 +522,9 @@ const createUser = async (body: any, admin: ReturnType<typeof createServiceClien
       id: userId,
       display_name: displayName,
       role: "user",
-      owned_bank_quota: 6,
-      owned_bank_pad_cap: 64,
-      device_total_bank_cap: 120,
+      owned_bank_quota: quotaDefaults.ownedBankQuota,
+      owned_bank_pad_cap: quotaDefaults.ownedBankPadCap,
+      device_total_bank_cap: quotaDefaults.deviceTotalBankCap,
     }, { onConflict: "id" });
   if (profileErr) return fail(500, `User created, profile setup failed: ${profileErr.message}`);
 
@@ -508,9 +535,9 @@ const createUser = async (body: any, admin: ReturnType<typeof createServiceClien
         email: created.user.email,
         display_name: displayName,
         role: "user",
-        owned_bank_quota: 6,
-        owned_bank_pad_cap: 64,
-        device_total_bank_cap: 120,
+        owned_bank_quota: quotaDefaults.ownedBankQuota,
+        owned_bank_pad_cap: quotaDefaults.ownedBankPadCap,
+        device_total_bank_cap: quotaDefaults.deviceTotalBankCap,
       },
     },
     201,

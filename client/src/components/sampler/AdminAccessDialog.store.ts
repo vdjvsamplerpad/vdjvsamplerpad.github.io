@@ -9,6 +9,7 @@ import {
   type StoreCatalogSort,
   type StoreConfigDraft,
   type StoreMarketingBanner,
+  type StorePromotion,
   type TabKey,
   validateStoreBannerFile,
   validateStoreQrFile,
@@ -85,6 +86,8 @@ const EMPTY_STORE_CONFIG: StoreConfigDraft = {
   qr_image_path: '',
   account_price_php: '',
   banner_rotation_ms: '5000',
+  store_maintenance_enabled: false,
+  store_maintenance_message: '',
   account_auto_approve_enabled: false,
   account_auto_approve_mode: 'schedule',
   account_auto_approve_start_hour: '0',
@@ -103,6 +106,29 @@ const EMPTY_STORE_CONFIG: StoreConfigDraft = {
   store_email_reject_body: '',
 };
 
+const EMPTY_STORE_PROMOTION_FORM = {
+  name: '',
+  description: '',
+  promotion_type: 'flash_sale' as const,
+  discount_type: 'percent' as const,
+  discount_value: '10',
+  starts_at: '',
+  ends_at: '',
+  timezone: 'Asia/Manila',
+  badge_text: '',
+  priority: '100',
+  is_active: true,
+  target_bank_ids: [] as string[],
+};
+
+const toDateTimeLocalValue = (value: string | null | undefined): string => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const adjusted = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60 * 1000);
+  return adjusted.toISOString().slice(0, 16);
+};
+
 export function useAdminAccessStoreManager({
   open,
   isAdmin,
@@ -113,6 +139,7 @@ export function useAdminAccessStoreManager({
   const [storeLoading, setStoreLoading] = React.useState(false);
   const [storeRequests, setStoreRequests] = React.useState<PurchaseRequest[]>([]);
   const [storeDrafts, setStoreDrafts] = React.useState<CatalogDraft[]>([]);
+  const [storePromotions, setStorePromotions] = React.useState<StorePromotion[]>([]);
   const [storeBanners, setStoreBanners] = React.useState<StoreMarketingBanner[]>([]);
   const [loadedStoreBanners, setLoadedStoreBanners] = React.useState<StoreMarketingBanner[]>([]);
   const [bannerLoading, setBannerLoading] = React.useState(false);
@@ -141,6 +168,8 @@ export function useAdminAccessStoreManager({
   const [storeCatalogPaidFilter, setStoreCatalogPaidFilter] = React.useState<'all' | 'paid' | 'free'>('all');
   const [storeCatalogPinnedFilter, setStoreCatalogPinnedFilter] = React.useState<'all' | 'pinned' | 'unpinned'>('all');
   const [storeCatalogSort, setStoreCatalogSort] = React.useState<StoreCatalogSort>('pinned_first');
+  const [storePromotionForm, setStorePromotionForm] = React.useState(EMPTY_STORE_PROMOTION_FORM);
+  const [editingPromotionId, setEditingPromotionId] = React.useState<string | null>(null);
 
   const storeAuthFetch = React.useCallback(async (url: string, options: RequestInit = {}) => {
     const normalized = url.replace(/^\/api\//, '');
@@ -214,6 +243,20 @@ export function useAdminAccessStoreManager({
     setStoreLoading(false);
   }, [pushNotice, storeAuthFetch]);
 
+  const loadStorePromotions = React.useCallback(async () => {
+    setStoreLoading(true);
+    try {
+      const res = await storeAuthFetch('/api/admin/store/promotions');
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json().catch(() => ({} as any));
+      setStorePromotions(Array.isArray(data.promotions) ? data.promotions : []);
+    } catch (err: any) {
+      pushNotice({ variant: 'error', message: err?.message || 'Could not load store promotions.' });
+    } finally {
+      setStoreLoading(false);
+    }
+  }, [pushNotice, storeAuthFetch]);
+
   const loadStoreConfig = React.useCallback(async () => {
     setStoreLoading(true);
     try {
@@ -235,6 +278,8 @@ export function useAdminAccessStoreManager({
             banner_rotation_ms: typeof data.config.banner_rotation_ms === 'number' && Number.isFinite(data.config.banner_rotation_ms)
               ? String(Math.max(3000, Math.min(15000, Math.floor(data.config.banner_rotation_ms))))
               : '5000',
+            store_maintenance_enabled: Boolean(data.config.store_maintenance_enabled),
+            store_maintenance_message: data.config.store_maintenance_message || '',
             account_auto_approve_enabled: Boolean(data.config.account_auto_approve_enabled),
             account_auto_approve_mode: data.config.account_auto_approve_mode === 'countdown'
               ? 'countdown'
@@ -299,8 +344,12 @@ export function useAdminAccessStoreManager({
     if (!open || !isAdmin) return;
     if (tab === 'store_requests') void loadStoreRequests();
     if (tab === 'store_catalog' || tab === 'store_banners') void loadStoreCatalog();
-    if (tab === 'store_config') void loadStoreConfig();
-  }, [isAdmin, loadStoreCatalog, loadStoreConfig, loadStoreRequests, open, tab]);
+    if (tab === 'store_promotions') {
+      void loadStoreCatalog();
+      void loadStorePromotions();
+    }
+    if (tab === 'store_catalog' || tab === 'store_config') void loadStoreConfig();
+  }, [isAdmin, loadStoreCatalog, loadStoreConfig, loadStorePromotions, loadStoreRequests, open, tab]);
 
   const handleStoreRequestAction = React.useCallback(async (id: string, action: 'approve' | 'reject', rejectionMessage?: string) => {
     setStoreLoading(true);
@@ -384,6 +433,105 @@ export function useAdminAccessStoreManager({
       pushNotice({ variant: 'error', message: 'Network error updating catalog' });
     }
   }, [loadStoreCatalog, pushNotice, storeAuthFetch]);
+
+  const resetStorePromotionForm = React.useCallback(() => {
+    setEditingPromotionId(null);
+    setStorePromotionForm(EMPTY_STORE_PROMOTION_FORM);
+  }, []);
+
+  const editStorePromotion = React.useCallback((promotion: StorePromotion) => {
+    setEditingPromotionId(promotion.id);
+    setStorePromotionForm({
+      name: promotion.name || '',
+      description: promotion.description || '',
+      promotion_type: promotion.promotion_type,
+      discount_type: promotion.discount_type,
+      discount_value: String(promotion.discount_value ?? ''),
+      starts_at: toDateTimeLocalValue(promotion.starts_at),
+      ends_at: toDateTimeLocalValue(promotion.ends_at),
+      timezone: promotion.timezone || 'Asia/Manila',
+      badge_text: promotion.badge_text || '',
+      priority: String(promotion.priority ?? 100),
+      is_active: Boolean(promotion.is_active),
+      target_bank_ids: [...(promotion.target_bank_ids || [])],
+    });
+  }, []);
+
+  const persistStorePromotion = React.useCallback(async () => {
+    const payload = {
+      name: storePromotionForm.name.trim(),
+      description: storePromotionForm.description.trim() || null,
+      promotion_type: storePromotionForm.promotion_type,
+      discount_type: storePromotionForm.discount_type,
+      discount_value: Number(storePromotionForm.discount_value),
+      starts_at: storePromotionForm.starts_at ? new Date(storePromotionForm.starts_at).toISOString() : null,
+      ends_at: storePromotionForm.ends_at ? new Date(storePromotionForm.ends_at).toISOString() : null,
+      timezone: storePromotionForm.timezone.trim() || 'Asia/Manila',
+      badge_text: storePromotionForm.badge_text.trim() || null,
+      priority: Number(storePromotionForm.priority),
+      is_active: Boolean(storePromotionForm.is_active),
+      target_bank_ids: storePromotionForm.target_bank_ids,
+    };
+    if (!payload.name) {
+      pushNotice({ variant: 'error', message: 'Promotion name is required.' });
+      return false;
+    }
+    if (!payload.starts_at || !payload.ends_at) {
+      pushNotice({ variant: 'error', message: 'Start and end dates are required.' });
+      return false;
+    }
+    if (!Number.isFinite(payload.discount_value) || payload.discount_value <= 0) {
+      pushNotice({ variant: 'error', message: 'Discount value must be greater than zero.' });
+      return false;
+    }
+    if (!Number.isFinite(payload.priority) || payload.priority < 0) {
+      pushNotice({ variant: 'error', message: 'Priority must be zero or greater.' });
+      return false;
+    }
+    if (payload.target_bank_ids.length === 0) {
+      pushNotice({ variant: 'error', message: 'Select at least one target bank.' });
+      return false;
+    }
+
+    setStoreLoading(true);
+    try {
+      const route = editingPromotionId
+        ? `/api/admin/store/promotions/${editingPromotionId}`
+        : '/api/admin/store/promotions';
+      const method = editingPromotionId ? 'PATCH' : 'POST';
+      const res = await storeAuthFetch(route, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json().catch(() => ({} as any));
+      setStorePromotions(Array.isArray(data.promotions) ? data.promotions : []);
+      pushNotice({ variant: 'success', message: editingPromotionId ? 'Promotion updated.' : 'Promotion created.' });
+      resetStorePromotionForm();
+      return true;
+    } catch (err: any) {
+      pushNotice({ variant: 'error', message: err?.message || 'Promotion could not be saved.' });
+      return false;
+    } finally {
+      setStoreLoading(false);
+    }
+  }, [editingPromotionId, pushNotice, resetStorePromotionForm, storeAuthFetch, storePromotionForm]);
+
+  const deleteStorePromotion = React.useCallback(async (promotionId: string) => {
+    setStoreLoading(true);
+    try {
+      const res = await storeAuthFetch(`/api/admin/store/promotions/${promotionId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(await res.text());
+      setStorePromotions((prev) => prev.filter((promotion) => promotion.id !== promotionId));
+      if (editingPromotionId === promotionId) resetStorePromotionForm();
+      pushNotice({ variant: 'success', message: 'Promotion deleted.' });
+    } catch (err: any) {
+      pushNotice({ variant: 'error', message: err?.message || 'Promotion could not be deleted.' });
+    } finally {
+      setStoreLoading(false);
+    }
+  }, [editingPromotionId, pushNotice, resetStorePromotionForm, storeAuthFetch]);
 
   const uploadStoreBannerImage = React.useCallback(async (file: File): Promise<string> => {
     const { supabase } = await import('@/lib/supabase');
@@ -707,6 +855,7 @@ export function useAdminAccessStoreManager({
       qr_image_path: qrImagePath,
       account_price_php: rawAccountPrice ? Number(rawAccountPrice) : null,
       banner_rotation_ms: Math.floor(Number(rawBannerRotation)),
+      store_maintenance_message: String(config.store_maintenance_message || '').trim(),
       account_auto_approve_start_hour: Math.floor(Number(config.account_auto_approve_start_hour)),
       account_auto_approve_end_hour: Math.floor(Number(config.account_auto_approve_end_hour)),
       account_auto_approve_duration_hours: Math.floor(Number(config.account_auto_approve_duration_hours)),
@@ -1124,6 +1273,15 @@ export function useAdminAccessStoreManager({
     return { total, active, inactive, dirty };
   }, [dirtyStoreBannerIds, storeBanners]);
 
+  const storePromotionStats = React.useMemo(() => {
+    const total = storePromotions.length;
+    const active = storePromotions.filter((promotion) => promotion.status === 'active').length;
+    const scheduled = storePromotions.filter((promotion) => promotion.status === 'scheduled').length;
+    const expired = storePromotions.filter((promotion) => promotion.status === 'expired').length;
+    const inactive = storePromotions.filter((promotion) => promotion.status === 'inactive').length;
+    return { total, active, scheduled, expired, inactive };
+  }, [storePromotions]);
+
   const visibleStoreBanners = React.useMemo(
     () => storeBanners.filter((banner) => showInactiveBanners || banner.is_active || dirtyStoreBannerIds.has(banner.id)),
     [dirtyStoreBannerIds, showInactiveBanners, storeBanners],
@@ -1167,12 +1325,17 @@ export function useAdminAccessStoreManager({
     handleStoreCatalogUpdate,
     handleStoreConfigSave,
     handleStoreAutoApprovalAction,
+    persistStorePromotion,
+    deleteStorePromotion,
+    editStorePromotion,
     handleStoreQrFileChange,
     handleStoreRequestAction,
     handleStoreRequestRetryEmail,
     hasStoreCatalogFilters,
     loadStoreCatalog,
+    loadStorePromotions,
     dirtyStoreBannerIds,
+    editingPromotionId,
     newBannerImageFile,
     newBannerImageUrl,
     newBannerLinkUrl,
@@ -1183,6 +1346,7 @@ export function useAdminAccessStoreManager({
     reqTotalPages,
     resetStoreCatalogFilters,
     resetBannerDraft,
+    resetStorePromotionForm,
     setExpandedStoreRequestId,
     setNewBannerImageFile,
     setNewBannerImageUrl,
@@ -1218,6 +1382,9 @@ export function useAdminAccessStoreManager({
     storeConfig,
     storeDrafts,
     storeLoading,
+    storePromotionForm,
+    storePromotionStats,
+    storePromotions,
     storePublishDialog,
     storeQrPreviewUrl,
     storeReqPage,
@@ -1225,6 +1392,7 @@ export function useAdminAccessStoreManager({
     storeRequestFilter,
     storeRequestToReject,
     storeRequests,
+    setStorePromotionForm,
     updateBannerDraft,
     visibleStoreBanners,
   };
