@@ -231,7 +231,7 @@ Current intended architecture:
   - [ ] `compileSdkVersion` is current enough
   - [ ] `targetSdkVersion` is current enough for Play submission/update policy
   - [ ] dangerous/legacy permissions are still necessary and policy-safe
-  - Current blocker: project is still on API 34 in `android/variables.gradle`, while Google Play requires target API 35 for new apps and updates.
+  - Current note: repo config has been bumped to API 35 in `android/variables.gradle`, but a full Android release build and manifest/policy review are still pending.
 - [ ] Release versioning is correct:
   - [ ] `versionCode` increments for every Play upload
   - [ ] `versionName` matches the release you want users to see
