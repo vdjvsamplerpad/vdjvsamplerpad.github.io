@@ -241,7 +241,7 @@ Current intended architecture:
   - [ ] signed `.aab` generated from the final commit/tag
   - [ ] final release build is not just a debug APK snapshot
   - [ ] archive the exact uploaded artifact checksum and source commit
-  - Current note: an unsigned/signed APK set and `android/app/build/outputs/bundle/release/app-release.aab` already exist locally, but the release process is not yet locked to a final tagged build.
+  - Current note: `npm run cap:build:android` now targets `bundleRelease`, and Gradle release signing can read `ANDROID_RELEASE_KEYSTORE_PATH`, `ANDROID_RELEASE_KEYSTORE_PASSWORD`, `ANDROID_RELEASE_KEY_ALIAS`, and optional `ANDROID_RELEASE_KEY_PASSWORD` from env or Gradle properties.
 - [ ] Upgrade behavior is tested on a real Android device:
   - [ ] install previous build
   - [ ] install update over it

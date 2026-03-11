@@ -1,8 +1,44 @@
 apply plugin: 'com.android.application'
 
+def readReleaseSigningValue = { name ->
+    def envValue = System.getenv(name)
+    if (envValue != null && envValue.toString().trim()) {
+        return envValue.toString().trim()
+    }
+
+    if (project.hasProperty(name)) {
+        def gradleValue = project.property(name)
+        if (gradleValue != null && gradleValue.toString().trim()) {
+            return gradleValue.toString().trim()
+        }
+    }
+
+    return null
+}
+
+def releaseKeystorePath = readReleaseSigningValue('ANDROID_RELEASE_KEYSTORE_PATH')
+def releaseKeystorePassword = readReleaseSigningValue('ANDROID_RELEASE_KEYSTORE_PASSWORD')
+def releaseKeyAlias = readReleaseSigningValue('ANDROID_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = readReleaseSigningValue('ANDROID_RELEASE_KEY_PASSWORD') ?: releaseKeystorePassword
+def releaseKeystoreFile = releaseKeystorePath ? file(releaseKeystorePath) : null
+def hasReleaseSigning = releaseKeystoreFile != null &&
+    releaseKeystoreFile.exists() &&
+    releaseKeystorePassword &&
+    releaseKeyAlias
+
 android {
     namespace "com.powerworkout.vdjv"
     compileSdk rootProject.ext.compileSdkVersion
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile releaseKeystoreFile
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     defaultConfig {
         applicationId "com.powerworkout.vdjv"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -20,8 +56,15 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
         }
     }
+}
+
+if (!hasReleaseSigning) {
+    logger.lifecycle("Release signing config not found. Release APK/AAB outputs will be unsigned until ANDROID_RELEASE_KEYSTORE_PATH, ANDROID_RELEASE_KEYSTORE_PASSWORD, and ANDROID_RELEASE_KEY_ALIAS are provided.")
 }
 
 repositories {
