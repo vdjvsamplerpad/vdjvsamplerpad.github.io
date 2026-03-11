@@ -42,6 +42,7 @@ export interface ImportBankOptions {
   preferredDerivedKey?: string | null;
   preferredBankId?: string | null;
   entitlementToken?: string | null;
+  replaceExistingBankId?: string | null;
 }
 type ImportActivityPayload = {
   status: 'success' | 'failed';
@@ -643,6 +644,12 @@ export const runImportBankPipeline = async (
         metadata?.catalogItemId ? 'official_store' : (importedIsTrustedBank ? 'official_admin' : 'user');
       const importedIsOwnedCounted = !importedIsTrustedBank;
       const currentBanks = banksRef.current;
+      const replaceExistingBankId = typeof options?.replaceExistingBankId === 'string'
+        ? options.replaceExistingBankId.trim()
+        : '';
+      const replaceExistingBank = replaceExistingBankId
+        ? currentBanks.find((bank) => bank.id === replaceExistingBankId) || null
+        : null;
       if (profile?.role !== 'admin') {
         if (currentBanks.length >= quotaPolicy.deviceTotalBankCap) {
           throw new Error(`You reached your device bank limit (${quotaPolicy.deviceTotalBankCap}). Remove a bank before importing another one.`);
@@ -664,17 +671,22 @@ export const runImportBankPipeline = async (
       const maxSortOrder = banks.length > 0 ? Math.max(...banks.map(b => b.sortOrder || 0)) : -1;
       const newBank: SamplerBank = {
         ...bankData,
-        id: generateId(),
-        name: resolvedBankName,
-        defaultColor: resolvedBankColor,
-        createdAt: bankData.createdAt ? new Date(bankData.createdAt) : new Date(),
-        sortOrder: maxSortOrder + 1,
+        id: replaceExistingBank?.id || generateId(),
+        name: replaceExistingBank?.name || resolvedBankName,
+        defaultColor: replaceExistingBank?.defaultColor || resolvedBankColor,
+        createdAt: replaceExistingBank?.createdAt || (bankData.createdAt ? new Date(bankData.createdAt) : new Date()),
+        sortOrder: replaceExistingBank?.sortOrder ?? (maxSortOrder + 1),
         pads: [],
         sourceBankId: metadataBankId || bankDataId || importSignature,
         isAdminBank,
         transferable: true,
         exportable: metadata?.exportable ?? true,
-        bankMetadata: metadata
+        bankMetadata: metadata,
+        isLocalDuplicate: replaceExistingBank?.isLocalDuplicate,
+        duplicateOriginBankId: replaceExistingBank?.duplicateOriginBankId,
+        restoreKind: replaceExistingBank?.restoreKind,
+        restoreStatus: replaceExistingBank?.restoreStatus,
+        remoteSnapshotApplied: replaceExistingBank?.remoteSnapshotApplied,
       };
 
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
@@ -930,15 +942,75 @@ export const runImportBankPipeline = async (
 
       newBank.pads = newPads;
       let importedBankRef: SamplerBank = applyBankContentPolicy(newBank);
-      setBanks((prev) => {
-        const deduped = dedupeBanksByIdentity([...prev, importedBankRef]);
-        const replacementId = deduped.removedIdToKeptId.get(importedBankRef.id);
-        if (replacementId) {
-          const replacementBank = prev.find((bank) => bank.id === replacementId);
-          if (replacementBank) importedBankRef = replacementBank;
-        }
-        return deduped.banks;
-      });
+      if (replaceExistingBank) {
+        const importedPadById = new Map<string, PadData>();
+        const matchedImportedPadIds = new Set<string>();
+        importedBankRef.pads.forEach((pad) => {
+          importedPadById.set(pad.id, pad);
+          if (typeof pad.originPadId === 'string' && pad.originPadId.trim().length > 0) {
+            importedPadById.set(pad.originPadId, pad);
+          }
+        });
+
+        const mergedPads = replaceExistingBank.pads.map((existingPad) => {
+          if (existingPad.restoreAssetKind === 'default_asset') return existingPad;
+          const importedPad =
+            importedPadById.get(existingPad.id) ||
+            (typeof existingPad.sourcePadId === 'string' ? importedPadById.get(existingPad.sourcePadId) : undefined) ||
+            (typeof existingPad.originPadId === 'string' ? importedPadById.get(existingPad.originPadId) : undefined);
+          if (!importedPad) return existingPad;
+          matchedImportedPadIds.add(importedPad.id);
+          if (existingPad.restoreAssetKind === 'custom_local_media') return existingPad;
+          return {
+            ...existingPad,
+            audioUrl: importedPad.audioUrl || existingPad.audioUrl,
+            audioStorageKey: importedPad.audioStorageKey ?? existingPad.audioStorageKey,
+            audioBackend: importedPad.audioBackend ?? existingPad.audioBackend,
+            imageUrl: importedPad.imageUrl || existingPad.imageUrl,
+            imageStorageKey: importedPad.imageStorageKey ?? existingPad.imageStorageKey,
+            imageBackend: importedPad.imageBackend ?? existingPad.imageBackend,
+            hasImageAsset: importedPad.hasImageAsset ?? existingPad.hasImageAsset,
+            audioBytes: importedPad.audioBytes ?? existingPad.audioBytes,
+            audioDurationMs: importedPad.audioDurationMs ?? existingPad.audioDurationMs,
+            contentOrigin: importedPad.contentOrigin ?? existingPad.contentOrigin,
+            originBankId: importedPad.originBankId ?? existingPad.originBankId,
+            originPadId: importedPad.originPadId ?? existingPad.originPadId,
+            originCatalogItemId: importedPad.originCatalogItemId ?? existingPad.originCatalogItemId,
+            originBankTitle: importedPad.originBankTitle ?? existingPad.originBankTitle,
+            missingMediaExpected: false,
+            missingImageExpected: false,
+          };
+        });
+        const appendedImportedPads = importedBankRef.pads.filter((pad) => !matchedImportedPadIds.has(pad.id));
+
+        importedBankRef = applyBankContentPolicy({
+          ...replaceExistingBank,
+          ...importedBankRef,
+          id: replaceExistingBank.id,
+          name: replaceExistingBank.name,
+          defaultColor: replaceExistingBank.defaultColor,
+          createdAt: replaceExistingBank.createdAt,
+          sortOrder: replaceExistingBank.sortOrder,
+          isLocalDuplicate: replaceExistingBank.isLocalDuplicate,
+          duplicateOriginBankId: replaceExistingBank.duplicateOriginBankId,
+          restoreKind: replaceExistingBank.restoreKind,
+          restoreStatus: replaceExistingBank.restoreStatus,
+          remoteSnapshotApplied: replaceExistingBank.remoteSnapshotApplied,
+          pads: [...mergedPads, ...appendedImportedPads],
+        });
+
+        setBanks((prev) => prev.map((bank) => bank.id === replaceExistingBank.id ? importedBankRef : bank));
+      } else {
+        setBanks((prev) => {
+          const deduped = dedupeBanksByIdentity([...prev, importedBankRef]);
+          const replacementId = deduped.removedIdToKeptId.get(importedBankRef.id);
+          if (replacementId) {
+            const replacementBank = prev.find((bank) => bank.id === replacementId);
+            if (replacementBank) importedBankRef = replacementBank;
+          }
+          return deduped.banks;
+        });
+      }
       reportImportStage('Finalizing imported bank...', 98, 'finalize');
       reportImportStage('Import complete.', 100, 'complete');
       const importCompletedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();

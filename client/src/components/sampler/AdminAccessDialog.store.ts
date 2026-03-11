@@ -236,7 +236,11 @@ export function useAdminAccessStoreManager({
               ? String(Math.max(3000, Math.min(15000, Math.floor(data.config.banner_rotation_ms))))
               : '5000',
             account_auto_approve_enabled: Boolean(data.config.account_auto_approve_enabled),
-            account_auto_approve_mode: data.config.account_auto_approve_mode === 'countdown' ? 'countdown' : 'schedule',
+            account_auto_approve_mode: data.config.account_auto_approve_mode === 'countdown'
+              ? 'countdown'
+              : data.config.account_auto_approve_mode === 'always'
+                ? 'always'
+                : 'schedule',
             account_auto_approve_start_hour: String(
               Number.isFinite(Number(data.config.account_auto_approve_start_hour))
                 ? Math.max(0, Math.min(23, Math.floor(Number(data.config.account_auto_approve_start_hour))))
@@ -254,7 +258,11 @@ export function useAdminAccessStoreManager({
             ),
             account_auto_approve_expires_at: data.config.account_auto_approve_expires_at ? String(data.config.account_auto_approve_expires_at) : null,
             store_auto_approve_enabled: Boolean(data.config.store_auto_approve_enabled),
-            store_auto_approve_mode: data.config.store_auto_approve_mode === 'countdown' ? 'countdown' : 'schedule',
+            store_auto_approve_mode: data.config.store_auto_approve_mode === 'countdown'
+              ? 'countdown'
+              : data.config.store_auto_approve_mode === 'always'
+                ? 'always'
+                : 'schedule',
             store_auto_approve_start_hour: String(
               Number.isFinite(Number(data.config.store_auto_approve_start_hour))
                 ? Math.max(0, Math.min(23, Math.floor(Number(data.config.store_auto_approve_start_hour))))
@@ -663,7 +671,7 @@ export function useAdminAccessStoreManager({
             throw new Error(`${label} must be between 0 and 23.`);
           }
         }
-      } else {
+      } else if (config.account_auto_approve_mode === 'countdown') {
         const parsed = Number(String(config.account_auto_approve_duration_hours || '').trim());
         if (!Number.isFinite(parsed) || parsed < 1 || parsed > 168) {
           throw new Error('Account Auto Approval Duration must be between 1 and 168 hours.');
@@ -683,7 +691,7 @@ export function useAdminAccessStoreManager({
           throw new Error(`${label} must be between 0 and 23.`);
         }
       }
-    } else {
+    } else if (config.store_auto_approve_mode === 'countdown') {
       const parsed = Number(String(config.store_auto_approve_duration_hours || '').trim());
       if (!Number.isFinite(parsed) || parsed < 1 || parsed > 168) {
         throw new Error('Store Auto Approval Duration must be between 1 and 168 hours.');

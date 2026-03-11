@@ -33,9 +33,9 @@
       "purpose": "maskable"
     }
   ],
-  "id": "/",
-  "start_url": "/",
-  "scope": "/",
+  "id": "/vdjv/",
+  "start_url": "/vdjv/",
+  "scope": "/vdjv/",
   "display": "standalone",
   "orientation": "any",
   "theme_color": "#dc2626",
@@ -45,7 +45,7 @@
       "name": "Open App",
       "short_name": "Open",
       "description": "Launch the sampler pad app",
-      "url": "/"
+      "url": "/vdjv/"
     },
     {
       "name": "Install Guide",

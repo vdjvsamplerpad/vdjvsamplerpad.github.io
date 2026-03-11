@@ -86,21 +86,21 @@ export const runDefaultBankSyncPipeline = async (
 
     const mergeCanonicalPadFields = (existingPad: PadData, sourcePad: PadData): PadData => ({
       ...existingPad,
-      name: sourcePad.name || existingPad.name,
-      color: sourcePad.color || existingPad.color,
-      triggerMode: sourcePad.triggerMode,
-      playbackMode: sourcePad.playbackMode,
-      volume: sourcePad.volume,
-      gainDb: typeof sourcePad.gainDb === 'number' ? sourcePad.gainDb : 0,
-      gain: typeof sourcePad.gain === 'number' ? sourcePad.gain : 1,
-      fadeInMs: sourcePad.fadeInMs,
-      fadeOutMs: sourcePad.fadeOutMs,
-      startTimeMs: sourcePad.startTimeMs,
-      endTimeMs: sourcePad.endTimeMs,
-      pitch: sourcePad.pitch,
-      tempoPercent: typeof sourcePad.tempoPercent === 'number' ? sourcePad.tempoPercent : 0,
-      keyLock: sourcePad.keyLock !== false,
-      savedHotcuesMs: cloneHotcues(sourcePad.savedHotcuesMs),
+      name: existingPad.name || sourcePad.name,
+      color: existingPad.color || sourcePad.color,
+      triggerMode: existingPad.triggerMode,
+      playbackMode: existingPad.playbackMode,
+      volume: existingPad.volume,
+      gainDb: typeof existingPad.gainDb === 'number' ? existingPad.gainDb : (typeof sourcePad.gainDb === 'number' ? sourcePad.gainDb : 0),
+      gain: typeof existingPad.gain === 'number' ? existingPad.gain : (typeof sourcePad.gain === 'number' ? sourcePad.gain : 1),
+      fadeInMs: existingPad.fadeInMs,
+      fadeOutMs: existingPad.fadeOutMs,
+      startTimeMs: existingPad.startTimeMs,
+      endTimeMs: existingPad.endTimeMs,
+      pitch: existingPad.pitch,
+      tempoPercent: typeof existingPad.tempoPercent === 'number' ? existingPad.tempoPercent : (typeof sourcePad.tempoPercent === 'number' ? sourcePad.tempoPercent : 0),
+      keyLock: existingPad.keyLock !== false,
+      savedHotcuesMs: cloneHotcues(existingPad.savedHotcuesMs ?? sourcePad.savedHotcuesMs),
       audioBytes: sourcePad.audioBytes ?? existingPad.audioBytes,
       audioDurationMs: sourcePad.audioDurationMs ?? existingPad.audioDurationMs,
       contentOrigin: sourcePad.contentOrigin ?? existingPad.contentOrigin,
@@ -169,26 +169,29 @@ export const runDefaultBankSyncPipeline = async (
     };
 
     const existingDefault = prev.find(
-      (bank) => isDefaultBankIdentity(bank) && Array.isArray(bank.pads) && bank.pads.length > 0
+      (bank) => isDefaultBankIdentity(bank) && !bank.isLocalDuplicate && Array.isArray(bank.pads) && bank.pads.length > 0
     );
 
     let nextBanks: SamplerBank[];
     if (!existingDefault) {
       const withoutDefaultPlaceholders = prev.filter((bank) => {
-        const isPlaceholder = isDefaultBankIdentity(bank) && (!Array.isArray(bank.pads) || bank.pads.length === 0);
+        const isPlaceholder =
+          isDefaultBankIdentity(bank) &&
+          !bank.isLocalDuplicate &&
+          (!Array.isArray(bank.pads) || bank.pads.length === 0);
         if (isPlaceholder) removedPlaceholderIds.add(bank.id);
         return !isPlaceholder;
       });
       nextBanks = [...withoutDefaultPlaceholders, assetDefault];
     } else {
       nextBanks = prev.map((bank) => {
-        if (!isDefaultBankIdentity(bank)) return bank;
+        if (!isDefaultBankIdentity(bank) || bank.isLocalDuplicate) return bank;
         const mergedPads = mergeDefaultPads(bank.pads || [], assetDefault.pads || [], allowAudio);
         return applyBankContentPolicy({
           ...bank,
           name: 'Default Bank',
           sourceBankId: defaultBankSourceId,
-          defaultColor: assetDefault.defaultColor || bank.defaultColor,
+          defaultColor: bank.defaultColor || assetDefault.defaultColor,
           isAdminBank: assetDefault.isAdminBank,
           transferable: assetDefault.transferable,
           exportable: assetDefault.exportable,

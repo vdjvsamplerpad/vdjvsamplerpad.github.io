@@ -6,8 +6,9 @@ import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
-import { adminApi, type AccessEntry, type ActiveSessionRow, type AdminAccountRegistrationRequest, type AdminActivityRow, type AdminBank, type AdminDashboardOverview, type AdminUser, type BankAccessEntry, type DefaultBankRelease, type SortDirection } from '@/lib/admin-api';
+import { adminApi, type AccessEntry, type ActiveSessionRow, type AdminAccountRegistrationRequest, type AdminActivityRow, type AdminBank, type AdminDashboardOverview, type AdminUser, type BankAccessEntry, type DefaultBankRelease, type LandingDownloadConfig, type SortDirection } from '@/lib/admin-api';
 import { edgeFunctionUrl } from '@/lib/edge-api';
+import { DEFAULT_LANDING_DOWNLOAD_CONFIG, normalizeLandingDownloadConfig } from '@/components/landing/download-config';
 import { Edit, Eye, EyeOff, Plus, RefreshCw, Shield, Trash2, UserPlus, Users, Loader2, Store, CreditCard, History, Save, Check, X, Search, Menu } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import {
@@ -51,6 +52,7 @@ import {
 import {
   AccountRequestsTab,
   DefaultBankTab,
+  LandingDownloadTab,
   StoreBannersTab,
   StoreCatalogTab,
   StoreConfigTab,
@@ -280,6 +282,11 @@ export function AdminAccessDialog({
   const [defaultBankSourceId, setDefaultBankSourceId] = React.useState('');
   const [defaultBankReleaseNotes, setDefaultBankReleaseNotes] = React.useState('');
   const [defaultBankMinAppVersion, setDefaultBankMinAppVersion] = React.useState('');
+  const [landingDownloadLoading, setLandingDownloadLoading] = React.useState(false);
+  const [landingDownloadSaving, setLandingDownloadSaving] = React.useState(false);
+  const [landingDownloadConfig, setLandingDownloadConfig] = React.useState<LandingDownloadConfig>(() =>
+    normalizeLandingDownloadConfig(DEFAULT_LANDING_DOWNLOAD_CONFIG)
+  );
 
   const [accountReqFilter, setAccountReqFilter] = React.useState<'pending' | 'history'>('pending');
   const [accountReqLoading, setAccountReqLoading] = React.useState(false);
@@ -473,11 +480,46 @@ export function AdminAccessDialog({
     }
   }, [refreshDefaultBank]);
 
+  const refreshLandingDownloadConfig = React.useCallback(async () => {
+    setLandingDownloadLoading(true);
+    try {
+      const data = await adminApi.getLandingDownloadConfig();
+      setLandingDownloadConfig(normalizeLandingDownloadConfig(data.config));
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load landing download config.');
+      setLandingDownloadConfig(normalizeLandingDownloadConfig(DEFAULT_LANDING_DOWNLOAD_CONFIG));
+    } finally {
+      setLandingDownloadLoading(false);
+    }
+  }, []);
+
+  const handleSaveLandingDownloadConfig = React.useCallback(async () => {
+    setLandingDownloadSaving(true);
+    try {
+      const normalized = normalizeLandingDownloadConfig(landingDownloadConfig);
+      const data = await adminApi.saveLandingDownloadConfig(normalized);
+      setLandingDownloadConfig(normalizeLandingDownloadConfig(data.config));
+      setInfo('Landing download config saved.');
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not save landing download config.');
+    } finally {
+      setLandingDownloadSaving(false);
+    }
+  }, [landingDownloadConfig]);
+
   React.useEffect(() => {
     if (!open || !isAdmin) return;
     if (tab !== 'default_bank') return;
     void refreshDefaultBank();
   }, [isAdmin, open, refreshDefaultBank, tab]);
+
+  React.useEffect(() => {
+    if (!open || !isAdmin) return;
+    if (tab !== 'landing_download') return;
+    void refreshLandingDownloadConfig();
+  }, [isAdmin, open, refreshLandingDownloadConfig, tab]);
 
   const refreshAccess = React.useCallback(async (userId: string) => {
     if (!userId) {
@@ -1466,6 +1508,19 @@ export function AdminAccessDialog({
                   onRefresh={() => void refreshDefaultBank()}
                   onPublish={() => void handlePublishDefaultBankRelease()}
                   onRollback={(version) => void handleRollbackDefaultBankRelease(version)}
+                />
+              )}
+
+              {tab === 'landing_download' && (
+                <LandingDownloadTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('landing_download')}
+                  loading={landingDownloadLoading}
+                  saving={landingDownloadSaving}
+                  config={landingDownloadConfig}
+                  onConfigChange={setLandingDownloadConfig}
+                  onRefresh={() => void refreshLandingDownloadConfig()}
+                  onSave={() => void handleSaveLandingDownloadConfig()}
                 />
               )}
 

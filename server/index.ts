@@ -753,7 +753,7 @@ app.post('/api/admin/users/:id/reset-password', async (req: any, res: any) => {
     if (!email) return res.status(400).json({ error: 'User has no email' });
 
     const anon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } });
-    const { error: resetErr } = await anon.auth.resetPasswordForEmail(email, { redirectTo: `${process.env.PUBLIC_SITE_URL || 'http://localhost:3000'}` });
+    const { error: resetErr } = await anon.auth.resetPasswordForEmail(email);
     if (resetErr) return res.status(500).json({ error: resetErr.message });
     res.json({ ok: true });
   } catch (err: any) {

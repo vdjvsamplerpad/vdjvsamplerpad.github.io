@@ -36,6 +36,7 @@ export type TabKey =
   | 'store_requests'
   | 'store_catalog'
   | 'store_banners'
+  | 'landing_download'
   | 'store_config';
 export type UserSortBy = 'display_name' | 'email' | 'created_at' | 'last_sign_in_at' | 'ban_status';
 export type BankSortBy = 'title' | 'created_at' | 'access_count';
@@ -86,6 +87,7 @@ export const TABS: Array<{
   { key: 'store_catalog', label: 'Catalog', emoji: '🏷️', hint: 'Prepare and publish store catalog items', tone: 'teal' },
   { key: 'store_banners', label: 'Banners', emoji: '🖼️', hint: 'Manage marketing banners for store homepage', tone: 'teal' },
   { key: 'default_bank', label: 'Default Bank', emoji: 'DB', hint: 'Publish and roll back versioned default-bank releases', tone: 'teal' },
+  { key: 'landing_download', label: 'Landing Download', emoji: 'LD', hint: 'Manage landing page download links and descriptions', tone: 'fuchsia' },
   { key: 'store_config', label: 'Pay Config', emoji: '💳', hint: 'Configure payment details and QR', tone: 'fuchsia' },
 ];
 
@@ -354,13 +356,13 @@ export interface StoreConfigDraft {
   account_price_php: string;
   banner_rotation_ms: string;
   account_auto_approve_enabled: boolean;
-  account_auto_approve_mode: 'schedule' | 'countdown';
+  account_auto_approve_mode: 'schedule' | 'countdown' | 'always';
   account_auto_approve_start_hour: string;
   account_auto_approve_end_hour: string;
   account_auto_approve_duration_hours: string;
   account_auto_approve_expires_at: string | null;
   store_auto_approve_enabled: boolean;
-  store_auto_approve_mode: 'schedule' | 'countdown';
+  store_auto_approve_mode: 'schedule' | 'countdown' | 'always';
   store_auto_approve_start_hour: string;
   store_auto_approve_end_hour: string;
   store_auto_approve_duration_hours: string;
@@ -372,4 +374,5 @@ export interface StoreConfigDraft {
 }
 
 export type HomeTrendRows = AdminDashboardOverview['trends'];
+
 

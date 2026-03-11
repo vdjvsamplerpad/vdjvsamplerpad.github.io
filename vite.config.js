@@ -84,9 +84,19 @@ const resolveDevHttps = (env) => {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const isElectron = env.ELECTRON === 'true';
+  const isCapacitor = env.CAPACITOR === 'true';
+  const includeLanding = env.VITE_INCLUDE_LANDING === 'false' ? false : (!isElectron && !isCapacitor);
+  const requiredClientEnv = ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'];
+  const missingClientEnv = requiredClientEnv.filter((key) => !String(env[key] || '').trim());
+
+  if (mode !== 'development' && missingClientEnv.length > 0) {
+    throw new Error(`Missing required frontend env vars for build: ${missingClientEnv.join(', ')}`);
+  }
+
   const base = isElectron ? './' : '/';
   const appVersion = getCommitBasedVersion();
   const devHttps = resolveDevHttps(env);
+  const distPublicDir = path.resolve(__dirname, 'dist/public');
   
   return {
     root: 'client', 
@@ -96,6 +106,7 @@ export default defineConfig(({ mode }) => {
     base: base,
     define: {
       'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
+      __VDJV_INCLUDE_LANDING__: JSON.stringify(includeLanding),
     },
     
     plugins: [
@@ -128,6 +139,34 @@ export default defineConfig(({ mode }) => {
             }
             next();
           });
+        },
+      },
+      {
+        name: 'vdjv-landing-index-prune',
+        transformIndexHtml(html) {
+          if (includeLanding) return html;
+          return html.replace(/\s*<link rel="manifest" href="\/site\.webmanifest" \/>\r?\n/g, '\n');
+        },
+      },
+      {
+        name: 'vdjv-prune-landing-assets',
+        apply: 'build',
+        closeBundle() {
+          if (includeLanding) return;
+          const pruneTargets = [
+            'frames',
+            'android',
+            'ios',
+            '404.html',
+            'site.webmanifest',
+            'sw.js',
+          ];
+          for (const target of pruneTargets) {
+            const targetPath = path.join(distPublicDir, target);
+            if (fs.existsSync(targetPath)) {
+              fs.rmSync(targetPath, { recursive: true, force: true });
+            }
+          }
         },
       },
     ],

@@ -600,7 +600,7 @@ export const SamplerPad = React.memo(function SamplerPad({
         // Added title for native browser tooltip on hover (shows full name)
         title={shouldShowText ? pad.name : undefined}
         className={`
-          w-full h-full min-h-[80px] min-w-0 max-w-full font-bold border-2 relative overflow-hidden select-none rounded-[0.75rem]
+          w-full h-full min-h-0 md:min-h-[80px] min-w-0 max-w-full font-bold border-2 relative overflow-hidden select-none rounded-[0.75rem]
           ${getButtonOpacity()} ${getEditModeClasses()} ${getEditModeButtonClasses()}
           perf-high:transition-all perf-high:duration-200 perf-high:ease-out 
           perf-medium:transition-colors perf-medium:duration-150 

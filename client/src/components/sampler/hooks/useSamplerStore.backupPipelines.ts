@@ -1,6 +1,11 @@
 import JSZip from 'jszip';
 import type { PadData, SamplerBank } from '../types/sampler';
 import { applyBankContentPolicy, isOfficialPadContent } from './useSamplerStore.provenance';
+import {
+  deriveSnapshotRestoreStatus,
+  getSnapshotBankRestoreKind,
+  getSnapshotPadRestoreKind,
+} from './useSamplerStore.snapshotMetadata';
 
 type MediaBackend = 'native' | 'idb';
 
@@ -755,11 +760,37 @@ export const runBackupRestorePipeline = async (
         if (restoredPadCount % 6 === 0) await yieldToMainThread();
       }
 
-      restoredBanks.push(applyBankContentPolicy({
+      const restoredBankBase = applyBankContentPolicy({
         ...bank,
         createdAt: new Date(bank.createdAt || Date.now()),
         pads: restoredPads,
-      } as SamplerBank));
+      } as SamplerBank);
+      const restoreKind = getSnapshotBankRestoreKind(restoredBankBase);
+      const normalizedPads = restoredBankBase.pads.map((pad) => {
+        const restoreAssetKind = pad.restoreAssetKind || getSnapshotPadRestoreKind(restoredBankBase, pad);
+        const expectsCustomImage = restoreAssetKind === 'custom_local_media' && Boolean(
+          pad.hasImageAsset ||
+          pad.imageStorageKey ||
+          pad.imageBackend ||
+          (typeof pad.imageUrl === 'string' && pad.imageUrl.trim().length > 0)
+        );
+        return {
+          ...pad,
+          restoreAssetKind,
+          missingMediaExpected: !pad.audioUrl,
+          missingImageExpected: !pad.imageUrl && expectsCustomImage,
+        };
+      });
+      restoredBanks.push({
+        ...restoredBankBase,
+        restoreKind,
+        pads: normalizedPads,
+        restoreStatus: deriveSnapshotRestoreStatus({
+          ...restoredBankBase,
+          restoreKind,
+          pads: normalizedPads,
+        }),
+      });
     }
 
     diagnostics.metrics.processedBytes = restoredMediaBytes;

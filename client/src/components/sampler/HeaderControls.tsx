@@ -261,7 +261,7 @@ export function HeaderControls({
   onPublishDefaultBankRelease,
 }: HeaderControlsProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const { user, profile, loading, signOut } = useAuth();
+  const { user, profile, loading, authTransition, signOut } = useAuth();
   const isAdmin = profile?.role === 'admin';
   const [adminDialogOpen, setAdminDialogOpen] = React.useState(false);
   const [AdminAccessDialog, setAdminAccessDialog] = React.useState<React.ComponentType<any> | null>(null);
@@ -284,6 +284,7 @@ export function HeaderControls({
 
   // Track previous user to detect login
   const prevUserIdRef = React.useRef<string | null>(null);
+  const prevAuthTransitionRef = React.useRef(authTransition.status);
 
   React.useEffect(() => {
     const handleLoginRequest = () => setShowLoginModal(true);
@@ -369,17 +370,20 @@ export function HeaderControls({
   };
 
   const handleSignOut = React.useCallback(async () => {
+    if (authTransition.status === 'signing_out') return;
     const { error } = await signOut();
     if (error) {
       pushNotice({ variant: 'error', message: error.message || 'Sign out failed.' });
       return;
     }
-    pushNotice({ variant: 'success', message: 'Signed out.' });
-  }, [signOut, pushNotice]);
+    pushNotice({ variant: 'info', message: 'Signing out...' });
+  }, [authTransition.status, signOut, pushNotice]);
 
   const isMobileScreen = windowWidth < 1160;
   const effectiveAuthUser = user || getCachedUser();
   const isAuthenticated = Boolean(effectiveAuthUser);
+  const isSigningIn = authTransition.status === 'signing_in';
+  const isSigningOut = authTransition.status === 'signing_out';
   const isPortraitViewport = typeof window !== 'undefined'
     ? window.innerHeight > window.innerWidth
     : windowWidth < 768;
@@ -406,6 +410,14 @@ export function HeaderControls({
       return currentBank?.name || 'No bank selected';
     }
   };
+
+  React.useEffect(() => {
+    const previous = prevAuthTransitionRef.current;
+    if (previous === 'signing_out' && authTransition.status === 'idle' && !isAuthenticated) {
+      pushNotice({ variant: 'success', message: 'Signed out.' });
+    }
+    prevAuthTransitionRef.current = authTransition.status;
+  }, [authTransition.status, isAuthenticated, pushNotice]);
 
   return (
     <>
@@ -570,18 +582,21 @@ export function HeaderControls({
           {/* Login Button (only shown when not logged in) */}
           {!loading && !isAuthenticated && (
             <Button
-              onClick={() => setShowLoginModal(true)}
+              onClick={() => {
+                if (isSigningIn) return;
+                setShowLoginModal(true);
+              }}
               variant="outline"
               size={isMobileScreen ? "sm" : "default"}
-              disabled={loading}
+              disabled={loading || isSigningIn}
               className={`w-24 transition-all duration-200 ${theme === 'dark'
                 ? 'bg-blue-600/20 border-blue-500 text-blue-300 hover:bg-blue-500 hover:border-blue-400 hover:text-blue-200'
                 : 'bg-blue-50 border-blue-300 text-blue-600 hover:bg-blue-100 hover:border-blue-400 hover:text-blue-700'
                 }`}
-              title="Sign in to your account"
+              title={isSigningIn ? 'Signing in...' : 'Sign in to your account'}
             >
               <LogIn className="w-4 h-4" />
-              <span className="ml-1">Login</span>
+              <span className="ml-1">{isSigningIn ? 'Wait' : 'Login'}</span>
             </Button>
           )}
 
@@ -680,6 +695,7 @@ export function HeaderControls({
             effectiveTierLabel={effectiveGraphicsTierLabel}
             onGraphicsProfileChange={onGraphicsProfileChange}
             isAuthenticated={isAuthenticated}
+            authTransitionStatus={authTransition.status}
             onSignOut={handleSignOut}
           />
 

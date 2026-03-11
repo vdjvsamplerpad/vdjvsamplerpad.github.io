@@ -202,6 +202,26 @@ type ReceiptOcrDetection = {
   elapsedMs: number;
 };
 
+type ReceiptOcrFailureCode =
+  | "OCR_UNAVAILABLE"
+  | "OCR_STORAGE_DOWNLOAD_FAILED"
+  | "OCR_UNSUPPORTED_EXTENSION"
+  | "OCR_UNSUPPORTED_MIME"
+  | "OCR_INVALID_FILE_SIZE"
+  | "OCR_FILE_TOO_LARGE"
+  | "OCR_TIMEOUT"
+  | "OCR_HTTP_FAILED"
+  | "OCR_PROVIDER_PROCESSING_ERROR"
+  | "OCR_EMPTY_TEXT"
+  | "OCR_FAILED";
+
+type ReceiptOcrAttempt = {
+  detected: ReceiptOcrDetection | null;
+  errorCode: ReceiptOcrFailureCode | null;
+  provider: string | null;
+  elapsedMs: number;
+};
+
 type ReceiptOcrMetadata = {
   referenceNo: string | null;
   payerName: string | null;
@@ -213,7 +233,7 @@ type ReceiptOcrMetadata = {
   errorCode: string | null;
 };
 
-type AutoApprovalMode = "schedule" | "countdown";
+type AutoApprovalMode = "schedule" | "countdown" | "always";
 
 type AutoApprovalWindowConfig = {
   enabled: boolean;
@@ -231,7 +251,9 @@ const normalizeAutoApprovalHour = (value: unknown): number => {
 };
 
 const normalizeAutoApprovalMode = (value: unknown): AutoApprovalMode => {
-  return value === "countdown" ? "countdown" : "schedule";
+  if (value === "countdown") return "countdown";
+  if (value === "always") return "always";
+  return "schedule";
 };
 
 const normalizeAutoApprovalDurationHours = (value: unknown): number => {
@@ -321,6 +343,7 @@ const matchesConfiguredWalletRecipient = (input: {
 
 const isWithinAutoApprovalWindow = (config: AutoApprovalWindowConfig, now = new Date()): boolean => {
   if (!config.enabled) return false;
+  if (config.mode === "always") return true;
   if (config.mode === "countdown") {
     if (!config.expiresAt) return false;
     const expiresAtMs = new Date(config.expiresAt).getTime();
@@ -660,21 +683,33 @@ const normalizeReceiptOcrContext = (value: string | null | undefined): ReceiptOc
   return "unknown";
 };
 
-const extractReceiptFieldsViaOcr = async (input: {
-  file: File;
-  context: ReceiptOcrContext;
-}): Promise<ReceiptOcrDetection | null> => {
-  const startedAt = Date.now();
-  const ocrApiKey = String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim();
-  if (!ocrApiKey) return null;
-
-  const file = input.file;
+const validateReceiptOcrFile = (file: File): ReceiptOcrFailureCode | null => {
   const fileName = asString(file.name, 240) || "receipt.jpg";
   const ext = getExtensionFromFileName(fileName);
   const contentType = String(file.type || "").toLowerCase();
-  if (!ext || !ACCOUNT_REG_ALLOWED_EXTENSIONS.has(ext)) return null;
-  if (contentType && !ACCOUNT_REG_ALLOWED_MIME_TYPES.has(contentType)) return null;
-  if (!Number.isFinite(file.size) || file.size <= 0 || file.size > ACCOUNT_REG_MAX_PROOF_BYTES) return null;
+  if (!ext || !ACCOUNT_REG_ALLOWED_EXTENSIONS.has(ext)) return "OCR_UNSUPPORTED_EXTENSION";
+  if (contentType && !ACCOUNT_REG_ALLOWED_MIME_TYPES.has(contentType)) return "OCR_UNSUPPORTED_MIME";
+  if (!Number.isFinite(file.size) || file.size <= 0) return "OCR_INVALID_FILE_SIZE";
+  if (file.size > ACCOUNT_REG_MAX_PROOF_BYTES) return "OCR_FILE_TOO_LARGE";
+  return null;
+};
+
+const extractReceiptFieldsViaOcr = async (input: {
+  file: File;
+  context: ReceiptOcrContext;
+}): Promise<ReceiptOcrAttempt> => {
+  const startedAt = Date.now();
+  const ocrApiKey = String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim();
+  if (!ocrApiKey) {
+    return { detected: null, errorCode: "OCR_UNAVAILABLE", provider: null, elapsedMs: Date.now() - startedAt };
+  }
+
+  const file = input.file;
+  const fileName = asString(file.name, 240) || "receipt.jpg";
+  const validationError = validateReceiptOcrFile(file);
+  if (validationError) {
+    return { detected: null, errorCode: validationError, provider: null, elapsedMs: Date.now() - startedAt };
+  }
 
   const providerPayload = new FormData();
   providerPayload.append("file", file, fileName);
@@ -694,23 +729,46 @@ const extractReceiptFieldsViaOcr = async (input: {
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) return null;
+    if (!response.ok) {
+      return { detected: null, errorCode: "OCR_HTTP_FAILED", provider: OCR_SPACE_PROVIDER, elapsedMs: Date.now() - startedAt };
+    }
 
     const isErrored = Boolean(payload?.IsErroredOnProcessing);
     const rawText = extractOcrSpaceText(payload);
-    if (isErrored && !rawText) return null;
+    if (isErrored && !rawText) {
+      return {
+        detected: null,
+        errorCode: "OCR_PROVIDER_PROCESSING_ERROR",
+        provider: OCR_SPACE_PROVIDER,
+        elapsedMs: Date.now() - startedAt,
+      };
+    }
+    if (!rawText) {
+      return { detected: null, errorCode: "OCR_EMPTY_TEXT", provider: OCR_SPACE_PROVIDER, elapsedMs: Date.now() - startedAt };
+    }
 
     return {
-      referenceNo: detectReferenceNo(rawText),
-      payerName: detectPayerName(rawText),
-      amountPhp: detectReceiptAmount(rawText),
-      recipientNumber: detectReceiptRecipientNumber(rawText),
-      rawText,
+      detected: {
+        referenceNo: detectReferenceNo(rawText),
+        payerName: detectPayerName(rawText),
+        amountPhp: detectReceiptAmount(rawText),
+        recipientNumber: detectReceiptRecipientNumber(rawText),
+        rawText,
+        provider: OCR_SPACE_PROVIDER,
+        elapsedMs: Date.now() - startedAt,
+      },
+      errorCode: null,
       provider: OCR_SPACE_PROVIDER,
       elapsedMs: Date.now() - startedAt,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    const errorName = error instanceof Error ? error.name : "";
+    return {
+      detected: null,
+      errorCode: errorName === "AbortError" ? "OCR_TIMEOUT" : "OCR_FAILED",
+      provider: OCR_SPACE_PROVIDER,
+      elapsedMs: Date.now() - startedAt,
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -721,9 +779,11 @@ const extractReceiptFieldsFromStoragePath = async (
   bucket: string,
   path: string,
   context: ReceiptOcrContext,
-): Promise<ReceiptOcrDetection | null> => {
+) : Promise<ReceiptOcrAttempt> => {
   const { data, error } = await admin.storage.from(bucket).download(path);
-  if (error || !data) return null;
+  if (error || !data) {
+    return { detected: null, errorCode: "OCR_STORAGE_DOWNLOAD_FAILED", provider: null, elapsedMs: 0 };
+  }
   const ext = getExtensionFromFileName(path) || "jpg";
   const mime = String((data as Blob).type || "").toLowerCase() || "image/jpeg";
   const file = new File([data], `receipt.${ext}`, { type: mime });
@@ -1384,6 +1444,104 @@ const getStorePaymentConfig = async () => {
   });
 };
 
+const LANDING_VERSION_KEYS = ["V1", "V2", "V3"] as const;
+const LANDING_PLATFORM_KEYS = ["android", "ios", "windows", "macos"] as const;
+const DEFAULT_LANDING_DOWNLOAD_LINKS = {
+  V1: {
+    android: "/android/",
+    ios: "/ios/",
+    windows: "https://m.me/PWOSoundSystem/",
+    macos: "https://m.me/PWOSoundSystem/",
+  },
+  V2: {
+    android: "https://m.me/PWOSoundSystem/",
+    ios: "https://apps.apple.com/us/app/virtualdj-remote/id407160120",
+    windows: "https://m.me/PWOSoundSystem/",
+    macos: "https://m.me/PWOSoundSystem/",
+  },
+  V3: {
+    android: "https://m.me/PWOSoundSystem/",
+    ios: "https://apps.apple.com/us/app/virtualdj-remote/id407160120",
+    windows: "https://m.me/PWOSoundSystem/",
+    macos: "https://m.me/PWOSoundSystem/",
+  },
+} as const;
+const DEFAULT_LANDING_PLATFORM_DESCRIPTIONS = {
+  V1: {
+    android: "VDJV App, no laptop needed",
+    ios: "Web App, no laptop needed",
+    windows: "Standalone software, no remote app",
+    macos: "Web app sa browser, no remote app",
+  },
+  V2: {
+    android: "VDJV Remote App V2 connect sa laptop/PC",
+    ios: "VirtualDJ Remote App",
+    windows: "VDJV V2 (up to V2.5)",
+    macos: "Message muna for compatibility",
+  },
+  V3: {
+    android: "VDJV Remote App V3 connect sa laptop/PC",
+    ios: "VirtualDJ Remote App",
+    windows: "VDJV V3 (2026 latest)",
+    macos: "Message muna for compatibility",
+  },
+} as const;
+const DEFAULT_LANDING_VERSION_DESCRIPTIONS = {
+  V1: {
+    title: "V1 – Standalone Version",
+    desc: "Pinakasimple na version ng VDJV. Hindi kailangan ng laptop o PC dahil diretso na itong gagana sa device mo. Best ito para sa mga gusto lang ng basic sampler pad para sa events gamit ang phone, tablet, o computer nang walang setup o remote connection. May unique features kumpara sa V2 at V3 pero mabilis at madaling gamitin.",
+  },
+  V2: {
+    title: "V2 – Laptop/PC Based Version",
+    desc: "Ito ang 2023 version na gumagamit ng laptop o PC bilang main system. Ang phone o tablet ay gagamitin bilang wireless touchscreen controller gamit ang remote app. Mas stable ito para sa events at mas flexible kumpara sa V1 dahil naka-run ang audio sa laptop. Recommended ito kung gusto mo ng mas professional setup pero hindi pa kailangan ang full features ng V3.",
+  },
+  V3: {
+    title: "V3 – Full Features Version",
+    desc: "Ito ang pinaka-complete at latest version ng VDJV. May kasama na itong installer, bagong features, effects, at lahat ng banks. Designed ito para sa professional events at mas advanced na paggamit. Laptop o PC pa rin ang main system habang ang phone o tablet ay gagamitin bilang wireless controller. Ito ang recommended version kung gusto mo ng full VDJV experience.",
+  },
+} as const;
+
+const normalizeLandingDownloadConfig = (row: any) => {
+  const downloadLinksRaw = row?.download_links && typeof row.download_links === "object" ? row.download_links : {};
+  const platformDescriptionsRaw = row?.platform_descriptions && typeof row.platform_descriptions === "object" ? row.platform_descriptions : {};
+  const versionDescriptionsRaw = row?.version_descriptions && typeof row.version_descriptions === "object" ? row.version_descriptions : {};
+
+  const downloadLinks: Record<string, Record<string, string>> = {};
+  const platformDescriptions: Record<string, Record<string, string>> = {};
+  const versionDescriptions: Record<string, { title: string; desc: string }> = {};
+
+  LANDING_VERSION_KEYS.forEach((version) => {
+    const downloadEntry = downloadLinksRaw?.[version] && typeof downloadLinksRaw[version] === "object" ? downloadLinksRaw[version] : {};
+    const platformEntry = platformDescriptionsRaw?.[version] && typeof platformDescriptionsRaw[version] === "object" ? platformDescriptionsRaw[version] : {};
+    const versionEntry = versionDescriptionsRaw?.[version] && typeof versionDescriptionsRaw[version] === "object" ? versionDescriptionsRaw[version] : {};
+
+    downloadLinks[version] = {};
+    platformDescriptions[version] = {};
+    LANDING_PLATFORM_KEYS.forEach((platform) => {
+      downloadLinks[version][platform] = asString(downloadEntry?.[platform], 2000) || DEFAULT_LANDING_DOWNLOAD_LINKS[version][platform];
+      platformDescriptions[version][platform] = asString(platformEntry?.[platform], 500) || DEFAULT_LANDING_PLATFORM_DESCRIPTIONS[version][platform];
+    });
+    versionDescriptions[version] = {
+      title: asString(versionEntry?.title, 200) || DEFAULT_LANDING_VERSION_DESCRIPTIONS[version].title,
+      desc: asString(versionEntry?.desc, 5000) || DEFAULT_LANDING_VERSION_DESCRIPTIONS[version].desc,
+    };
+  });
+
+  return { downloadLinks, platformDescriptions, versionDescriptions };
+};
+
+const getLandingDownloadConfig = async () => {
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .from("landing_download_config")
+    .select("download_links,platform_descriptions,version_descriptions")
+    .eq("id", "default")
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) return fail(500, error.message);
+  return ok({ config: normalizeLandingDownloadConfig(data || {}) });
+};
+
 const createAccountRegistrationProofUploadUrl = async (req: Request, body: any) => {
   const admin = createServiceClient();
   const email = normalizeEmail(body?.email);
@@ -1449,22 +1607,22 @@ const createReceiptOcr = async (req: Request) => {
   const maybeFile = form.get("file");
   if (!(maybeFile instanceof File)) return badRequest("file is required");
   const file = maybeFile;
-  const fileName = asString(file.name, 240) || "receipt.jpg";
-  const ext = getExtensionFromFileName(fileName);
-  const contentType = String(file.type || "").toLowerCase();
   const context = normalizeReceiptOcrContext(asString(form.get("context"), 50) || "unknown");
   const normalizedEmail = normalizeEmail(form.get("email"));
   const subjectHint = asString(form.get("subject"), 120) || "";
 
-  if (!ext || !ACCOUNT_REG_ALLOWED_EXTENSIONS.has(ext)) {
-    return badRequest("Unsupported proof file extension");
+  const validationError = validateReceiptOcrFile(file);
+  if (validationError === "OCR_UNSUPPORTED_EXTENSION") {
+    return fail(400, validationError);
   }
-  if (contentType && !ACCOUNT_REG_ALLOWED_MIME_TYPES.has(contentType)) {
-    return badRequest("Unsupported proof mime type");
+  if (validationError === "OCR_UNSUPPORTED_MIME") {
+    return fail(400, validationError);
   }
-  if (!Number.isFinite(file.size) || file.size <= 0) return badRequest("Invalid file size");
-  if (file.size > ACCOUNT_REG_MAX_PROOF_BYTES) {
-    return fail(413, "PROOF_TOO_LARGE", { max_bytes: ACCOUNT_REG_MAX_PROOF_BYTES });
+  if (validationError === "OCR_INVALID_FILE_SIZE") {
+    return fail(400, validationError);
+  }
+  if (validationError === "OCR_FILE_TOO_LARGE") {
+    return fail(413, validationError, { max_bytes: ACCOUNT_REG_MAX_PROOF_BYTES });
   }
 
   const subject = `${getRequestIp(req)}:${normalizedEmail || subjectHint || "anon"}`;
@@ -1481,13 +1639,14 @@ const createReceiptOcr = async (req: Request) => {
     });
   }
 
-  const detected = await extractReceiptFieldsViaOcr({ file, context });
-  if (!detected) {
-    return fail(502, "OCR_FAILED", {
-      provider: OCR_SPACE_PROVIDER,
-      elapsedMs: Date.now() - startedAt,
+  const attempt = await extractReceiptFieldsViaOcr({ file, context });
+  if (!attempt.detected) {
+    return fail(502, attempt.errorCode || "OCR_FAILED", {
+      provider: attempt.provider,
+      elapsedMs: attempt.elapsedMs || (Date.now() - startedAt),
     });
   }
+  const detected = attempt.detected;
 
   return ok({
     context,
@@ -1555,25 +1714,28 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
   const automationSettings = await getStoreAutomationSettings(admin);
   let ocrDetected: ReceiptOcrDetection | null = null;
   let ocrErrorCode: string | null = null;
+  let ocrProvider: string | null = null;
   const shouldRunServerOcr = paymentChannel === "image_proof" && Boolean(proofPath) && automationSettings.account.enabled;
   if (shouldRunServerOcr && proofPath) {
-    const detected = await extractReceiptFieldsFromStoragePath(
+    const attempt = await extractReceiptFieldsFromStoragePath(
       admin,
       "payment-proof",
       proofPath,
       "account_registration",
-    ).catch(() => null);
-    if (detected) {
-      ocrDetected = detected;
-      if (!payerName && detected.payerName) payerName = detected.payerName;
-      if (!referenceNo && detected.referenceNo) referenceNo = detected.referenceNo;
+    ).catch(() => ({ detected: null, errorCode: "OCR_FAILED", provider: OCR_SPACE_PROVIDER, elapsedMs: 0 } satisfies ReceiptOcrAttempt));
+    if (attempt.detected) {
+      ocrDetected = attempt.detected;
+      ocrProvider = attempt.detected.provider;
+      if (!payerName && attempt.detected.payerName) payerName = attempt.detected.payerName;
+      if (!referenceNo && attempt.detected.referenceNo) referenceNo = attempt.detected.referenceNo;
     } else {
-      ocrErrorCode = String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE";
+      ocrErrorCode = attempt.errorCode || (String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE");
+      ocrProvider = attempt.provider;
     }
   } else if (paymentChannel === "image_proof" && proofPath) {
     ocrErrorCode = "MANUAL_REVIEW_MODE";
   }
-  const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode);
+  const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode, ocrProvider);
   const { data: paymentSettings, error: paymentSettingsError } = await admin
     .from("store_payment_settings")
     .select("gcash_number,maya_number")
@@ -1809,6 +1971,7 @@ const getAccountRegistrationLoginHint = async (req: Request, body: any) => {
 const buildReceiptOcrMetadata = (
   detected: ReceiptOcrDetection | null,
   fallbackErrorCode: string | null,
+  fallbackProvider: string | null = null,
 ): ReceiptOcrMetadata => {
   if (!detected) {
     if (fallbackErrorCode === "MANUAL_REVIEW_MODE") {
@@ -1828,7 +1991,7 @@ const buildReceiptOcrMetadata = (
       payerName: null,
       amountPhp: null,
       recipientNumber: null,
-      provider: fallbackErrorCode === "OCR_UNAVAILABLE" ? null : OCR_SPACE_PROVIDER,
+      provider: fallbackErrorCode === "OCR_UNAVAILABLE" ? null : fallbackProvider,
       scannedAt: new Date().toISOString(),
       status: fallbackErrorCode === "OCR_UNAVAILABLE" ? "unavailable" : "failed",
       errorCode: fallbackErrorCode || "OCR_FAILED",
@@ -2383,27 +2546,30 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
   const automationSettings = await getStoreAutomationSettings(admin);
   let ocrDetected: ReceiptOcrDetection | null = null;
   let ocrErrorCode: string | null = null;
+  let ocrProvider: string | null = null;
   const shouldRunServerOcr = normalizedPaymentChannel === "image_proof"
     && Boolean(normalizedProofPath)
     && automationSettings.store.enabled;
   if (shouldRunServerOcr && normalizedProofPath) {
-    const detected = await extractReceiptFieldsFromStoragePath(
+    const attempt = await extractReceiptFieldsFromStoragePath(
       admin,
       "payment-proof",
       normalizedProofPath,
       "bank_store",
-    ).catch(() => null);
-    if (detected) {
-      ocrDetected = detected;
-      if (!normalizedPayerName && detected.payerName) normalizedPayerName = detected.payerName;
-      if (!normalizedReferenceNo && detected.referenceNo) normalizedReferenceNo = detected.referenceNo;
+    ).catch(() => ({ detected: null, errorCode: "OCR_FAILED", provider: OCR_SPACE_PROVIDER, elapsedMs: 0 } satisfies ReceiptOcrAttempt));
+    if (attempt.detected) {
+      ocrDetected = attempt.detected;
+      ocrProvider = attempt.detected.provider;
+      if (!normalizedPayerName && attempt.detected.payerName) normalizedPayerName = attempt.detected.payerName;
+      if (!normalizedReferenceNo && attempt.detected.referenceNo) normalizedReferenceNo = attempt.detected.referenceNo;
     } else {
-      ocrErrorCode = String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE";
+      ocrErrorCode = attempt.errorCode || (String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE");
+      ocrProvider = attempt.provider;
     }
   } else if (normalizedPaymentChannel === "image_proof" && normalizedProofPath) {
     ocrErrorCode = "MANUAL_REVIEW_MODE";
   }
-  const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode);
+  const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode, ocrProvider);
   const { data: paymentSettings, error: paymentSettingsError } = await admin
     .from("store_payment_settings")
     .select("gcash_number,maya_number")
@@ -2888,15 +3054,6 @@ const sendAccountPendingSubmissionEmail = async (input: {
     };
   }
 
-  let receiptSignedUrl = "";
-  const proofPath = asString(input.requestRow?.proof_path, 500);
-  if (proofPath) {
-    const signed = await input.admin.storage.from("payment-proof").createSignedUrl(proofPath, STORE_EMAIL_RECEIPT_LINK_TTL_SECONDS);
-    if (!signed.error && signed.data?.signedUrl) {
-      receiptSignedUrl = signed.data.signedUrl;
-    }
-  }
-
   const displayName = asString(input.requestRow?.display_name, 160) || "User";
   const submittedAt = new Date(asString(input.requestRow?.created_at, 80) || new Date().toISOString()).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
   const amount = asPriceNumber(input.requestRow?.account_price_php_snapshot);
@@ -2924,7 +3081,6 @@ const sendAccountPendingSubmissionEmail = async (input: {
       { label: "Status", value: "Pending Approval" },
     ],
     bodyText: textBody,
-    receiptImageUrl: receiptSignedUrl || undefined,
   });
 
   try {
@@ -2932,7 +3088,7 @@ const sendAccountPendingSubmissionEmail = async (input: {
       to: targetEmail,
       subject: `Payment Received - Pending Approval - ${asString(input.requestRow?.receipt_reference, 120) || "VDJV"}`,
       html: htmlBody,
-      text: receiptSignedUrl ? `${textBody}\n\nReceipt image: ${receiptSignedUrl}` : textBody,
+      text: textBody,
     });
     return { status: "sent", error: null };
   } catch (err) {
@@ -3018,15 +3174,6 @@ const sendStorePendingSubmissionEmail = async (input: {
   const amountText = amountTotal > 0 ? formatPhpCurrency(amountTotal) : "To be confirmed";
   const submittedAt = new Date().toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
 
-  let receiptSignedUrl = "";
-  const proofPath = asString(firstRow?.proof_path, 500);
-  if (proofPath) {
-    const signed = await input.admin.storage.from("payment-proof").createSignedUrl(proofPath, STORE_EMAIL_RECEIPT_LINK_TTL_SECONDS);
-    if (!signed.error && signed.data?.signedUrl) {
-      receiptSignedUrl = signed.data.signedUrl;
-    }
-  }
-
   const textBody = [
     "We received your bank store payment submission.",
     "",
@@ -3050,7 +3197,6 @@ const sendStorePendingSubmissionEmail = async (input: {
       { label: "Status", value: "Pending Approval" },
     ],
     bodyText: textBody,
-    receiptImageUrl: receiptSignedUrl || undefined,
   });
 
   try {
@@ -3058,7 +3204,7 @@ const sendStorePendingSubmissionEmail = async (input: {
       to: targetEmail,
       subject: `Payment Received - Pending Approval - ${String(firstRow.receipt_reference || "VDJV")}`,
       html: htmlBody,
-      text: receiptSignedUrl ? `${textBody}\n\nReceipt image: ${receiptSignedUrl}` : textBody,
+      text: textBody,
     });
     return { status: "sent", error: null };
   } catch (err) {
@@ -3195,15 +3341,6 @@ const sendStoreDecisionEmail = async (input: {
   const renderedBody = renderTemplate(bodyTemplate, templateValues).trim();
   const bodyForCard = stripReceiptDuplicateLines(renderedBody);
 
-  let receiptSignedUrl = "";
-  const proofPath = asString(firstRow?.proof_path, 500);
-  if (proofPath) {
-    const signed = await input.admin.storage.from("payment-proof").createSignedUrl(proofPath, STORE_EMAIL_RECEIPT_LINK_TTL_SECONDS);
-    if (!signed.error && signed.data?.signedUrl) {
-      receiptSignedUrl = signed.data.signedUrl;
-    }
-  }
-
   const htmlBody = buildReceiptStyleEmailHtml({
     variant: input.nextStatus === "approved" ? "approved" : "rejected",
     title: input.nextStatus === "approved" ? "Payment Approved" : "Payment Rejected",
@@ -3221,9 +3358,8 @@ const sendStoreDecisionEmail = async (input: {
       ...(input.nextStatus === "rejected" ? [{ label: "Reason", value: String(input.rejectionMessage || "-") }] : []),
     ],
     bodyText: bodyForCard,
-    receiptImageUrl: receiptSignedUrl || undefined,
   });
-  const textBody = receiptSignedUrl ? `${renderedBody}\n\nReceipt image: ${receiptSignedUrl}` : renderedBody;
+  const textBody = renderedBody;
 
   try {
     await sendEmailViaResend({
@@ -3705,6 +3841,42 @@ const getAdminStoreConfig = async () => {
   });
 };
 
+const getAdminLandingDownloadConfig = async () => {
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .from("landing_download_config")
+    .select("*")
+    .eq("id", "default")
+    .maybeSingle();
+  if (error) return fail(500, error.message);
+  return ok({ config: normalizeLandingDownloadConfig(data || {}) });
+};
+
+const saveAdminLandingDownloadConfig = async (body: any, adminUserId: string) => {
+  const payload = normalizeLandingDownloadConfig({
+    download_links: body?.downloadLinks,
+    platform_descriptions: body?.platformDescriptions,
+    version_descriptions: body?.versionDescriptions,
+  });
+  const admin = createServiceClient();
+  const row = {
+    id: "default",
+    is_active: true,
+    download_links: payload.downloadLinks,
+    platform_descriptions: payload.platformDescriptions,
+    version_descriptions: payload.versionDescriptions,
+    updated_by: adminUserId,
+    updated_at: new Date().toISOString(),
+  };
+  let upsert = await admin.from("landing_download_config").upsert(row, { onConflict: "id" }).select("*").single();
+  if (upsert.error && /updated_by/i.test(upsert.error.message || "")) {
+    const { updated_by: _skip, ...fallback } = row;
+    upsert = await admin.from("landing_download_config").upsert(fallback, { onConflict: "id" }).select("*").single();
+  }
+  if (upsert.error) return fail(500, upsert.error.message);
+  return ok({ config: normalizeLandingDownloadConfig(upsert.data) });
+};
+
 const saveAdminStoreConfig = async (body: any, adminUserId: string) => {
   const admin = createServiceClient();
   const { data: existingConfig, error: existingError } = await admin
@@ -3874,6 +4046,7 @@ Deno.serve(async (req) => {
 
     if (req.method === "GET" && scoped[0] === "catalog" && scoped.length === 1) return await getStoreCatalog(req);
     if (req.method === "GET" && scoped[0] === "payment-config" && scoped.length === 1) return await getStorePaymentConfig();
+    if (req.method === "GET" && scoped[0] === "landing-config" && scoped.length === 1) return await getLandingDownloadConfig();
     if (req.method === "GET" && scoped[0] === "default-bank" && scoped[1] === "manifest" && scoped.length === 2) {
       return await getPublicDefaultBankManifest();
     }
@@ -3974,6 +4147,11 @@ Deno.serve(async (req) => {
     if (req.method === "POST" && scoped[2] === "config" && scoped.length === 3) {
       const body = await req.json().catch(() => ({}));
       return await saveAdminStoreConfig(body, adminUserId);
+    }
+    if (req.method === "GET" && scoped[2] === "landing-config" && scoped.length === 3) return await getAdminLandingDownloadConfig();
+    if (req.method === "POST" && scoped[2] === "landing-config" && scoped.length === 3) {
+      const body = await req.json().catch(() => ({}));
+      return await saveAdminLandingDownloadConfig(body, adminUserId);
     }
     return fail(404, "Unknown store route");
   } catch (err) {

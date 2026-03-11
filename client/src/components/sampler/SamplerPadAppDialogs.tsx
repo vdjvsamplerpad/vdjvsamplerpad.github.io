@@ -33,7 +33,13 @@ type PendingOfficialPadTransferConfirm = {
 interface SamplerPadAppDialogsProps {
   theme: 'light' | 'dark';
   remoteSnapshotPrompt: RemoteSnapshotPromptState | null;
+  remoteSnapshotRestoreProgress: {
+    phase: 'applying' | 'settings' | 'finalizing';
+    label: string;
+    progress: number;
+  } | null;
   onRemoteSnapshotPromptChange: (next: RemoteSnapshotPromptState | null) => void;
+  onSkipRemoteSnapshotPrompt: () => void;
   onApplyRemoteSnapshot: () => void;
   onRestoreFromBackupForRemoteSnapshot: () => void;
   missingMediaSummary: MissingMediaSummary;
@@ -61,7 +67,9 @@ interface SamplerPadAppDialogsProps {
 export function SamplerPadAppDialogs({
   theme,
   remoteSnapshotPrompt,
+  remoteSnapshotRestoreProgress,
   onRemoteSnapshotPromptChange,
+  onSkipRemoteSnapshotPrompt,
   onApplyRemoteSnapshot,
   onRestoreFromBackupForRemoteSnapshot,
   missingMediaSummary,
@@ -87,7 +95,7 @@ export function SamplerPadAppDialogs({
 }: SamplerPadAppDialogsProps) {
   return (
     <>
-      <Dialog open={Boolean(remoteSnapshotPrompt)} onOpenChange={(open) => { if (!open) onRemoteSnapshotPromptChange(null); }}>
+      <Dialog open={Boolean(remoteSnapshotPrompt)} onOpenChange={(open) => { if (!open) onSkipRemoteSnapshotPrompt(); }}>
         <DialogContent className="sm:max-w-lg" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Restore Banks on This Device?</DialogTitle>
@@ -102,10 +110,38 @@ export function SamplerPadAppDialogs({
               <div className="mt-1">Custom pads that may need manual relink: <span className="font-semibold">{remoteSnapshotPrompt?.summary.missingCustomPads || 0}</span></div>
             </div>
             <div className="grid grid-cols-1 gap-2">
-              <Button onClick={onApplyRemoteSnapshot} variant="default">Manual Sync Metadata</Button>
-              <Button onClick={onRestoreFromBackupForRemoteSnapshot} variant="outline">Restore from Full Backup</Button>
-              <Button onClick={() => onRemoteSnapshotPromptChange(null)} variant="ghost">Skip for Now</Button>
+              <Button onClick={onApplyRemoteSnapshot} variant="default" disabled={Boolean(remoteSnapshotRestoreProgress)}>
+                {remoteSnapshotRestoreProgress ? 'Restoring...' : 'Manual Sync Metadata'}
+              </Button>
+              <Button
+                onClick={onRestoreFromBackupForRemoteSnapshot}
+                variant="outline"
+                disabled={Boolean(remoteSnapshotRestoreProgress)}
+              >
+                Restore from Full Backup
+              </Button>
+              <Button
+                onClick={onSkipRemoteSnapshotPrompt}
+                variant="ghost"
+                disabled={Boolean(remoteSnapshotRestoreProgress)}
+              >
+                Skip for Now
+              </Button>
             </div>
+            {remoteSnapshotRestoreProgress && (
+              <div className={`rounded-md border p-3 ${theme === 'dark' ? 'border-indigo-500/40 bg-indigo-950/40' : 'border-indigo-200 bg-indigo-50'}`}>
+                <div className="flex items-center justify-between gap-3 text-xs font-medium">
+                  <span>{remoteSnapshotRestoreProgress.label}</span>
+                  <span>{remoteSnapshotRestoreProgress.progress}%</span>
+                </div>
+                <div className={`mt-2 h-2 overflow-hidden rounded-full ${theme === 'dark' ? 'bg-black/30' : 'bg-white/80'}`}>
+                  <div
+                    className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+                    style={{ width: `${remoteSnapshotRestoreProgress.progress}%` }}
+                  />
+                </div>
+              </div>
+            )}
             <div className={`rounded-md border p-3 text-xs ${theme === 'dark' ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-500'}`}>
               <div><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Manual Sync Metadata:</span> rebuild the bank list first, then recover downloads or missing media per bank.</div>
               <div className="mt-1"><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Restore from Full Backup:</span> use your exported backup file for the fastest full-media restore.</div>

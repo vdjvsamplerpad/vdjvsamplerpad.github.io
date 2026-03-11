@@ -29,6 +29,7 @@ interface OnlineBankStoreDialogProps {
     onOpenChange: (open: boolean) => void;
     theme: 'light' | 'dark';
     importedBankIds?: Set<string>;
+    runtimeBankIdsBySource?: Record<string, string[]>;
     onImportBankFromStore: (
         file: File,
         meta: OnlineBankStoreImportMeta,
@@ -46,8 +47,6 @@ const ACCOUNT_PROOF_ALLOWED_MIME_TYPES = new Set([
     'image/heic',
     'image/heif',
 ]);
-const IMPORTED_HISTORY_STORAGE_KEY_PREFIX = 'vdjv-store-imported-history-v1:';
-
 const getFileExt = (name: string): string => String(name.split('.').pop() || '').toLowerCase();
 
 const validateProofFile = (file: File): string | null => {
@@ -75,7 +74,7 @@ const normalizeBannerRotationMs = (value: unknown): number | null => {
     return Math.max(3000, Math.min(15000, Math.floor(parsed)));
 };
 
-export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankIds, onImportBankFromStore }: OnlineBankStoreDialogProps) {
+export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankIds, runtimeBankIdsBySource, onImportBankFromStore }: OnlineBankStoreDialogProps) {
     const { user, profile } = useAuth();
     const effectiveUser = user || getCachedUser();
     const effectiveUserId = effectiveUser?.id || null;
@@ -125,7 +124,7 @@ export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankI
     const [proofPreviewUrl, setProofPreviewUrl] = React.useState<string | null>(null);
     const [expandedQrUrl, setExpandedQrUrl] = React.useState<string | null>(null);
     const [purchaseReceipt, setPurchaseReceipt] = React.useState<PurchaseReceiptState | null>(null);
-    const [persistedImportedBankIds, setPersistedImportedBankIds] = React.useState<Set<string>>(new Set());
+    const [refreshAssetsItem, setRefreshAssetsItem] = React.useState<StoreItem | null>(null);
     const dialogScrollRef = React.useRef<HTMLDivElement | null>(null);
     const proofOcrSeqRef = React.useRef(0);
     const loadSeqRef = React.useRef(0);
@@ -174,43 +173,6 @@ export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankI
 
     const userKey = effectiveUserId || 'anon';
     const cacheKey = `vdjv-store-snapshot-v1:${userKey}`;
-    const importedHistoryStorageKey = `${IMPORTED_HISTORY_STORAGE_KEY_PREFIX}${userKey}`;
-
-    const persistImportedHistory = React.useCallback((updater: (prev: Set<string>) => Set<string>) => {
-        setPersistedImportedBankIds((prev) => {
-            const next = updater(prev);
-            try {
-                localStorage.setItem(importedHistoryStorageKey, JSON.stringify(Array.from(next)));
-            } catch {
-                // Ignore local persistence failures.
-            }
-            return next;
-        });
-    }, [importedHistoryStorageKey]);
-
-    React.useEffect(() => {
-        try {
-            const raw = localStorage.getItem(importedHistoryStorageKey);
-            if (!raw) {
-                setPersistedImportedBankIds(new Set());
-                return;
-            }
-            const parsed = JSON.parse(raw);
-            const next = Array.isArray(parsed) ? new Set(parsed.filter((value) => typeof value === 'string' && value.trim().length > 0)) : new Set<string>();
-            setPersistedImportedBankIds(next);
-        } catch {
-            setPersistedImportedBankIds(new Set());
-        }
-    }, [importedHistoryStorageKey]);
-
-    React.useEffect(() => {
-        if (!importedBankIds || importedBankIds.size === 0) return;
-        persistImportedHistory((prev) => {
-            const next = new Set(prev);
-            importedBankIds.forEach((bankId) => next.add(bankId));
-            return next;
-        });
-    }, [importedBankIds, persistImportedHistory]);
 
     React.useEffect(() => {
         const handleOnline = () => {
@@ -478,28 +440,8 @@ export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankI
     const cartItems = React.useMemo(() => items.filter(i => cartItemIds.has(i.id)), [items, cartItemIds]);
     const cartTotal = cartItems.reduce((sum, i) => sum + (i.price_php ?? 0), 0);
     const importedOrDownloadedBankIds = React.useMemo(() => {
-        const next = new Set<string>(Array.from(persistedImportedBankIds));
-        Array.from(importedBankIds || []).forEach((bankId) => next.add(bankId));
-        Object.entries(transfers).forEach(([catalogItemId, transfer]) => {
-            if (transfer.phase !== 'success') return;
-            const matchedItem = items.find((item) => item.id === catalogItemId);
-            if (matchedItem?.bank_id) next.add(matchedItem.bank_id);
-        });
-        return next;
-    }, [importedBankIds, items, persistedImportedBankIds, transfers]);
-
-    React.useEffect(() => {
-        const successfulBankIds = Object.entries(transfers)
-            .filter(([, transfer]) => transfer.phase === 'success')
-            .map(([catalogItemId]) => items.find((item) => item.id === catalogItemId)?.bank_id)
-            .filter((bankId): bankId is string => typeof bankId === 'string' && bankId.trim().length > 0);
-        if (successfulBankIds.length === 0) return;
-        persistImportedHistory((prev) => {
-            const next = new Set(prev);
-            successfulBankIds.forEach((bankId) => next.add(bankId));
-            return next;
-        });
-    }, [items, persistImportedHistory, transfers]);
+        return new Set<string>(Array.from(importedBankIds || []));
+    }, [importedBankIds]);
     const activeBanner = React.useMemo(() => {
         if (!Array.isArray(banners) || banners.length === 0) return null;
         const index = bannerIndex >= 0 && bannerIndex < banners.length ? bannerIndex : 0;
@@ -537,6 +479,9 @@ export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankI
                     overlayClassName="z-[110]"
                     className={`!left-[50%] !top-[50%] !translate-x-[-50%] !translate-y-[-50%] fixed z-[120] max-w-4xl max-h-[85vh] overflow-hidden flex flex-col p-0 ${isDark ? 'bg-gray-900 border-gray-700' : 'bg-gray-50 border-gray-200'}`}
                     aria-describedby={undefined}
+                    onOpenAutoFocus={(event) => {
+                        event.preventDefault();
+                    }}
                 >
                     {toastMessage && (
                         <div className={`absolute top-4 left-1/2 transform -translate-x-1/2 px-4 py-2 rounded-md shadow-md z-50 flex items-center gap-2 transition-all ${toastMessage.type === 'error' ? 'bg-red-500 text-white' : 'bg-green-500 text-white'}`}>
@@ -811,8 +756,11 @@ export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankI
                                                                 {item.price_php === null ? <span className="text-amber-300 text-sm">Price to be announced</span> : <span>PHP {item.price_php.toLocaleString()}</span>}
                                                             </div>
                                                         ) : importedOrDownloadedBankIds.has(item.bank_id) ? (
-                                                            <span className="inline-flex items-center h-6 px-2 text-[10px] rounded-md font-bold uppercase tracking-wide bg-cyan-600/20 text-cyan-200 border border-cyan-300/30">
-                                                                IMPORTED
+                                                            <span
+                                                                className="inline-flex items-center h-6 px-2 text-[10px] rounded-md font-bold uppercase tracking-wide bg-cyan-600/20 text-cyan-200 border border-cyan-300/30"
+                                                                title="This bank is already imported on this device."
+                                                            >
+                                                                Imported
                                                             </span>
                                                         ) : !isGuest && item.status === 'free_download' ? (
                                                             <span className="inline-flex items-center h-6 px-2 text-[10px] rounded-md font-bold uppercase tracking-wide bg-green-600/20 text-green-200 border border-green-300/30">
@@ -839,9 +787,19 @@ export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankI
                                                                 </Button>
                                                             ) : (item.status === 'free_download' || item.status === 'granted_download') ? (
                                                                 importedOrDownloadedBankIds.has(item.bank_id) ? (
-                                                                    <span className={`inline-flex items-center h-7 px-2.5 text-xs rounded-md font-medium ${isDark ? 'bg-cyan-500/10 text-cyan-300' : 'bg-cyan-50 text-cyan-700'}`}>
-                                                                        <Check className="w-3 h-3 mr-1" />Imported
-                                                                    </span>
+                                                                    <Button
+                                                                        size="sm"
+                                                                        variant="ghost"
+                                                                        onClick={() => {
+                                                                            if ((runtimeBankIdsBySource?.[item.bank_id] || []).length <= 0) return;
+                                                                            setRefreshAssetsItem(item);
+                                                                        }}
+                                                                        disabled={(runtimeBankIdsBySource?.[item.bank_id] || []).length <= 0 || transfers[item.id]?.phase === 'downloading' || transfers[item.id]?.phase === 'importing'}
+                                                                        className={`h-7 px-2.5 text-xs rounded-md font-medium border ${isDark ? 'bg-cyan-500/10 text-cyan-300 border-cyan-400/30 hover:bg-cyan-500/20' : 'bg-cyan-50 text-cyan-700 border-cyan-200 hover:bg-cyan-100'}`}
+                                                                        title={(runtimeBankIdsBySource?.[item.bank_id] || []).length > 0 ? 'Redownload official bank assets without changing your edits.' : 'This bank is not currently available on this device.'}
+                                                                    >
+                                                                        <RotateCcw className="w-3 h-3 mr-1" />Redownload
+                                                                    </Button>
                                                                 ) : transfers[item.id]?.phase === 'error' ? (
                                                                     <Button
                                                                         size="sm"
@@ -986,6 +944,62 @@ export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankI
                             </div>
                         </div>
                     )}
+
+                    <Dialog
+                        open={Boolean(refreshAssetsItem)}
+                        onOpenChange={(nextOpen) => {
+                            if (!nextOpen) setRefreshAssetsItem(null);
+                        }}
+                        useHistory={false}
+                    >
+                        <DialogContent
+                            overlayClassName="z-[159]"
+                            className="z-[160] sm:max-w-md"
+                            aria-describedby={undefined}
+                        >
+                            <DialogHeader>
+                                <DialogTitle>Redownload Bank Assets?</DialogTitle>
+                                <DialogDescription>
+                                    Refresh the official audio, image, and thumbnail assets for this bank without changing your saved edits, custom pads, or metadata.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4 text-sm">
+                                <p className={isDark ? 'text-gray-300' : 'text-gray-600'}>
+                                    {refreshAssetsItem
+                                        ? `This refreshes official assets for "${refreshAssetsItem.bank.title}" on this device, including duplicate paid banks and linked paid pads when they match this store bank.`
+                                        : 'Refresh official bank assets on this device.'}
+                                </p>
+                                <div className="grid grid-cols-1 gap-2">
+                                    <Button
+                                        onClick={async () => {
+                                            if (!refreshAssetsItem) return;
+                                            const targetBankIds = runtimeBankIdsBySource?.[refreshAssetsItem.bank_id] || [];
+                                            const targetBankId = targetBankIds[0] || null;
+                                            if (!targetBankId) {
+                                                showToast('This bank is not currently available on this device.', 'error');
+                                                setRefreshAssetsItem(null);
+                                                return;
+                                            }
+                                            const nextItem: StoreItem = {
+                                                ...refreshAssetsItem,
+                                                snapshot_target_bank_id: targetBankId,
+                                            };
+                                            setRefreshAssetsItem(null);
+                                            await handleDownload(nextItem, {
+                                                preferCachedImportRetry: false,
+                                                refreshAssetsOnly: true,
+                                            });
+                                        }}
+                                    >
+                                        Redownload Assets
+                                    </Button>
+                                    <Button variant="ghost" onClick={() => setRefreshAssetsItem(null)}>
+                                        Cancel
+                                    </Button>
+                                </div>
+                            </div>
+                        </DialogContent>
+                    </Dialog>
 
                     {rejectedOverlay && (
                         <OnlineStoreRejectedOverlay

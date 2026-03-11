@@ -2,6 +2,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
+import { isNativeCapacitorRuntime } from '@/lib/runtime-routes';
 
 function restoreSpaPathFromRedirect() {
   if (typeof window === 'undefined') return;
@@ -17,7 +18,7 @@ function restoreSpaPathFromRedirect() {
 }
 
 const isSecureContext = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
-if ('serviceWorker' in navigator && isSecureContext) {
+if ('serviceWorker' in navigator && isSecureContext && !isNativeCapacitorRuntime() && __VDJV_INCLUDE_LANDING__) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then(registration => {
     }).catch(registrationError => {

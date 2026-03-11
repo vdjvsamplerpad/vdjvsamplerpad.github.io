@@ -6,7 +6,7 @@ import {
   readR2DirectUploadSession,
 } from "../_shared/r2-direct-upload.ts";
 import { createPresignedPutUrl, headObject } from "../_shared/r2-storage.ts";
-import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_shared/supabase.ts";
+import { createServiceClient, getUserFromAuthHeader } from "../_shared/supabase.ts";
 import { asNumber, asObject, asString, asUuid } from "../_shared/validate.ts";
 
 const R2_BUCKET = asString(Deno.env.get("R2_BUCKET"), 200);
@@ -60,7 +60,6 @@ const requireAuthenticatedUser = async (
   const authHeader = req.headers.get("Authorization");
   const user = await getUserFromAuthHeader(authHeader);
   if (!user?.id) return { ok: false, response: json(401, { ok: false, error: "NOT_AUTHENTICATED" }, req) };
-  if (await isAdminUser(user.id)) return { ok: false, response: json(403, { ok: false, error: "FORBIDDEN" }, req) };
   return { ok: true, userId: user.id };
 };
 

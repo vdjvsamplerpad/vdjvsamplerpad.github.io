@@ -17,6 +17,7 @@ import type { PerformanceTier } from '@/lib/performance-monitor';
 import { useGuestStorePreviewBanks, type GuestStorePreviewBank } from './hooks/useGuestStorePreviewBanks';
 import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { useOnlineStoreDownloadTransfer } from './hooks/useOnlineStoreDownloadTransfer';
+import { deriveSnapshotRestoreStatus } from './hooks/useSamplerStore.snapshotMetadata';
 import type { OnlineBankStoreImportMeta, StoreDownloadedArtifact, StoreItem, TransferState } from './onlineStore.types';
 
 type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string };
@@ -66,6 +67,7 @@ interface SideMenuProps {
       preferredDerivedKey?: string | null;
       preferredBankId?: string | null;
       entitlementToken?: string | null;
+      replaceExistingBankId?: string | null;
     }
   ) => Promise<SamplerBank | null>;
   onExportBank: (id: string, onProgress?: (progress: number) => void) => Promise<string>;
@@ -239,7 +241,9 @@ export function SideMenu({
     window.dispatchEvent(new Event('vdjv-login-request'));
   }, []);
 
-  const showEnhancedStoreButton = graphicsTier === 'high';
+  const isHighGraphics = graphicsTier === 'high';
+  const isMediumGraphics = graphicsTier === 'medium';
+  const showEnhancedStoreButton = isHighGraphics;
   const storeButtonMotionStyle = showEnhancedStoreButton
     ? { animation: 'vdjv-store-button-float 2.6s ease-in-out infinite' }
     : undefined;
@@ -263,15 +267,129 @@ export function SideMenu({
     requestLoginPrompt(reason || 'Please sign in to download this bank.');
   }, [requestLoginPrompt]);
 
+  const mergeOfficialPadAssets = React.useCallback((targetPad: PadData, sourcePad: PadData): PadData => ({
+    ...targetPad,
+    audioUrl: sourcePad.audioUrl || targetPad.audioUrl,
+    audioStorageKey: sourcePad.audioStorageKey ?? targetPad.audioStorageKey,
+    audioBackend: sourcePad.audioBackend ?? targetPad.audioBackend,
+    imageUrl: sourcePad.imageUrl || targetPad.imageUrl,
+    imageStorageKey: sourcePad.imageStorageKey ?? targetPad.imageStorageKey,
+    imageBackend: sourcePad.imageBackend ?? targetPad.imageBackend,
+    hasImageAsset: sourcePad.hasImageAsset ?? targetPad.hasImageAsset,
+    audioBytes: sourcePad.audioBytes ?? targetPad.audioBytes,
+    audioDurationMs: sourcePad.audioDurationMs ?? targetPad.audioDurationMs,
+    contentOrigin: sourcePad.contentOrigin ?? targetPad.contentOrigin,
+    originBankId: sourcePad.originBankId ?? targetPad.originBankId,
+    originPadId: sourcePad.originPadId ?? targetPad.originPadId,
+    originCatalogItemId: sourcePad.originCatalogItemId ?? targetPad.originCatalogItemId,
+    originBankTitle: sourcePad.originBankTitle ?? targetPad.originBankTitle,
+    missingMediaExpected: false,
+    missingImageExpected: false,
+  }), []);
+
+  const refreshStoreAssetsFromImportedBank = React.useCallback((importedBank: SamplerBank, meta: OnlineBankStoreImportMeta) => {
+    const importedPadById = new Map<string, PadData>();
+    const importedPadByOriginId = new Map<string, PadData>();
+    importedBank.pads.forEach((pad) => {
+      importedPadById.set(pad.id, pad);
+      if (typeof pad.originPadId === 'string' && pad.originPadId.trim().length > 0) {
+        importedPadByOriginId.set(pad.originPadId, pad);
+      }
+    });
+
+    const resolveImportedPad = (targetPad: PadData): PadData | null => {
+      return (
+        importedPadById.get(targetPad.id) ||
+        (typeof targetPad.sourcePadId === 'string'
+          ? importedPadByOriginId.get(targetPad.sourcePadId) || importedPadById.get(targetPad.sourcePadId)
+          : undefined) ||
+        (typeof targetPad.originPadId === 'string'
+          ? importedPadByOriginId.get(targetPad.originPadId) || importedPadById.get(targetPad.originPadId)
+          : undefined) ||
+        null
+      );
+    };
+
+    let refreshedBanks = 0;
+    let refreshedPads = 0;
+    banks.forEach((candidate) => {
+      if (candidate.id === importedBank.id) return;
+
+      const isPaidBankDuplicate =
+        candidate.bankMetadata?.bankId === meta.bankId ||
+        candidate.sourceBankId === meta.bankId ||
+        candidate.bankMetadata?.catalogItemId === meta.catalogItemId;
+
+      let changed = false;
+      let nextPads = candidate.pads;
+
+      if (isPaidBankDuplicate) {
+        const matchedImportedPadIds = new Set<string>();
+        nextPads = candidate.pads.map((targetPad) => {
+          if (targetPad.restoreAssetKind === 'custom_local_media') return targetPad;
+          const sourcePad = resolveImportedPad(targetPad);
+          if (!sourcePad) return targetPad;
+          matchedImportedPadIds.add(sourcePad.id);
+          changed = true;
+          refreshedPads += 1;
+          return mergeOfficialPadAssets(targetPad, sourcePad);
+        });
+        const appendedImportedPads = importedBank.pads.filter((pad) =>
+          pad.restoreAssetKind !== 'custom_local_media' && !matchedImportedPadIds.has(pad.id)
+        );
+        if (appendedImportedPads.length > 0) {
+          nextPads = [...nextPads, ...appendedImportedPads];
+          changed = true;
+          refreshedPads += appendedImportedPads.length;
+        }
+      } else {
+        nextPads = candidate.pads.map((targetPad) => {
+          const referencesThisStoreBank = targetPad.restoreAssetKind === 'paid_asset' && (
+            targetPad.originCatalogItemId === meta.catalogItemId ||
+            targetPad.sourceCatalogItemId === meta.catalogItemId ||
+            targetPad.originBankId === meta.bankId
+          );
+          if (!referencesThisStoreBank) return targetPad;
+          const sourcePad = resolveImportedPad(targetPad);
+          if (!sourcePad) return targetPad;
+          changed = true;
+          refreshedPads += 1;
+          return mergeOfficialPadAssets(targetPad, sourcePad);
+        });
+      }
+
+      if (!changed) return;
+      refreshedBanks += 1;
+      onUpdateBank(candidate.id, {
+        pads: nextPads,
+        restoreStatus: deriveSnapshotRestoreStatus({ ...candidate, pads: nextPads }),
+        bankMetadata: isPaidBankDuplicate
+          ? {
+              ...candidate.bankMetadata,
+              thumbnailUrl: meta.thumbnailUrl || candidate.bankMetadata?.thumbnailUrl,
+            }
+          : candidate.bankMetadata,
+      });
+    });
+
+    return { refreshedBanks, refreshedPads };
+  }, [banks, mergeOfficialPadAssets, onUpdateBank]);
+
   const importBankFromStoreWithSnapshotReconcile = React.useCallback(async (
     file: File,
     meta: OnlineBankStoreImportMeta,
     onProgress?: (progress: number) => void
   ) => {
-      const placeholderBank = banks.find((candidate) =>
-        candidate.remoteSnapshotApplied &&
-        candidate.restoreKind === 'paid_bank' &&
-        (candidate.bankMetadata?.bankId === meta.bankId || candidate.sourceBankId === meta.bankId)
+      const placeholderBank = (
+        (meta.targetBankId
+          ? banks.find((candidate) => candidate.id === meta.targetBankId) || null
+          : null)
+        || banks.find((candidate) =>
+          candidate.remoteSnapshotApplied &&
+          candidate.restoreKind === 'paid_bank' &&
+          (candidate.bankMetadata?.bankId === meta.bankId || candidate.sourceBankId === meta.bankId)
+        )
+        || null
       );
 
       const importedBank = await onImportBank(file, onProgress, {
@@ -279,14 +397,34 @@ export function SideMenu({
         preferredBankId: meta.bankId || null,
         entitlementToken: meta.entitlementToken || null,
         allowDuplicateImport: Boolean(placeholderBank),
+        replaceExistingBankId: meta.targetBankId || placeholderBank?.id || null,
       });
 
       if (!importedBank) return;
 
+      if (meta.refreshAssetsOnly) {
+        const refreshResult = refreshStoreAssetsFromImportedBank(importedBank, meta);
+        if (refreshResult.refreshedBanks > 0 || refreshResult.refreshedPads > 0) {
+          pushNotice({
+            variant: 'success',
+            message: `Refreshed official assets for ${refreshResult.refreshedBanks} bank${refreshResult.refreshedBanks === 1 ? '' : 's'} and ${refreshResult.refreshedPads} pad${refreshResult.refreshedPads === 1 ? '' : 's'}.`,
+          });
+        } else {
+          pushNotice({
+            variant: 'info',
+            message: 'The latest bank assets were refreshed on this device.',
+          });
+        }
+      }
+
+      const nextRestoreStatus = deriveSnapshotRestoreStatus({
+        ...importedBank,
+        restoreKind: 'paid_bank',
+      });
       onUpdateBank(importedBank.id, {
         sortOrder: placeholderBank?.sortOrder ?? importedBank.sortOrder,
         restoreKind: 'paid_bank',
-        restoreStatus: 'ready',
+        restoreStatus: nextRestoreStatus,
         remoteSnapshotApplied: true,
         bankMetadata: {
           ...importedBank.bankMetadata,
@@ -302,29 +440,12 @@ export function SideMenu({
             meta.entitlementTokenExpiresAt || importedBank.bankMetadata?.entitlementTokenExpiresAt,
         }
       });
-
-      if (placeholderBank && placeholderBank.id !== importedBank.id) {
-        const wasPrimary = primaryBankId === placeholderBank.id;
-        const wasSecondary = secondaryBankId === placeholderBank.id;
-        const wasCurrent = currentBankId === placeholderBank.id;
-        onDeleteBank(placeholderBank.id);
-        window.setTimeout(() => {
-          if (wasPrimary) onSetPrimaryBank(importedBank.id);
-          if (wasSecondary) onSetSecondaryBank(importedBank.id);
-          if (wasCurrent) onSetCurrentBank(importedBank.id);
-        }, 0);
-      }
   }, [
     banks,
-    currentBankId,
-    onDeleteBank,
     onImportBank,
-    onSetCurrentBank,
-    onSetPrimaryBank,
-    onSetSecondaryBank,
     onUpdateBank,
-    primaryBankId,
-    secondaryBankId,
+    pushNotice,
+    refreshStoreAssetsFromImportedBank,
   ]);
 
   const { normalizeProgress, handleDownload: handleSnapshotBankDownload } = useOnlineStoreDownloadTransfer({
@@ -346,14 +467,21 @@ export function SideMenu({
       ? bank.bankMetadata.bankId.trim()
       : (typeof bank.sourceBankId === 'string' ? bank.sourceBankId.trim() : '');
     if (!catalogItemId || !storeBankId) return null;
+    const requiresGrant = Boolean(
+      bank.bankMetadata?.entitlementToken ||
+      bank.bankMetadata?.entitlementTokenKid ||
+      bank.bankMetadata?.entitlementTokenIssuedAt ||
+      bank.bankMetadata?.entitlementTokenExpiresAt
+    );
     return {
       id: catalogItemId,
       bank_id: storeBankId,
-      is_paid: true,
-      requires_grant: true,
+      snapshot_target_bank_id: bank.id,
+      is_paid: requiresGrant,
+      requires_grant: requiresGrant,
       is_pinned: false,
       is_owned: true,
-      is_free_download: false,
+      is_free_download: !requiresGrant,
       is_pending: false,
       is_rejected: false,
       is_downloadable: true,
@@ -1110,8 +1238,38 @@ export function SideMenu({
                 const isActive = !isPreview && (isPrimary || isSecondary || isCurrent);
                 const isDragOver = !isPreview && dragOverBankId === bankId;
                 const bankShortcutLabel = !isPreview ? normalizeStoredShortcutKey(bank?.shortcutKey) : undefined;
-                const bankTextColorStyle = (!isActive || isLowestGraphics)
+                const shouldUseBankColorText = (!isActive || isLowestGraphics)
+                  && !(thumbnailUrl && !isActive && !isLowestGraphics && !isMediumGraphics);
+                const isHighThumbnailCard = isHighGraphics && !isActive && !isLowestGraphics && !!thumbnailUrl;
+                const bankTextColorStyle = shouldUseBankColorText
                   ? { color: getTextColorForBackground(bankColor) }
+                  : undefined;
+                const highThumbnailTextStyle = isHighThumbnailCard
+                  ? { color: '#ffffff', textShadow: '0 1px 2px rgba(0, 0, 0, 0.75)' }
+                  : undefined;
+                const inactiveBankCardStyle = !isActive
+                  ? {
+                    backgroundColor: bankColor,
+                    borderColor: bankColor,
+                    ...(isHighGraphics
+                      ? {
+                        boxShadow: `inset 0 0 0 3px ${bankColor}`,
+                      }
+                      : {}),
+                    ...(thumbnailUrl
+                      ? isMediumGraphics
+                        ? {
+                          backgroundImage: `linear-gradient(to right, transparent 0%, ${bankColor} 70%), url(${thumbnailUrl})`,
+                          backgroundSize: 'cover, cover',
+                          backgroundPosition: 'center, left center',
+                        }
+                        : {
+                          backgroundImage: `url(${thumbnailUrl})`,
+                          backgroundSize: 'cover',
+                          backgroundPosition: 'center',
+                        }
+                      : {}),
+                  }
                   : undefined;
                 const activeLabel = isPrimary ? 'PRIMARY' : isSecondary ? 'SECONDARY' : isCurrent ? 'CURRENT' : null;
                 const activeAccentClass = isPrimary
@@ -1130,11 +1288,17 @@ export function SideMenu({
                   : isSecondary
                     ? (theme === 'dark' ? 'bg-purple-500/18 text-purple-200 border-purple-400/50' : 'bg-purple-100 text-purple-700 border-purple-200')
                     : (theme === 'dark' ? 'bg-emerald-500/18 text-emerald-200 border-emerald-400/50' : 'bg-emerald-100 text-emerald-700 border-emerald-200');
+                const lowestActivePillClass = isPrimary
+                  ? (theme === 'dark' ? 'bg-blue-950/85 text-blue-100 border-blue-400/70' : 'bg-blue-600 text-white border-blue-200')
+                  : isSecondary
+                    ? (theme === 'dark' ? 'bg-purple-950/85 text-purple-100 border-purple-400/70' : 'bg-purple-600 text-white border-purple-200')
+                    : (theme === 'dark' ? 'bg-emerald-950/85 text-emerald-100 border-emerald-400/70' : 'bg-emerald-600 text-white border-emerald-200');
                 const activeRailClass = isPrimary
                   ? 'bg-blue-500'
                   : isSecondary
                     ? 'bg-purple-500'
                     : 'bg-emerald-500';
+                const canRecoverAtBankLevel = !isPreview && bank?.restoreKind === 'custom_bank';
                 const lowestAccentBorder = isPrimary
                   ? '#3b82f6'
                   : isSecondary
@@ -1151,7 +1315,7 @@ export function SideMenu({
                     setSnapshotBankAction({ kind: 'download', bankId });
                     return;
                   }
-                  if (restoreStatus === 'missing_media' || restoreStatus === 'partially_restored') {
+                  if (canRecoverAtBankLevel && (restoreStatus === 'missing_media' || restoreStatus === 'partially_restored')) {
                     setSnapshotBankAction({ kind: 'recover', bankId });
                     return;
                   }
@@ -1176,16 +1340,10 @@ export function SideMenu({
                       ? {
                         backgroundColor: bankColor,
                         borderColor: lowestAccentBorder,
+                        borderWidth: isActive ? '2px' : undefined,
+                        boxShadow: isActive ? `inset 0 0 0 2px ${lowestAccentBorder}` : undefined,
                       }
-                      : !isActive ? {
-                        backgroundColor: bankColor,
-                        borderColor: bankColor,
-                        ...(thumbnailUrl ? {
-                          backgroundImage: `linear-gradient(to right, transparent 0%, ${bankColor} 70%), url(${thumbnailUrl})`,
-                          backgroundSize: 'cover, cover',
-                          backgroundPosition: 'center, left center',
-                        } : {}),
-                      } : undefined}
+                      : inactiveBankCardStyle}
                     onDragOver={isPreview ? undefined : (e) => handleBankDragOver(e, bankId)}
                     onDrop={isPreview ? undefined : (e) => handleBankDrop(e, bankId)}
                     onDragLeave={isPreview ? undefined : handleBankDragLeave}
@@ -1212,21 +1370,24 @@ export function SideMenu({
                       <div className={`pointer-events-none absolute inset-y-2 left-1.5 w-1 rounded-full ${activeRailClass}`} />
                     )}
 
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className={`flex items-center gap-2 mb-1 ${isActive && !isLowestGraphics ? 'pl-3' : ''} ${isHighThumbnailCard ? 'rounded-md bg-black/25 px-1.5 py-1 shadow-[0_8px_20px_-14px_rgba(0,0,0,0.7)] backdrop-blur-[1px]' : ''}`}>
                       <div className="flex-1 min-w-0 cursor-pointer" onClick={handleBankSelect}>
-                        {activeLabel && !isLowestGraphics && (
+                        {activeLabel && (
                           <div className="mb-1">
-                            <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.12em] ${activePillClass}`}>
+                            <span className={`inline-flex rounded-full border font-semibold tracking-[0.12em] ${isLowestGraphics
+                              ? `px-1.5 py-0.5 text-[8px] ${lowestActivePillClass}`
+                              : `px-1.5 py-0.5 text-[9px] ${activePillClass}`
+                              }`}>
                               {activeLabel}
                             </span>
                           </div>
                         )}
-                        <h3 className="font-medium text-sm truncate" title={bankName} style={bankTextColorStyle}>
+                        <h3 className="font-medium text-sm truncate" title={bankName} style={isHighThumbnailCard ? highThumbnailTextStyle : bankTextColorStyle}>
                           {bankName.length > 15 ? `${bankName.substring(0, 15)}...` : bankName}
                         </h3>
                         {!isPreview && (
                           <div className="mt-0.5 flex flex-wrap items-center gap-1">
-                            <p className="text-xs opacity-75" style={bankTextColorStyle}>
+                            <p className="text-xs opacity-75" style={isHighThumbnailCard ? highThumbnailTextStyle : bankTextColorStyle}>
                               {bank?.pads.length || 0} pad{bank?.pads.length !== 1 ? 's' : ''}
                             </p>
                             {restoreStatus === 'needs_download' && (
@@ -1257,13 +1418,13 @@ export function SideMenu({
                         )}
                         {!isPreview && snapshotTransfer && (snapshotTransfer.phase === 'downloading' || snapshotTransfer.phase === 'importing' || snapshotTransfer.phase === 'error') && (
                           <div className="mt-1 space-y-1">
-                            <div className={`h-1.5 overflow-hidden rounded-full ${theme === 'dark' ? 'bg-black/20' : 'bg-white/40'}`}>
+                            <div className={`h-1.5 overflow-hidden rounded-full ${isHighThumbnailCard ? 'bg-black/45' : theme === 'dark' ? 'bg-black/20' : 'bg-white/40'}`}>
                               <div
                                 className={`h-full rounded-full transition-all duration-300 ${snapshotTransfer.phase === 'error' ? 'bg-red-500' : 'bg-indigo-500'}`}
                                 style={{ width: `${normalizeProgress(snapshotTransfer.progress)}%` }}
                               />
                             </div>
-                            <p className="text-[10px] opacity-80" style={bankTextColorStyle}>
+                            <p className="text-[10px] opacity-80" style={isHighThumbnailCard ? highThumbnailTextStyle : bankTextColorStyle}>
                               {snapshotTransfer.phase === 'importing'
                                 ? `Importing ${normalizeProgress(snapshotTransfer.progress)}%`
                                 : snapshotTransfer.phase === 'downloading'
@@ -1275,8 +1436,8 @@ export function SideMenu({
                       </div>
                       {bankShortcutLabel && !hideShortcutLabels && (
                         <span
-                          className="max-w-[64px] shrink-0 rounded bg-black/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide truncate"
-                          style={bankTextColorStyle}
+                          className={`max-w-[64px] shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide truncate ${isHighThumbnailCard ? 'bg-black/45' : 'bg-black/20'}`}
+                          style={isHighThumbnailCard ? highThumbnailTextStyle : bankTextColorStyle}
                           title={bankShortcutLabel}
                         >
                           {bankShortcutLabel}
@@ -1296,9 +1457,11 @@ export function SideMenu({
                               onMoveBankUp(bankId);
                             }}
                             disabled={!isPreview && !canMoveUp(bankId)}
-                            className={`p-0 h-3 w-4 transition-all duration-200 ${theme === 'dark'
-                              ? 'text-gray-400 hover:text-white hover:bg-gray-600 disabled:text-gray-600'
-                              : 'text-gray-600 hover:text-gray-900 hover:bg-white disabled:text-gray-400'
+                            className={`p-0 h-3 w-4 transition-all duration-200 ${isHighThumbnailCard
+                              ? 'text-white/85 hover:text-white hover:bg-black/35 disabled:text-white/30'
+                              : theme === 'dark'
+                                ? 'text-gray-400 hover:text-white hover:bg-gray-600 disabled:text-gray-600'
+                                : 'text-gray-600 hover:text-gray-900 hover:bg-white disabled:text-gray-400'
                               }`}
                             title="Move up"
                           >
@@ -1316,9 +1479,11 @@ export function SideMenu({
                               onMoveBankDown(bankId);
                             }}
                             disabled={!isPreview && !canMoveDown(bankId)}
-                            className={`p-0 h-3 w-4 transition-all duration-200 ${theme === 'dark'
-                              ? 'text-gray-400 hover:text-white hover:bg-gray-600 disabled:text-gray-600'
-                              : 'text-gray-600 hover:text-gray-900 hover:bg-white disabled:text-gray-400'
+                            className={`p-0 h-3 w-4 transition-all duration-200 ${isHighThumbnailCard
+                              ? 'text-white/85 hover:text-white hover:bg-black/35 disabled:text-white/30'
+                              : theme === 'dark'
+                                ? 'text-gray-400 hover:text-white hover:bg-gray-600 disabled:text-gray-600'
+                                : 'text-gray-600 hover:text-gray-900 hover:bg-white disabled:text-gray-400'
                               }`}
                             title="Move down"
                           >
@@ -1346,9 +1511,11 @@ export function SideMenu({
                             ? theme === 'dark'
                               ? 'bg-yellow-500 text-yellow-300 hover:bg-yellow-400'
                               : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
-                            : theme === 'dark'
-                              ? 'text-gray-400 hover:text-yellow-300 hover:bg-yellow-500'
-                              : 'text-gray-600 hover:text-yellow-700 hover:bg-yellow-100'
+                            : isHighThumbnailCard
+                              ? 'text-white/85 hover:text-yellow-200 hover:bg-black/35'
+                              : theme === 'dark'
+                                ? 'text-gray-400 hover:text-yellow-300 hover:bg-yellow-500'
+                                : 'text-gray-600 hover:text-yellow-700 hover:bg-yellow-100'
                             }`}
                           title={isPrimary ? 'Primary (click to exit dual mode)' : 'Set as Primary'}
                         >
@@ -1368,15 +1535,17 @@ export function SideMenu({
                                 setSnapshotBankAction({ kind: 'download', bankId });
                                 return;
                               }
-                              if (restoreStatus === 'missing_media' || restoreStatus === 'partially_restored') {
+                              if (canRecoverAtBankLevel && (restoreStatus === 'missing_media' || restoreStatus === 'partially_restored')) {
                                 setSnapshotBankAction({ kind: 'recover', bankId });
                                 return;
                               }
                               if (bank) handleEditBank(bank);
                             }}
-                          className={`p-1 h-6 w-6 transition-all duration-200 ${theme === 'dark'
-                            ? 'text-gray-400 hover:text-white hover:bg-gray-600'
-                            : 'text-gray-600 hover:text-gray-900 hover:bg-white'
+                          className={`p-1 h-6 w-6 transition-all duration-200 ${isHighThumbnailCard
+                            ? 'text-white/85 hover:text-white hover:bg-black/35'
+                            : theme === 'dark'
+                              ? 'text-gray-400 hover:text-white hover:bg-gray-600'
+                              : 'text-gray-600 hover:text-gray-900 hover:bg-white'
                             }`}
                         >
                           <Settings className="w-3 h-3" />
@@ -1399,7 +1568,7 @@ export function SideMenu({
       >
         <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Download Paid Bank?</DialogTitle>
+            <DialogTitle>Download Bank?</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 text-sm">
             <p className={theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}>
@@ -1698,6 +1867,20 @@ export function SideMenu({
               if (b.bankMetadata?.bankId) ids.add(b.bankMetadata.bankId);
             });
             return ids;
+          }, [banks])}
+          runtimeBankIdsBySource={React.useMemo(() => {
+            const next: Record<string, string[]> = {};
+            banks.forEach((bank) => {
+              const keys = [
+                typeof bank.bankMetadata?.bankId === 'string' ? bank.bankMetadata.bankId.trim() : '',
+                typeof bank.sourceBankId === 'string' ? bank.sourceBankId.trim() : '',
+              ].filter(Boolean);
+              keys.forEach((key) => {
+                if (!next[key]) next[key] = [];
+                if (!next[key].includes(bank.id)) next[key].push(bank.id);
+              });
+            });
+            return next;
           }, [banks])}
           onImportBankFromStore={importBankFromStoreWithSnapshotReconcile}
         />

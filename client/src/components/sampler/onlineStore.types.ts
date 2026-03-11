@@ -1,6 +1,7 @@
 export interface StoreItem {
     id: string; // catalog item id
     bank_id: string;
+    snapshot_target_bank_id?: string | null;
     is_paid: boolean;
     requires_grant: boolean;
     is_pinned?: boolean;
@@ -98,6 +99,8 @@ export type OnlineBankStoreImportMeta = {
     bankId: string;
     bankName: string;
     catalogItemId: string;
+    targetBankId?: string;
+    refreshAssetsOnly?: boolean;
     catalogSha256?: string;
     thumbnailUrl?: string;
     derivedKey?: string;

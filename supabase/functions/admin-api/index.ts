@@ -629,9 +629,7 @@ const resetPassword = async (userId: string, admin: ReturnType<typeof createServ
   }
 
   const anon = createClient(supabaseUrl, supabaseAnonKey, { auth: { persistSession: false } });
-  const { error: resetErr } = await anon.auth.resetPasswordForEmail(email, {
-    redirectTo: `${Deno.env.get("PUBLIC_SITE_URL") || "http://localhost:3000"}`,
-  });
+  const { error: resetErr } = await anon.auth.resetPasswordForEmail(email);
   if (resetErr) return fail(500, resetErr.message);
   return ok({ userId, email });
 };

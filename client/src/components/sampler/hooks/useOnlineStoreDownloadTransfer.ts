@@ -30,6 +30,7 @@ type UseOnlineStoreDownloadTransferArgs = {
 
 type HandleDownloadOptions = {
     preferCachedImportRetry?: boolean;
+    refreshAssetsOnly?: boolean;
 };
 
 const toHex = (buffer: ArrayBuffer): string => {
@@ -395,6 +396,8 @@ export function useOnlineStoreDownloadTransfer({
                     bankId: item.bank_id,
                     bankName: item.bank.title,
                     catalogItemId: item.id,
+                    targetBankId: item.snapshot_target_bank_id || undefined,
+                    refreshAssetsOnly: options?.refreshAssetsOnly === true,
                     catalogSha256: item.sha256 || undefined,
                     thumbnailUrl: item.thumbnail_path || undefined,
                     derivedKey: importedBankDerivedKey || undefined,

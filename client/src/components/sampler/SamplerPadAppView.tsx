@@ -106,7 +106,13 @@ interface SamplerPadAppViewProps {
   onRestoreBackupFile: (event: React.ChangeEvent<HTMLInputElement>) => void | Promise<void>;
   onRecoverBankFiles: (event: React.ChangeEvent<HTMLInputElement>) => void | Promise<void>;
   remoteSnapshotPrompt: RemoteSnapshotPromptState | null;
+  remoteSnapshotRestoreProgress: {
+    phase: 'applying' | 'settings' | 'finalizing';
+    label: string;
+    progress: number;
+  } | null;
   onRemoteSnapshotPromptChange: (next: RemoteSnapshotPromptState | null) => void;
+  onSkipRemoteSnapshotPrompt: () => void;
   onApplyRemoteSnapshot: () => void;
   onRestoreFromBackupForRemoteSnapshot: () => void;
   missingMediaSummary: MissingMediaSummary;
@@ -228,7 +234,9 @@ export function SamplerPadAppView({
   onRestoreBackupFile,
   onRecoverBankFiles,
   remoteSnapshotPrompt,
+  remoteSnapshotRestoreProgress,
   onRemoteSnapshotPromptChange,
+  onSkipRemoteSnapshotPrompt,
   onApplyRemoteSnapshot,
   onRestoreFromBackupForRemoteSnapshot,
   missingMediaSummary,
@@ -526,7 +534,9 @@ export function SamplerPadAppView({
           <SamplerPadAppDialogs
             theme={theme}
             remoteSnapshotPrompt={remoteSnapshotPrompt}
+            remoteSnapshotRestoreProgress={remoteSnapshotRestoreProgress}
             onRemoteSnapshotPromptChange={onRemoteSnapshotPromptChange}
+            onSkipRemoteSnapshotPrompt={onSkipRemoteSnapshotPrompt}
             onApplyRemoteSnapshot={onApplyRemoteSnapshot}
             onRestoreFromBackupForRemoteSnapshot={onRestoreFromBackupForRemoteSnapshot}
             missingMediaSummary={missingMediaSummary}

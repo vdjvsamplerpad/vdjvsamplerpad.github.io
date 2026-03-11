@@ -260,7 +260,7 @@ export function SamplerPadApp() {
   const { theme, toggleTheme } = useTheme();
   const { width: windowWidth, height: windowHeight } = useWindowSize();
   const midi = useWebMidi();
-  const { user, profile, loading } = useAuth();
+  const { user, profile, loading, authTransition } = useAuth();
   const audioTelemetry = React.useMemo(
     () => getAudioTelemetry((import.meta as any).env?.VITE_APP_VERSION || 'unknown'),
     []
@@ -281,6 +281,9 @@ export function SamplerPadApp() {
   const settingsSaveTimeoutRef = React.useRef<number | null>(null);
   const settingsLatestRef = React.useRef<AppSettings>(defaultSettings);
   const remoteSnapshotSyncAttemptRef = React.useRef<string | null>(null);
+  const remoteSnapshotRetryTimerRef = React.useRef<number | null>(null);
+  const remoteSnapshotRetryCountRef = React.useRef(0);
+  const remoteSnapshotPreviousUserIdRef = React.useRef<string | null>(null);
   const canUseAdminExport = profile?.role === 'admin';
 
   // Load settings from localStorage
@@ -357,7 +360,14 @@ export function SamplerPadApp() {
     missingImages: number;
     affectedBanks: string[];
   } | null>(null);
+  const [remoteSnapshotRetryNonce, setRemoteSnapshotRetryNonce] = React.useState(0);
   const [remoteSnapshotPrompt, setRemoteSnapshotPrompt] = React.useState<RemoteSnapshotPromptState | null>(null);
+  const [remoteSnapshotAvailable, setRemoteSnapshotAvailable] = React.useState<RemoteSnapshotPromptState | null>(null);
+  const [remoteSnapshotRestoreProgress, setRemoteSnapshotRestoreProgress] = React.useState<{
+    phase: 'applying' | 'settings' | 'finalizing';
+    label: string;
+    progress: number;
+  } | null>(null);
   const restoreBackupInputRef = React.useRef<HTMLInputElement>(null);
   const recoverBankInputRef = React.useRef<HTMLInputElement>(null);
   const [showRecoverBankModeDialog, setShowRecoverBankModeDialog] = React.useState(false);
@@ -440,6 +450,10 @@ export function SamplerPadApp() {
 
   // Global Toast State
   const [directImportSuccess, setDirectImportSuccess] = React.useState<string | null>(null);
+  const remoteSnapshotSkipSessionKey = React.useMemo(
+    () => (effectiveAuthUser?.id ? `vdjv-remote-snapshot-skip:${effectiveAuthUser.id}` : null),
+    [effectiveAuthUser?.id]
+  );
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -598,6 +612,48 @@ export function SamplerPadApp() {
   React.useEffect(() => {
     setMissingMediaSummary(null);
   }, [effectiveAuthUser?.id]);
+
+  React.useEffect(() => {
+    const previousUserId = remoteSnapshotPreviousUserIdRef.current;
+    const nextUserId = effectiveAuthUser?.id || null;
+    if (typeof window !== 'undefined' && previousUserId && previousUserId !== nextUserId) {
+      try {
+        window.sessionStorage.removeItem(`vdjv-remote-snapshot-skip:${previousUserId}`);
+      } catch {
+      }
+    }
+    remoteSnapshotPreviousUserIdRef.current = nextUserId;
+    remoteSnapshotSyncAttemptRef.current = null;
+    remoteSnapshotRetryCountRef.current = 0;
+    setRemoteSnapshotPrompt(null);
+    setRemoteSnapshotAvailable(null);
+    setRemoteSnapshotRestoreProgress(null);
+    if (typeof window !== 'undefined' && remoteSnapshotRetryTimerRef.current !== null) {
+      window.clearTimeout(remoteSnapshotRetryTimerRef.current);
+      remoteSnapshotRetryTimerRef.current = null;
+    }
+  }, [effectiveAuthUser?.id]);
+
+  const previousAuthTransitionStatusRef = React.useRef(authTransition.status);
+
+  React.useEffect(() => {
+    const previousStatus = previousAuthTransitionStatusRef.current;
+    const nextStatus = authTransition.status;
+    previousAuthTransitionStatusRef.current = nextStatus;
+
+    if (loading) return;
+    if (!effectiveAuthUser?.id) return;
+    if (nextStatus !== 'idle') return;
+    if (previousStatus !== 'signing_in') return;
+
+    remoteSnapshotSyncAttemptRef.current = null;
+    remoteSnapshotRetryCountRef.current = 0;
+    if (typeof window !== 'undefined' && remoteSnapshotRetryTimerRef.current !== null) {
+      window.clearTimeout(remoteSnapshotRetryTimerRef.current);
+      remoteSnapshotRetryTimerRef.current = null;
+    }
+    setRemoteSnapshotRetryNonce((value) => value + 1);
+  }, [authTransition.status, effectiveAuthUser?.id, loading]);
 
   // Update individual settings
   const updateSetting = React.useCallback(<K extends keyof AppSettings>(
@@ -761,47 +817,121 @@ export function SamplerPadApp() {
 
   React.useEffect(() => {
     if (loading) return;
-    if (!startupRestoreCompleted) return;
     if (!effectiveAuthUser?.id) return;
-
-    const hasLocalUserBanks = banks.some((bank) => bank.remoteSnapshotApplied || (
-      bank.sourceBankId !== DEFAULT_BANK_SOURCE_ID && bank.name !== 'Default Bank'
-    ));
-    if (hasLocalUserBanks) return;
+    if (authTransition.status !== 'idle') return;
+    if (remoteSnapshotAvailable) return;
 
     const userId = effectiveAuthUser.id;
-    if (remoteSnapshotSyncAttemptRef.current === userId) return;
-    remoteSnapshotSyncAttemptRef.current = userId;
+    const requestKey = `${userId}:${remoteSnapshotRetryNonce}`;
+    if (remoteSnapshotSyncAttemptRef.current === requestKey) return;
+    remoteSnapshotSyncAttemptRef.current = requestKey;
 
     let cancelled = false;
     const storageKey = `vdjv-remote-snapshot-applied:${userId}`;
+    const scheduleRetry = (delayMs: number) => {
+      remoteSnapshotSyncAttemptRef.current = null;
+      if (cancelled || typeof window === 'undefined' || remoteSnapshotRetryTimerRef.current !== null) return;
+      if (remoteSnapshotRetryCountRef.current >= 4) return;
+      remoteSnapshotRetryCountRef.current += 1;
+      remoteSnapshotRetryTimerRef.current = window.setTimeout(() => {
+        remoteSnapshotRetryTimerRef.current = null;
+        setRemoteSnapshotRetryNonce((value) => value + 1);
+      }, delayMs);
+    };
 
     void (async () => {
       try {
         const { snapshot, savedAt } = await getLatestUserSamplerMetadataSnapshot();
-        if (cancelled || !snapshot) return;
+        if (cancelled) return;
+        if (!snapshot) {
+          scheduleRetry(1500);
+          return;
+        }
 
         const snapshotMarker = savedAt || snapshot.exportedAt || '';
         if (typeof window !== 'undefined' && snapshotMarker && localStorage.getItem(storageKey) === snapshotMarker) {
           return;
         }
-        setRemoteSnapshotPrompt({
+        remoteSnapshotRetryCountRef.current = 0;
+        const nextPrompt = {
           snapshot,
           summary: summarizeRemoteSnapshotPrompt(snapshot),
-        });
+        };
+        setRemoteSnapshotAvailable(nextPrompt);
       } catch {
-        remoteSnapshotSyncAttemptRef.current = null;
+        scheduleRetry(1200);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [applySamplerMetadataSnapshot, banks, effectiveAuthUser?.id, loading, startupRestoreCompleted]);
+  }, [
+    authTransition.status,
+    effectiveAuthUser?.id,
+    loading,
+    remoteSnapshotAvailable,
+    remoteSnapshotRetryNonce,
+  ]);
 
-  const applyRemoteSnapshotToDevice = React.useCallback(async (snapshot: SamplerMetadataSnapshot) => {
+  React.useEffect(() => {
+    if (loading) return;
+    if (!startupRestoreCompleted) return;
+    if (!effectiveAuthUser?.id) return;
+    if (!remoteSnapshotAvailable) return;
+    if (remoteSnapshotPrompt) return;
+
+    if (typeof window !== 'undefined' && remoteSnapshotSkipSessionKey) {
+      try {
+        if (window.sessionStorage.getItem(remoteSnapshotSkipSessionKey) === '1') return;
+      } catch {
+      }
+    }
+
+    const hasLocalUserBanks = banks.some((bank) => bank.remoteSnapshotApplied || (
+      bank.sourceBankId !== DEFAULT_BANK_SOURCE_ID && bank.name !== 'Default Bank'
+    ));
+    if (hasLocalUserBanks) return;
+
+    setRemoteSnapshotPrompt(remoteSnapshotAvailable);
+  }, [
+    banks,
+    effectiveAuthUser?.id,
+    loading,
+    remoteSnapshotAvailable,
+    remoteSnapshotPrompt,
+    remoteSnapshotSkipSessionKey,
+    startupRestoreCompleted,
+  ]);
+
+  const handleSkipRemoteSnapshotPrompt = React.useCallback(() => {
+    if (typeof window !== 'undefined' && remoteSnapshotSkipSessionKey) {
+      try {
+        window.sessionStorage.setItem(remoteSnapshotSkipSessionKey, '1');
+      } catch {
+      }
+    }
+    setRemoteSnapshotPrompt(null);
+    setRemoteSnapshotAvailable(null);
+    setRemoteSnapshotRestoreProgress(null);
+  }, [remoteSnapshotSkipSessionKey]);
+
+  const applyRemoteSnapshotToDevice = React.useCallback(async (
+    snapshot: SamplerMetadataSnapshot,
+    onProgress?: (state: { phase: 'applying' | 'settings' | 'finalizing'; label: string; progress: number }) => void
+  ) => {
+    onProgress?.({
+      phase: 'applying',
+      label: 'Applying bank metadata...',
+      progress: 24,
+    });
     const result = await applySamplerMetadataSnapshot(snapshot);
 
+    onProgress?.({
+      phase: 'settings',
+      label: 'Restoring settings and layout...',
+      progress: 72,
+    });
     if (result.settings) {
       const restoredSettings = result.settings as Partial<AppSettings>;
       const normalizedDeckLayout = normalizeDeckLayoutEntries(restoredSettings.deckLayout);
@@ -824,6 +954,11 @@ export function SamplerPadApp() {
       }
     }
 
+    onProgress?.({
+      phase: 'finalizing',
+      label: 'Finalizing restore...',
+      progress: 100,
+    });
     const userId = effectiveAuthUser?.id;
     const snapshotMarker = snapshot.exportedAt || '';
     if (typeof window !== 'undefined' && userId && snapshotMarker) {
@@ -836,11 +971,17 @@ export function SamplerPadApp() {
   const handleApplyRemoteSnapshot = React.useCallback(async () => {
     if (!remoteSnapshotPrompt) return;
     try {
-      const result = await applyRemoteSnapshotToDevice(remoteSnapshotPrompt.snapshot);
+      const result = await applyRemoteSnapshotToDevice(
+        remoteSnapshotPrompt.snapshot,
+        setRemoteSnapshotRestoreProgress
+      );
       setRemoteSnapshotPrompt(null);
+      setRemoteSnapshotAvailable(null);
+      setRemoteSnapshotRestoreProgress(null);
       setError(result.message);
       setShowErrorDialog(true);
     } catch (snapshotError) {
+      setRemoteSnapshotRestoreProgress(null);
       setError(snapshotError instanceof Error ? snapshotError.message : 'Failed to sync sampler metadata.');
       setShowErrorDialog(true);
     }
@@ -2666,6 +2807,7 @@ export function SamplerPadApp() {
 
   const handleRestoreFromBackupForRemoteSnapshot = React.useCallback(() => {
     setRemoteSnapshotPrompt(null);
+    setRemoteSnapshotRestoreProgress(null);
     handleRestoreBackupPrompt();
   }, [handleRestoreBackupPrompt]);
 
@@ -2967,7 +3109,9 @@ export function SamplerPadApp() {
       onRestoreBackupFile={handleRestoreBackupFile}
       onRecoverBankFiles={handleRecoverBankFiles}
       remoteSnapshotPrompt={remoteSnapshotPrompt}
+      remoteSnapshotRestoreProgress={remoteSnapshotRestoreProgress}
       onRemoteSnapshotPromptChange={setRemoteSnapshotPrompt}
+      onSkipRemoteSnapshotPrompt={handleSkipRemoteSnapshotPrompt}
       onApplyRemoteSnapshot={handleApplyRemoteSnapshot}
       onRestoreFromBackupForRemoteSnapshot={handleRestoreFromBackupForRemoteSnapshot}
       missingMediaSummary={missingMediaSummary}

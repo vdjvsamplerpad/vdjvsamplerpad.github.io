@@ -72,9 +72,16 @@ const computeSnapshotBankRestoreStatus = (
 ): SnapshotBankRecord['restoreStatus'] => {
   if (restoreKind === 'paid_bank') return 'needs_download';
   const missingCustom = pads.some((pad) => pad.restoreAssetKind === 'custom_local_media' && pad.missingMediaExpected);
+  const missingPaid = pads.some((pad) => pad.restoreAssetKind === 'paid_asset' && pad.missingMediaExpected);
+
+  if (restoreKind === 'default_bank') {
+    if (missingPaid || missingCustom) return 'partially_restored';
+    return 'ready';
+  }
+
   const missingOfficial = pads.some((pad) => pad.restoreAssetKind !== 'custom_local_media');
   if (missingCustom && missingOfficial) return 'partially_restored';
-  if (missingCustom) return 'missing_media';
+  if (missingCustom || missingOfficial) return 'missing_media';
   return 'ready';
 };
 
@@ -236,13 +243,26 @@ export const materializeSnapshotBanks = (
 };
 
 export const deriveSnapshotRestoreStatus = (bank: SamplerBank): NonNullable<SamplerBank['restoreStatus']> => {
-  if (bank.restoreKind === 'paid_bank' && (!bank.pads.length || bank.pads.every((pad) => pad.restoreAssetKind === 'paid_asset' && pad.missingMediaExpected))) {
-    return 'needs_download';
-  }
   const hasMissingCustom = bank.pads.some((pad) => pad.restoreAssetKind === 'custom_local_media' && pad.missingMediaExpected);
-  const hasMissingOfficial = bank.pads.some(
-    (pad) => (pad.restoreAssetKind === 'default_asset' || pad.restoreAssetKind === 'paid_asset') && !pad.audioUrl
+  const hasMissingDefaultOfficial = bank.pads.some(
+    (pad) => pad.restoreAssetKind === 'default_asset' && !pad.audioUrl
   );
+  const hasMissingPaidOfficial = bank.pads.some(
+    (pad) => pad.restoreAssetKind === 'paid_asset' && !pad.audioUrl
+  );
+
+  if (bank.restoreKind === 'paid_bank') {
+    if (hasMissingDefaultOfficial || hasMissingPaidOfficial) return 'needs_download';
+    if (hasMissingCustom) return 'partially_restored';
+    return 'ready';
+  }
+
+  if (bank.restoreKind === 'default_bank') {
+    if (hasMissingPaidOfficial || hasMissingCustom) return 'partially_restored';
+    return 'ready';
+  }
+
+  const hasMissingOfficial = hasMissingDefaultOfficial || hasMissingPaidOfficial;
   if (hasMissingCustom && hasMissingOfficial) return 'partially_restored';
   if (hasMissingCustom || hasMissingOfficial) return 'missing_media';
   return 'ready';

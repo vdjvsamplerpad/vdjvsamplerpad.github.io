@@ -593,9 +593,13 @@ export function useSamplerStore(): SamplerStore {
 
     const cachedDefaultBank = readDefaultBankOwnerCache(DEFAULT_BANK_OWNER_CACHE_KEY, ownerId);
     const previousDefaultIds = new Set(
-      banksRef.current.filter((bank) => isDefaultBankIdentity(bank)).map((bank) => bank.id)
+      banksRef.current
+        .filter((bank) => isDefaultBankIdentity(bank) && !bank.isLocalDuplicate)
+        .map((bank) => bank.id)
     );
-    const withoutDefaultBanks = banksRef.current.filter((bank) => !isDefaultBankIdentity(bank));
+    const withoutDefaultBanks = banksRef.current.filter(
+      (bank) => !isDefaultBankIdentity(bank) || bank.isLocalDuplicate
+    );
     const deduped = dedupeBanksByIdentity(
       cachedDefaultBank ? [...withoutDefaultBanks, cachedDefaultBank] : withoutDefaultBanks
     );
@@ -826,8 +830,8 @@ export function useSamplerStore(): SamplerStore {
     }
 
     const defaultBank =
-      banks.find((bank) => isDefaultBankIdentity(bank) && Array.isArray(bank.pads) && bank.pads.length > 0) ||
-      banks.find((bank) => isDefaultBankIdentity(bank)) ||
+      banks.find((bank) => isDefaultBankIdentity(bank) && !bank.isLocalDuplicate && Array.isArray(bank.pads) && bank.pads.length > 0) ||
+      banks.find((bank) => isDefaultBankIdentity(bank) && !bank.isLocalDuplicate) ||
       null;
 
     writeDefaultBankOwnerCache(DEFAULT_BANK_OWNER_CACHE_KEY, ownerId, defaultBank);

@@ -1,73 +1,45 @@
 import * as React from 'react';
 import { Link } from 'react-router-dom';
 import { ScrollFrameAnimator, type ScrollFrameAnimatorHandle } from '@/components/landing/ScrollFrameAnimator';
-import { DOWNLOAD_LINKS, PlatformKey, VersionKey } from '@/components/landing/download-config';
+import {
+  DEFAULT_LANDING_DOWNLOAD_CONFIG,
+  normalizeLandingDownloadConfig,
+  type LandingDownloadConfig,
+  type PlatformKey,
+  type VersionKey,
+} from '@/components/landing/download-config';
 import { VersionSelector } from '@/components/landing/VersionSelector';
 import { usePerformanceTier } from '@/hooks/usePerformanceTier';
 import { edgeFunctionUrl } from '@/lib/edge-api';
+import { getLandingPagePath } from '@/lib/runtime-routes';
 import { Download, Monitor, Smartphone } from 'lucide-react';
 
 const FRAME_COUNT = 97;
 const REVEAL_THRESHOLD = 0.92;
-
-const versionDescriptions: Record<VersionKey, { title: string; desc: string }> = {
-  V1: {
-    title: 'V1 – Standalone Version',
-    desc: 'Pinakasimple na version ng VDJV. Hindi kailangan ng laptop o PC dahil diretso na itong gagana sa device mo. Best ito para sa mga gusto lang ng basic sampler pad para sa events gamit ang phone, tablet, o computer nang walang setup o remote connection. May unique features kumpara sa V2 at V3 pero mabilis at madaling gamitin.'
-  },
-  V2: {
-    title: 'V2 – Laptop/PC Based Version',
-    desc: 'Ito ang 2023 version na gumagamit ng laptop o PC bilang main system. Ang phone o tablet ay gagamitin bilang wireless touchscreen controller gamit ang remote app. Mas stable ito para sa events at mas flexible kumpara sa V1 dahil naka-run ang audio sa laptop. Recommended ito kung gusto mo ng mas professional setup pero hindi pa kailangan ang full features ng V3.'
-  },
-  V3: {
-    title: 'V3 – Full Features Version',
-    desc: 'Ito ang pinaka-complete at latest version ng VDJV. May kasama na itong installer, bagong features, effects, at lahat ng banks. Designed ito para sa professional events at mas advanced na paggamit. Laptop o PC pa rin ang main system habang ang phone o tablet ay gagamitin bilang wireless controller. Ito ang recommended version kung gusto mo ng full VDJV experience.'
-  }
-};
-
-const platformDescriptions: Record<VersionKey, Record<PlatformKey, string>> = {
-  V1: {
-    android: 'VDJV App, no laptop needed',
-    ios: 'Web App, no laptop needed',
-    windows: 'Standalone software, no remote app',
-    macos: 'Web app sa browser, no remote app',
-  },
-  V2: {
-    android: 'VDJV Remote App V2 connect sa laptop/PC',
-    ios: 'VirtualDJ Remote App',
-    windows: 'VDJV V2 (up to V2.5)',
-    macos: 'Message muna for compatibility',
-  },
-  V3: {
-    android: 'VDJV Remote App V3 connect sa laptop/PC',
-    ios: 'VirtualDJ Remote App',
-    windows: 'VDJV V3 (2026 latest)',
-    macos: 'Message muna for compatibility',
-  },
-};
+const LANDING_CONFIG_CACHE_KEY = 'vdjv-landing-config-v1';
 
 const platformGroups: Array<{
   sideClass: string;
   title: string;
   items: Array<{ key: PlatformKey; label: string; Icon: React.ElementType }>;
 }> = [
-    {
-      sideClass: 'is-left',
-      title: 'Mobile',
-      items: [
-        { key: 'android', label: 'Android', Icon: Smartphone },
-        { key: 'ios', label: 'iOS', Icon: Smartphone },
-      ],
-    },
-    {
-      sideClass: 'is-right',
-      title: 'Desktop',
-      items: [
-        { key: 'windows', label: 'Windows', Icon: Monitor },
-        { key: 'macos', label: 'macOS', Icon: Monitor },
-      ],
-    },
-  ];
+  {
+    sideClass: 'is-left',
+    title: 'Mobile',
+    items: [
+      { key: 'android', label: 'Android', Icon: Smartphone },
+      { key: 'ios', label: 'iOS', Icon: Smartphone },
+    ],
+  },
+  {
+    sideClass: 'is-right',
+    title: 'Desktop',
+    items: [
+      { key: 'windows', label: 'Windows', Icon: Monitor },
+      { key: 'macos', label: 'macOS', Icon: Monitor },
+    ],
+  },
+];
 
 const padFrameNumber = (index: number) => String(index + 1).padStart(4, '0');
 
@@ -87,6 +59,31 @@ function usePrefersReducedMotion() {
   return prefersReducedMotion;
 }
 
+function useConnectionHints() {
+  const [state, setState] = React.useState(() => {
+    const connection = typeof navigator !== 'undefined' ? (navigator as any).connection : null;
+    const effectiveType = typeof connection?.effectiveType === 'string' ? connection.effectiveType : '';
+    const saveData = connection?.saveData === true;
+    const slowConnection = saveData || effectiveType === 'slow-2g' || effectiveType === '2g' || effectiveType === '3g';
+    return { saveData, slowConnection };
+  });
+
+  React.useEffect(() => {
+    const connection = typeof navigator !== 'undefined' ? (navigator as any).connection : null;
+    if (!connection?.addEventListener) return;
+    const onChange = () => {
+      const effectiveType = typeof connection.effectiveType === 'string' ? connection.effectiveType : '';
+      const saveData = connection.saveData === true;
+      const slowConnection = saveData || effectiveType === 'slow-2g' || effectiveType === '2g' || effectiveType === '3g';
+      setState({ saveData, slowConnection });
+    };
+    connection.addEventListener('change', onChange);
+    return () => connection.removeEventListener('change', onChange);
+  }, []);
+
+  return state;
+}
+
 export default function LandingPage() {
   const animatorRef = React.useRef<ScrollFrameAnimatorHandle | null>(null);
   const sectionRef = React.useRef<HTMLElement | null>(null);
@@ -94,28 +91,52 @@ export default function LandingPage() {
   const [version, setVersion] = React.useState<VersionKey>('V1');
   const [progress, setProgress] = React.useState(0);
   const [revealOverride, setRevealOverride] = React.useState(false);
+  const [landingConfig, setLandingConfig] = React.useState<LandingDownloadConfig>(() => {
+    if (typeof window === 'undefined') {
+      return normalizeLandingDownloadConfig(DEFAULT_LANDING_DOWNLOAD_CONFIG);
+    }
+    try {
+      const cached = window.localStorage.getItem(LANDING_CONFIG_CACHE_KEY);
+      if (cached) return normalizeLandingDownloadConfig(JSON.parse(cached));
+    } catch {}
+    return normalizeLandingDownloadConfig(DEFAULT_LANDING_DOWNLOAD_CONFIG);
+  });
   const { tier } = usePerformanceTier();
   const prefersReducedMotion = usePrefersReducedMotion();
+  const { saveData, slowConnection } = useConnectionHints();
 
-  const compactRunway = prefersReducedMotion || tier === 'lowest';
+  const compactRunway = prefersReducedMotion || tier === 'lowest' || slowConnection;
   const autoplayEnabled = !prefersReducedMotion;
+  const allowVersionTransitions = !prefersReducedMotion && tier !== 'lowest';
   const revealVisible = revealOverride || progress >= REVEAL_THRESHOLD;
-  const activeLinks = DOWNLOAD_LINKS[version];
-
-  const [paymentConfig, setPaymentConfig] = React.useState<{ messenger_url?: string } | null>(null);
+  const landingPagePath = React.useMemo(() => getLandingPagePath(), []);
+  const activeLinks = landingConfig.downloadLinks[version];
+  const activePlatformDescriptions = landingConfig.platformDescriptions[version];
+  const activeVersionDescription = landingConfig.versionDescriptions[version];
 
   React.useEffect(() => {
     let active = true;
-    fetch(edgeFunctionUrl('store-api', 'payment-config'))
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), slowConnection ? 1800 : 3200);
+
+    fetch(edgeFunctionUrl('store-api', 'landing-config'), { signal: controller.signal })
       .then(async (res) => {
         const payload = await res.json().catch(() => ({}));
         const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
         if (!active || !res.ok) return;
-        setPaymentConfig(data?.config || null);
+        const normalized = normalizeLandingDownloadConfig(data?.config || DEFAULT_LANDING_DOWNLOAD_CONFIG);
+        setLandingConfig(normalized);
+        try {
+          window.localStorage.setItem(LANDING_CONFIG_CACHE_KEY, JSON.stringify(normalized));
+        } catch {}
       })
       .catch(() => { });
-    return () => { active = false; };
-  }, []);
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [slowConnection]);
 
   const clearTimers = React.useCallback(() => {
     if (autoplayStartTimeoutRef.current !== null) {
@@ -139,24 +160,30 @@ export default function LandingPage() {
     clearTimers();
     setRevealOverride(false);
 
-    // Stop any existing manual tween and natively scroll cleanly.
+    animatorRef.current?.primeMainSequence();
     animatorRef.current?.stopAutoplay();
     sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
 
     if (!autoplayEnabled) {
       setRevealOverride(true);
+      return;
     }
+
+    autoplayStartTimeoutRef.current = window.setTimeout(() => {
+      animatorRef.current?.startAutoplay();
+    }, 180);
   }, [autoplayEnabled, clearTimers]);
+
+  const handleDownloadIntent = React.useCallback(() => {
+    animatorRef.current?.primeMainSequence();
+  }, []);
 
   return (
     <main className="lp-page">
       <header className="lp-header">
-        <Link className="lp-brand" to="/home">
+        <Link className="lp-brand" to={landingPagePath}>
           <img src="/assets/logo.png" alt="VDJV Sampler Pad logo" className="lp-brand-logo" />
           <span className="lp-brand-copy">VDJV Sampler Pad App</span>
-        </Link>
-        <Link className="lp-open-app" to="/">
-          Web Demo
         </Link>
       </header>
 
@@ -176,16 +203,26 @@ export default function LandingPage() {
           onAutoplayComplete={handleAutoplayComplete}
           autoplayEnabled={autoplayEnabled}
           compactRunway={compactRunway}
+          saveDataMode={saveData || slowConnection}
           overlayVisible={revealVisible}
           activeVersion={version}
+          allowVersionTransitions={allowVersionTransitions}
           tier={tier}
-          topOverlay={
-            <button type="button" className="lp-floating-download" onClick={handleDownloadClick} aria-label="Download VDJV Sampler Pad App">
+          topOverlay={(
+            <button
+              type="button"
+              className="lp-floating-download"
+              onClick={handleDownloadClick}
+              onPointerEnter={handleDownloadIntent}
+              onFocus={handleDownloadIntent}
+              onTouchStart={handleDownloadIntent}
+              aria-label="Download VDJV Sampler Pad App"
+            >
               <Download size={22} className="lp-download-icon" />
               <span className="lp-floating-download-title">DOWNLOAD</span>
             </button>
-          }
-          overlay={
+          )}
+          overlay={(
             <div className="lp-download-panel">
               <VersionSelector value={version} onChange={setVersion} />
               <div className="lp-platform-columns" aria-label="VDJV Sampler Pad App platform downloads">
@@ -194,29 +231,21 @@ export default function LandingPage() {
                     <p className="lp-platform-title">{group.title}</p>
                     {group.items.map((item) => {
                       const Icon = item.Icon;
-
-                      let overrideHref = activeLinks[item.key];
-                      if ((version === 'V2' || version === 'V3') && item.key === 'ios') {
-                        overrideHref = 'https://apps.apple.com/us/app/virtualdj-remote/id407160120';
-                      } else if ((version === 'V2' || version === 'V3') && item.key === 'macos') {
-                        overrideHref = paymentConfig?.messenger_url || '#';
-                      }
-
                       return (
                         <a
                           key={item.key}
                           className="lp-platform-link"
-                          href={overrideHref}
+                          href={activeLinks[item.key] || '#'}
                           target="_blank"
                           rel="noreferrer"
-                          title={platformDescriptions[version][item.key]}
+                          title={activePlatformDescriptions[item.key]}
                           aria-label={`${item.label} ${version}`}
                         >
                           <div className="lp-platform-info">
                             <Icon size={18} className="lp-platform-icon" />
                             <span>{item.label}</span>
                           </div>
-                          <small>{platformDescriptions[version][item.key]}</small>
+                          <small>{activePlatformDescriptions[item.key]}</small>
                         </a>
                       );
                     })}
@@ -224,14 +253,14 @@ export default function LandingPage() {
                 ))}
               </div>
             </div>
-          }
+          )}
         />
       </section>
 
       <section className="lp-version-details-section">
         <div className="lp-version-description-box" key={version}>
-          <h4>{versionDescriptions[version].title}</h4>
-          <p>{versionDescriptions[version].desc}</p>
+          <h4>{activeVersionDescription.title}</h4>
+          <p>{activeVersionDescription.desc}</p>
         </div>
       </section>
     </main>

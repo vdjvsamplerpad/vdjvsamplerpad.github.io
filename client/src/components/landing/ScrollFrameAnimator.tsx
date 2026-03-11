@@ -3,6 +3,7 @@ import * as React from 'react';
 export type ScrollFrameAnimatorHandle = {
   startAutoplay: () => void;
   stopAutoplay: () => void;
+  primeMainSequence: () => void;
 };
 
 type ScrollFrameAnimatorProps = {
@@ -13,10 +14,12 @@ type ScrollFrameAnimatorProps = {
   onAutoplayComplete?: () => void;
   autoplayEnabled: boolean;
   compactRunway: boolean;
+  saveDataMode?: boolean;
   overlay?: React.ReactNode;
   overlayVisible?: boolean;
   topOverlay?: React.ReactNode;
   activeVersion?: string;
+  allowVersionTransitions?: boolean;
   tier?: 'high' | 'medium' | 'low' | 'lowest';
 };
 
@@ -38,22 +41,29 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
   onAutoplayComplete,
   autoplayEnabled,
   compactRunway,
+  saveDataMode = false,
   overlay,
   overlayVisible = false,
   topOverlay,
   activeVersion,
+  allowVersionTransitions = true,
   tier = 'high',
 }, ref) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const posterFrameRef = React.useRef<HTMLImageElement | null>(null);
   const framesRef = React.useRef<Array<HTMLImageElement | null>>([]);
   const drawnFrameRef = React.useRef<number>(-1);
   const progressRef = React.useRef<number>(0);
   const autoplayRafRef = React.useRef<number | null>(null);
   const autoplayInterruptGuardUntilRef = React.useRef(0);
   const pendingAutoplayRef = React.useRef(false);
+  const mainLoadStartedRef = React.useRef(false);
+  const isMountedRef = React.useRef(true);
   const isAutoplayingRef = React.useRef(false);
   const [ready, setReady] = React.useState(false);
+  const [posterReady, setPosterReady] = React.useState(false);
+  const [mainLoadStarted, setMainLoadStarted] = React.useState(false);
   const [loadError, setLoadError] = React.useState('');
   const [loadProgress, setLoadProgress] = React.useState(0);
   const [uiProgress, setUiProgress] = React.useState(0);
@@ -121,6 +131,64 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
     isAutoplayingRef.current = false;
   }, []);
 
+  React.useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const startMainSequenceLoad = React.useCallback(() => {
+    if (mainLoadStartedRef.current || ready) return;
+
+    mainLoadStartedRef.current = true;
+    setMainLoadStarted(true);
+
+    const frames = new Array<HTMLImageElement | null>(frameCount).fill(null);
+    const batchSize = saveDataMode ? 8 : compactRunway ? 12 : BATCH_SIZE;
+
+    const loadFrame = (index: number): Promise<HTMLImageElement> =>
+      new Promise((resolve, reject) => {
+        const image = new Image();
+        image.decoding = 'async';
+        if (index < 6) {
+          (image as HTMLImageElement & { fetchPriority?: 'high' | 'low' | 'auto' }).fetchPriority = 'high';
+        }
+        image.src = framePathBuilder(index);
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error(`Failed to load frame ${index + 1}`));
+      });
+
+    const preloadFrames = async () => {
+      let loaded = 0;
+      for (let offset = 0; offset < frameCount; offset += batchSize) {
+        const batchEnd = Math.min(offset + batchSize, frameCount);
+        const frameIndexes = Array.from({ length: batchEnd - offset }, (_, idx) => offset + idx);
+        const settled = await Promise.allSettled(frameIndexes.map((frameIndex) => loadFrame(frameIndex)));
+        if (!isMountedRef.current) return;
+
+        for (let idx = 0; idx < settled.length; idx += 1) {
+          const result = settled[idx];
+          if (result.status === 'fulfilled') {
+            frames[frameIndexes[idx]] = result.value;
+            loaded += 1;
+          }
+        }
+        setLoadProgress(Math.round((loaded / frameCount) * 100));
+      }
+
+      if (!isMountedRef.current) return;
+      framesRef.current = frames;
+      setReady(true);
+      if (loaded < frameCount) {
+        setLoadError('VDJV Sampler Pad App preview loaded with partial frames.');
+      }
+      syncProgress(calculateScrollProgress());
+    };
+
+    void preloadFrames();
+  }, [calculateScrollProgress, compactRunway, frameCount, framePathBuilder, ready, saveDataMode, syncProgress]);
+
   const startAutoplay = React.useCallback(() => {
     if (!autoplayEnabled) {
       onAutoplayComplete?.();
@@ -129,6 +197,7 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
 
     if (!ready) {
       pendingAutoplayRef.current = true;
+      startMainSequenceLoad();
       return;
     }
 
@@ -166,63 +235,69 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
     };
 
     autoplayRafRef.current = window.requestAnimationFrame(tick);
-  }, [autoplayEnabled, onAutoplayComplete, ready, stopAutoplay, syncProgress]);
+  }, [autoplayEnabled, onAutoplayComplete, ready, startMainSequenceLoad, stopAutoplay, syncProgress]);
 
   React.useImperativeHandle(ref, () => ({
     startAutoplay,
     stopAutoplay,
-  }), [startAutoplay, stopAutoplay]);
+    primeMainSequence: startMainSequenceLoad,
+  }), [startAutoplay, startMainSequenceLoad, stopAutoplay]);
 
   React.useEffect(() => {
-    let cancelled = false;
-    const frames = new Array<HTMLImageElement | null>(frameCount).fill(null);
+    if (!ready || !pendingAutoplayRef.current) return;
+    pendingAutoplayRef.current = false;
+    startAutoplay();
+  }, [ready, startAutoplay]);
 
-    const loadFrame = (index: number): Promise<HTMLImageElement> =>
-      new Promise((resolve, reject) => {
-        const image = new Image();
-        image.decoding = 'async';
-        image.src = framePathBuilder(index);
-        image.onload = () => resolve(image);
-        image.onerror = () => reject(new Error(`Failed to load frame ${index + 1}`));
-      });
-
-    const preloadFrames = async () => {
-      let loaded = 0;
-      for (let offset = 0; offset < frameCount; offset += BATCH_SIZE) {
-        const batchEnd = Math.min(offset + BATCH_SIZE, frameCount);
-        const frameIndexes = Array.from({ length: batchEnd - offset }, (_, idx) => offset + idx);
-        const settled = await Promise.allSettled(frameIndexes.map((frameIndex) => loadFrame(frameIndex)));
-        for (let idx = 0; idx < settled.length; idx += 1) {
-          const result = settled[idx];
-          if (result.status === 'fulfilled') {
-            frames[frameIndexes[idx]] = result.value;
-            loaded += 1;
-          }
-        }
-        if (cancelled) return;
-        setLoadProgress(Math.round((loaded / frameCount) * 100));
-      }
-
-      if (cancelled) return;
-      framesRef.current = frames;
-      setReady(true);
-      if (loaded < frameCount) {
-        setLoadError('VDJV Sampler Pad App preview loaded with partial frames.');
-      }
-      syncProgress(calculateScrollProgress());
-      if (pendingAutoplayRef.current) {
-        window.requestAnimationFrame(() => {
-          startAutoplay();
-        });
-      }
+  React.useEffect(() => {
+    const image = new Image();
+    image.decoding = 'async';
+    (image as HTMLImageElement & { fetchPriority?: 'high' | 'low' | 'auto' }).fetchPriority = 'high';
+    image.src = framePathBuilder(0);
+    image.onload = () => {
+      if (!isMountedRef.current) return;
+      posterFrameRef.current = image;
+      setPosterReady(true);
+    };
+    image.onerror = () => {
+      if (!isMountedRef.current) return;
+      setLoadError('Could not load landing poster frame.');
     };
 
-    void preloadFrames();
     return () => {
-      cancelled = true;
       stopAutoplay();
     };
-  }, [calculateScrollProgress, frameCount, framePathBuilder, startAutoplay, stopAutoplay, syncProgress]);
+  }, [framePathBuilder, stopAutoplay]);
+
+  React.useEffect(() => {
+    const node = containerRef.current;
+    if (!node || mainLoadStartedRef.current || ready) return;
+
+    const rootMargin = saveDataMode
+      ? '25% 0px'
+      : compactRunway
+        ? '75% 0px'
+        : '125% 0px';
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const shouldLoad = entries.some((entry) => entry.isIntersecting || entry.intersectionRatio > 0);
+        if (!shouldLoad) return;
+        startMainSequenceLoad();
+        observer.disconnect();
+      },
+      { rootMargin },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [compactRunway, ready, saveDataMode, startMainSequenceLoad]);
+
+  React.useEffect(() => {
+    if (ready || mainLoadStartedRef.current) return;
+    if (progressRef.current < 0.02) return;
+    startMainSequenceLoad();
+  }, [ready, startMainSequenceLoad, uiProgress]);
 
   React.useEffect(() => {
     const onScroll = () => {
@@ -265,7 +340,7 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
   }, [calculateScrollProgress, stopAutoplay, syncProgress]);
 
   React.useEffect(() => {
-    if (!activeVersion || activeVersion === previousVersionRef.current) return;
+    if (!ready || !overlayVisible || !activeVersion || activeVersion === previousVersionRef.current) return;
     const from = previousVersionRef.current;
     const to = activeVersion;
     previousVersionRef.current = to;
@@ -275,8 +350,8 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
       versionTransitionRafRef.current = null;
     }
 
-    if (compactRunway || tier === 'lowest') {
-      return; // Skip complex version animations for extreme low-end devices
+    if (!allowVersionTransitions || tier === 'lowest') {
+      return;
     }
 
     let cancelled = false;
@@ -317,10 +392,6 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
       });
     });
 
-    // Prefetch the target native scroll-array securely so it's ready when user scrolls up
-    if (to === 'V2') prefetchSequence('v2-v1');
-    if (to === 'V3') prefetchSequence('v2-v3');
-
     Promise.all(loadPromises).then(loadedFrames => {
       if (cancelled) return;
       loadingVersionTransRef.current = false;
@@ -360,13 +431,42 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
         cancelAnimationFrame(versionTransitionRafRef.current);
       }
     };
-  }, [activeVersion, tier, compactRunway]);
+  }, [activeVersion, allowVersionTransitions, overlayVisible, ready, tier]);
+
+  React.useEffect(() => {
+    if (!ready || !overlayVisible || saveDataMode) return;
+    const win = window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    let timeoutId: number | null = null;
+    let idleId: number | null = null;
+    const prefetch = () => {
+      prefetchSequence('v2-v1');
+      prefetchSequence('v2-v3');
+    };
+
+    if (typeof win.requestIdleCallback === 'function') {
+      idleId = win.requestIdleCallback(() => prefetch(), { timeout: 1500 });
+    } else {
+      timeoutId = window.setTimeout(prefetch, 400);
+    }
+
+    return () => {
+      if (idleId !== null && typeof win.cancelIdleCallback === 'function') {
+        win.cancelIdleCallback(idleId);
+      }
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [overlayVisible, prefetchSequence, ready, saveDataMode]);
 
   React.useEffect(() => {
     let rafId = 0;
 
     const drawFrame = () => {
-      if (!ready) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
       const context = canvas.getContext('2d');
@@ -375,7 +475,10 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
       let frameToDraw: HTMLImageElement | null = null;
       let frameIdentifier = -1;
 
-      if (progressRef.current < 0.999 && !versionAnimationRef.current.active) {
+      if (!ready) {
+        frameToDraw = posterFrameRef.current;
+        frameIdentifier = posterReady ? -2 : -1;
+      } else if (progressRef.current < 0.999 && !versionAnimationRef.current.active) {
         // Dynamic Core Runway Scroll Mode based on active version
         let framesToUse = framesRef.current;
         let p = progressRef.current;
@@ -467,7 +570,7 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
     return () => {
       window.cancelAnimationFrame(rafId);
     };
-  }, [frameCount, ready]);
+  }, [frameCount, posterReady, ready]);
 
 
   const runwayClass = compactRunway ? 'lp-scroll-runway compact' : 'lp-scroll-runway';
@@ -483,7 +586,7 @@ export const ScrollFrameAnimator = React.forwardRef<ScrollFrameAnimatorHandle, S
           </div>
         </div>
 
-        {!ready && (
+        {mainLoadStarted && !ready && (
           <div className="lp-loader-overlay" role="status" aria-live="polite">
             <div className="lp-loader-chip">Preparing VDJV Sampler Pad App Preview</div>
             <div className="lp-loader-value">{loadProgress}%</div>

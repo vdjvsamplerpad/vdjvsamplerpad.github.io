@@ -104,6 +104,7 @@ interface AboutDialogProps {
   effectiveTierLabel: string;
   onGraphicsProfileChange: (profile: GraphicsProfile) => void;
   isAuthenticated?: boolean;
+  authTransitionStatus?: 'idle' | 'signing_in' | 'signing_out';
   onSignOut?: () => Promise<void> | void;
 }
 
@@ -171,6 +172,7 @@ export function AboutDialog({
   effectiveTierLabel,
   onGraphicsProfileChange,
   isAuthenticated = false,
+  authTransitionStatus = 'idle',
   onSignOut
 }: AboutDialogProps) {
   const [midiLearnAction, setMidiLearnAction] = React.useState<
@@ -924,12 +926,21 @@ export function AboutDialog({
     setIsSigningOut(true);
     try {
       await onSignOut();
-      setShowSignOutConfirm(false);
-      onOpenChange(false);
-    } finally {
+    } catch {
       setIsSigningOut(false);
     }
   }, [onSignOut, isSigningOut, onOpenChange]);
+
+  React.useEffect(() => {
+    if (!isSigningOut) return;
+    if (authTransitionStatus === 'signing_out') return;
+
+    if (!isAuthenticated) {
+      setShowSignOutConfirm(false);
+      onOpenChange(false);
+    }
+    setIsSigningOut(false);
+  }, [authTransitionStatus, isAuthenticated, isSigningOut, onOpenChange]);
 
   const showColorColumn = midiEnabled;
   const showMidiColumn = midiAccessGranted;

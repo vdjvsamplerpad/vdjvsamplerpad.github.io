@@ -34,8 +34,10 @@ interface AuthState {
   user: User | null
   profile: Profile | null
   loading: boolean
-  isPasswordRecovery: boolean
-  redirectError: { code: string; description: string } | null
+  authTransition: {
+    status: 'idle' | 'signing_in' | 'signing_out'
+    email: string | null
+  }
   sessionConflictReason: string | null
   banned: boolean
   offlineTrustedSession: boolean
@@ -109,8 +111,8 @@ interface AuthActions {
   signIn: (email: string, password: string) => Promise<{ error?: AuthError | null; data?: { user: User | null } }>
   signOut: () => Promise<{ error?: AuthError | null }>
   requestPasswordReset: (email: string) => Promise<{ error?: AuthError | null }>
+  verifyPasswordResetCode: (email: string, code: string) => Promise<{ error?: AuthError | null }>
   updatePassword: (newPassword: string) => Promise<{ error?: AuthError | null }>
-  clearRedirectError: () => void
   clearSessionConflictReason: () => void
 }
 
@@ -169,14 +171,6 @@ const setHideProtectedBanksLock = (locked: boolean): void => {
   } catch {
   }
 };
-
-function parseHashParams(hash: string): Record<string, string> {
-  const raw = hash.replace(/^#/, '')
-  const params = new URLSearchParams(raw)
-  const out: Record<string, string> = {}
-  params.forEach((v, k) => (out[k] = v))
-  return out
-}
 
 function isBanError(error: { message?: string | null; status?: number; code?: string | null } | null | undefined): boolean {
   if (!error) return false
@@ -254,8 +248,10 @@ function useAuthValue(): AuthState & AuthActions {
     user: cachedUser,
     profile: cachedProfile,
     loading: true,
-    isPasswordRecovery: false,
-    redirectError: null,
+    authTransition: {
+      status: 'idle',
+      email: null,
+    },
     sessionConflictReason: getCachedSessionConflictReason(),
     banned: cachedBan,
     offlineTrustedSession: Boolean(cachedUser && (typeof navigator !== 'undefined' ? !navigator.onLine : false)),
@@ -265,6 +261,11 @@ function useAuthValue(): AuthState & AuthActions {
   // Track which user we've already refreshed cache for
   const cacheRefreshedForUserIdRef = React.useRef<string | null>(null)
   const sessionConflictLockedRef = React.useRef(false)
+  const authTransitionStatusRef = React.useRef<AuthState['authTransition']['status']>('idle')
+
+  React.useEffect(() => {
+    authTransitionStatusRef.current = state.authTransition.status
+  }, [state.authTransition.status])
 
   React.useEffect(() => {
     ensureActivityRuntime()
@@ -280,6 +281,18 @@ function useAuthValue(): AuthState & AuthActions {
     setState((s) => (s.sessionConflictReason === reason ? s : { ...s, sessionConflictReason: reason }))
   }, [])
 
+  const setAuthTransition = React.useCallback((status: AuthState['authTransition']['status'], email: string | null = null) => {
+    authTransitionStatusRef.current = status
+    setState((s) => (
+      s.authTransition.status === status && s.authTransition.email === email
+        ? s
+        : {
+            ...s,
+            authTransition: { status, email },
+          }
+    ))
+  }, [])
+
   const enforceBan = React.useCallback(async () => {
     cacheBanState(true)
     setHideProtectedBanksLock(true)
@@ -291,7 +304,10 @@ function useAuthValue(): AuthState & AuthActions {
       user: null,
       profile: null,
       loading: false,
-      isPasswordRecovery: false,
+      authTransition: {
+        status: 'idle',
+        email: null,
+      },
       banned: true,
       offlineTrustedSession: false,
       lastSessionValidationAt: null,
@@ -319,7 +335,10 @@ function useAuthValue(): AuthState & AuthActions {
       user: null,
       profile: null,
       loading: false,
-      isPasswordRecovery: false,
+      authTransition: {
+        status: 'idle',
+        email: null,
+      },
       offlineTrustedSession: false,
       lastSessionValidationAt: null,
     }))
@@ -364,25 +383,7 @@ function useAuthValue(): AuthState & AuthActions {
       })
     }
 
-    // 1) Parse URL hash for redirect errors (e.g., otp_expired)
-    if (typeof window !== 'undefined' && window.location.hash) {
-      const params = parseHashParams(window.location.hash)
-      const error = params['error']
-      const error_code = params['error_code']
-      const error_description = params['error_description']
-      if (error || error_code) {
-        setState((s) => ({
-          ...s,
-          redirectError: {
-            code: error_code || error || 'unknown_error',
-            description: decodeURIComponent(error_description || 'There was a problem handling the link.'),
-          },
-        }))
-        history.replaceState(null, '', window.location.pathname + window.location.search)
-      }
-    }
-
-    // 2) Session/profile
+    // Session/profile
     const fetchSessionAndProfile = async (session: Session | null) => {
       if (sessionConflictLockedRef.current) {
         cacheUserData(null, null)
@@ -393,6 +394,10 @@ function useAuthValue(): AuthState & AuthActions {
           user: null,
           profile: null,
           loading: false,
+          authTransition: {
+            status: 'idle',
+            email: null,
+          },
           offlineTrustedSession: false,
           lastSessionValidationAt: null
         }))
@@ -413,6 +418,10 @@ function useAuthValue(): AuthState & AuthActions {
             user: null,
             profile: null,
             loading: false,
+            authTransition: {
+              status: 'idle',
+              email: null,
+            },
             offlineTrustedSession: false,
             lastSessionValidationAt: null
           }))
@@ -447,6 +456,10 @@ function useAuthValue(): AuthState & AuthActions {
               user: authUser,
               profile: fallbackProfile,
               loading: false,
+              authTransition: {
+                status: 'idle',
+                email: null,
+              },
               offlineTrustedSession: true
             }))
           } else {
@@ -458,6 +471,10 @@ function useAuthValue(): AuthState & AuthActions {
               user: null,
               profile: null,
               loading: false,
+              authTransition: {
+                status: 'idle',
+                email: null,
+              },
               offlineTrustedSession: false,
               lastSessionValidationAt: null
             }))
@@ -470,6 +487,10 @@ function useAuthValue(): AuthState & AuthActions {
             user: authUser,
             profile: resolvedProfile,
             loading: false,
+            authTransition: {
+              status: 'idle',
+              email: null,
+            },
             offlineTrustedSession: false,
             lastSessionValidationAt: Date.now()
           }))
@@ -493,6 +514,10 @@ function useAuthValue(): AuthState & AuthActions {
             user: fallbackUser,
             profile: fallbackProfile,
             loading: false,
+            authTransition: {
+              status: 'idle',
+              email: null,
+            },
             offlineTrustedSession: true
           }))
           return
@@ -507,6 +532,10 @@ function useAuthValue(): AuthState & AuthActions {
           user: null,
           profile: null,
           loading: false,
+          authTransition: {
+            status: 'idle',
+            email: null,
+          },
           offlineTrustedSession: false,
           lastSessionValidationAt: null
         }))
@@ -528,6 +557,10 @@ function useAuthValue(): AuthState & AuthActions {
               user: fallbackUser,
               profile: fallbackProfile,
               loading: false,
+              authTransition: {
+                status: 'idle',
+                email: null,
+              },
               offlineTrustedSession: true
             }))
             return
@@ -542,14 +575,16 @@ function useAuthValue(): AuthState & AuthActions {
           user: null,
           profile: null,
           loading: false,
+          authTransition: {
+            status: 'idle',
+            email: null,
+          },
           offlineTrustedSession: false,
           lastSessionValidationAt: null
         }))
       })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      const isRecovery = event === 'PASSWORD_RECOVERY'
-      setState((s) => ({ ...s, isPasswordRecovery: isRecovery }))
       fetchSessionAndProfile(session)
     })
 
@@ -713,6 +748,10 @@ function useAuthValue(): AuthState & AuthActions {
         user: null,
         profile: null,
         loading: false,
+        authTransition: {
+          status: 'idle',
+          email: null,
+        },
         offlineTrustedSession: false,
         lastSessionValidationAt: null
       }))
@@ -733,8 +772,17 @@ function useAuthValue(): AuthState & AuthActions {
   }, [state.user?.id, state.banned])
 
   const signIn = React.useCallback(async (email: string, password: string) => {
+    if (authTransitionStatusRef.current !== 'idle') {
+      return {
+        error: {
+          message: 'Authentication is already in progress. Please wait.',
+        } as AuthError,
+        data: { user: null },
+      }
+    }
     setSessionConflictReason(null)
     sessionConflictLockedRef.current = false
+    setAuthTransition('signing_in', email)
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (!error && data?.user) {
       setHideProtectedBanksLock(false)
@@ -742,14 +790,19 @@ function useAuthValue(): AuthState & AuthActions {
         ...s,
         offlineTrustedSession: false
       }))
+    } else {
+      setAuthTransition('idle')
     }
     if (isBanError(error)) {
       await enforceBan()
     }
     return { error, data: { user: data.user } }
-  }, [enforceBan, setSessionConflictReason])
+  }, [enforceBan, setAuthTransition, setSessionConflictReason])
 
   const signOut = React.useCallback(async () => {
+    if (authTransitionStatusRef.current === 'signing_out') {
+      return { error: null }
+    }
     const activeUser = state.user || getCachedUser()
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setPendingOfflineSignout(true)
@@ -766,7 +819,11 @@ function useAuthValue(): AuthState & AuthActions {
       })
       return { error: null }
     }
+    setAuthTransition('signing_out', activeUser?.email || null)
     const { error } = await supabase.auth.signOut()
+    if (error) {
+      setAuthTransition('idle')
+    }
     setPendingOfflineSignout(false)
     setHideProtectedBanksLock(true)
     // Clear cached user data on sign out
@@ -783,7 +840,7 @@ function useAuthValue(): AuthState & AuthActions {
     }).catch((err) => {
     })
     return { error }
-  }, [state.user])
+  }, [setAuthTransition, state.user])
 
   const requestPasswordReset = React.useCallback(async (email: string) => {
     try {
@@ -805,19 +862,16 @@ function useAuthValue(): AuthState & AuthActions {
       // Store the reset request time first
       localStorage.setItem(recentResetKey, now.toString())
 
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/`,
-      })
+      const { error } = await supabase.auth.resetPasswordForEmail(email)
 
       if (error) {
         // Remove the stored time if the request failed
         localStorage.removeItem(recentResetKey)
         
-        // Handle specific Supabase error messages
-        if (error.message.includes('User not found') || 
-            error.message.includes('No user found') ||
-            error.message.includes('Invalid email')) {
-          return { error: { message: 'No account found with this email address.' } as AuthError }
+        // Do not leak whether the email exists.
+        if (error.message.includes('User not found') ||
+            error.message.includes('No user found')) {
+          return { error: null }
         }
         
         return { error }
@@ -829,16 +883,18 @@ function useAuthValue(): AuthState & AuthActions {
     }
   }, [])
 
-  const updatePassword = React.useCallback(async (newPassword: string) => {
-    const { error } = await supabase.auth.updateUser({ password: newPassword })
-    if (!error) {
-      setState((s) => ({ ...s, isPasswordRecovery: false }))
-    }
+  const verifyPasswordResetCode = React.useCallback(async (email: string, code: string) => {
+    const { error } = await supabase.auth.verifyOtp({
+      email,
+      token: code,
+      type: 'recovery',
+    })
     return { error }
   }, [])
 
-  const clearRedirectError = React.useCallback(() => {
-    setState((s) => ({ ...s, redirectError: null }))
+  const updatePassword = React.useCallback(async (newPassword: string) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    return { error }
   }, [])
 
   const clearSessionConflictReason = React.useCallback(() => {
@@ -850,8 +906,8 @@ function useAuthValue(): AuthState & AuthActions {
     signIn,
     signOut,
     requestPasswordReset,
+    verifyPasswordResetCode,
     updatePassword,
-    clearRedirectError,
     clearSessionConflictReason,
   }
 }

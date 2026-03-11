@@ -279,7 +279,7 @@ html.graphics-lowest *::after {
   margin: 0 auto;
   padding: 1.06rem 1.25rem;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   gap: 0.7rem;
 }
@@ -303,24 +303,6 @@ html.graphics-lowest *::after {
   font-size: 1rem;
   letter-spacing: 0.015em;
   font-weight: 700;
-}
-
-.lp-open-app {
-  text-decoration: none;
-  border: 1px solid rgb(220 38 38 / 23%);
-  color: #991b1b;
-  border-radius: 999px;
-  padding: 0.52rem 0.9rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  background: rgb(255 255 255 / 86%);
-  transition: background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out;
-}
-
-.lp-open-app:hover {
-  background: rgb(254 242 242 / 95%);
-  border-color: rgb(220 38 38 / 45%);
-  color: #991b1b;
 }
 
 .lp-marketing-band {
@@ -743,11 +725,6 @@ html.graphics-lowest *::after {
 
   .lp-marketing-band {
     padding: 0.28rem 0.8rem 0.18rem;
-  }
-
-  .lp-open-app {
-    font-size: 0.7rem;
-    padding: 0.46rem 0.62rem;
   }
 
   .lp-scroll-runway {

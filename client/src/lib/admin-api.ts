@@ -200,6 +200,20 @@ export interface DefaultBankRelease {
   deactivatedBy: string | null;
 }
 
+export type LandingVersionKey = 'V1' | 'V2' | 'V3';
+export type LandingPlatformKey = 'android' | 'ios' | 'windows' | 'macos';
+
+export interface LandingVersionDescription {
+  title: string;
+  desc: string;
+}
+
+export interface LandingDownloadConfig {
+  downloadLinks: Record<LandingVersionKey, Record<LandingPlatformKey, string>>;
+  platformDescriptions: Record<LandingVersionKey, Record<LandingPlatformKey, string>>;
+  versionDescriptions: Record<LandingVersionKey, LandingVersionDescription>;
+}
+
 const toQueryString = (params: Record<string, string | number | boolean | null | undefined>) => {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -473,5 +487,13 @@ export const adminApi = {
 
   async rollbackDefaultBankRelease(version: number) {
     return callAdmin<{ release: DefaultBankRelease }>('POST', 'default-bank/rollback', { version });
+  },
+
+  async getLandingDownloadConfig() {
+    return callStoreApi<{ config: LandingDownloadConfig }>('GET', 'admin/store/landing-config');
+  },
+
+  async saveLandingDownloadConfig(input: LandingDownloadConfig) {
+    return callStoreApi<{ config: LandingDownloadConfig }>('POST', 'admin/store/landing-config', input);
   },
 };

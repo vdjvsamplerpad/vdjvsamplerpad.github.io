@@ -52,6 +52,40 @@ const ACCOUNT_PROOF_ALLOWED_MIME_TYPES = new Set([
   'image/heic',
   'image/heif',
 ])
+const RESET_CODE_MAX_ATTEMPTS = 5
+const RESET_CODE_LOCKOUT_MINUTES = 10
+const RESET_CODE_LOCKOUT_MS = RESET_CODE_LOCKOUT_MINUTES * 60 * 1000
+
+function getResetVerifyAttemptKey(email: string): string {
+  return `password_reset_verify_${email.trim().toLowerCase()}`
+}
+
+function readResetVerifyAttemptState(email: string): { failures: number; blockedUntil: number | null } {
+  if (typeof window === 'undefined') return { failures: 0, blockedUntil: null }
+  try {
+    const raw = localStorage.getItem(getResetVerifyAttemptKey(email))
+    if (!raw) return { failures: 0, blockedUntil: null }
+    const parsed = JSON.parse(raw) as { failures?: number; blockedUntil?: number | null }
+    return {
+      failures: Number.isFinite(parsed?.failures) ? Math.max(0, Number(parsed.failures)) : 0,
+      blockedUntil: typeof parsed?.blockedUntil === 'number' ? parsed.blockedUntil : null,
+    }
+  } catch {
+    return { failures: 0, blockedUntil: null }
+  }
+}
+
+function writeResetVerifyAttemptState(email: string, next: { failures: number; blockedUntil: number | null }): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (next.failures <= 0 && !next.blockedUntil) {
+      localStorage.removeItem(getResetVerifyAttemptKey(email))
+      return
+    }
+    localStorage.setItem(getResetVerifyAttemptKey(email), JSON.stringify(next))
+  } catch {
+  }
+}
 
 function normalizeAuthErrorMessage(msg: string): string {
   const m = (msg || '').toLowerCase()
@@ -64,8 +98,14 @@ function normalizeAuthErrorMessage(msg: string): string {
   if (m.includes('email') && m.includes('invalid')) return 'Email address is invalid.'
   if (m.includes('already registered') || m.includes('already exists')) return 'This email is already registered.'
   if (m.includes('rate limit')) return 'Too many attempts. Please try again later.'
-  if (m.includes('no account found') || m.includes('user not found') || m.includes('no user found')) {
-    return 'No account found with this email address.'
+  if (
+    m.includes('token has expired') ||
+    m.includes('token may be expired') ||
+    m.includes('invalid token') ||
+    m.includes('otp expired') ||
+    m.includes('otp') && m.includes('expired')
+  ) {
+    return 'Reset code is invalid or expired. Request a new code and try again.'
   }
   if (m.includes('please wait') && m.includes('minute')) return msg
   if (m.includes('unable to verify email')) return 'Unable to verify email. Please try again.'
@@ -142,6 +182,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [confirmPassword, setConfirmPassword] = React.useState('')
   const [mode, setMode] = React.useState<Mode>('signin')
   const [loading, setLoading] = React.useState(false)
+  const [awaitingSignInSync, setAwaitingSignInSync] = React.useState(false)
   const [resetCooldown, setResetCooldown] = React.useState<number>(0)
   const [allowLoginWhileBanned, setAllowLoginWhileBanned] = React.useState(false)
 
@@ -162,15 +203,18 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [proofOcrLoading, setProofOcrLoading] = React.useState(false)
   const [buyReceipt, setBuyReceipt] = React.useState<BuyReceiptState | null>(null)
   const [expandedQrUrl, setExpandedQrUrl] = React.useState<string | null>(null)
+  const [resetCode, setResetCode] = React.useState('')
+  const [resetCodeFailures, setResetCodeFailures] = React.useState(0)
+  const [resetCodeBlockedSeconds, setResetCodeBlockedSeconds] = React.useState(0)
   const proofOcrSeqRef = React.useRef(0)
 
   const {
+    user,
     signIn,
     requestPasswordReset,
+    verifyPasswordResetCode,
     updatePassword,
-    isPasswordRecovery,
-    redirectError,
-    clearRedirectError,
+    authTransition,
     sessionConflictReason,
     clearSessionConflictReason,
     banned,
@@ -179,6 +223,8 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const colorText = theme === 'dark' ? 'text-white' : 'text-gray-900'
   const panelClass = `sm:max-w-xl ${theme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'}`
   const isDark = theme === 'dark'
+  const isSignInSyncing = authTransition.status === 'signing_in'
+  const isSignInBusy = loading || awaitingSignInSync || isSignInSyncing
 
   const logLoginAttempt = React.useCallback((input: {
     status: 'success' | 'failed'
@@ -237,6 +283,8 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
 
   React.useEffect(() => {
     if (!open) {
+      setLoading(false)
+      setAwaitingSignInSync(false)
       setSignInError(null)
       setSignInCooldownSeconds(0)
       setFailedSignInAttempts(0)
@@ -255,15 +303,34 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setPayerName('')
       setReferenceNo('')
       setNotes('')
+      setResetCode('')
       setProofFile(null)
       setProofPreviewUrl(null)
       setProofOcrLoading(false)
       setBuyReceipt(null)
       setExpandedQrUrl(null)
+      setResetCodeFailures(0)
+      setResetCodeBlockedSeconds(0)
       if (banned) setAllowLoginWhileBanned(false)
-      if (redirectError) clearRedirectError()
     }
-  }, [open, banned, redirectError, clearRedirectError])
+  }, [open, banned])
+
+  React.useEffect(() => {
+    if (!awaitingSignInSync) return
+    if (authTransition.status !== 'idle') return
+
+    if (user) {
+      setLoading(false)
+      setAwaitingSignInSync(false)
+      pushNotice?.({ variant: 'success', message: 'Logged in successfully.' })
+      onOpenChange(false)
+      return
+    }
+
+    setLoading(false)
+    setAwaitingSignInSync(false)
+    pushNotice?.({ variant: 'error', message: 'Sign-in sync did not finish. Please try again.' })
+  }, [authTransition.status, awaitingSignInSync, onOpenChange, pushNotice, user])
 
   React.useEffect(() => {
     if (open && email) {
@@ -290,35 +357,37 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   }, [resetCooldown])
 
   React.useEffect(() => {
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!normalizedEmail) {
+      setResetCodeFailures(0)
+      setResetCodeBlockedSeconds(0)
+      return
+    }
+    const syncResetVerifyState = () => {
+      const attemptState = readResetVerifyAttemptState(normalizedEmail)
+      setResetCodeFailures(attemptState.failures)
+      if (attemptState.blockedUntil && attemptState.blockedUntil > Date.now()) {
+        setResetCodeBlockedSeconds(Math.ceil((attemptState.blockedUntil - Date.now()) / 1000))
+        return
+      }
+      if (attemptState.blockedUntil) {
+        writeResetVerifyAttemptState(normalizedEmail, { failures: attemptState.failures, blockedUntil: null })
+      }
+      setResetCodeBlockedSeconds(0)
+    }
+    syncResetVerifyState()
+    if (mode !== 'reset') return
+    const timer = window.setInterval(syncResetVerifyState, 1000)
+    return () => window.clearInterval(timer)
+  }, [email, mode])
+
+  React.useEffect(() => {
     if (signInCooldownSeconds <= 0) return
     const timer = window.setTimeout(() => {
       setSignInCooldownSeconds((prev) => Math.max(0, prev - 1))
     }, 1000)
     return () => window.clearTimeout(timer)
   }, [signInCooldownSeconds])
-
-  React.useEffect(() => {
-    if (isPasswordRecovery) {
-      setMode('reset')
-      if (!open) onOpenChange(true)
-      pushNotice?.({ variant: 'info', message: 'Ready to set a new password.' })
-    }
-  }, [isPasswordRecovery, onOpenChange, open, pushNotice])
-
-  React.useEffect(() => {
-    if (redirectError) {
-      if (!open) onOpenChange(true)
-      pushNotice?.({
-        variant: 'error',
-        message:
-          redirectError.code === 'otp_expired'
-            ? 'Reset link expired. Request a new one.'
-            : redirectError.description || 'Authentication error.',
-      })
-      setMode('forgot')
-      clearRedirectError()
-    }
-  }, [redirectError, onOpenChange, open, clearRedirectError, pushNotice])
 
   React.useEffect(() => {
     if (!sessionConflictReason) return
@@ -463,33 +532,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     }
   }, [open, mode])
 
-  const RecoveryLandingHelper = () =>
-    isPasswordRecovery ? (
-      <div className="p-3 rounded-lg text-xs bg-yellow-50 border border-yellow-200 text-yellow-700 mb-3">
-        If you opened this from your email in a separate tab, your app may already be ready to reset in another tab.{' '}
-        <button
-          type="button"
-          onClick={() => {
-            try {
-              window.close()
-            } catch {
-              // ignore
-            }
-          }}
-          className="underline"
-        >
-          Close this tab
-        </button>
-        {appReturnUrl && (
-          <>
-            {' · '}
-            <a className="underline" href={appReturnUrl}>
-              Return to the app
-            </a>
-          </>
-        )}
-      </div>
-    ) : null
+  const RecoveryLandingHelper = () => null
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -505,6 +548,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
 
     setSignInError(null)
     setLoading(true)
+    let waitForAuthSync = false
     try {
       const { error, data } = await signIn(normalizedEmail, password)
       if (error) {
@@ -573,12 +617,14 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setFailedSignInAttempts(0)
       setSignInCooldownSeconds(0)
       logLoginAttempt({ status: 'success', email: normalizedEmail, userId: data?.user?.id || undefined })
-      pushNotice?.({ variant: 'success', message: 'Logged in successfully.' })
-      onOpenChange(false)
+      waitForAuthSync = true
+      setAwaitingSignInSync(true)
     } catch {
       pushNotice?.({ variant: 'error', message: 'We could not complete that right now. Please try again.' })
     } finally {
-      setLoading(false)
+      if (!waitForAuthSync) {
+        setLoading(false)
+      }
     }
   }
 
@@ -599,8 +645,8 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
           if (match) setResetCooldown(Number(match[1]))
         }
       } else {
-        pushNotice?.({ variant: 'success', message: 'Password reset sent. Please check your email inbox.' })
-        setMode('signin')
+        pushNotice?.({ variant: 'success', message: 'If the email is registered, a reset code was sent. Check your email and enter the code here.' })
+        setMode('reset')
         setResetCooldown(5)
       }
     } catch {
@@ -612,6 +658,16 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault()
+    const normalizedEmail = email.trim().toLowerCase()
+    const normalizedResetCode = resetCode.trim()
+    if (!isValidEmail(normalizedEmail)) {
+      pushNotice?.({ variant: 'error', message: 'Enter a valid email address.' })
+      return
+    }
+    if (!normalizedResetCode) {
+      pushNotice?.({ variant: 'error', message: 'Enter the reset code from your email.' })
+      return
+    }
     if (password.length < 8) {
       pushNotice?.({ variant: 'error', message: 'Password must be at least 8 characters.' })
       return
@@ -620,9 +676,28 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       pushNotice?.({ variant: 'error', message: 'Passwords do not match.' })
       return
     }
+    if (resetCodeBlockedSeconds > 0) {
+      const waitMinutes = Math.ceil(resetCodeBlockedSeconds / 60)
+      pushNotice?.({ variant: 'error', message: `Too many invalid reset code attempts. Please wait ${waitMinutes} minute${waitMinutes > 1 ? 's' : ''} before trying again.` })
+      return
+    }
 
     setLoading(true)
     try {
+      const { error: verifyError } = await verifyPasswordResetCode(normalizedEmail, normalizedResetCode)
+      if (verifyError) {
+        const currentAttemptState = readResetVerifyAttemptState(normalizedEmail)
+        const nextFailures = currentAttemptState.failures + 1
+        const blockedUntil = nextFailures >= RESET_CODE_MAX_ATTEMPTS ? Date.now() + RESET_CODE_LOCKOUT_MS : null
+        writeResetVerifyAttemptState(normalizedEmail, { failures: nextFailures, blockedUntil })
+        setResetCodeFailures(nextFailures)
+        setResetCodeBlockedSeconds(blockedUntil ? Math.ceil((blockedUntil - Date.now()) / 1000) : 0)
+        pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(verifyError.message) })
+        return
+      }
+      writeResetVerifyAttemptState(normalizedEmail, { failures: 0, blockedUntil: null })
+      setResetCodeFailures(0)
+      setResetCodeBlockedSeconds(0)
       const { error } = await updatePassword(password)
       if (error) {
         pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(error.message) })
@@ -636,6 +711,44 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setLoading(false)
     }
   }
+
+  const handleResendResetCode = React.useCallback(async () => {
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!isValidEmail(normalizedEmail)) {
+      pushNotice?.({ variant: 'error', message: 'Enter a valid email address.' })
+      return
+    }
+    if (resetCooldown > 0) {
+      pushNotice?.({ variant: 'error', message: `Please wait ${resetCooldown} minute${resetCooldown > 1 ? 's' : ''} before requesting another reset.` })
+      return
+    }
+    setLoading(true)
+    try {
+      const { error } = await requestPasswordReset(normalizedEmail)
+      if (error) {
+        pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(error.message) })
+        if (error.message.includes('Please wait')) {
+          const match = error.message.match(/(\d+)/)
+          if (match) setResetCooldown(Number(match[1]))
+        }
+        return
+      }
+      pushNotice?.({ variant: 'success', message: 'If the email is registered, a new reset code was sent.' })
+      setResetCooldown(5)
+    } catch {
+      pushNotice?.({ variant: 'error', message: 'We could not complete that right now. Please try again.' })
+    } finally {
+      setLoading(false)
+    }
+  }, [email, pushNotice, requestPasswordReset, resetCooldown])
+
+  const handleDialogOpenChange = React.useCallback((nextOpen: boolean) => {
+    if (!nextOpen && isSignInBusy) {
+      return
+    }
+    if (!nextOpen && banned) setAllowLoginWhileBanned(false)
+    onOpenChange(nextOpen)
+  }, [banned, isSignInBusy, onOpenChange])
 
   const handleBuySubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -840,10 +953,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   return (
     <Dialog
       open={open}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen && banned) setAllowLoginWhileBanned(false)
-        onOpenChange(nextOpen)
-      }}
+      onOpenChange={handleDialogOpenChange}
     >
       <DialogContent className={panelClass} aria-describedby={undefined} hideCloseButton>
         <DialogHeader>
@@ -856,7 +966,8 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               variant="ghost"
               size="icon"
               className={`h-8 w-8 shrink-0 ${isDark ? 'text-gray-300 hover:bg-gray-700 hover:text-white' : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'}`}
-              onClick={() => onOpenChange(false)}
+              onClick={() => handleDialogOpenChange(false)}
+              disabled={isSignInBusy}
               aria-label="Close login dialog"
             >
               <X className="h-4 w-4" />
@@ -867,14 +978,58 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         <DialogDescription className="sr-only">
           {mode === 'signin' && 'Sign in to your account.'}
           {mode === 'buy' && 'Submit account registration with payment details.'}
-          {mode === 'forgot' && 'Request a password reset link via email.'}
-          {mode === 'reset' && 'Choose a new password for your account.'}
+          {mode === 'forgot' && 'Request a password reset code via email.'}
+          {mode === 'reset' && 'Enter your reset code and choose a new password for your account.'}
         </DialogDescription>
 
         <RecoveryLandingHelper />
 
         {mode === 'reset' && (
           <form onSubmit={handleResetPassword} className="space-y-4">
+            <div className={`rounded-lg border p-3 text-sm ${isDark ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-100' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`}>
+              Enter the reset code from your email, then choose a new password.
+            </div>
+            {resetCodeBlockedSeconds > 0 && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                Too many invalid reset code attempts. Please wait {Math.ceil(resetCodeBlockedSeconds / 60)} minute{Math.ceil(resetCodeBlockedSeconds / 60) > 1 ? 's' : ''} before trying again.
+              </div>
+            )}
+            {resetCodeBlockedSeconds <= 0 && resetCodeFailures > 0 && (
+              <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-700">
+                Invalid reset code attempts: {resetCodeFailures}/{RESET_CODE_MAX_ATTEMPTS}
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="resetEmail" className={colorText}>
+                Email
+              </Label>
+              <Input
+                id="resetEmail"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Enter your email"
+                required
+                disabled={loading}
+                autoComplete="email"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="resetCode" className={colorText}>
+                Reset Code
+              </Label>
+              <Input
+                id="resetCode"
+                type="text"
+                value={resetCode}
+                onChange={(e) => setResetCode(e.target.value.replace(/\s+/g, ''))}
+                placeholder="Enter the code from your email"
+                required
+                disabled={loading}
+                autoComplete="one-time-code"
+                inputMode="text"
+              />
+            </div>
             <div className="space-y-2">
               <Label htmlFor="newPassword" className={colorText}>
                 New Password
@@ -930,8 +1085,19 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               </div>
             </div>
             <div className="space-y-2">
-              <Button type="submit" className="w-full" disabled={loading || !password || !confirmPassword}>
+              <Button type="submit" className="w-full" disabled={loading || !password || !confirmPassword || !email || !resetCode || resetCodeBlockedSeconds > 0}>
                 {loading ? 'Updating...' : 'Update Password'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  void handleResendResetCode()
+                }}
+                disabled={loading || !email || resetCooldown > 0}
+              >
+                {resetCooldown > 0 ? `Resend in ${resetCooldown} minute${resetCooldown > 1 ? 's' : ''}` : 'Resend reset code'}
               </Button>
               <Button
                 type="button"
@@ -961,7 +1127,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="Enter your email"
                 required
-                disabled={loading}
+                disabled={isSignInBusy}
                 autoComplete="email"
               />
             </div>
@@ -974,7 +1140,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
 
             <div className="space-y-2">
               <Button type="submit" className="w-full" disabled={loading || !email || resetCooldown > 0}>
-                {loading ? 'Sending...' : 'Send reset link'}
+                {loading ? 'Sending...' : 'Send reset code'}
               </Button>
               <Button
                 type="button"
@@ -1032,7 +1198,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                   }}
                   placeholder="Enter your password"
                   required
-                  disabled={loading || signInCooldownSeconds > 0}
+                  disabled={isSignInBusy || signInCooldownSeconds > 0}
                   minLength={6}
                   autoComplete="current-password"
                   className="pr-10"
@@ -1059,7 +1225,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 variant="link"
                 className="px-0 text-sm"
                 onClick={() => setMode('forgot')}
-                disabled={loading}
+                disabled={isSignInBusy}
               >
                 Forgot password?
               </Button>
@@ -1079,7 +1245,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                   setProofFile(null)
                   setBuyReceipt(null)
                 }}
-                disabled={loading}
+                disabled={isSignInBusy}
               >
                 Buy VDJV Account
               </Button>
@@ -1091,9 +1257,9 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               name="signin-submit"
               type="submit"
               className="w-full"
-              disabled={loading || signInCooldownSeconds > 0 || !email || !password}
+              disabled={isSignInBusy || signInCooldownSeconds > 0 || !email || !password}
             >
-              {loading ? 'Loading...' : signInCooldownSeconds > 0 ? `Try again in ${signInCooldownSeconds}s` : 'Log In'}
+              {isSignInBusy ? 'Signing in...' : signInCooldownSeconds > 0 ? `Try again in ${signInCooldownSeconds}s` : 'Log In'}
             </Button>
           </form>
         )}
@@ -1447,4 +1613,5 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     </Dialog>
   )
 }
+
 

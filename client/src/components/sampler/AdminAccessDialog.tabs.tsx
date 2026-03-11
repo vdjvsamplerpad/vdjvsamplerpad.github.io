@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { AdminAccountRegistrationRequest, DefaultBankRelease } from '@/lib/admin-api';
+import type { AdminAccountRegistrationRequest, DefaultBankRelease, LandingDownloadConfig, LandingPlatformKey, LandingVersionKey } from '@/lib/admin-api';
 import { Check, ChevronDown, ChevronUp, EyeOff, Loader2, Plus, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
 import type {
   AdminDialogTheme,
@@ -180,6 +180,17 @@ interface StoreConfigTabProps {
   onSave: () => void;
 }
 
+interface LandingDownloadTabProps {
+  theme: AdminDialogTheme;
+  panelClass: string;
+  loading: boolean;
+  saving: boolean;
+  config: LandingDownloadConfig;
+  onConfigChange: (next: LandingDownloadConfig) => void;
+  onRefresh: () => void;
+  onSave: () => void;
+}
+
 interface DefaultBankTabProps {
   theme: AdminDialogTheme;
   panelClass: string;
@@ -207,6 +218,39 @@ const formatAutomationLabel = (value: string | null | undefined): string => {
   return normalized.replace(/_/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
 };
 
+const formatOcrErrorLabel = (value: string | null | undefined): string => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '-';
+  switch (normalized) {
+    case 'MANUAL_REVIEW_MODE':
+      return 'Skipped because auto-approval is disabled';
+    case 'OCR_UNAVAILABLE':
+      return 'OCR provider is not configured';
+    case 'OCR_STORAGE_DOWNLOAD_FAILED':
+      return 'Proof image could not be loaded from storage';
+    case 'OCR_UNSUPPORTED_EXTENSION':
+      return 'Proof image file extension is not supported';
+    case 'OCR_UNSUPPORTED_MIME':
+      return 'Proof image mime type is not supported';
+    case 'OCR_INVALID_FILE_SIZE':
+      return 'Proof image file size is invalid';
+    case 'OCR_FILE_TOO_LARGE':
+      return 'Proof image is too large for OCR';
+    case 'OCR_TIMEOUT':
+      return 'OCR request timed out';
+    case 'OCR_HTTP_FAILED':
+      return 'OCR provider request failed';
+    case 'OCR_PROVIDER_PROCESSING_ERROR':
+      return 'OCR provider could not process the proof image';
+    case 'OCR_EMPTY_TEXT':
+      return 'OCR found no readable text in the proof image';
+    case 'OCR_FAILED':
+      return 'OCR failed for an unknown reason';
+    default:
+      return formatAutomationLabel(normalized);
+  }
+};
+
 const formatOcrAmount = (value: number | null | undefined): string => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
   return `PHP ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -229,6 +273,128 @@ const formatCountdownRemaining = (expiresAt: string | null | undefined, nowMs: n
   if (hours > 0) return `${hours}h remaining`;
   return `${minutes}m remaining`;
 };
+
+const LANDING_VERSION_OPTIONS: LandingVersionKey[] = ['V1', 'V2', 'V3'];
+const LANDING_PLATFORM_OPTIONS: LandingPlatformKey[] = ['android', 'ios', 'windows', 'macos'];
+
+export function LandingDownloadTab({
+  theme,
+  panelClass,
+  loading,
+  saving,
+  config,
+  onConfigChange,
+  onRefresh,
+  onSave,
+}: LandingDownloadTabProps) {
+  return (
+    <div className={`border rounded p-3 space-y-3 h-full min-h-0 flex flex-col overflow-hidden ${panelClass}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold">Landing Download Config</div>
+          <div className="text-xs opacity-70">Manage links, platform descriptions, and version copy without editing frontend files.</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || saving}>
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
+          </Button>
+          <Button size="sm" onClick={onSave} disabled={loading || saving}>
+            {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
+            Save
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-auto space-y-4 pr-1">
+        {LANDING_VERSION_OPTIONS.map((version) => (
+          <div key={version} className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+            <div className="text-sm font-semibold">{version}</div>
+            <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-3">
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <Label>{version} Title</Label>
+                  <Input
+                    value={config.versionDescriptions[version].title}
+                    onChange={(event) => onConfigChange({
+                      ...config,
+                      versionDescriptions: {
+                        ...config.versionDescriptions,
+                        [version]: {
+                          ...config.versionDescriptions[version],
+                          title: event.target.value,
+                        },
+                      },
+                    })}
+                    className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>{version} Description</Label>
+                  <textarea
+                    value={config.versionDescriptions[version].desc}
+                    onChange={(event) => onConfigChange({
+                      ...config,
+                      versionDescriptions: {
+                        ...config.versionDescriptions,
+                        [version]: {
+                          ...config.versionDescriptions[version],
+                          desc: event.target.value,
+                        },
+                      },
+                    })}
+                    className={`w-full min-h-[140px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`}
+                  />
+                </div>
+              </div>
+              <div className="space-y-3">
+                {LANDING_PLATFORM_OPTIONS.map((platform) => (
+                  <div key={`${version}-${platform}`} className={`rounded-lg border p-3 space-y-2 ${theme === 'dark' ? 'border-gray-800 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+                    <div className="text-xs font-semibold uppercase tracking-wide opacity-70">{platform}</div>
+                    <div className="space-y-1">
+                      <Label>Download Link</Label>
+                      <Input
+                        value={config.downloadLinks[version][platform]}
+                        onChange={(event) => onConfigChange({
+                          ...config,
+                          downloadLinks: {
+                            ...config.downloadLinks,
+                            [version]: {
+                              ...config.downloadLinks[version],
+                              [platform]: event.target.value,
+                            },
+                          },
+                        })}
+                        placeholder="https://..."
+                        className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Platform Description</Label>
+                      <Input
+                        value={config.platformDescriptions[version][platform]}
+                        onChange={(event) => onConfigChange({
+                          ...config,
+                          platformDescriptions: {
+                            ...config.platformDescriptions,
+                            [version]: {
+                              ...config.platformDescriptions[version],
+                              [platform]: event.target.value,
+                            },
+                          },
+                        })}
+                        className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function DefaultBankTab({
   theme,
@@ -464,7 +630,12 @@ export function AccountRequestsTab({
                       {typeof req.ocr_amount_php === 'number' && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
                       {req.ocr_status && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
                       {req.ocr_provider && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
-                      {req.ocr_error_code && <div className="col-span-2"><span className="opacity-70">OCR Error:</span> {req.ocr_error_code}</div>}
+                      {req.ocr_error_code && (
+                        <div className="col-span-2">
+                          <span className="opacity-70">OCR Error:</span> {formatOcrErrorLabel(req.ocr_error_code)}
+                          <span className="opacity-60 font-mono text-[11px]"> ({req.ocr_error_code})</span>
+                        </div>
+                      )}
                       {req.notes && <div className="col-span-2"><span className="opacity-70">Notes:</span> {req.notes}</div>}
                       {req.decision_email_error && <div className="col-span-2"><span className="opacity-70">Email Error:</span> {req.decision_email_error}</div>}
                       {req.proof_path && <div className="col-span-2"><span className="opacity-70">Proof:</span> <ProofImagePreview path={req.proof_path} /></div>}
@@ -595,7 +766,12 @@ export function StoreRequestsTab({
                       {typeof req.ocr_amount_php === 'number' && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
                       {req.ocr_status && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
                       {req.ocr_provider && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
-                      {req.ocr_error_code && <div className="col-span-2"><span className="opacity-70">OCR Error:</span> {req.ocr_error_code}</div>}
+                      {req.ocr_error_code && (
+                        <div className="col-span-2">
+                          <span className="opacity-70">OCR Error:</span> {formatOcrErrorLabel(req.ocr_error_code)}
+                          <span className="opacity-60 font-mono text-[11px]"> ({req.ocr_error_code})</span>
+                        </div>
+                      )}
                       {req.notes && <div className="col-span-2"><span className="opacity-70">Notes:</span> {req.notes}</div>}
                       {req.proof_path && <div className="col-span-2"><span className="opacity-70">Proof:</span> <ProofImagePreview path={req.proof_path} /></div>}
                       {req.decision_email_error && <div className="col-span-2"><span className="opacity-70">Email Error:</span> {req.decision_email_error}</div>}
@@ -1113,19 +1289,22 @@ export function StoreConfigTab({
     title: string,
     description: string,
     enabled: boolean,
-    mode: 'schedule' | 'countdown',
+    mode: 'schedule' | 'countdown' | 'always',
     startHour: string,
     endHour: string,
     durationHours: string,
     expiresAt: string | null,
   ) => {
     const isCountdown = mode === 'countdown';
+    const isAlways = mode === 'always';
     const accentClass = enabled
       ? (theme === 'dark' ? 'border-emerald-500/40 bg-emerald-950/20' : 'border-emerald-200 bg-emerald-50/70')
       : (theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50');
     const statusText = enabled
       ? (isCountdown
         ? formatCountdownRemaining(expiresAt, nowMs)
+        : isAlways
+          ? 'Active always (24/7)'
         : `Active daily ${formatHourLabel(startHour)} to ${formatHourLabel(endHour)} (Asia/Manila)`)
       : 'Stopped';
 
@@ -1141,7 +1320,7 @@ export function StoreConfigTab({
                 {enabled ? 'Running' : 'Stopped'}
               </span>
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${theme === 'dark' ? 'bg-blue-500/20 text-blue-300' : 'bg-blue-100 text-blue-700'}`}>
-                {isCountdown ? 'Countdown' : 'Schedule'}
+                {isCountdown ? 'Countdown' : isAlways ? 'Always' : 'Schedule'}
               </span>
             </div>
             <div className={`text-[11px] ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>{description}</div>
@@ -1175,7 +1354,11 @@ export function StoreConfigTab({
             <select
               value={mode}
               onChange={(event) => {
-                const nextMode = event.target.value === 'countdown' ? 'countdown' : 'schedule';
+                const nextMode = event.target.value === 'countdown'
+                  ? 'countdown'
+                  : event.target.value === 'always'
+                    ? 'always'
+                    : 'schedule';
                 onStoreConfigChange({
                   ...storeConfig,
                   ...(target === 'account'
@@ -1191,6 +1374,7 @@ export function StoreConfigTab({
               }}
               className={`w-full rounded-md border px-3 py-2 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300 text-gray-900'}`}
             >
+              <option value="always">Always</option>
               <option value="schedule">Schedule</option>
               <option value="countdown">Countdown</option>
             </select>
@@ -1220,6 +1404,10 @@ export function StoreConfigTab({
               })}
               className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
             />
+          </div>
+        ) : isAlways ? (
+          <div className={`rounded-md border px-3 py-2 text-sm ${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-300' : 'bg-gray-50 border-gray-200 text-gray-700'}`}>
+            Runs continuously every day until you stop it.
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1318,7 +1506,7 @@ export function StoreConfigTab({
             <div className="flex flex-col gap-1">
               <div className="text-base font-semibold">Auto Approval Control</div>
               <div className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
-                Choose a daily schedule or a temporary countdown. Starting or stopping automation asks for confirmation and saves immediately.
+                Choose always-on, a daily schedule, or a temporary countdown. Starting or stopping automation asks for confirmation and saves immediately.
               </div>
             </div>
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
