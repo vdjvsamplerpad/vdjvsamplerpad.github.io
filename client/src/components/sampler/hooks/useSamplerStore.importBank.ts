@@ -488,7 +488,12 @@ export const runImportBankPipeline = async (
           throw new Error('This bank is already imported.');
         }
       }
-      const isAdminBank = metadata?.password === true;
+      const isAdminBank = Boolean(
+        metadata?.password === true ||
+        metadataBankId ||
+        metadata?.trustedAdminExport ||
+        (typeof metadata?.adminExportToken === 'string' && metadata.adminExportToken.trim().length > 0)
+      );
 
       let resolvedBankName = bankData.name;
       let resolvedBankColor = typeof bankData.defaultColor === 'string' ? bankData.defaultColor : '#3b82f6';
@@ -676,6 +681,11 @@ export const runImportBankPipeline = async (
         defaultColor: replaceExistingBank?.defaultColor || resolvedBankColor,
         createdAt: replaceExistingBank?.createdAt || (bankData.createdAt ? new Date(bankData.createdAt) : new Date()),
         sortOrder: replaceExistingBank?.sortOrder ?? (maxSortOrder + 1),
+        creatorEmail:
+          replaceExistingBank?.creatorEmail ||
+          (typeof bankData?.creatorEmail === 'string' && bankData.creatorEmail.trim().length > 0
+            ? bankData.creatorEmail.trim()
+            : undefined),
         pads: [],
         sourceBankId: metadataBankId || bankDataId || importSignature,
         isAdminBank,

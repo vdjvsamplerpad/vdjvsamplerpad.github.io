@@ -449,6 +449,7 @@ export const runCreateBankPipeline = (
     currentBankId: string | null;
     isDualMode: boolean;
     profileRole?: string | null;
+    creatorEmail?: string | null;
     quotaPolicy: QuotaPolicy;
   },
   deps: {
@@ -465,6 +466,7 @@ export const runCreateBankPipeline = (
     currentBankId,
     isDualMode,
     profileRole,
+    creatorEmail,
     quotaPolicy,
   } = input;
   const {
@@ -488,7 +490,15 @@ export const runCreateBankPipeline = (
   }
 
   const maxSort = currentBanks.length > 0 ? Math.max(...currentBanks.map((b) => b.sortOrder || 0)) : -1;
-  const newBank: SamplerBank = { id: generateId(), name, defaultColor, pads: [], createdAt: new Date(), sortOrder: maxSort + 1 };
+  const newBank: SamplerBank = {
+    id: generateId(),
+    name,
+    defaultColor,
+    pads: [],
+    createdAt: new Date(),
+    sortOrder: maxSort + 1,
+    creatorEmail: typeof creatorEmail === 'string' && creatorEmail.trim().length > 0 ? creatorEmail.trim() : undefined,
+  };
   const nextBanks = [...currentBanks, newBank];
   banksRef.current = nextBanks;
   setBanks(nextBanks);

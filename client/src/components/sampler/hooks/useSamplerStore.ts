@@ -1124,6 +1124,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         currentBankId,
         isDualMode,
         profileRole: profile?.role,
+        creatorEmail: user?.email || null,
         quotaPolicy,
       },
       {
@@ -1134,7 +1135,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         generateId,
       }
     );
-  }, [currentBankId, isDualMode, profile?.role, quotaPolicy.deviceTotalBankCap, quotaPolicy.ownedBankQuota]);
+  }, [currentBankId, isDualMode, profile?.role, quotaPolicy.deviceTotalBankCap, quotaPolicy.ownedBankQuota, user?.email]);
 
   const moveBankUp = React.useCallback((id: string) => {
     runMoveBankUpPipeline(id, setBanks);
