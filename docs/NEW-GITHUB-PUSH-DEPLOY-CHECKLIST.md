@@ -1,13 +1,13 @@
 # Project Finalization + Push/Deploy Checklist
 
-Last updated: 2026-03-10
+Last updated: 2026-03-11
 
 Use this as the final ship checklist for this repo.
 
 Archived planning/migration docs were removed from the fresh local project so this can remain the single active checklist.
 
 Current local note:
-- Local Git was re-initialized on `main` for the fresh repo, but no remote is connected yet and nothing has been committed.
+- Fresh repo is active on `main`, connected to `https://github.com/vdjvsamplerpad/vdjvsamplerpad.github.io.git`, and GitHub Pages is live.
 
 Current intended architecture:
 1. Frontend: GitHub Pages static build
@@ -92,24 +92,24 @@ Current intended architecture:
   - Current index excludes ignored local/build output and excludes removed junk such as `android/.idea/`, `client/typecheck.log`, and `client/public/assets/DEFAULT_BANK - Copy/`.
 
 ## 4) Deploy / Hosting Checklist
-- [ ] GitHub repo settings recreated if moving repo
-- [ ] Actions enabled and deployment workflow present
+- [x] GitHub repo settings recreated if moving repo
+- [x] Actions enabled and deployment workflow present
   - [x] deployment workflow present at `.github/workflows/deploy.yml`
-- [ ] Pages target confirmed:
-  - [ ] root site `/`
+- [x] Pages target confirmed:
+  - [x] root site `/`
   - [ ] project path `/<repo>/`
-- [ ] Frontend base path is correct for GitHub Pages deployment mode
-- [ ] `404.html`, manifest, icons, and service worker are all valid for static hosting
+- [x] Frontend base path is correct for GitHub Pages deployment mode
+- [x] `404.html`, manifest, icons, and service worker are all valid for static hosting
 - [ ] GitHub Pages update path tested:
   - [ ] open old deployed app in one browser tab
   - [ ] deploy new build
   - [ ] verify refresh / revisit gets new hashed assets and working routes
   - [ ] verify existing installed PWA or shortcut is not trapped on stale shell assets
 - [ ] Public site URL is consistent across:
-  - [ ] GitHub Pages
+  - [x] GitHub Pages
   - [ ] Supabase Auth Site URL
   - [ ] Supabase redirect URLs
-  - [ ] docs
+  - [x] docs
 
 ## 5) Supabase / Edge / Storage Production Checks
 - [ ] Confirm production project is the intended Supabase project
@@ -168,8 +168,8 @@ Current intended architecture:
 - [ ] Android Capacitor build completes
 - [ ] `npm run cap:sync` succeeds
 - [ ] Android release build installs and opens correctly
-- [ ] PWA install path still works in browser
-- [ ] Icons, splash-related assets, and manifest entries are correct
+- [x] PWA install path still works in browser
+- [x] Icons, splash-related assets, and manifest entries are correct
 - [ ] Service worker update path does not trap users on stale builds
 - [ ] If URL/domain changed, understand what happens to existing installed shortcuts
 
@@ -231,14 +231,17 @@ Current intended architecture:
   - [ ] `compileSdkVersion` is current enough
   - [ ] `targetSdkVersion` is current enough for Play submission/update policy
   - [ ] dangerous/legacy permissions are still necessary and policy-safe
+  - Current blocker: project is still on API 34 in `android/variables.gradle`, while Google Play requires target API 35 for new apps and updates.
 - [ ] Release versioning is correct:
   - [ ] `versionCode` increments for every Play upload
   - [ ] `versionName` matches the release you want users to see
   - [ ] release tag/changelog maps cleanly to the uploaded bundle
+  - Current blocker: `android/app/build.gradle` is still `versionCode 1` and `versionName "1.0"`.
 - [ ] Release artifact is the right one:
   - [ ] signed `.aab` generated from the final commit/tag
   - [ ] final release build is not just a debug APK snapshot
   - [ ] archive the exact uploaded artifact checksum and source commit
+  - Current note: an unsigned/signed APK set and `android/app/build/outputs/bundle/release/app-release.aab` already exist locally, but the release process is not yet locked to a final tagged build.
 - [ ] Upgrade behavior is tested on a real Android device:
   - [ ] install previous build
   - [ ] install update over it
