@@ -433,26 +433,30 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         : [null, null, null, null],
     };
 
-    const restoredAudio = await restoreFileAccess(
-      pad.id,
-      'audio',
-      pad.audioStorageKey,
-      pad.audioBackend
-    );
-    if (restoredAudio.url) restoredPad.audioUrl = restoredAudio.url;
-    if (restoredAudio.storageKey) restoredPad.audioStorageKey = restoredAudio.storageKey;
-    restoredPad.audioBackend = restoredAudio.backend;
+    if (pad.audioStorageKey || pad.audioBackend) {
+      const restoredAudio = await restoreFileAccess(
+        pad.id,
+        'audio',
+        pad.audioStorageKey,
+        pad.audioBackend
+      );
+      if (restoredAudio.url) restoredPad.audioUrl = restoredAudio.url;
+      if (restoredAudio.storageKey) restoredPad.audioStorageKey = restoredAudio.storageKey;
+      restoredPad.audioBackend = restoredAudio.backend;
+    }
 
-    const restoredImage = await restoreFileAccess(
-      pad.id,
-      'image',
-      pad.imageStorageKey,
-      pad.imageBackend
-    );
-    if (restoredImage.url) restoredPad.imageUrl = restoredImage.url;
-    if (restoredImage.storageKey) restoredPad.imageStorageKey = restoredImage.storageKey;
-    restoredPad.imageBackend = restoredImage.backend;
-    if (restoredImage.url) restoredPad.hasImageAsset = true;
+    if (pad.imageStorageKey || pad.imageBackend) {
+      const restoredImage = await restoreFileAccess(
+        pad.id,
+        'image',
+        pad.imageStorageKey,
+        pad.imageBackend
+      );
+      if (restoredImage.url) restoredPad.imageUrl = restoredImage.url;
+      if (restoredImage.storageKey) restoredPad.imageStorageKey = restoredImage.storageKey;
+      restoredPad.imageBackend = restoredImage.backend;
+      if (restoredImage.url) restoredPad.hasImageAsset = true;
+    }
     if (!restoredPad.imageUrl && pad.imageData) {
       try {
         restoredPad.imageUrl = URL.createObjectURL(base64ToBlob(pad.imageData));
@@ -471,8 +475,29 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       restoredPads.push(await rehydratePadMediaFromStorage(bank.pads[i]));
       if ((i + 1) % 6 === 0) await yieldToMainThread();
     }
-    return { ...bank, pads: restoredPads };
-  }, [rehydratePadMediaFromStorage]);
+    const thumbnailStorageId = `bank-thumbnail-${bank.id}`;
+    let nextMetadata = bank.bankMetadata;
+    if (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend) {
+      try {
+        const restoredThumbnail = await restoreFileAccess(
+          thumbnailStorageId,
+          'image',
+          nextMetadata.thumbnailStorageKey,
+          nextMetadata.thumbnailBackend
+        );
+        const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
+        nextMetadata = {
+          ...nextMetadata,
+          thumbnailUrl: restoredThumbnail.url || (/^https?:\/\//i.test(currentThumbnailUrl) ? currentThumbnailUrl : undefined),
+          thumbnailStorageKey: restoredThumbnail.storageKey || nextMetadata.thumbnailStorageKey,
+          thumbnailBackend: restoredThumbnail.backend || nextMetadata.thumbnailBackend,
+        };
+      } catch {
+        // Ignore thumbnail restore failures and keep any durable remote URL.
+      }
+    }
+    return { ...bank, pads: restoredPads, bankMetadata: nextMetadata };
+  }, [rehydratePadMediaFromStorage, restoreFileAccess, yieldToMainThread]);
 
   React.useEffect(() => {
     ensureActivityRuntime();
@@ -693,7 +718,10 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   const restoreAllFiles = React.useCallback(async () => {
     setStartupRestoreCompleted(false);
     await runRestoreAllFilesPipeline(
-      { user: getCachedUser() },
+      {
+        user: getCachedUser(),
+        allowDefaultBankAudio: Boolean(authSessionUserId) && !isGuestLockedSession,
+      },
       {
         setIsBanksHydrated,
         mediaRestoreRunIdRef,
@@ -727,7 +755,15 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       }
     );
     setStartupRestoreCompleted(true);
-  }, [readLastOpenBankId, samplerConfig.bankDefaults.defaultBankColor, samplerConfig.bankDefaults.defaultBankName, setHiddenProtectedBanks, writeLastOpenBankId]);
+  }, [
+    authSessionUserId,
+    isGuestLockedSession,
+    readLastOpenBankId,
+    samplerConfig.bankDefaults.defaultBankColor,
+    samplerConfig.bankDefaults.defaultBankName,
+    setHiddenProtectedBanks,
+    writeLastOpenBankId,
+  ]);
 
   React.useEffect(() => { restoreAllFiles(); }, [restoreAllFiles]);
 

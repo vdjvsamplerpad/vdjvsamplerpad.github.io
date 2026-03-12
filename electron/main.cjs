@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, screen, shell } = require('electron');
+const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -19,6 +19,14 @@ function isAllowedExternalUrl(rawUrl) {
 function setupWindowStateCycle(win) {
   let cycleMode = 'windowed';
   let normalBounds = win.getBounds();
+  let suppressMaximizeEvent = false;
+  let suppressUnmaximizeEvent = false;
+  let suppressLeaveFullscreenEvent = false;
+
+  const emitFullscreenState = () => {
+    if (win.isDestroyed()) return;
+    win.webContents.send('vdjv-window-fullscreen-changed', win.isFullScreen());
+  };
 
   const captureNormalBounds = () => {
     if (!win.isMaximized() && !win.isFullScreen() && cycleMode !== 'pseudo-fullscreen') {
@@ -26,20 +34,52 @@ function setupWindowStateCycle(win) {
     }
   };
 
+  const enterTrueFullscreen = () => {
+    cycleMode = 'fullscreen';
+    if (win.isFullScreen()) {
+      emitFullscreenState();
+      return;
+    }
+    if (win.isMaximized()) {
+      suppressUnmaximizeEvent = true;
+      win.unmaximize();
+      setImmediate(() => {
+        if (win.isDestroyed()) return;
+        win.setFullScreen(true);
+      });
+      return;
+    }
+    win.setFullScreen(true);
+  };
+
+  const exitToWindowed = () => {
+    cycleMode = 'windowed';
+    const restoreBounds = normalBounds;
+    if (win.isFullScreen()) {
+      suppressLeaveFullscreenEvent = true;
+      win.setFullScreen(false);
+      setImmediate(() => {
+        if (win.isDestroyed()) return;
+        suppressUnmaximizeEvent = true;
+        if (win.isMaximized()) win.unmaximize();
+        if (restoreBounds) win.setBounds(restoreBounds);
+      });
+      return;
+    }
+    suppressUnmaximizeEvent = true;
+    if (win.isMaximized()) win.unmaximize();
+    if (restoreBounds) win.setBounds(restoreBounds);
+    emitFullscreenState();
+  };
+
   win.on('move', captureNormalBounds);
   win.on('resize', captureNormalBounds);
 
   // Cycle order on maximize button (Windows):
-  // windowed -> maximized -> pseudo-fullscreen -> windowed
+  // windowed -> maximized -> fullscreen -> windowed
   win.on('maximize', () => {
-    if (cycleMode === 'pseudo-fullscreen') {
-      cycleMode = 'windowed';
-      const restoreBounds = normalBounds;
-      setImmediate(() => {
-        if (win.isDestroyed()) return;
-        if (win.isMaximized()) win.unmaximize();
-        if (restoreBounds) win.setBounds(restoreBounds);
-      });
+    if (suppressMaximizeEvent) {
+      suppressMaximizeEvent = false;
       return;
     }
 
@@ -49,14 +89,66 @@ function setupWindowStateCycle(win) {
   });
 
   win.on('unmaximize', () => {
+    if (suppressUnmaximizeEvent) {
+      suppressUnmaximizeEvent = false;
+      return;
+    }
     if (cycleMode !== 'maximized') return;
-    cycleMode = 'pseudo-fullscreen';
-    const { bounds } = screen.getDisplayMatching(win.getBounds());
     setImmediate(() => {
       if (win.isDestroyed()) return;
-      win.setBounds(bounds);
+      enterTrueFullscreen();
     });
   });
+
+  win.on('leave-full-screen', () => {
+    if (suppressLeaveFullscreenEvent) {
+      suppressLeaveFullscreenEvent = false;
+      emitFullscreenState();
+      return;
+    }
+    if (cycleMode !== 'fullscreen') return;
+    exitToWindowed();
+  });
+
+  win.on('enter-full-screen', () => {
+    cycleMode = 'fullscreen';
+    emitFullscreenState();
+  });
+
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const key = String(input.key || '').toUpperCase();
+    if (key !== 'F11') return;
+    event.preventDefault();
+
+    if (win.isFullScreen()) {
+      exitToWindowed();
+      return;
+    }
+
+    if (win.isMaximized()) {
+      enterTrueFullscreen();
+      return;
+    }
+
+    suppressMaximizeEvent = true;
+    cycleMode = 'maximized';
+    win.maximize();
+  });
+
+  return {
+    toggleFullscreen() {
+      if (win.isFullScreen()) {
+        exitToWindowed();
+        return false;
+      }
+      enterTrueFullscreen();
+      return true;
+    },
+    getFullscreenState() {
+      return win.isFullScreen();
+    },
+  };
 }
 
 function resolveWindowIconPath() {
@@ -112,7 +204,7 @@ function createMainWindow() {
     const key = String(input.key || '').toUpperCase();
     const hasCtrlOrCmd = Boolean(input.control || input.meta);
 
-    // Reserve F11 for app mappings, not Electron fullscreen.
+    // Reserve F11 for our custom window-state cycle, not the default Electron fullscreen toggle.
     if (key === 'F11') {
       event.preventDefault();
       return;
@@ -128,7 +220,18 @@ function createMainWindow() {
     }
   });
 
-  setupWindowStateCycle(mainWindow);
+  const windowStateControls = setupWindowStateCycle(mainWindow);
+
+  ipcMain.removeHandler('vdjv-window-toggle-fullscreen');
+  ipcMain.removeHandler('vdjv-window-get-fullscreen-state');
+  ipcMain.handle('vdjv-window-toggle-fullscreen', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    return windowStateControls.toggleFullscreen();
+  });
+  ipcMain.handle('vdjv-window-get-fullscreen-state', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    return windowStateControls.getFullscreenState();
+  });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
@@ -138,6 +241,8 @@ function createMainWindow() {
   });
 
   mainWindow.on('closed', () => {
+    ipcMain.removeHandler('vdjv-window-toggle-fullscreen');
+    ipcMain.removeHandler('vdjv-window-get-fullscreen-state');
     mainWindow = null;
   });
 }

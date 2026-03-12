@@ -1,6 +1,6 @@
 ﻿import * as React from 'react';
 import { Button } from '@/components/ui/button';
-import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search } from 'lucide-react';
+import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Maximize2, Minimize2 } from 'lucide-react';
 import type { SamplerBank, StopMode } from './types/sampler';
 import { createPortal } from 'react-dom';
 import { getCachedUser, useAuth } from '@/hooks/useAuth';
@@ -275,7 +275,9 @@ export function HeaderControls({
   const [AdminAccessDialog, setAdminAccessDialog] = React.useState<React.ComponentType<any> | null>(null);
   const [showLoginModal, setShowLoginModal] = React.useState(false);
   const [aboutOpen, setAboutOpen] = React.useState(false);
+  const [isElectronFullscreen, setIsElectronFullscreen] = React.useState(false);
   const appVersion = (import.meta as any).env?.VITE_APP_VERSION || 'unknown';
+  const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.toggleFullscreen);
 
   // Dynamically load AdminAccessDialog only for admin users
   React.useEffect(() => {
@@ -318,6 +320,31 @@ export function HeaderControls({
     window.addEventListener('vdjv-open-about', handleOpenAbout as EventListener);
     return () => window.removeEventListener('vdjv-open-about', handleOpenAbout as EventListener);
   }, []);
+
+  React.useEffect(() => {
+    if (!isElectronWindowControlsAvailable) return;
+    let mounted = true;
+
+    window.electronAPI?.getFullscreenState?.()
+      .then((value) => {
+        if (!mounted) return;
+        setIsElectronFullscreen(Boolean(value));
+      })
+      .catch(() => {});
+
+    const unsubscribe = window.electronAPI?.onFullscreenChange?.((next) => {
+      if (!mounted) return;
+      setIsElectronFullscreen(Boolean(next));
+      if (next) {
+        pushNotice({ variant: 'info', message: 'Fullscreen enabled. Press Esc to exit or use the Fullscreen button.' });
+      }
+    });
+
+    return () => {
+      mounted = false;
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [isElectronWindowControlsAvailable, pushNotice]);
 
   React.useEffect(() => {
     const isEditableTarget = (target: EventTarget | null): boolean => {
@@ -407,6 +434,17 @@ export function HeaderControls({
   const handleUploadClick = () => {
     fileInputRef.current?.click();
   };
+
+  const handleToggleElectronFullscreen = React.useCallback(() => {
+    if (!isElectronWindowControlsAvailable) return;
+    window.electronAPI?.toggleFullscreen?.()
+      .then((next) => {
+        setIsElectronFullscreen(Boolean(next));
+      })
+      .catch(() => {
+        pushNotice({ variant: 'error', message: 'Could not change fullscreen mode.' });
+      });
+  }, [isElectronWindowControlsAvailable, pushNotice]);
 
   const handleSignOut = React.useCallback(async () => {
     if (authTransition.status === 'signing_out') return;
@@ -579,6 +617,27 @@ export function HeaderControls({
             <Search className="w-4 h-4" />
             {!isMobileScreen && 'Search'}
           </Button>
+
+          {isElectronWindowControlsAvailable && (
+            <Button
+              onClick={handleToggleElectronFullscreen}
+              variant="outline"
+              size={isMobileScreen ? "sm" : "default"}
+              className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${
+                isElectronFullscreen
+                  ? theme === 'dark'
+                    ? 'bg-emerald-500 border-emerald-400 text-emerald-100'
+                    : 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                  : theme === 'dark'
+                    ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-emerald-500 hover:border-emerald-400 hover:text-emerald-100'
+                    : 'bg-white border-gray-300 text-gray-700 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700'
+              }`}
+              title={isElectronFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            >
+              {isElectronFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+              {!isMobileScreen && (isElectronFullscreen ? 'Exit Full' : 'Fullscreen')}
+            </Button>
+          )}
 
           {/* Mute/Unmute Button */}
           <Button

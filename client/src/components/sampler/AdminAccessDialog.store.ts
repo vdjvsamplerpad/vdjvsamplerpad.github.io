@@ -106,11 +106,26 @@ const EMPTY_STORE_CONFIG: StoreConfigDraft = {
   store_email_reject_body: '',
 };
 
-const EMPTY_STORE_PROMOTION_FORM = {
+type StorePromotionForm = {
+  name: string;
+  description: string;
+  promotion_type: 'standard' | 'flash_sale';
+  discount_type: 'percent' | 'fixed';
+  discount_value: string;
+  starts_at: string;
+  ends_at: string;
+  timezone: string;
+  badge_text: string;
+  priority: string;
+  is_active: boolean;
+  target_bank_ids: string[];
+};
+
+const EMPTY_STORE_PROMOTION_FORM: StorePromotionForm = {
   name: '',
   description: '',
-  promotion_type: 'flash_sale' as const,
-  discount_type: 'percent' as const,
+  promotion_type: 'flash_sale',
+  discount_type: 'percent',
   discount_value: '10',
   starts_at: '',
   ends_at: '',
@@ -118,7 +133,7 @@ const EMPTY_STORE_PROMOTION_FORM = {
   badge_text: '',
   priority: '100',
   is_active: true,
-  target_bank_ids: [] as string[],
+  target_bank_ids: [],
 };
 
 const toDateTimeLocalValue = (value: string | null | undefined): string => {

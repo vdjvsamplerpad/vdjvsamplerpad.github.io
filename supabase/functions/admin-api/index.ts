@@ -15,6 +15,7 @@ import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig } from "../_share
 import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_shared/supabase.ts";
 import { asNumber, asString, asUuid } from "../_shared/validate.ts";
 import { consumeRateLimit } from "../_shared/rate-limit.ts";
+import { sendDiscordAdminActionEvent } from "../_shared/discord.ts";
 
 type SortDirection = "asc" | "desc";
 type ActivityEventType = "auth.login" | "auth.signup" | "auth.signout" | "bank.export" | "bank.import";
@@ -74,6 +75,14 @@ const ok = (data: Record<string, unknown>, status = 200) =>
 
 const fail = (status: number, error: string, extra?: Record<string, unknown>) =>
   json(status, { ok: false, error, ...(extra || {}) });
+
+const swallowDiscordError = async (task: () => Promise<void>) => {
+  try {
+    await task();
+  } catch {
+    // Discord is secondary monitoring only.
+  }
+};
 
 const normalizeSortDir = (value: string | null): SortDirection => {
   return String(value || "").toLowerCase() === "asc" ? "asc" : "desc";
@@ -621,9 +630,25 @@ const updateUserProfile = async (userId: string, body: any, admin: ReturnType<ty
   });
 };
 
-const deleteUser = async (userId: string, admin: ReturnType<typeof createServiceClient>) => {
+const deleteUser = async (
+  userId: string,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const existing = await admin.auth.admin.getUserById(userId);
+  const targetEmail = existing.data?.user?.email || null;
   const { error } = await admin.auth.admin.deleteUser(userId);
   if (error) return fail(500, error.message);
+  await swallowDiscordError(() =>
+    sendDiscordAdminActionEvent({
+      severity: "critical",
+      title: "Admin Deleted User",
+      description: "A user account was deleted by admin.",
+      actorUserId: adminUserId,
+      targetUserId: userId,
+      extraFields: targetEmail ? [{ name: "Target Email", value: targetEmail, inline: true }] : [],
+    })
+  );
   return ok({ userId });
 };
 
@@ -643,7 +668,11 @@ const unbanUser = async (userId: string, admin: ReturnType<typeof createServiceC
   return ok({ userId, banned_until: null });
 };
 
-const resetPassword = async (userId: string, admin: ReturnType<typeof createServiceClient>) => {
+const resetPassword = async (
+  userId: string,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
   const { data, error } = await admin.auth.admin.getUserById(userId);
   if (error || !data?.user) return fail(404, error?.message || "User not found");
   const email = data.user.email;
@@ -658,6 +687,16 @@ const resetPassword = async (userId: string, admin: ReturnType<typeof createServ
   const anon = createClient(supabaseUrl, supabaseAnonKey, { auth: { persistSession: false } });
   const { error: resetErr } = await anon.auth.resetPasswordForEmail(email);
   if (resetErr) return fail(500, resetErr.message);
+  await swallowDiscordError(() =>
+    sendDiscordAdminActionEvent({
+      severity: "warning",
+      title: "Admin Reset User Password",
+      description: "Password reset email was triggered by admin.",
+      actorUserId: adminUserId,
+      targetUserId: userId,
+      extraFields: [{ name: "Target Email", value: email, inline: true }],
+    })
+  );
   return ok({ userId, email });
 };
 
@@ -1261,7 +1300,7 @@ const deleteBank = async (
 
   const { data: bankRow, error: bankError } = await admin
     .from("banks")
-    .select("id, deleted_at")
+    .select("id, title, deleted_at")
     .eq("id", bankId)
     .maybeSingle();
   if (bankError) return fail(500, bankError.message);
@@ -1286,6 +1325,21 @@ const deleteBank = async (
     .eq("id", bankId)
     .is("deleted_at", null);
   if (softDeleteError) return fail(500, softDeleteError.message);
+
+  await swallowDiscordError(() =>
+    sendDiscordAdminActionEvent({
+      severity: "critical",
+      title: "Admin Deleted Bank",
+      description: "A bank was archived by admin.",
+      actorUserId: adminUserId,
+      bankId,
+      extraFields: [
+        { name: "Bank", value: asString((bankRow as any)?.title, 255) || bankId, inline: false },
+        { name: "Revoke All Access", value: revokeAll ? "Yes" : "No", inline: true },
+        { name: "Catalog Unpublished", value: String((unpublishedRows || []).length), inline: true },
+      ],
+    })
+  );
 
   return ok({
     bankId,
@@ -1447,7 +1501,12 @@ const grantAccessForUser = async (userId: string, body: any, admin: ReturnType<t
   return ok({ userId, bankIds, grantedCount: bankIds.length });
 };
 
-const revokeAccessForUser = async (userId: string, body: any, admin: ReturnType<typeof createServiceClient>) => {
+const revokeAccessForUser = async (
+  userId: string,
+  body: any,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
   const bankIds = parseUuidList(body?.bankIds);
   if (!bankIds.length) return badRequest("bankIds is required");
 
@@ -1457,6 +1516,18 @@ const revokeAccessForUser = async (userId: string, body: any, admin: ReturnType<
     .eq("user_id", userId)
     .in("bank_id", bankIds);
   if (error) return fail(500, error.message);
+
+  await swallowDiscordError(() =>
+    sendDiscordAdminActionEvent({
+      severity: "critical",
+      title: "Admin Revoked Bank Access",
+      description: "Bank access was revoked for a user.",
+      actorUserId: adminUserId,
+      targetUserId: userId,
+      bankIds,
+      extraFields: [{ name: "Revoked Count", value: String(bankIds.length), inline: true }],
+    })
+  );
 
   return ok({ userId, bankIds, revokedCount: bankIds.length });
 };
@@ -2226,10 +2297,10 @@ Deno.serve(async (req) => {
       const userId = asUuid(route.id);
       if (!userId) return badRequest("Invalid user id");
       if (route.action === "update-profile") return await updateUserProfile(userId, body, admin);
-      if (route.action === "delete") return await deleteUser(userId, admin);
+      if (route.action === "delete") return await deleteUser(userId, admin, adminCheck.userId);
       if (route.action === "ban") return await banUser(userId, body, admin);
       if (route.action === "unban") return await unbanUser(userId, admin);
-      if (route.action === "reset-password") return await resetPassword(userId, admin);
+      if (route.action === "reset-password") return await resetPassword(userId, admin, adminCheck.userId);
       return fail(404, "Unknown admin route");
     }
 
@@ -2249,7 +2320,7 @@ Deno.serve(async (req) => {
       if (!userId || !accessAction) return badRequest("Invalid access route");
 
       if (accessAction === "grant") return await grantAccessForUser(userId, body, admin);
-      if (accessAction === "revoke") return await revokeAccessForUser(userId, body, admin);
+      if (accessAction === "revoke") return await revokeAccessForUser(userId, body, admin, adminCheck.userId);
       return fail(404, "Unknown access route");
     }
 

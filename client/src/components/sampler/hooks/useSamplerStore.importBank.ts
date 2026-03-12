@@ -73,7 +73,8 @@ export interface ImportBankPipelineDeps {
   storeFile: (
     id: string,
     file: File,
-    type: 'audio' | 'image'
+    type: 'audio' | 'image',
+    options?: { storageId?: string; nativeStorageKeyHint?: string }
   ) => Promise<{ storageKey?: string; backend: MediaBackend }>;
   saveBatchBlobsToDB: (items: BatchFileItem[]) => Promise<void>;
   yieldToMainThread: () => Promise<void>;
@@ -536,28 +537,28 @@ export const runImportBankPipeline = async (
         resolvedBankColor = metadata.color;
       }
 
-      const loadEmbeddedThumbnailUrl = async (assetPath: string | null | undefined): Promise<string | undefined> => {
+      const loadEmbeddedThumbnailBlob = async (assetPath: string | null | undefined): Promise<Blob | null> => {
         const normalizedPath = typeof assetPath === 'string' ? normalizeArchiveAssetPath(assetPath) : '';
-        if (!normalizedPath) return undefined;
+        if (!normalizedPath) return null;
         const thumbnailFile = contents.file(normalizedPath);
-        if (!thumbnailFile) return undefined;
+        if (!thumbnailFile) return null;
         try {
           const thumbnailBlob = await thumbnailFile.async('blob');
-          if (!(thumbnailBlob instanceof Blob) || thumbnailBlob.size <= 0) return undefined;
-          return URL.createObjectURL(thumbnailBlob);
+          if (!(thumbnailBlob instanceof Blob) || thumbnailBlob.size <= 0) return null;
+          return thumbnailBlob;
         } catch {
-          return undefined;
+          return null;
         }
       };
 
-      const embeddedThumbnailUrl = await loadEmbeddedThumbnailUrl(metadata?.thumbnailAssetPath);
-      if (embeddedThumbnailUrl) {
+      const embeddedThumbnailBlob = await loadEmbeddedThumbnailBlob(metadata?.thumbnailAssetPath);
+      if (embeddedThumbnailBlob) {
         metadata = {
           ...(metadata || {
             password: false,
             transferable: true,
           }),
-          thumbnailUrl: embeddedThumbnailUrl,
+          thumbnailUrl: URL.createObjectURL(embeddedThumbnailBlob),
           hideThumbnailPreview: metadata?.hideThumbnailPreview,
         };
       }
@@ -698,6 +699,39 @@ export const runImportBankPipeline = async (
         restoreStatus: replaceExistingBank?.restoreStatus,
         remoteSnapshotApplied: replaceExistingBank?.remoteSnapshotApplied,
       };
+
+      if (embeddedThumbnailBlob) {
+        try {
+          const thumbStorageId = `bank-thumbnail-${newBank.id}`;
+          const thumbExt = (() => {
+            const mime = embeddedThumbnailBlob.type || '';
+            if (mime === 'image/png') return 'png';
+            if (mime === 'image/webp') return 'webp';
+            if (mime === 'image/gif') return 'gif';
+            if (mime === 'image/jpeg') return 'jpg';
+            return 'bin';
+          })();
+          const storedThumbnail = await storeFile(
+            thumbStorageId,
+            new File([embeddedThumbnailBlob], `${thumbStorageId}.${thumbExt}`, { type: embeddedThumbnailBlob.type || 'application/octet-stream' }),
+            'image',
+            {
+              storageId: `image_${thumbStorageId}`,
+              nativeStorageKeyHint: `image/${thumbStorageId}.${thumbExt}`,
+            }
+          );
+          newBank.bankMetadata = {
+            ...(newBank.bankMetadata || {
+              password: false,
+              transferable: true,
+            }),
+            thumbnailStorageKey: storedThumbnail.storageKey,
+            thumbnailBackend: storedThumbnail.backend,
+          };
+        } catch {
+          // Keep the in-memory thumbnail URL even if persistence fails.
+        }
+      }
 
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
       const createFastIOSBlobURL = async (blob: Blob): Promise<string> => {

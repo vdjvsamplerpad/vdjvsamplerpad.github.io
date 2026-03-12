@@ -95,6 +95,8 @@ export interface BankMetadata {
   description?: string; // Bank description from database
   color?: string; // Optional bank color override
   thumbnailUrl?: string; // Store catalog thumbnail URL for visual display
+  thumbnailStorageKey?: string; // Persistent offline thumbnail media key
+  thumbnailBackend?: 'native' | 'idb'; // Storage backend hint for offline thumbnail recovery
   thumbnailAssetPath?: string; // Embedded thumbnail file path inside .bank archive
   hideThumbnailPreview?: boolean; // Hide thumbnail in bank list and show color-only preview
   defaultBankSource?: 'assets' | 'remote'; // Active source for the built-in default bank

@@ -8,10 +8,10 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && tsc --project tsconfig.server.json",
-    "build:capacitor:web": "cross-env CAPACITOR=true vite build && tsc --project tsconfig.server.json",
+    "build": "vite build && npm run type-check && tsc --project tsconfig.server.json",
+    "build:capacitor:web": "cross-env CAPACITOR=true vite build && npm run type-check && tsc --project tsconfig.server.json",
     "generate:electron-icons": "node scripts/generate-electron-icons.js",
-    "build:electron": "npm run generate:electron-icons && cross-env ELECTRON=true vite build && tsc --project tsconfig.server.json",
+    "build:electron": "npm run generate:electron-icons && cross-env ELECTRON=true vite build && npm run type-check && tsc --project tsconfig.server.json",
     "build:electron:package": "npm run build:electron && electron-builder",
     "start": "tsx watch scripts/dev.ts",
     "preview": "vite preview",

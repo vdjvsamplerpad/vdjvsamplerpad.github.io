@@ -56,7 +56,7 @@ This repository powers the live web app, Android builds through Capacitor, and W
 ## 🌐 Socials
 
 <p align="center">
-  <a href="https://www.facebook.com/PWOSoundSystem">
+  <a href="https://www.facebook.com/vdjvsampler">
     <img src="https://img.shields.io/badge/Facebook%20Page-1877F2?style=for-the-badge&logo=facebook&logoColor=white" alt="Facebook Page">
   </a>
   <a href="https://www.facebook.com/share/g/14esJ28V16J/">
@@ -211,7 +211,6 @@ If the app helps you and you want to support development, you can send a small t
 - Web app is deployed through GitHub Pages
 - Android builds are packaged through Capacitor
 - Windows installers are packaged through Electron
-- Current release hardening checklist lives in [docs/NEW-GITHUB-PUSH-DEPLOY-CHECKLIST.md](docs/PUSH-DEPLOY-CHECKLIST.md)
 
 ## 📄 License
 

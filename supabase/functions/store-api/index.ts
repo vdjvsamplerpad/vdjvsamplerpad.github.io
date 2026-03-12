@@ -6,10 +6,29 @@ import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig } from "../_share
 import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_shared/supabase.ts";
 import { asString, asUuid } from "../_shared/validate.ts";
 import { consumeRateLimit } from "../_shared/rate-limit.ts";
+import {
+  type DiscordField,
+  sendDiscordAccountRegistrationEvent,
+  sendDiscordOcrFailureEvent,
+  sendDiscordStoreRequestEvent,
+} from "../_shared/discord.ts";
 
 const ok = (data: Record<string, unknown>, status = 200) => json(status, { ok: true, data, ...data });
 const fail = (status: number, error: string, extra?: Record<string, unknown>) =>
   json(status, { ok: false, error, ...(extra || {}) });
+
+const swallowDiscordError = async (task: () => Promise<void>) => {
+  try {
+    await task();
+  } catch {
+    // Discord is secondary notification only.
+  }
+};
+
+const shouldNotifyOcrFailure = (errorCode: string | null | undefined): boolean => {
+  if (!errorCode) return false;
+  return errorCode !== "MANUAL_REVIEW_MODE";
+};
 
 const asPriceNumber = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) return value >= 0 ? value : null;
@@ -1826,20 +1845,20 @@ const DEFAULT_LANDING_DOWNLOAD_LINKS = {
   V1: {
     android: "/android/",
     ios: "/ios/",
-    windows: "https://m.me/PWOSoundSystem/",
-    macos: "https://m.me/PWOSoundSystem/",
+    windows: "https://m.me/vdjvsampler/",
+    macos: "https://m.me/vdjvsampler/",
   },
   V2: {
-    android: "https://m.me/PWOSoundSystem/",
+    android: "https://m.me/vdjvsampler/",
     ios: "https://apps.apple.com/us/app/virtualdj-remote/id407160120",
-    windows: "https://m.me/PWOSoundSystem/",
-    macos: "https://m.me/PWOSoundSystem/",
+    windows: "https://m.me/vdjvsampler/",
+    macos: "https://m.me/vdjvsampler/",
   },
   V3: {
-    android: "https://m.me/PWOSoundSystem/",
+    android: "https://m.me/vdjvsampler/",
     ios: "https://apps.apple.com/us/app/virtualdj-remote/id407160120",
-    windows: "https://m.me/PWOSoundSystem/",
-    macos: "https://m.me/PWOSoundSystem/",
+    windows: "https://m.me/vdjvsampler/",
+    macos: "https://m.me/vdjvsampler/",
   },
 } as const;
 const DEFAULT_LANDING_PLATFORM_DESCRIPTIONS = {
@@ -2051,6 +2070,15 @@ const createReceiptOcr = async (req: Request) => {
 
   const attempt = await extractReceiptFieldsViaOcr({ file, context });
   if (!attempt.detected) {
+    await swallowDiscordError(() =>
+      sendDiscordOcrFailureEvent({
+        context,
+        subject: subjectHint || null,
+        email: normalizedEmail,
+        errorCode: attempt.errorCode || "OCR_FAILED",
+        provider: attempt.provider,
+      })
+    );
     return fail(502, attempt.errorCode || "OCR_FAILED", {
       provider: attempt.provider,
       elapsedMs: attempt.elapsedMs || (Date.now() - startedAt),
@@ -2235,6 +2263,37 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
     receipt_reference: (data as any)?.receipt_reference || receiptReference,
     status: "pending",
   };
+
+  await swallowDiscordError(() =>
+    sendDiscordAccountRegistrationEvent({
+      severity: "info",
+      title: "Account Registration Submitted",
+      description: "A new account registration request was submitted.",
+      requestId: String(data.id),
+      email,
+      displayName,
+      paymentChannel,
+      payerName: payerName || null,
+      referenceNo: ocrMetadata.referenceNo || referenceNo || null,
+      receiptReference: asString(requestRow.receipt_reference, 160) || null,
+      proofPath: proofPath || null,
+      extraFields: [
+        { name: "Has Proof", value: proofPath ? "Yes" : "No", inline: true },
+      ],
+    })
+  );
+  if (shouldNotifyOcrFailure(ocrMetadata.errorCode)) {
+    await swallowDiscordError(() =>
+      sendDiscordOcrFailureEvent({
+        context: "account_registration",
+        email,
+        errorCode: ocrMetadata.errorCode,
+        provider: ocrMetadata.provider,
+        receiptReference: asString(requestRow.receipt_reference, 160) || null,
+        requestId: String(data.id),
+      })
+    );
+  }
 
   let automationResult: AutomationReason = "not_image_proof";
   let autoApproved = false;
@@ -2531,6 +2590,10 @@ const executeAccountApproval = async (input: {
   temporaryPassword?: string | null;
   automationResult?: string | null;
 }) => {
+  const resolvedAutomationResult =
+    input.decisionSource === "manual"
+      ? (asString(input.requestRow?.automation_result, 120) || null)
+      : (input.automationResult || null);
   const existingAuthUser = await findAuthUserByEmail(input.admin, input.requestRow.email);
   if (existingAuthUser) return fail(409, "EMAIL_ALREADY_REGISTERED");
 
@@ -2629,7 +2692,7 @@ const executeAccountApproval = async (input: {
       password_ciphertext: null,
       password_iv: null,
       decision_source: input.decisionSource,
-      automation_result: input.automationResult || null,
+      automation_result: resolvedAutomationResult,
     })
     .eq("id", input.requestRow.id)
     .eq("status", "pending");
@@ -2656,6 +2719,30 @@ const executeAccountApproval = async (input: {
       })
       .eq("id", input.requestRow.id);
   }
+
+  await swallowDiscordError(() =>
+    sendDiscordAccountRegistrationEvent({
+      severity: input.decisionSource === "automation" ? "warning" : "info",
+      title: "Account Request Approved",
+      description: input.decisionSource === "automation"
+        ? "Account request was auto-approved."
+        : "Account request was approved by admin.",
+      requestId: String(input.requestRow.id),
+      email: asString(input.requestRow.email, 320) || "unknown",
+      displayName: asString(input.requestRow.display_name, 160) || null,
+      paymentChannel: asString(input.requestRow.payment_channel, 80) || null,
+      payerName: asString(input.requestRow.payer_name, 160) || null,
+      referenceNo: asString(input.requestRow.ocr_reference_no, 160) || asString(input.requestRow.reference_no, 160) || null,
+      receiptReference: asString(input.requestRow.receipt_reference, 160) || null,
+      decisionSource: input.decisionSource,
+      automationResult: resolvedAutomationResult,
+      actorUserId: input.reviewedBy,
+      extraFields: [
+        { name: "Assisted", value: input.assisted ? "Yes" : "No", inline: true },
+        { name: "Approved User", value: authUserId, inline: true },
+      ],
+    })
+  );
 
   return ok({
     requestId: input.requestRow.id,
@@ -2718,6 +2805,32 @@ const executeStoreDecision = async (input: {
       return fail(500, emailUpdateResult.error.message);
     }
   }
+
+  await swallowDiscordError(() =>
+    sendDiscordStoreRequestEvent({
+      severity: input.nextStatus === "rejected" ? "warning" : (input.decisionSource === "automation" ? "warning" : "info"),
+      title: input.nextStatus === "approved" ? "Store Request Approved" : "Store Request Rejected",
+      description: input.decisionSource === "automation"
+        ? `Store request was ${input.nextStatus} automatically.`
+        : `Store request was ${input.nextStatus} by admin.`,
+      requestId: String(rowIds[0] || ""),
+      userId: asString(input.batchRows[0]?.user_id, 80) || null,
+      actorUserId: input.reviewedBy,
+      bankIds: input.batchRows.map((row) => asString(row?.bank_id, 80) || "").filter(Boolean),
+      catalogItemIds: input.batchRows.map((row) => asString(row?.catalog_item_id, 80) || "").filter(Boolean),
+      batchId: asString(input.batchRows[0]?.batch_id, 80) || null,
+      receiptReference: asString(input.batchRows[0]?.receipt_reference, 160) || null,
+      paymentChannel: asString(input.batchRows[0]?.payment_channel, 80) || null,
+      payerName: asString(input.batchRows[0]?.payer_name, 160) || null,
+      referenceNo: asString(input.batchRows[0]?.ocr_reference_no, 160) || asString(input.batchRows[0]?.reference_no, 160) || null,
+      decisionSource: input.decisionSource,
+      automationResult: input.automationResult || null,
+      extraFields: [
+        { name: "Request Count", value: String(input.batchRows.length), inline: true },
+        ...(input.rejectionMessage ? [{ name: "Reason", value: input.rejectionMessage, inline: false } as DiscordField] : []),
+      ],
+    })
+  );
 
   return ok({
     ids: appliedIds,
@@ -2840,7 +2953,7 @@ const adminAccountRegistrationRequestAction = async (requestId: string, body: an
     password_ciphertext: null,
     password_iv: null,
     decision_source: "manual",
-    automation_result: null,
+    automation_result: asString(requestRow?.automation_result, 120) || null,
   };
   const { error: rejectUpdateError } = await admin
     .from("account_registration_requests")
@@ -2848,6 +2961,24 @@ const adminAccountRegistrationRequestAction = async (requestId: string, body: an
     .eq("id", requestId)
     .eq("status", "pending");
   if (rejectUpdateError) return fail(500, rejectUpdateError.message);
+
+  await swallowDiscordError(() =>
+    sendDiscordAccountRegistrationEvent({
+      severity: "warning",
+      title: "Account Request Rejected",
+      description: "Account request was rejected by admin.",
+      requestId,
+      email: asString(requestRow.email, 320) || "unknown",
+      displayName: asString(requestRow.display_name, 160) || null,
+      paymentChannel: asString(requestRow.payment_channel, 80) || null,
+      payerName: asString(requestRow.payer_name, 160) || null,
+      referenceNo: asString(requestRow.ocr_reference_no, 160) || asString(requestRow.reference_no, 160) || null,
+      receiptReference: asString(requestRow.receipt_reference, 160) || null,
+      decisionSource: "manual",
+      actorUserId: adminUserId,
+      extraFields: rejectionMessage ? [{ name: "Reason", value: rejectionMessage, inline: false }] : [],
+    })
+  );
 
   return ok({
     requestId,
@@ -3133,9 +3264,44 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
         || asString(enrichedCatalogById.get(row.catalog_item_id)?.banks?.title, 200)
         || asString(catalogById.get(row.catalog_item_id)?.banks?.[0]?.title, 200)
         || asString(catalogById.get(row.catalog_item_id)?.banks?.title, 200)
-        || "Unknown Bank",
+      || "Unknown Bank",
     },
   }));
+
+  await swallowDiscordError(() =>
+    sendDiscordStoreRequestEvent({
+      severity: "info",
+      title: "Store Purchase Request Submitted",
+      description: "A new store purchase request was submitted.",
+      requestId: String(insertedRows[0]?.id || ""),
+      userId,
+      bankIds: normalizedItems.map((item) => item.bankId),
+      catalogItemIds: normalizedItems.map((item) => item.catalogItemId),
+      batchId,
+      receiptReference,
+      paymentChannel: normalizedPaymentChannel || null,
+      payerName: normalizedPayerName || null,
+      referenceNo: ocrMetadata.referenceNo || normalizedReferenceNo || null,
+      extraFields: [
+        { name: "Item Count", value: String(normalizedItems.length), inline: true },
+      ],
+    })
+  );
+  if (shouldNotifyOcrFailure(ocrMetadata.errorCode)) {
+    await swallowDiscordError(() =>
+      sendDiscordOcrFailureEvent({
+        context: "bank_store",
+        email: user?.email || null,
+        errorCode: ocrMetadata.errorCode,
+        provider: ocrMetadata.provider,
+        receiptReference,
+        requestId: String(insertedRows[0]?.id || ""),
+        bankIds: normalizedItems.map((item) => item.bankId),
+        catalogItemIds: normalizedItems.map((item) => item.catalogItemId),
+      })
+    );
+  }
+
   let automationResult: AutomationReason = "not_image_proof";
   let autoApproved = false;
   if (normalizedPaymentChannel === "image_proof") {

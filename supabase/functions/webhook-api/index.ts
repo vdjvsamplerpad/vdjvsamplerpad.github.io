@@ -1,5 +1,6 @@
 import "@supabase/functions-js/edge-runtime.d.ts";
 import { handleCorsPreflight, json } from "../_shared/http.ts";
+import { createServiceClient } from "../_shared/supabase.ts";
 import {
   parseDiscordWebhookPayload,
   sendDiscordAuthEvent,
@@ -39,6 +40,10 @@ const WEBHOOK_SIGNING_SECRET = asString(Deno.env.get("WEBHOOK_SIGNING_SECRET"), 
 const WEBHOOK_MAX_SKEW_SECONDS = readPositiveInt(Deno.env.get("WEBHOOK_MAX_SKEW_SECONDS"), 300);
 const WEBHOOK_RATE_LIMIT = readPositiveInt(Deno.env.get("WEBHOOK_RATE_LIMIT"), 120);
 const WEBHOOK_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("WEBHOOK_RATE_WINDOW_SECONDS"), 3600);
+const WEBHOOK_REPLAY_TTL_SECONDS = Math.max(
+  600,
+  readPositiveInt(Deno.env.get("WEBHOOK_REPLAY_TTL_SECONDS"), WEBHOOK_MAX_SKEW_SECONDS * 2),
+);
 
 const normalizeSignature = (value: string | null): string | null => {
   if (!value) return null;
@@ -102,6 +107,33 @@ const verifyWebhookSignature = async (
   return { ok: true };
 };
 
+const claimWebhookReplayKey = async (
+  replayKey: string,
+  route: string,
+  requester: string,
+): Promise<boolean> => {
+  const admin = createServiceClient();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + (WEBHOOK_REPLAY_TTL_SECONDS * 1000)).toISOString();
+  await admin
+    .from("webhook_replay_cache")
+    .delete()
+    .lt("expires_at", now.toISOString());
+  const { error } = await admin
+    .from("webhook_replay_cache")
+    .insert({
+      replay_key: replayKey,
+      route,
+      requester_ip: requester,
+      expires_at: expiresAt,
+    });
+  if (!error) return true;
+  if ((error as { code?: string }).code === "23505" || /duplicate key/i.test(error.message || "")) {
+    return false;
+  }
+  throw new Error(error.message);
+};
+
 Deno.serve(async (req) => {
   const cors = handleCorsPreflight(req);
   if (cors) return cors;
@@ -116,6 +148,10 @@ Deno.serve(async (req) => {
     const body = rawBody ? asObject(JSON.parse(rawBody)) : {};
     const path = new URL(req.url).pathname;
     const requester = parseClientIp(req) || "unknown";
+    const requestId = asString(body.requestId, 120) || asString(body.request_id, 120) || null;
+    const replayKey = requestId || `sig:${normalizeSignature(asString(req.headers.get("x-webhook-signature"), 500)) || "missing"}`;
+    const claimed = await claimWebhookReplayKey(replayKey, path, requester);
+    if (!claimed) return json(409, { error: "REPLAYED_WEBHOOK" }, req);
 
     if (path.endsWith("/auth-event")) {
       const rate = await consumeRateLimit({
@@ -146,6 +182,9 @@ Deno.serve(async (req) => {
         status: String(body.status || "").toLowerCase() === "failed" ? "failed" : "success",
         errorMessage: asString(body.errorMessage, 2000),
         clientIp: requester,
+        userId: asString(body.userId, 120),
+        sessionKey: asString(body.sessionKey, 120),
+        deviceSessionId: asString(body.deviceSessionId, 120),
       });
       return json(200, { ok: true }, req);
     }

@@ -602,7 +602,7 @@ export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankI
                                             ? `Checking out ${cartItems.length} item${cartItems.length > 1 ? 's' : ''} for PHP ${cartTotal.toLocaleString()}`
                                             : selectedItem
                                                 ? `Purchasing: ${selectedItem.bank.title}`
-                                                : 'Discover premium sound banks and import them straight into your grid.'}
+                                                : 'Discover sampler banks and download them'}
                                     </span>
                                     {!isOnline && offlineSnapshotTime && (
                                         <span className="text-xs opacity-80 shrink-0">

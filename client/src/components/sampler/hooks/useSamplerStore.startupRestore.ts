@@ -1,11 +1,14 @@
 import type { PadData, SamplerBank } from '../types/sampler';
 import { applyBankContentPolicy } from './useSamplerStore.provenance';
+import { loadDefaultBankFromAssetsPipeline } from './useSamplerStore.defaultBankAssets';
+import { DEFAULT_BANK_SOURCE_ID, isDefaultBankIdentity } from './useSamplerStore.bankIdentity';
 
 type MediaBackend = 'native' | 'idb';
 type SetState<T> = (value: T | ((prev: T) => T)) => void;
 
 export interface RunRestoreAllFilesInput {
   user: { id: string } | null;
+  allowDefaultBankAudio: boolean;
 }
 
 export interface RunRestoreAllFilesDeps {
@@ -54,6 +57,7 @@ export const runRestoreAllFilesPipeline = async (
 ): Promise<void> => {
   const {
     user,
+    allowDefaultBankAudio,
   } = input;
   const {
     setIsBanksHydrated,
@@ -154,46 +158,108 @@ export const runRestoreAllFilesPipeline = async (
           ? (pad.savedHotcuesMs.slice(0, 4) as [number | null, number | null, number | null, number | null])
           : [null, null, null, null],
       };
-      try {
-        const restoredAudio = await restoreFileAccess(
-          pad.id,
-          'audio',
-          pad.audioStorageKey,
-          pad.audioBackend
-        );
-        if (restoredAudio.url) restoredPad.audioUrl = restoredAudio.url;
-        if (restoredAudio.storageKey) restoredPad.audioStorageKey = restoredAudio.storageKey;
-        restoredPad.audioBackend = restoredAudio.backend;
-      } catch { }
-      try {
-        const restoredImage = await restoreFileAccess(
-          pad.id,
-          'image',
-          pad.imageStorageKey,
-          pad.imageBackend
-        );
-        if (restoredImage.url) restoredPad.imageUrl = restoredImage.url;
-        if (restoredImage.storageKey) restoredPad.imageStorageKey = restoredImage.storageKey;
-        restoredPad.imageBackend = restoredImage.backend;
-        if (restoredImage.url) restoredPad.hasImageAsset = true;
-        if (!restoredPad.imageUrl && pad.imageData) {
-          try {
-            restoredPad.imageUrl = URL.createObjectURL(base64ToBlob(pad.imageData));
-            restoredPad.imageBackend = 'idb';
-            restoredPad.hasImageAsset = true;
-          } catch { }
-        }
-      } catch { }
+      if (pad.audioStorageKey || pad.audioBackend) {
+        try {
+          const restoredAudio = await restoreFileAccess(
+            pad.id,
+            'audio',
+            pad.audioStorageKey,
+            pad.audioBackend
+          );
+          if (restoredAudio.url) restoredPad.audioUrl = restoredAudio.url;
+          if (restoredAudio.storageKey) restoredPad.audioStorageKey = restoredAudio.storageKey;
+          restoredPad.audioBackend = restoredAudio.backend;
+        } catch { }
+      }
+      if (pad.imageStorageKey || pad.imageBackend) {
+        try {
+          const restoredImage = await restoreFileAccess(
+            pad.id,
+            'image',
+            pad.imageStorageKey,
+            pad.imageBackend
+          );
+          if (restoredImage.url) restoredPad.imageUrl = restoredImage.url;
+          if (restoredImage.storageKey) restoredPad.imageStorageKey = restoredImage.storageKey;
+          restoredPad.imageBackend = restoredImage.backend;
+          if (restoredImage.url) restoredPad.hasImageAsset = true;
+        } catch { }
+      }
+      if (!restoredPad.imageUrl && pad.imageData) {
+        try {
+          restoredPad.imageUrl = URL.createObjectURL(base64ToBlob(pad.imageData));
+          restoredPad.imageBackend = 'idb';
+          restoredPad.hasImageAsset = true;
+        } catch { }
+      }
       return restoredPad;
     };
 
+    let defaultBankAssetSourcePromise: Promise<SamplerBank> | null = null;
+    const getDefaultBankAssetSource = async (): Promise<SamplerBank> => {
+      if (!defaultBankAssetSourcePromise) {
+        defaultBankAssetSourcePromise = loadDefaultBankFromAssetsPipeline(allowDefaultBankAudio, {
+          generateId,
+          defaultBankSourceId: DEFAULT_BANK_SOURCE_ID,
+        });
+      }
+      return await defaultBankAssetSourcePromise;
+    };
+
     const restoreBankMedia = async (bank: SamplerBank): Promise<SamplerBank> => {
+      const defaultBankAssetSource = isDefaultBankIdentity(bank)
+        ? await getDefaultBankAssetSource().catch(() => null)
+        : null;
+      const defaultBankAssetPadsById = defaultBankAssetSource
+        ? new Map(defaultBankAssetSource.pads.map((pad) => [pad.id, pad] as const))
+        : null;
       const restoredPads: PadData[] = [];
       for (let i = 0; i < bank.pads.length; i += 1) {
-        restoredPads.push(await restorePadMedia(bank.pads[i]));
+        const restoredPad = await restorePadMedia(bank.pads[i]);
+        const assetPad =
+          defaultBankAssetPadsById?.get(restoredPad.id) ||
+          defaultBankAssetSource?.pads[i] ||
+          null;
+        if (assetPad) {
+          if (!restoredPad.audioUrl && !restoredPad.audioStorageKey && !restoredPad.audioBackend) {
+            restoredPad.audioUrl = assetPad.audioUrl || restoredPad.audioUrl;
+          }
+          if (!restoredPad.imageUrl && !restoredPad.imageStorageKey && !restoredPad.imageBackend) {
+            restoredPad.imageUrl = assetPad.imageUrl || restoredPad.imageUrl;
+            if (assetPad.imageUrl) restoredPad.hasImageAsset = true;
+          }
+        }
+        restoredPads.push(restoredPad);
         if ((i + 1) % 6 === 0) await yieldToMainThread();
       }
-      return { ...bank, pads: restoredPads };
+      const thumbnailStorageId = `bank-thumbnail-${bank.id}`;
+      let nextMetadata = defaultBankAssetSource?.bankMetadata
+        ? {
+            ...defaultBankAssetSource.bankMetadata,
+            ...bank.bankMetadata,
+            thumbnailUrl: bank.bankMetadata?.thumbnailUrl || defaultBankAssetSource.bankMetadata.thumbnailUrl,
+          }
+        : bank.bankMetadata;
+      if (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend) {
+        try {
+          const restoredThumbnail = await restoreFileAccess(
+            thumbnailStorageId,
+            'image',
+            nextMetadata.thumbnailStorageKey,
+            nextMetadata.thumbnailBackend
+          );
+          const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
+          nextMetadata = {
+            ...nextMetadata,
+            thumbnailUrl: restoredThumbnail.url || (/^https?:\/\//i.test(currentThumbnailUrl) ? currentThumbnailUrl : undefined),
+            thumbnailStorageKey: restoredThumbnail.storageKey || nextMetadata.thumbnailStorageKey,
+            thumbnailBackend: restoredThumbnail.backend || nextMetadata.thumbnailBackend,
+          };
+        } catch {
+          // Ignore thumbnail restore failures and keep any durable remote URL.
+        }
+      }
+      return { ...bank, pads: restoredPads, bankMetadata: nextMetadata };
     };
 
     const prioritizeBanksForMediaRestore = (candidateBanks: SamplerBank[], priorityBankId: string | null): SamplerBank[] => {
@@ -204,18 +270,18 @@ export const runRestoreAllFilesPipeline = async (
     };
 
     let restoredBanks: SamplerBank[] = savedBanks.map((bank: any, index: number) => ({
-      ...bank,
-      createdAt: new Date(bank.createdAt),
-      sortOrder: bank.sortOrder ?? index,
-      pads: (bank.pads || []).map((pad: any, padIndex: number) => ({
-        ...pad,
-        audioUrl: null,
-        imageUrl: null,
-        audioBackend: (pad.audioBackend as MediaBackend | undefined) || (pad.audioStorageKey ? 'native' : 'idb'),
-        imageBackend: (pad.imageBackend as MediaBackend | undefined) || (pad.imageStorageKey ? 'native' : undefined),
-        hasImageAsset: typeof pad.hasImageAsset === 'boolean'
-          ? pad.hasImageAsset
-          : Boolean(pad.imageStorageKey || pad.imageData || (typeof pad.imageUrl === 'string' && pad.imageUrl.length > 0)),
+        ...bank,
+        createdAt: new Date(bank.createdAt),
+        sortOrder: bank.sortOrder ?? index,
+        pads: (bank.pads || []).map((pad: any, padIndex: number) => ({
+          ...pad,
+          audioUrl: null,
+          imageUrl: null,
+          audioBackend: (pad.audioBackend as MediaBackend | undefined) || (pad.audioStorageKey ? 'native' : undefined),
+          imageBackend: (pad.imageBackend as MediaBackend | undefined) || (pad.imageStorageKey ? 'native' : undefined),
+          hasImageAsset: typeof pad.hasImageAsset === 'boolean'
+            ? pad.hasImageAsset
+            : Boolean(pad.imageStorageKey || pad.imageData || (typeof pad.imageUrl === 'string' && pad.imageUrl.length > 0)),
         fadeInMs: pad.fadeInMs || 0,
         fadeOutMs: pad.fadeOutMs || 0,
         startTimeMs: pad.startTimeMs || 0,

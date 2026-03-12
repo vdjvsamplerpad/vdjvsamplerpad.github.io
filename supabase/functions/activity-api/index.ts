@@ -2,7 +2,12 @@ import "@supabase/functions-js/edge-runtime.d.ts"
 import { badRequest, handleCorsPreflight, json } from "../_shared/http.ts";
 import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_shared/supabase.ts";
 import { asNumber, asObject, asString, asUuid, extractPadNames } from "../_shared/validate.ts";
-import { sendDiscordAuthEvent, sendDiscordExportEvent, sendDiscordImportEvent } from "../_shared/discord.ts";
+import {
+  sendDiscordAuthEvent,
+  sendDiscordExportEvent,
+  sendDiscordImportEvent,
+  sendDiscordSessionConflictEvent,
+} from "../_shared/discord.ts";
 import { consumeRateLimit } from "../_shared/rate-limit.ts";
 
 type ActivityEventType =
@@ -377,7 +382,26 @@ Deno.serve(async (req) => {
       const trimmedPadNames = padNames.slice(0, MAX_META_PAD_NAMES);
       const explicitPadCount = asNumber(body.padCount);
       const padCount = explicitPadCount ?? (padNames.length ? padNames.length : null);
-      if (userId && (await isAdminUser(userId))) return json(200, { ok: true, skippedAdmin: true }, req);
+      const actorIsAdmin = userId ? await isAdminUser(userId) : false;
+      if (actorIsAdmin) {
+        if (eventType === "auth.login" && status === "success") {
+          const adminUser = userId ? await createServiceClient().auth.admin.getUserById(userId) : null;
+          await sendDiscordAuthEvent({
+            webhook: Deno.env.get("DISCORD_WEBHOOK_AUTH") || null,
+            eventType,
+            email: adminUser?.data?.user?.email || email || "unknown",
+            device,
+            status,
+            errorMessage,
+            clientIp: parseClientIp(req),
+            userId,
+            sessionKey,
+            deviceSessionId,
+            isAdminLogin: true,
+          });
+        }
+        return json(200, { ok: true, skippedAdmin: true }, req);
+      }
 
       const eventLimit = await consumeRateLimit({
         scope: "activity.event",
@@ -457,6 +481,9 @@ Deno.serve(async (req) => {
             status,
             errorMessage,
             clientIp: parseClientIp(req),
+            userId,
+            sessionKey,
+            deviceSessionId,
           });
         } else if (eventType === "bank.export" && (!exportPhase || exportPhase === "local_export")) {
           await sendDiscordExportEvent({
@@ -466,6 +493,9 @@ Deno.serve(async (req) => {
             bankName: bankName || "unknown",
             padNames,
             errorMessage,
+            userId,
+            bankId,
+            requestId,
           });
         } else if (eventType === "bank.import") {
           await sendDiscordImportEvent({
@@ -476,6 +506,9 @@ Deno.serve(async (req) => {
             padNames,
             includePadList: Boolean(meta.includePadList),
             errorMessage,
+            userId,
+            bankId,
+            requestId,
           });
         }
       } catch (err) {
@@ -518,6 +551,14 @@ Deno.serve(async (req) => {
       const validation = await validateSingleSession(userId, deviceSessionId);
       if (!validation.valid) {
         await markSessionOffline(sessionKey, "session.conflict");
+        await sendDiscordSessionConflictEvent({
+          userId,
+          email: asString(body.email, 320),
+          sessionKey,
+          deviceSessionId,
+          clientIp: parseClientIp(req),
+          lastEvent: asString(body.lastEvent, 60) || "heartbeat",
+        });
         return json(
           409,
           {
@@ -581,6 +622,14 @@ Deno.serve(async (req) => {
       const validation = await validateSingleSession(userId, deviceSessionId);
       if (!validation.valid) {
         await markSessionOffline(sessionKey, "session.conflict");
+        await sendDiscordSessionConflictEvent({
+          userId,
+          email: asString(body.email, 320),
+          sessionKey,
+          deviceSessionId,
+          clientIp: parseClientIp(req),
+          lastEvent: asString(body.lastEvent, 60) || "session-check",
+        });
         return json(
           409,
           {

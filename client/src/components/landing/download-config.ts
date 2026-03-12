@@ -19,20 +19,20 @@ export const DEFAULT_DOWNLOAD_LINKS: Record<VersionKey, Record<PlatformKey, stri
   V1: {
     android: '/android/',
     ios: '/ios/',
-    windows: 'https://m.me/PWOSoundSystem/',
-    macos: 'https://m.me/PWOSoundSystem/',
+    windows: 'https://m.me/vdjvsampler/',
+    macos: 'https://m.me/vdjvsampler/',
   },
   V2: {
-    android: 'https://m.me/PWOSoundSystem/',
+    android: 'https://m.me/vdjvsampler/',
     ios: 'https://apps.apple.com/us/app/virtualdj-remote/id407160120',
-    windows: 'https://m.me/PWOSoundSystem/',
-    macos: 'https://m.me/PWOSoundSystem/',
+    windows: 'https://m.me/vdjvsampler/',
+    macos: 'https://m.me/vdjvsampler/',
   },
   V3: {
-    android: 'https://m.me/PWOSoundSystem/',
+    android: 'https://m.me/vdjvsampler/',
     ios: 'https://apps.apple.com/us/app/virtualdj-remote/id407160120',
-    windows: 'https://m.me/PWOSoundSystem/',
-    macos: 'https://m.me/PWOSoundSystem/',
+    windows: 'https://m.me/vdjvsampler/',
+    macos: 'https://m.me/vdjvsampler/',
   },
 };
 

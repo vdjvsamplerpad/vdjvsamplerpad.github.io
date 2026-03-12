@@ -84,40 +84,6 @@ const parseClientIp = (req: Request): string | null => {
   return normalized || null;
 };
 
-const isPrivateIp = (ip: string): boolean => {
-  return (
-    ip === '127.0.0.1' ||
-    ip === '::1' ||
-    ip.startsWith('10.') ||
-    ip.startsWith('192.168.') ||
-    ip.startsWith('172.16.') ||
-    ip.startsWith('172.17.') ||
-    ip.startsWith('172.18.') ||
-    ip.startsWith('172.19.') ||
-    ip.startsWith('172.2') ||
-    ip.startsWith('172.3')
-  );
-};
-
-const fetchGeo = async (ip: string): Promise<Record<string, string> | null> => {
-  try {
-    if (!ip || isPrivateIp(ip)) return null;
-    const resp = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, { method: 'GET' });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    if (data?.error) return null;
-    return {
-      city: data?.city || '',
-      region: data?.region || '',
-      country: data?.country_name || data?.country || '',
-      timezone: data?.timezone || '',
-      org: data?.org || data?.org_name || '',
-    };
-  } catch {
-    return null;
-  }
-};
-
 const postDiscordWebhook = async (url: string, content: string) => {
   const resp = await fetch(url, {
     method: 'POST',
@@ -435,7 +401,6 @@ const sendDiscordAuthEvent = async (
 ) => {
   if (!DISCORD_WEBHOOK_AUTH) return;
   const clientIp = parseClientIp(req) || 'unknown';
-  const geo = clientIp !== 'unknown' ? await fetchGeo(clientIp) : null;
   const eventName = payload.eventType.replace('auth.', '').toUpperCase();
   const lines = [
     `**Auth Event:** ${eventName}`,
@@ -448,11 +413,6 @@ const sendDiscordAuthEvent = async (
     payload.device?.browser ? `**Browser:** ${payload.device.browser}` : '',
     payload.device?.os ? `**OS:** ${payload.device.os}` : '',
     payload.errorMessage ? `**Failed Message:** ${payload.errorMessage}` : '',
-    geo?.city || geo?.region || geo?.country
-      ? `**Location:** ${[geo?.city, geo?.region, geo?.country].filter(Boolean).join(', ')}`
-      : '',
-    geo?.timezone ? `**Geo TZ:** ${geo.timezone}` : '',
-    geo?.org ? `**Org:** ${geo.org}` : '',
   ].filter(Boolean);
   await postDiscordWebhook(DISCORD_WEBHOOK_AUTH, lines.join('\n'));
 };
