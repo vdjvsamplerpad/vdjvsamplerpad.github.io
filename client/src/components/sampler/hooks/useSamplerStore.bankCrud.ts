@@ -22,6 +22,25 @@ type PadTemplateDefaults = {
   keyLock: boolean;
 };
 
+const buildPadCapReachedMessage = (padCap: number): string =>
+  `LIMITED: Max ${padCap} pads allowed per bank. Remove a pad or message us on facebook for expansion.`;
+
+const buildPadCapKeepFirstMessage = (padCap: number): string =>
+  `LIMITED: Max ${padCap} pads allowed per bank. First ${padCap} pads are kept. Message us on facebook for expansion.`;
+
+const buildDeviceBankLimitMessage = (bankCap: number, action: string): string =>
+  `LIMITED: You reached your device bank limit (${bankCap}). Remove a bank before ${action}.`;
+
+const buildOwnedBankQuotaMessage = (bankQuota: number, detail: string): string =>
+  `LIMITED: You reached your owned bank quota (${bankQuota}). ${detail} Message us on facebook for expansion.`;
+
+const buildPadCapBlockedFilesMessage = (
+  loadedCount: number,
+  blockedCount: number,
+  padCap: number
+): string =>
+  `LIMITED: Loaded first ${loadedCount} file(s). Blocked ${blockedCount} file(s) because this bank reached the ${padCap}-pad limit. Message us on facebook for expansion.`;
+
 export const runAddPadPipeline = async (
   input: {
     file: File;
@@ -75,9 +94,9 @@ export const runAddPadPipeline = async (
   if (!targetBankId) return;
   const targetBank = banksRef.current.find((bank) => bank.id === targetBankId);
   if (!targetBank) return;
-  const shouldEnforceOwnedPadCap = profileRole !== 'admin' && isOwnedCountedBankForQuota(targetBank);
-  if (shouldEnforceOwnedPadCap && targetBank.pads.length >= quotaPolicy.ownedBankPadCap) {
-    throw new Error(`Max ${quotaPolicy.ownedBankPadCap} pads allowed for owned banks. Remove a pad or use a trusted Store/Admin bank.`);
+  const shouldEnforcePadCap = profileRole !== 'admin';
+  if (shouldEnforcePadCap && targetBank.pads.length >= quotaPolicy.ownedBankPadCap) {
+    throw new Error(buildPadCapReachedMessage(quotaPolicy.ownedBankPadCap));
   }
 
   const metadata = await extractMetadataFromFile(file);
@@ -122,10 +141,7 @@ export const runAddPadPipeline = async (
 
   const latestBanks = banksRef.current;
   const latestBank = latestBanks.find((bank) => bank.id === targetBankId);
-  const mustEnforceLatestPadCap =
-    Boolean(latestBank) &&
-    profileRole !== 'admin' &&
-    isOwnedCountedBankForQuota(latestBank as SamplerBank);
+  const mustEnforceLatestPadCap = Boolean(latestBank) && profileRole !== 'admin';
   if (!latestBank || (mustEnforceLatestPadCap && latestBank.pads.length >= quotaPolicy.ownedBankPadCap)) {
     if (audioUrl?.startsWith('blob:')) URL.revokeObjectURL(audioUrl);
     await deletePadMediaArtifacts({
@@ -133,7 +149,7 @@ export const runAddPadPipeline = async (
       audioStorageKey: storedAudio.storageKey,
       audioBackend: storedAudio.backend,
     }, 'audio');
-    throw new Error(`Max ${quotaPolicy.ownedBankPadCap} pads allowed for owned banks. First ${quotaPolicy.ownedBankPadCap} pads are kept.`);
+    throw new Error(buildPadCapKeepFirstMessage(quotaPolicy.ownedBankPadCap));
   }
 
   const nextBanks = latestBanks.map((bank) => (
@@ -198,12 +214,12 @@ export const runAddPadsPipeline = async (
 
   const validFiles = files.filter((file) => file.type.startsWith('audio/'));
   if (validFiles.length === 0) return;
-  const shouldEnforceOwnedPadCap = profileRole !== 'admin' && isOwnedCountedBankForQuota(targetBank);
-  const remainingSlots = shouldEnforceOwnedPadCap
+  const shouldEnforcePadCap = profileRole !== 'admin';
+  const remainingSlots = shouldEnforcePadCap
     ? Math.max(0, quotaPolicy.ownedBankPadCap - targetBank.pads.length)
     : Number.MAX_SAFE_INTEGER;
   if (remainingSlots <= 0) {
-    throw new Error(`Max ${quotaPolicy.ownedBankPadCap} pads allowed for owned banks. Remove a pad first.`);
+    throw new Error(buildPadCapReachedMessage(quotaPolicy.ownedBankPadCap));
   }
   const acceptedFiles = validFiles.slice(0, remainingSlots);
   const blockedCount = Math.max(0, validFiles.length - acceptedFiles.length);
@@ -266,7 +282,7 @@ export const runAddPadsPipeline = async (
   if (newPads.length > 0) {
     const latestBanks = banksRef.current;
     const latestTargetBank = latestBanks.find((bank) => bank.id === targetBankId);
-    const latestRemainingSlots = latestTargetBank && profileRole !== 'admin' && isOwnedCountedBankForQuota(latestTargetBank)
+    const latestRemainingSlots = latestTargetBank && profileRole !== 'admin'
       ? Math.max(0, quotaPolicy.ownedBankPadCap - latestTargetBank.pads.length)
       : Number.MAX_SAFE_INTEGER;
     const finalPadsToAdd = newPads.slice(0, latestRemainingSlots);
@@ -280,10 +296,16 @@ export const runAddPadsPipeline = async (
     }
     if (blockedCount > 0 || lateBlocked > 0) {
       const totalBlocked = blockedCount + lateBlocked;
-      throw new Error(`Loaded first ${Math.max(0, acceptedFiles.length - lateBlocked)} file(s). Blocked ${totalBlocked} file(s) because owned-bank pad limit is ${quotaPolicy.ownedBankPadCap}.`);
+      throw new Error(
+        buildPadCapBlockedFilesMessage(
+          Math.max(0, acceptedFiles.length - lateBlocked),
+          totalBlocked,
+          quotaPolicy.ownedBankPadCap
+        )
+      );
     }
   } else if (blockedCount > 0) {
-    throw new Error(`Loaded first ${acceptedFiles.length} file(s). Blocked ${blockedCount} file(s) because owned-bank pad limit is ${quotaPolicy.ownedBankPadCap}.`);
+    throw new Error(buildPadCapBlockedFilesMessage(acceptedFiles.length, blockedCount, quotaPolicy.ownedBankPadCap));
   }
 };
 
@@ -481,11 +503,16 @@ export const runCreateBankPipeline = (
   const isAdminUser = profileRole === 'admin';
   if (!isAdminUser) {
     if (currentBanks.length >= quotaPolicy.deviceTotalBankCap) {
-      throw new Error(`You reached your device bank limit (${quotaPolicy.deviceTotalBankCap}). Remove a bank before creating a new one.`);
+      throw new Error(buildDeviceBankLimitMessage(quotaPolicy.deviceTotalBankCap, 'creating a new one'));
     }
     const ownedUsed = countOwnedCountedBanks(currentBanks);
     if (ownedUsed >= quotaPolicy.ownedBankQuota) {
-      throw new Error(`You reached your owned bank quota (${quotaPolicy.ownedBankQuota}). Import trusted Store/Admin banks or remove an owned bank first. Message us on facebook for expansion.`);
+      throw new Error(
+        buildOwnedBankQuotaMessage(
+          quotaPolicy.ownedBankQuota,
+          'Import trusted Store/Admin banks or remove an owned bank first.'
+        )
+      );
     }
   }
 
@@ -558,11 +585,7 @@ export const runTransferPadPipeline = (
     const src = prev.find((b) => b.id === sourceBankId);
     const tgt = prev.find((b) => b.id === targetBankId);
     if (!src || !tgt) return prev;
-    if (
-      profileRole !== 'admin' &&
-      isOwnedCountedBankForQuota(tgt) &&
-      tgt.pads.length >= quotaOwnedBankPadCap
-    ) {
+    if (profileRole !== 'admin' && tgt.pads.length >= quotaOwnedBankPadCap) {
       return prev;
     }
     const pad = src.pads.find((p) => p.id === padId);

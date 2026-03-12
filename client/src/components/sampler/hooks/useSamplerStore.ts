@@ -18,6 +18,7 @@ import {
   coerceUploadHeaders,
   invokeUserExportApi,
   isNonRetryableGithubUploadError,
+  patchAdminCatalogItem,
   uploadAdminCatalogAsset,
   uploadDefaultBankReleaseArchive,
   uploadUserExportAsset,
@@ -49,6 +50,7 @@ import {
   type MediaBackend,
 } from './useSamplerStore.mediaRuntime';
 import {
+  clearAdminUpdateRetryJobsForCatalogItem,
   type AdminExportUploadJob,
   type UserExportUploadJob,
 } from './useSamplerStore.uploadQueue';
@@ -156,6 +158,7 @@ import { createSamplerBackupRuntimeHelpers } from './useSamplerStore.backupRunti
 import {
   type ExportAudioMode,
   type SamplerStore,
+  type UpdateStoreBankInput,
 } from './useSamplerStore.types';
 import {
   saveBatchBlobsToDB,
@@ -210,6 +213,9 @@ const MAX_CAPACITOR_BRIDGE_READ_BYTES = 6 * 1024 * 1024;
 const SELECTED_BANK_HYDRATION_MAX_RETRIES = 3;
 const BACKUP_FILE_ACCESS_DENIED_MESSAGE =
   'Cannot read the selected backup file. Please pick it again from the in-app file picker and allow file access.';
+
+const buildPadCapReachedMessage = (padCap: number): string =>
+  `LIMITED: Max ${padCap} pads allowed per bank. Remove a pad or message us on facebook for expansion.`;
 
 const STORAGE_KEY = 'vdjv-sampler-banks';
 const STATE_STORAGE_KEY = 'vdjv-sampler-state';
@@ -1182,6 +1188,10 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   }, []);
 
   const transferPad = React.useCallback((padId: string, sourceBankId: string, targetBankId: string) => {
+    const targetBank = banksRef.current.find((bank) => bank.id === targetBankId);
+    if (profile?.role !== 'admin' && targetBank && targetBank.pads.length >= quotaPolicy.ownedBankPadCap) {
+      throw new Error(buildPadCapReachedMessage(quotaPolicy.ownedBankPadCap));
+    }
     runTransferPadPipeline(
       {
         padId,
@@ -1431,6 +1441,55 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       }
     );
   }, [banks, enqueueAdminExportUpload, user, profile]);
+
+  const updateStoreBank = React.useCallback(async (
+    input: UpdateStoreBankInput,
+  ) => {
+    const { runUpdateStoreBankPipeline } = await import('./useSamplerStore.updateStoreBank');
+
+    return runUpdateStoreBankPipeline(
+      {
+        ...input,
+        user,
+        profileRole: profile?.role,
+      },
+      {
+        createOperationDiagnostics,
+        addOperationStage,
+        getNowMs,
+        ensureExportPermission,
+        estimateBankMediaBytes,
+        isNativeCapacitorPlatform,
+        maxNativeBankExportBytes: MAX_NATIVE_BANK_EXPORT_BYTES,
+        ensureStorageHeadroom,
+        padHasExpectedImageAsset,
+        loadPadMediaBlob,
+        shouldAttemptTrim,
+        trimAudio,
+        detectAudioFormat,
+        sha256HexFromBlob,
+        sha256HexFromText,
+        yieldToMainThread,
+        extFromMime,
+        inferImageExtFromPath,
+        addBankMetadata: (zip, metadata) => addBankMetadata(zip, metadata),
+        encryptZip,
+        saveExportFile,
+        patchAdminCatalogItem,
+        uploadAdminCatalogAsset,
+        isNonRetryableGithubUploadError,
+        enqueueAdminExportUpload,
+        clearQueuedAdminUpdateJobsForCatalogItem: (catalogItemId, options) => {
+          clearAdminUpdateRetryJobsForCatalogItem(catalogItemId, {
+            blobCacheRef: adminExportUploadBlobCacheRef,
+            setQueue: setAdminExportUploadQueue,
+            excludeExportOperationId: options?.excludeExportOperationId,
+          });
+        },
+        writeOperationDiagnosticsLog,
+      },
+    );
+  }, [enqueueAdminExportUpload, user, profile]);
 
   const publishDefaultBankRelease = React.useCallback(async (
     bankId: string,
@@ -1888,7 +1947,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
 
   return {
     banks, startupRestoreCompleted, primaryBankId, secondaryBankId, currentBankId, primaryBank, secondaryBank, currentBank, isDualMode,
-    addPad, addPads, updatePad, removePad, createBank, setPrimaryBank, setSecondaryBank, setCurrentBank, updateBank, deleteBank, duplicateBank, duplicatePad, importBank, exportBank, reorderPads, moveBankUp, moveBankDown, transferPad, exportAdminBank, publishDefaultBankRelease, canTransferFromBank,
+    addPad, addPads, updatePad, removePad, createBank, setPrimaryBank, setSecondaryBank, setCurrentBank, updateBank, deleteBank, duplicateBank, duplicatePad, importBank, exportBank, reorderPads, moveBankUp, moveBankDown, transferPad, exportAdminBank, updateStoreBank, publishDefaultBankRelease, canTransferFromBank,
     exportAppBackup, restoreAppBackup, applySamplerMetadataSnapshot, relinkPadAudioFromFile, rehydratePadMedia, rehydrateMissingMediaInBank, recoverMissingMediaFromBanks,
   };
 }

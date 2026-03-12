@@ -658,12 +658,12 @@ export const runImportBankPipeline = async (
         : null;
       if (profile?.role !== 'admin') {
         if (currentBanks.length >= quotaPolicy.deviceTotalBankCap) {
-          throw new Error(`You reached your device bank limit (${quotaPolicy.deviceTotalBankCap}). Remove a bank before importing another one.`);
+          throw new Error(`LIMITED: You reached your device bank limit (${quotaPolicy.deviceTotalBankCap}). Remove a bank before importing another one.`);
         }
         if (importedIsOwnedCounted) {
           const ownedUsed = countOwnedCountedBanks(currentBanks);
           if (ownedUsed >= quotaPolicy.ownedBankQuota) {
-            throw new Error(`You reached your owned bank quota (${quotaPolicy.ownedBankQuota}). Trusted Store/Admin imports are unlimited. Message us on facebook for expansion.`);
+            throw new Error(`LIMITED: You reached your owned bank quota (${quotaPolicy.ownedBankQuota}). Trusted Store/Admin imports are unlimited. Message us on facebook for expansion.`);
           }
           const incomingPadCount = Array.isArray(bankData?.pads) ? bankData.pads.length : 0;
           if (incomingPadCount > quotaPolicy.ownedBankPadCap) {

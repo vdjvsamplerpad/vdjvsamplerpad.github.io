@@ -5,6 +5,8 @@ import { Label } from '@/components/ui/label';
 import {
   ChevronDown,
   ChevronUp,
+  Maximize2,
+  Minimize2,
   Pause,
   Play,
   SlidersHorizontal as Equalizer,
@@ -272,6 +274,8 @@ export function VolumeMixer({
 }: VolumeMixerProps) {
   const isMobile = windowWidth < 768;
   const isLowestGraphics = graphicsTier === 'lowest';
+  const [isElectronFullscreen, setIsElectronFullscreen] = React.useState(false);
+  const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.toggleFullscreen);
   const isWaveformAnalysisEnabled = !isLowestGraphics;
   const waveformRuntimeLoad = React.useMemo(() => getWaveformRuntimeLoad(), []);
   const waveformPointBudget = React.useMemo(() => {
@@ -573,6 +577,28 @@ export function VolumeMixer({
       window.clearInterval(intervalId);
     };
   }, [legacyPlayingPads.length, open]);
+
+  React.useEffect(() => {
+    if (!isElectronWindowControlsAvailable) return;
+    let mounted = true;
+
+    window.electronAPI?.getFullscreenState?.()
+      .then((value) => {
+        if (!mounted) return;
+        setIsElectronFullscreen(Boolean(value));
+      })
+      .catch(() => {});
+
+    const unsubscribe = window.electronAPI?.onFullscreenChange?.((next) => {
+      if (!mounted) return;
+      setIsElectronFullscreen(Boolean(next));
+    });
+
+    return () => {
+      mounted = false;
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [isElectronWindowControlsAvailable]);
 
   const stopSliderTouchPropagation = React.useCallback((event: React.TouchEvent) => {
     event.stopPropagation();
@@ -1087,6 +1113,15 @@ export function VolumeMixer({
     handleHotcueTap(channel, slotIndex, hotcueCaptureMsRef.current.get(key));
   }, [handleHotcueTap]);
 
+  const handleToggleElectronFullscreen = React.useCallback(() => {
+    if (!isElectronWindowControlsAvailable) return;
+    window.electronAPI?.toggleFullscreen?.()
+      .then((next) => {
+        setIsElectronFullscreen(Boolean(next));
+      })
+      .catch(() => {});
+  }, [isElectronWindowControlsAvailable]);
+
   const panelClasses = theme === 'dark'
     ? 'bg-gray-800/95 border-gray-700 text-white perf-high:backdrop-blur-md'
     : 'bg-white/95 border-gray-200 text-gray-900 perf-high:backdrop-blur-md';
@@ -1108,17 +1143,32 @@ export function VolumeMixer({
             {channelCount} loadable channels, stop mode: {stopMode}
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={() => onOpenChange(false)}
-          className={theme === 'dark'
-            ? 'h-8 w-8 border-red-500/60 bg-red-900/30 text-red-300 hover:bg-red-800/60'
-            : 'h-8 w-8 border-red-300 bg-red-50 text-red-600 hover:bg-red-100'}
-          title="Close Mixer"
-        >
-          <X className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-2">
+          {isElectronWindowControlsAvailable && (
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={handleToggleElectronFullscreen}
+              className={theme === 'dark'
+                ? 'h-8 w-8 border-emerald-500/60 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-800/60'
+                : 'h-8 w-8 border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}
+              title={isElectronFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            >
+              {isElectronFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => onOpenChange(false)}
+            className={theme === 'dark'
+              ? 'h-8 w-8 border-red-500/60 bg-red-900/30 text-red-300 hover:bg-red-800/60'
+              : 'h-8 w-8 border-red-300 bg-red-50 text-red-600 hover:bg-red-100'}
+            title="Close Mixer"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="h-[calc(100dvh-64px)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] p-3 space-y-3 touch-pan-y">
@@ -1247,13 +1297,7 @@ export function VolumeMixer({
                     </Button>
                   </div>
 
-                  {(isLoadArmed || isOtherChannelArmed) && (
-                    <div className={`mt-1 text-[10px] ${theme === 'dark' ? 'text-emerald-300/90' : 'text-emerald-700'}`}>
-                      {isLoadArmed
-                        ? `Tap highlighted pad to load CH ${channel.channelId}.`
-                        : `CH ${armedLoadChannelId} is waiting for pad selection.`}
-                    </div>
-                  )}
+
 
                   <div className="mt-1.5 flex items-center gap-1">
                     <Button

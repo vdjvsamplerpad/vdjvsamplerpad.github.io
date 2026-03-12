@@ -95,7 +95,7 @@ export const DEFAULT_SAMPLER_APP_CONFIG: SamplerAppConfig = {
   },
   quotaDefaults: {
     ownedBankQuota: 6,
-    ownedBankPadCap: 64,
+    ownedBankPadCap: 80,
     deviceTotalBankCap: 120,
   },
   audioLimits: {

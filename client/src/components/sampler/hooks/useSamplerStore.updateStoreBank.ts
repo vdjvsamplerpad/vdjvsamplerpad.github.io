@@ -1,10 +1,12 @@
 import JSZip from 'jszip';
 import type { BankMetadata, SamplerBank } from '../types/sampler';
 import type { AdminCatalogUploadPublishResult } from './useSamplerStore.exportUpload';
+import type { StoreBankAssetProtection } from './useSamplerStore.types';
+import { derivePassword } from '@/lib/bank-utils';
 
 type SamplerPad = SamplerBank['pads'][number];
-
-export type ExportAudioMode = 'fast' | 'compact';
+type ExportAudioMode = 'fast' | 'compact';
+type MediaBackend = 'native' | 'idb';
 
 type ExportDiagnosticsLike = {
   operationId: string;
@@ -23,12 +25,9 @@ type TrimAudioResult = {
   newDurationMs: number;
 };
 
-type SignedAdminExportTokenResult = {
-  token: string;
-  keyId: string | null;
-  issuedAt: string | null;
-  expiresAt: string | null;
-  bankJsonSha256: string;
+type ImportableAdminUser = {
+  id: string;
+  email?: string | null;
 };
 
 type EnqueueAdminExportUploadInput = {
@@ -47,27 +46,20 @@ type EnqueueAdminExportUploadInput = {
   blob: Blob;
 };
 
-type ImportableAdminUser = {
-  id: string;
-  email?: string | null;
-};
-
-export interface RunExportAdminBankInput {
-  id: string;
+export interface RunUpdateStoreBankInput {
+  bankSnapshot: SamplerBank;
   title: string;
   description: string;
-  addToDatabase: boolean;
-  allowExport: boolean;
-  publicCatalogAsset: boolean;
+  syncMetadata: boolean;
+  assetProtection: StoreBankAssetProtection;
   exportMode: ExportAudioMode;
   thumbnailPath?: string;
   onProgress?: (progress: number) => void;
-  banks: SamplerBank[];
   user: ImportableAdminUser | null;
   profileRole?: string | null;
 }
 
-export interface RunExportAdminBankDeps {
+export interface RunUpdateStoreBankDeps {
   createOperationDiagnostics: (operation: 'admin_bank_export', userId?: string | null) => ExportDiagnosticsLike;
   addOperationStage: (diagnostics: ExportDiagnosticsLike, stage: string, details?: Record<string, unknown>) => void;
   getNowMs: () => number;
@@ -93,14 +85,8 @@ export interface RunExportAdminBankDeps {
   inferImageExtFromPath: (value: string | undefined) => string;
   addBankMetadata: (zip: JSZip, metadata: BankMetadata) => void;
   encryptZip: (zip: JSZip, password: string) => Promise<Blob>;
-  sharedExportDisabledPassword: string;
-  issueSignedAdminExportToken: (input: {
-    bankJsonSha256: string;
-    bankName: string;
-    padCount: number;
-    allowExport: boolean;
-  }) => Promise<SignedAdminExportTokenResult>;
   saveExportFile: (blob: Blob, fileName: string) => Promise<SaveExportFileResult>;
+  patchAdminCatalogItem: (input: { catalogItemId: string; updates: Record<string, unknown> }) => Promise<Record<string, unknown>>;
   uploadAdminCatalogAsset: (input: {
     catalogItemId: string;
     operationType?: 'create' | 'update';
@@ -110,24 +96,60 @@ export interface RunExportAdminBankDeps {
   }) => Promise<AdminCatalogUploadPublishResult>;
   isNonRetryableGithubUploadError: (error: unknown) => boolean;
   enqueueAdminExportUpload: (input: EnqueueAdminExportUploadInput) => void;
+  clearQueuedAdminUpdateJobsForCatalogItem: (catalogItemId: string, options?: { excludeExportOperationId?: string }) => void;
   writeOperationDiagnosticsLog: (diagnostics: ExportDiagnosticsLike, error: unknown) => Promise<string | null>;
 }
 
-export const runExportAdminBankPipeline = async (
-  input: RunExportAdminBankInput,
-  deps: RunExportAdminBankDeps
+const stripUndefined = <T extends Record<string, unknown>>(value: T): T => {
+  const nextEntries = Object.entries(value).filter(([, entry]) => entry !== undefined);
+  return Object.fromEntries(nextEntries) as T;
+};
+
+const buildStoreReleaseMetadata = (input: {
+  bank: SamplerBank;
+  title: string;
+  description: string;
+  assetProtection: StoreBankAssetProtection;
+  thumbnailPath?: string;
+  embeddedThumbnailAssetPath?: string;
+}): BankMetadata => {
+  const existing = input.bank.bankMetadata;
+  return stripUndefined({
+    password: input.assetProtection === 'encrypted',
+    transferable: true,
+    exportable: false,
+    bankId: existing?.bankId,
+    catalogItemId: existing?.catalogItemId,
+    title: input.title,
+    description: input.description,
+    color: input.bank.defaultColor || existing?.color,
+    thumbnailUrl: input.thumbnailPath,
+    thumbnailAssetPath: input.embeddedThumbnailAssetPath,
+    hideThumbnailPreview: existing?.hideThumbnailPreview,
+  });
+};
+
+const buildStoreUpdateFileName = (title: string, catalogItemId: string): string => {
+  const base = (title || 'Bank').trim().replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '') || 'Bank';
+  const suffix = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+    ? crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(36).slice(2, 10);
+  return `${base}_${catalogItemId}_${suffix}.bank`;
+};
+
+export const runUpdateStoreBankPipeline = async (
+  input: RunUpdateStoreBankInput,
+  deps: RunUpdateStoreBankDeps,
 ): Promise<string> => {
   const {
-    id,
+    bankSnapshot,
     title,
     description,
-    addToDatabase,
-    allowExport,
-    publicCatalogAsset,
+    syncMetadata,
+    assetProtection,
     exportMode,
     thumbnailPath,
     onProgress,
-    banks,
     user,
     profileRole,
   } = input;
@@ -152,30 +174,34 @@ export const runExportAdminBankPipeline = async (
     inferImageExtFromPath,
     addBankMetadata,
     encryptZip,
-    sharedExportDisabledPassword,
-    issueSignedAdminExportToken,
     saveExportFile,
+    patchAdminCatalogItem,
     uploadAdminCatalogAsset,
     isNonRetryableGithubUploadError,
     enqueueAdminExportUpload,
+    clearQueuedAdminUpdateJobsForCatalogItem,
     writeOperationDiagnosticsLog,
   } = deps;
 
-  if (!user || profileRole !== 'admin') throw new Error('Only admins can do this action.');
-  const bank = banks.find((b) => b.id === id);
-  if (!bank) throw new Error('We could not find that bank.');
+  if (!user || profileRole !== 'admin') throw new Error('Only admins can update store banks.');
+  const catalogItemId = typeof bankSnapshot.bankMetadata?.catalogItemId === 'string'
+    ? bankSnapshot.bankMetadata.catalogItemId.trim()
+    : '';
+  if (!catalogItemId) throw new Error('Only linked store banks can be updated.');
 
+  const normalizedTitle = (title || bankSnapshot.name || 'Bank').trim();
   const diagnostics = createOperationDiagnostics('admin_bank_export', user.id);
   addOperationStage(diagnostics, 'start', {
-    bankId: bank.id,
-    bankName: bank.name,
-    padCount: bank.pads.length,
-    addToDatabase,
-    allowExport,
-    publicCatalogAsset,
-    transferable: true,
+    bankId: bankSnapshot.id,
+    bankName: bankSnapshot.name,
+    catalogItemId,
+    padCount: bankSnapshot.pads.length,
+    syncMetadata,
+    assetProtection,
     exportMode,
+    operationType: 'update',
   });
+
   const exportStartedAt = getNowMs();
   let preflightCompletedAt = exportStartedAt;
   let mediaCompletedAt = exportStartedAt;
@@ -187,27 +213,27 @@ export const runExportAdminBankPipeline = async (
     onProgress?.(5);
     await ensureExportPermission();
 
-    const estimatedBytes = await estimateBankMediaBytes(bank);
+    const estimatedBytes = await estimateBankMediaBytes(bankSnapshot);
     diagnostics.metrics.estimatedBytes = estimatedBytes;
     addOperationStage(diagnostics, 'preflight', { estimatedBytes });
 
     if (isNativeCapacitorPlatform() && estimatedBytes > maxNativeBankExportBytes) {
       throw new Error(
-        `Admin bank export is too large for mobile export (${Math.ceil(estimatedBytes / (1024 * 1024))}MB). Reduce bank size and try again.`
+        `Store bank update is too large for mobile export (${Math.ceil(estimatedBytes / (1024 * 1024))}MB). Reduce bank size and try again.`,
       );
     }
 
-    await ensureStorageHeadroom(Math.ceil(estimatedBytes * 0.35), 'admin bank export');
+    await ensureStorageHeadroom(Math.ceil(estimatedBytes * 0.35), 'store bank update');
     preflightCompletedAt = getNowMs();
 
     const zip = new JSZip();
     const audioFolder = zip.folder('audio');
     const imageFolder = zip.folder('images');
-    if (!audioFolder || !imageFolder) throw new Error('Could not prepare files for export.');
+    if (!audioFolder || !imageFolder) throw new Error('Could not prepare files for store update.');
 
     const totalMediaItems = Math.max(
       1,
-      bank.pads.reduce((count, pad) => count + (pad.audioUrl ? 1 : 0) + (padHasExpectedImageAsset(pad) ? 1 : 0), 0)
+      bankSnapshot.pads.reduce((count, pad) => count + (pad.audioUrl ? 1 : 0) + (padHasExpectedImageAsset(pad) ? 1 : 0), 0),
     );
     let processedItems = 0;
     let totalExportBytes = 0;
@@ -218,15 +244,14 @@ export const runExportAdminBankPipeline = async (
     let dedupedImageReuses = 0;
     const audioHashToPath = new Map<string, string>();
     const imageHashToPath = new Map<string, string>();
-
-    const exportPads = bank.pads.map((pad) => ({
+    const exportPads = bankSnapshot.pads.map((pad) => ({
       ...pad,
       audioUrl: undefined as string | undefined,
       imageUrl: undefined as string | undefined,
     }));
     const exportPadMap = new Map(exportPads.map((pad) => [pad.id, pad]));
 
-    for (const pad of bank.pads) {
+    for (const pad of bankSnapshot.pads) {
       if (pad.audioUrl) {
         const exportPad = exportPadMap.get(pad.id);
         const sourceBlob = await loadPadMediaBlob(pad, 'audio');
@@ -267,7 +292,7 @@ export const runExportAdminBankPipeline = async (
             if (exportPad) exportPad.audioUrl = path;
             uniqueExportBytes += audioBlob.size;
             if (isNativeCapacitorPlatform() && uniqueExportBytes > maxNativeBankExportBytes) {
-              throw new Error('This bank is too large to export on mobile. Try desktop export.');
+              throw new Error('This bank is too large to update from mobile. Try desktop upload.');
             }
           }
           exportedAudio += 1;
@@ -295,7 +320,7 @@ export const runExportAdminBankPipeline = async (
             if (exportPad) exportPad.imageUrl = path;
             uniqueExportBytes += imageBlob.size;
             if (isNativeCapacitorPlatform() && uniqueExportBytes > maxNativeBankExportBytes) {
-              throw new Error('This bank is too large to export on mobile. Try desktop export.');
+              throw new Error('This bank is too large to update from mobile. Try desktop upload.');
             }
           }
           exportedImages += 1;
@@ -318,268 +343,166 @@ export const runExportAdminBankPipeline = async (
     diagnostics.metrics.exportAudioMode = exportMode === 'compact' ? 1 : 0;
     mediaCompletedAt = getNowMs();
 
-    const bankData = {
-      ...bank,
-      createdAt: bank.createdAt.toISOString(),
-      pads: exportPads,
-    };
-    const bankJsonText = JSON.stringify(bankData, null, 2);
-    zip.file('bank.json', bankJsonText);
-    const bankJsonSha256 = await sha256HexFromText(bankJsonText);
-
     let embeddedThumbnailAssetPath: string | undefined;
     if (thumbnailPath) {
       try {
         const response = await fetch(thumbnailPath, { cache: 'no-store', credentials: 'omit' });
-        if (response.ok) {
-          const thumbnailBlob = await response.blob();
-          if (thumbnailBlob.size > 0) {
-            let ext = extFromMime(thumbnailBlob.type, 'image');
-            if (ext === 'bin') {
-              ext = inferImageExtFromPath(thumbnailPath);
-            }
-            embeddedThumbnailAssetPath = `thumbnail/bank-thumbnail.${ext}`;
-            zip.file(embeddedThumbnailAssetPath, thumbnailBlob);
-            addOperationStage(diagnostics, 'thumbnail-embedded', {
-              source: thumbnailPath,
-              bytes: thumbnailBlob.size,
-              path: embeddedThumbnailAssetPath,
-            });
-          }
-        } else {
-          addOperationStage(diagnostics, 'thumbnail-embed-warning', {
-            source: thumbnailPath,
-            status: response.status,
-          });
+        if (!response.ok) {
+          throw new Error(`Thumbnail fetch failed (${response.status}).`);
         }
-      } catch (embedError) {
-        addOperationStage(diagnostics, 'thumbnail-embed-warning', {
+        const thumbnailBlob = await response.blob();
+        if (thumbnailBlob.size <= 0) {
+          throw new Error('Thumbnail file was empty.');
+        }
+        let ext = extFromMime(thumbnailBlob.type, 'image');
+        if (ext === 'bin') ext = inferImageExtFromPath(thumbnailPath);
+        embeddedThumbnailAssetPath = `thumbnail/bank-thumbnail.${ext}`;
+        zip.file(embeddedThumbnailAssetPath, thumbnailBlob);
+        addOperationStage(diagnostics, 'thumbnail-embedded', {
           source: thumbnailPath,
-          reason: embedError instanceof Error ? embedError.message : String(embedError),
+          bytes: thumbnailBlob.size,
+          path: embeddedThumbnailAssetPath,
         });
+      } catch (embedError) {
+        throw new Error(
+          `Could not embed the bank thumbnail for offline use. ${
+            embedError instanceof Error ? embedError.message : String(embedError)
+          }`,
+        );
       }
     }
 
-    const normalizedTitle = (title || bank.name || 'Bank').trim();
-    let fileName = `${normalizedTitle.replace(/[^a-z0-9]/gi, '_')}.bank`;
+    const sanitizedMetadata = buildStoreReleaseMetadata({
+      bank: bankSnapshot,
+      title: normalizedTitle,
+      description,
+      assetProtection,
+      thumbnailPath,
+      embeddedThumbnailAssetPath,
+    });
+
+    const bankData = {
+      ...bankSnapshot,
+      name: normalizedTitle,
+      defaultColor: bankSnapshot.defaultColor,
+      createdAt: bankSnapshot.createdAt.toISOString(),
+      transferable: true,
+      exportable: false,
+      bankMetadata: sanitizedMetadata,
+      pads: exportPads,
+    };
+    const bankJsonText = JSON.stringify(bankData, null, 2);
+    zip.file('bank.json', bankJsonText);
+    await sha256HexFromText(bankJsonText);
+    const fileName = buildStoreUpdateFileName(normalizedTitle, catalogItemId);
+    addBankMetadata(zip, sanitizedMetadata);
+
+    onProgress?.(65);
     let outputBlob: Blob;
-    let catalogDraftId: string | null = null;
-    let uploadBankId = bank.id;
-    let signedTokenWarningMessage = '';
-
-    if (addToDatabase) {
-      addOperationStage(diagnostics, 'db-create');
-      const { createAdminBankWithDerivedKey } = await import('@/lib/admin-bank-utils');
-      const adminBank = await createAdminBankWithDerivedKey(title, description, user.id, bank.defaultColor);
-      if (!adminBank) throw new Error('Failed to create admin bank metadata entry.');
-      uploadBankId = adminBank.id;
-      fileName = `${normalizedTitle.replace(/[^a-z0-9]/gi, '_')}_${adminBank.id}.bank`;
-
-      addBankMetadata(zip, {
-        password: !publicCatalogAsset,
-        transferable: true,
-        exportable: false,
-        title,
-        description,
-        color: bank.defaultColor,
-        bankId: adminBank.id,
-        thumbnailUrl: thumbnailPath,
-        thumbnailAssetPath: embeddedThumbnailAssetPath,
-        hideThumbnailPreview: bank.bankMetadata?.hideThumbnailPreview,
-      });
-
-      try {
-        const { supabase } = await import('@/lib/supabase');
-        await supabase
-          .from('user_bank_access')
-          .upsert({ user_id: user.id, bank_id: adminBank.id }, { onConflict: 'user_id,bank_id' as any });
-
-        const storeDraftResponse = await supabase.functions.invoke(`admin-api/store/banks/${adminBank.id}/draft`, {
-          method: 'POST',
-          body: {
-            expected_asset_name: fileName,
-            thumbnail_path: thumbnailPath,
-            asset_protection: publicCatalogAsset ? 'public' : 'encrypted',
-          },
-        });
-        if (storeDraftResponse.error) {
-          addOperationStage(diagnostics, 'store-draft-warning', { error: storeDraftResponse.error.message });
-        } else {
-          const maybeDraftId = (storeDraftResponse as any)?.data?.item?.id;
-          if (typeof maybeDraftId === 'string' && maybeDraftId.trim().length > 0) {
-            catalogDraftId = maybeDraftId;
-          } else {
-            addOperationStage(diagnostics, 'store-draft-warning', { error: 'missing catalog item id' });
-          }
-        }
-      } catch (upsertError) {
-        addOperationStage(diagnostics, 'db-integration-warning', {
-          reason: upsertError instanceof Error ? upsertError.message : String(upsertError),
-        });
-      }
-
-      onProgress?.(65);
-      if (publicCatalogAsset) {
-        addOperationStage(diagnostics, 'archive-generate');
-        outputBlob = isNativeCapacitorPlatform()
-          ? await zip.generateAsync(
-            {
-              type: 'blob',
-              compression: 'STORE',
-            },
-            (meta) => onProgress?.(65 + meta.percent * 0.23)
-          )
-          : await zip.generateAsync(
-            {
-              type: 'blob',
-              compression: 'DEFLATE',
-              compressionOptions: { level: 9 },
-            },
-            (meta) => onProgress?.(65 + meta.percent * 0.23)
-          );
-      } else {
-        outputBlob = await encryptZip(zip, adminBank.derived_key);
-        onProgress?.(88);
-      }
-      archiveCompletedAt = getNowMs();
+    if (assetProtection === 'public') {
+      outputBlob = isNativeCapacitorPlatform()
+        ? await zip.generateAsync({ type: 'blob', compression: 'STORE' }, (meta) => onProgress?.(65 + meta.percent * 0.23))
+        : await zip.generateAsync(
+          { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 9 } },
+          (meta) => onProgress?.(65 + meta.percent * 0.23),
+        );
     } else {
-      let signedAdminExportToken: SignedAdminExportTokenResult | null = null;
-      if (bankJsonSha256) {
-        try {
-          signedAdminExportToken = await issueSignedAdminExportToken({
-            bankJsonSha256,
-            bankName: normalizedTitle,
-            padCount: bank.pads.length,
-            allowExport,
-          });
-          addOperationStage(diagnostics, 'admin-export-token-signed', {
-            keyId: signedAdminExportToken.keyId,
-            expiresAt: signedAdminExportToken.expiresAt,
-          });
-        } catch (tokenError) {
-          signedTokenWarningMessage =
-            ' Signed trust token unavailable; this file may count toward owned quota on import.';
-          addOperationStage(diagnostics, 'admin-export-token-warning', {
-            reason: tokenError instanceof Error ? tokenError.message : String(tokenError),
-          });
-        }
-      } else {
-        signedTokenWarningMessage =
-          ' Signed trust token unavailable; this file may count toward owned quota on import.';
-        addOperationStage(diagnostics, 'admin-export-token-warning', {
-          reason: 'bank-json-sha256-unavailable',
-        });
-      }
-
-      addBankMetadata(zip, {
-        password: !allowExport,
-        transferable: true,
-        exportable: allowExport,
-        title,
-        description,
-        color: bank.defaultColor,
-        thumbnailUrl: thumbnailPath,
-        thumbnailAssetPath: embeddedThumbnailAssetPath,
-        hideThumbnailPreview: bank.bankMetadata?.hideThumbnailPreview,
-        adminExportToken: signedAdminExportToken?.token,
-        adminExportTokenKid: signedAdminExportToken?.keyId || undefined,
-        adminExportTokenIssuedAt: signedAdminExportToken?.issuedAt || undefined,
-        adminExportTokenExpiresAt: signedAdminExportToken?.expiresAt || undefined,
-        adminExportTokenBankSha256: signedAdminExportToken?.bankJsonSha256 || bankJsonSha256 || undefined,
-      });
-
-      if (!allowExport) {
-        onProgress?.(65);
-        outputBlob = await encryptZip(zip, sharedExportDisabledPassword);
-        onProgress?.(88);
-        archiveCompletedAt = getNowMs();
-      } else {
-        addOperationStage(diagnostics, 'archive-generate');
-        onProgress?.(65);
-        outputBlob = isNativeCapacitorPlatform()
-          ? await zip.generateAsync(
-            {
-              type: 'blob',
-              compression: 'STORE',
-            },
-            (meta) => onProgress?.(65 + meta.percent * 0.23)
-          )
-          : await zip.generateAsync(
-            {
-              type: 'blob',
-              compression: 'DEFLATE',
-              compressionOptions: { level: 9 },
-            },
-            (meta) => onProgress?.(65 + meta.percent * 0.23)
-          );
-        archiveCompletedAt = getNowMs();
-      }
+      const bankId = typeof bankSnapshot.bankMetadata?.bankId === 'string' ? bankSnapshot.bankMetadata.bankId.trim() : '';
+      const derivedKey = bankId ? await derivePassword(bankId) : catalogItemId;
+      outputBlob = await encryptZip(zip, derivedKey);
+      onProgress?.(88);
     }
-
+    archiveCompletedAt = getNowMs();
     exportedArchiveBytes = outputBlob.size;
 
     const saveResult = await saveExportFile(outputBlob, fileName);
     if (!saveResult.success) {
-      throw new Error(saveResult.message || 'Failed to save admin bank export.');
+      throw new Error(saveResult.message || 'Failed to save store bank update export.');
     }
     addOperationStage(diagnostics, 'saved', { path: saveResult.savedPath || fileName });
     saveCompletedAt = getNowMs();
+
+    let metadataSynced = false;
     let uploadWarningMessage = '';
-    if (addToDatabase) {
-      if (catalogDraftId) {
-        try {
-          onProgress?.(95);
-          const uploadResult = await uploadAdminCatalogAsset({
-            catalogItemId: catalogDraftId,
-            operationType: 'create',
-            assetName: fileName,
-            exportBlob: outputBlob,
-            assetProtection: publicCatalogAsset ? 'public' : 'encrypted',
-          });
-          addOperationStage(diagnostics, 'github-upload-linked', {
-            catalogItemId: catalogDraftId,
-            releaseTag: uploadResult.releaseTag,
-            assetName: uploadResult.assetName,
-            fileSize: uploadResult.fileSize,
-          });
-          onProgress?.(99);
-        } catch (uploadError) {
-          const reason = uploadError instanceof Error ? uploadError.message : String(uploadError);
-          const shouldQueueRetry = !isNonRetryableGithubUploadError(uploadError);
-          if (shouldQueueRetry) {
-            const queuedSha256 = await sha256HexFromBlob(outputBlob);
-            enqueueAdminExportUpload({
-              exportOperationId: diagnostics.operationId,
-              userId: user.id,
-              bankId: uploadBankId,
-              bankName: normalizedTitle,
-              catalogItemId: catalogDraftId,
-              operationType: 'create',
-              fileName,
-              assetName: fileName,
-              assetProtection: publicCatalogAsset ? 'public' : 'encrypted',
-              fileSize: outputBlob.size,
-              fileSha256: queuedSha256,
-              padNames: bank.pads.map((pad) => pad.name || 'Untitled Pad'),
-              blob: outputBlob,
-            });
-            uploadWarningMessage = ` Upload failed. Auto-retry queued in background. (${reason})`;
-          } else {
-            uploadWarningMessage = ` Upload failed and was not queued for retry. (${reason})`;
-          }
-          addOperationStage(diagnostics, 'github-upload-warning', {
-            catalogItemId: catalogDraftId,
-            reason,
-            queuedRetry: shouldQueueRetry,
-          });
-        }
+    let uploadSucceeded = false;
+    try {
+      onProgress?.(95);
+      const uploadResult = await uploadAdminCatalogAsset({
+        catalogItemId,
+        operationType: 'update',
+        assetName: fileName,
+        exportBlob: outputBlob,
+        assetProtection,
+      });
+      addOperationStage(diagnostics, 'catalog-upload-linked', {
+        catalogItemId,
+        assetName: uploadResult.assetName,
+        fileSize: uploadResult.fileSize,
+        assetProtection,
+      });
+      clearQueuedAdminUpdateJobsForCatalogItem(catalogItemId, {
+        excludeExportOperationId: diagnostics.operationId,
+      });
+      uploadSucceeded = true;
+      onProgress?.(99);
+    } catch (uploadError) {
+      const reason = uploadError instanceof Error ? uploadError.message : String(uploadError);
+      const shouldQueueRetry = !isNonRetryableGithubUploadError(uploadError);
+      if (shouldQueueRetry) {
+        enqueueAdminExportUpload({
+          exportOperationId: diagnostics.operationId,
+          userId: user.id,
+          bankId: bankSnapshot.id,
+          bankName: normalizedTitle,
+          catalogItemId,
+          operationType: 'update',
+          fileName,
+          assetName: fileName,
+          assetProtection,
+          fileSize: outputBlob.size,
+          fileSha256: await sha256HexFromBlob(outputBlob),
+          padNames: bankSnapshot.pads.map((pad) => pad.name || 'Untitled Pad'),
+          blob: outputBlob,
+        });
+        uploadWarningMessage = ` Upload failed. Auto-retry queued in background. (${reason})`;
       } else {
-        uploadWarningMessage = ' Upload skipped because catalog draft could not be created.';
-        addOperationStage(diagnostics, 'github-upload-warning', {
-          reason: 'catalog-draft-id-missing',
+        uploadWarningMessage = ` Upload failed and was not queued for retry. (${reason})`;
+      }
+      addOperationStage(diagnostics, 'catalog-upload-warning', {
+        catalogItemId,
+        reason,
+        queuedRetry: shouldQueueRetry,
+      });
+    }
+
+    let metadataWarningMessage = '';
+    if (uploadSucceeded && syncMetadata) {
+      try {
+        await patchAdminCatalogItem({
+          catalogItemId,
+          updates: {
+            title: normalizedTitle,
+            description,
+            color: bankSnapshot.defaultColor,
+            thumbnail_path: thumbnailPath || null,
+          },
+        });
+        metadataSynced = true;
+        addOperationStage(diagnostics, 'catalog-metadata-synced', {
+          catalogItemId,
+          thumbnailPath: thumbnailPath || null,
+        });
+      } catch (metadataError) {
+        metadataWarningMessage = ` Store metadata sync failed. (${
+          metadataError instanceof Error ? metadataError.message : String(metadataError)
+        })`;
+        addOperationStage(diagnostics, 'catalog-metadata-sync-warning', {
+          catalogItemId,
+          reason: metadataError instanceof Error ? metadataError.message : String(metadataError),
         });
       }
     }
+
     const timing = {
       totalMs: Math.round(saveCompletedAt - exportStartedAt),
       preflightMs: Math.round(preflightCompletedAt - exportStartedAt),
@@ -596,7 +519,9 @@ export const runExportAdminBankPipeline = async (
     diagnostics.metrics.archiveBytes = exportedArchiveBytes;
     addOperationStage(diagnostics, 'timings', timing);
     onProgress?.(100);
-    return `${saveResult.message || 'Admin bank exported successfully.'}${uploadWarningMessage}${signedTokenWarningMessage}`;
+
+    const metadataMessage = metadataSynced ? ' Store metadata synced.' : '';
+    return `${saveResult.message || 'Store bank update exported successfully.'}${metadataMessage}${metadataWarningMessage}${uploadWarningMessage}${uploadWarningMessage ? '' : ' Draft asset uploaded. Publish it from Admin Access > Catalog when ready.'}`;
   } catch (error) {
     const now = getNowMs();
     const partialTiming = {

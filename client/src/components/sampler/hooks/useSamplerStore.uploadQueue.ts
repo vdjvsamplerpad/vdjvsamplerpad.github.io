@@ -1,4 +1,5 @@
 import type { PrepareUserExportUploadResult } from './useSamplerStore.exportUpload';
+import { deleteBlobFromDB, getBlobFromDB, saveBlobToDB } from './useSamplerStore.idbStorage';
 
 export interface UserExportUploadJob {
   exportOperationId: string;
@@ -21,6 +22,7 @@ export interface AdminExportUploadJob {
   bankId: string;
   bankName: string;
   catalogItemId: string;
+  operationType: 'create' | 'update';
   fileName: string;
   assetName: string;
   assetProtection: 'encrypted' | 'public';
@@ -77,10 +79,14 @@ type UploadUserAssetFn = (input: {
 
 type UploadAdminAssetFn = (input: {
   catalogItemId: string;
+  operationType?: 'create' | 'update';
   assetName: string;
   exportBlob: Blob;
   assetProtection: 'encrypted' | 'public';
 }) => Promise<{ releaseTag?: string | null; assetName: string; fileSize: number }>;
+
+const getRetryBlobStorageId = (scope: 'user' | 'admin', exportOperationId: string): string =>
+  `upload_retry_${scope}_${exportOperationId}`;
 
 export const getUserExportJobBlob = async (
   job: UserExportUploadJob,
@@ -90,6 +96,11 @@ export const getUserExportJobBlob = async (
 ): Promise<Blob | null> => {
   const cached = blobCacheRef.current.get(job.exportOperationId);
   if (cached) return cached;
+  const persisted = await getBlobFromDB(getRetryBlobStorageId('user', job.exportOperationId));
+  if (persisted) {
+    blobCacheRef.current.set(job.exportOperationId, persisted);
+    return persisted;
+  }
   if (!isNativeCapacitorPlatform()) return null;
   const nativeFile = await readNativeExportBackupFileByName(job.fileName);
   if (!nativeFile) return null;
@@ -104,6 +115,11 @@ export const getAdminExportJobBlob = async (
 ): Promise<Blob | null> => {
   const cached = blobCacheRef.current.get(job.exportOperationId);
   if (cached) return cached;
+  const persisted = await getBlobFromDB(getRetryBlobStorageId('admin', job.exportOperationId));
+  if (persisted) {
+    blobCacheRef.current.set(job.exportOperationId, persisted);
+    return persisted;
+  }
   if (!isNativeCapacitorPlatform()) return null;
   const nativeFile = await readNativeExportBackupFileByName(job.fileName);
   if (!nativeFile) return null;
@@ -144,6 +160,7 @@ export const enqueueUserExportUploadJob = (
     padNames: input.padNames.slice(0, 500),
   };
   options.blobCacheRef.current.set(nextJob.exportOperationId, input.blob);
+  void saveBlobToDB(getRetryBlobStorageId('user', nextJob.exportOperationId), input.blob, false).catch(() => undefined);
   options.setQueue((prev) => {
     const others = prev.filter((job) => job.exportOperationId !== nextJob.exportOperationId);
     return [...others, nextJob];
@@ -157,6 +174,7 @@ export const enqueueAdminExportUploadJob = (
     bankId: string;
     bankName: string;
     catalogItemId: string;
+    operationType: 'create' | 'update';
     fileName: string;
     assetName: string;
     assetProtection: 'encrypted' | 'public';
@@ -172,14 +190,16 @@ export const enqueueAdminExportUploadJob = (
   }
 ): void => {
   const now = Date.now();
+  let staleJobs: AdminExportUploadJob[] = [];
   const nextJob: AdminExportUploadJob = {
     exportOperationId: input.exportOperationId,
     userId: input.userId,
-    bankId: input.bankId,
-    bankName: input.bankName,
-    catalogItemId: input.catalogItemId,
-    fileName: input.fileName,
-    assetName: input.assetName,
+      bankId: input.bankId,
+      bankName: input.bankName,
+      catalogItemId: input.catalogItemId,
+      operationType: input.operationType,
+      fileName: input.fileName,
+      assetName: input.assetName,
     assetProtection: input.assetProtection,
     fileSize: input.fileSize,
     fileSha256: input.fileSha256,
@@ -190,9 +210,19 @@ export const enqueueAdminExportUploadJob = (
     padNames: input.padNames.slice(0, 500),
   };
   options.blobCacheRef.current.set(nextJob.exportOperationId, input.blob);
+  void saveBlobToDB(getRetryBlobStorageId('admin', nextJob.exportOperationId), input.blob, false).catch(() => undefined);
   options.setQueue((prev) => {
-    const others = prev.filter((job) => job.exportOperationId !== nextJob.exportOperationId);
+    staleJobs = input.operationType === 'update'
+      ? prev.filter((job) => job.catalogItemId === nextJob.catalogItemId && job.operationType === 'update')
+      : prev.filter((job) => job.exportOperationId === nextJob.exportOperationId);
+    const staleIds = new Set(staleJobs.map((job) => job.exportOperationId));
+    staleIds.add(nextJob.exportOperationId);
+    const others = prev.filter((job) => !staleIds.has(job.exportOperationId));
     return [...others, nextJob];
+  });
+  staleJobs.forEach((job) => {
+    options.blobCacheRef.current.delete(job.exportOperationId);
+    void deleteBlobFromDB(getRetryBlobStorageId('admin', job.exportOperationId), false).catch(() => undefined);
   });
 };
 
@@ -259,6 +289,7 @@ export const processUserExportUploadQueueOnce = async (params: {
       const skipReason = String(prepare.skipReason || 'already_uploaded');
 
       params.blobCacheRef.current.delete(currentJob.exportOperationId);
+      void deleteBlobFromDB(getRetryBlobStorageId('user', currentJob.exportOperationId), false).catch(() => undefined);
       params.setQueue((prev) => prev.filter((job) => job.exportOperationId !== currentJob.exportOperationId));
 
       params.logExportActivity({
@@ -322,6 +353,7 @@ export const processUserExportUploadQueueOnce = async (params: {
     }).catch(() => null);
 
     params.blobCacheRef.current.delete(currentJob.exportOperationId);
+    void deleteBlobFromDB(getRetryBlobStorageId('user', currentJob.exportOperationId), false).catch(() => undefined);
     params.setQueue((prev) => prev.filter((job) => job.exportOperationId !== currentJob.exportOperationId));
 
     params.logExportActivity({
@@ -383,6 +415,7 @@ export const processUserExportUploadQueueOnce = async (params: {
     params.setQueue((prev) => {
       if (exhausted) {
         params.blobCacheRef.current.delete(currentJob.exportOperationId);
+        void deleteBlobFromDB(getRetryBlobStorageId('user', currentJob.exportOperationId), false).catch(() => undefined);
         return prev.filter((job) => job.exportOperationId !== currentJob.exportOperationId);
       }
       return prev.map((job) => (
@@ -431,6 +464,34 @@ export const processAdminExportUploadQueueOnce = async (params: {
   if (!currentJob) return;
   if (currentJob.nextRetryAt > now) return;
 
+  if (currentJob.operationType === 'update') {
+    const newestMatchingJob = availableJobs
+      .filter((job) => job.catalogItemId === currentJob.catalogItemId && job.operationType === 'update')
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0];
+    if (newestMatchingJob && newestMatchingJob.exportOperationId !== currentJob.exportOperationId) {
+      params.blobCacheRef.current.delete(currentJob.exportOperationId);
+      void deleteBlobFromDB(getRetryBlobStorageId('admin', currentJob.exportOperationId), false).catch(() => undefined);
+      params.setQueue((prev) => prev.filter((job) => job.exportOperationId !== currentJob.exportOperationId));
+      params.logExportActivity({
+        status: 'failed',
+        phase: 'remote_upload',
+        bankId: currentJob.bankId,
+        bankName: currentJob.bankName,
+        padNames: currentJob.padNames,
+        exportOperationId: currentJob.exportOperationId,
+        errorMessage: 'Skipped stale admin update retry because a newer update exists for this catalog item.',
+        upload: {
+          assetName: currentJob.assetName || currentJob.fileName,
+          result: 'failed',
+          reason: 'stale_update_retry_skipped',
+          fileSize: currentJob.fileSize,
+          fileSha256: currentJob.fileSha256,
+        },
+      });
+      return;
+    }
+  }
+
   params.processingRef.current = true;
   try {
     const exportBlob = await getAdminExportJobBlob(
@@ -446,12 +507,14 @@ export const processAdminExportUploadQueueOnce = async (params: {
     const attemptNumber = currentJob.attempts + 1;
     const uploadResult = await params.uploadAdminCatalogAsset({
       catalogItemId: currentJob.catalogItemId,
+      operationType: currentJob.operationType,
       assetName: currentJob.assetName || currentJob.fileName,
       exportBlob,
       assetProtection: currentJob.assetProtection,
     });
 
     params.blobCacheRef.current.delete(currentJob.exportOperationId);
+    void deleteBlobFromDB(getRetryBlobStorageId('admin', currentJob.exportOperationId), false).catch(() => undefined);
     params.setQueue((prev) => prev.filter((job) => job.exportOperationId !== currentJob.exportOperationId));
 
     params.logExportActivity({
@@ -467,7 +530,7 @@ export const processAdminExportUploadQueueOnce = async (params: {
         attempt: attemptNumber,
         result: 'success',
         verified: true,
-        reason: 'admin_retry_queue',
+        reason: currentJob.operationType === 'update' ? 'admin_update_retry_queue' : 'admin_retry_queue',
         fileSize: currentJob.fileSize,
         fileSha256: currentJob.fileSha256,
       },
@@ -499,6 +562,7 @@ export const processAdminExportUploadQueueOnce = async (params: {
     params.setQueue((prev) => {
       if (exhausted) {
         params.blobCacheRef.current.delete(currentJob.exportOperationId);
+        void deleteBlobFromDB(getRetryBlobStorageId('admin', currentJob.exportOperationId), false).catch(() => undefined);
         return prev.filter((job) => job.exportOperationId !== currentJob.exportOperationId);
       }
       return prev.map((job) => (
@@ -514,4 +578,31 @@ export const processAdminExportUploadQueueOnce = async (params: {
   } finally {
     params.processingRef.current = false;
   }
+};
+
+export const clearAdminUpdateRetryJobsForCatalogItem = (
+  catalogItemId: string,
+  options: {
+    blobCacheRef: { current: Map<string, Blob> };
+    setQueue: QueueSetter<AdminExportUploadJob>;
+    excludeExportOperationId?: string;
+  }
+): void => {
+  const trimmedCatalogItemId = String(catalogItemId || '').trim();
+  if (!trimmedCatalogItemId) return;
+  let removedJobs: AdminExportUploadJob[] = [];
+  options.setQueue((prev) => {
+    removedJobs = prev.filter((job) =>
+      job.catalogItemId === trimmedCatalogItemId &&
+      job.operationType === 'update' &&
+      job.exportOperationId !== options.excludeExportOperationId
+    );
+    if (!removedJobs.length) return prev;
+    const removedIds = new Set(removedJobs.map((job) => job.exportOperationId));
+    return prev.filter((job) => !removedIds.has(job.exportOperationId));
+  });
+  removedJobs.forEach((job) => {
+    options.blobCacheRef.current.delete(job.exportOperationId);
+    void deleteBlobFromDB(getRetryBlobStorageId('admin', job.exportOperationId), false).catch(() => undefined);
+  });
 };

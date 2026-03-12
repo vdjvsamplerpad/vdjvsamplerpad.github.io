@@ -9,6 +9,7 @@ import { consumeRateLimit } from "../_shared/rate-limit.ts";
 import {
   type DiscordField,
   sendDiscordAccountRegistrationEvent,
+  sendDiscordAdminActionEvent,
   sendDiscordOcrFailureEvent,
   sendDiscordStoreRequestEvent,
 } from "../_shared/discord.ts";
@@ -974,7 +975,11 @@ const normalizeAdminCatalogItem = (item: any) => {
     is_pinned: Boolean(item?.is_pinned),
     status: item?.is_published ? "published" : "draft",
     price_php: resolveCatalogPrice(item),
-    bank: { title: bank?.title || "Unknown Bank" },
+    bank: {
+      title: bank?.title || "Unknown Bank",
+      description: asString(bank?.description, 2000) || "",
+      color: asString(bank?.color, 40) || "",
+    },
   };
 };
 
@@ -1465,6 +1470,16 @@ const deleteManagedStoreAsset = async (
   const message = String(error.message || "");
   if (/not found|does not exist|no such object/i.test(message)) return null;
   return message || "Unknown cleanup error";
+};
+
+const extractOwnedBankThumbnailPath = (bankId: unknown, imageUrl: unknown): string | null => {
+  const normalizedBankId = asString(bankId, 80);
+  if (!normalizedBankId) return null;
+  const objectPath = extractManagedStoreAssetPath(imageUrl);
+  if (!objectPath) return null;
+  const expectedPrefix = `bank-thumbnails/${normalizedBankId}/`;
+  if (!objectPath.startsWith(expectedPrefix)) return null;
+  return objectPath;
 };
 
 const toNonNegativeSortOrder = (value: unknown, fallback = 0): number => {
@@ -4269,17 +4284,18 @@ const listAdminStoreCatalog = async () => {
   return ok({ items: visible.map(normalizeAdminCatalogItem), banners: bannersResult.banners });
 };
 
-const patchAdminStoreCatalog = async (catalogItemId: string, body: any) => {
+const patchAdminStoreCatalog = async (catalogItemId: string, body: any, adminUserId: string) => {
   const admin = createServiceClient();
   const { data: existing, error: existingError } = await admin
     .from("bank_catalog_items")
-    .select("id,is_paid,requires_grant")
+    .select("id,bank_id,is_paid,requires_grant,asset_protection,thumbnail_path")
     .eq("id", catalogItemId)
     .maybeSingle();
   if (existingError) return fail(500, existingError.message);
   if (!existing) return fail(404, "Catalog item not found");
 
   const updates: Record<string, unknown> = {};
+  const bankUpdates: Record<string, unknown> = {};
   if (Object.prototype.hasOwnProperty.call(body, "status")) {
     const nextStatus = String(body.status || "").toLowerCase();
     if (!["draft", "published", "archived"].includes(nextStatus)) return badRequest("Invalid status");
@@ -4322,17 +4338,104 @@ const patchAdminStoreCatalog = async (catalogItemId: string, body: any) => {
     if (!expectedAssetName) return badRequest("expected_asset_name must be a non-empty string");
     updates.expected_asset_name = expectedAssetName;
   }
-  if (Object.keys(updates).length === 0) return badRequest("No valid fields to update");
+  if (Object.prototype.hasOwnProperty.call(body, "thumbnail_path")) {
+    if (body.thumbnail_path === null || body.thumbnail_path === "") {
+      updates.thumbnail_path = null;
+    } else {
+      const thumbnailPath = normalizeOptionalHttpUrl(body.thumbnail_path);
+      if (!thumbnailPath) return badRequest("thumbnail_path must be a valid http(s) URL");
+      updates.thumbnail_path = thumbnailPath;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "asset_protection") || Object.prototype.hasOwnProperty.call(body, "assetProtection")) {
+    const nextAssetProtectionRaw = body.asset_protection ?? body.assetProtection;
+    const nextAssetProtection = String(nextAssetProtectionRaw || "").trim().toLowerCase();
+    if (nextAssetProtection !== "encrypted" && nextAssetProtection !== "public") {
+      return badRequest("asset_protection must be encrypted or public");
+    }
+    updates.asset_protection = nextAssetProtection;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "title")) {
+    const title = asString(body.title, 255);
+    if (!title) return badRequest("title must be a non-empty string");
+    bankUpdates.title = title;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "description")) {
+    const description = asString(body.description, 2000);
+    bankUpdates.description = description || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "color")) {
+    const color = asString(body.color, 40);
+    bankUpdates.color = color || null;
+  }
+  if (Object.keys(updates).length === 0 && Object.keys(bankUpdates).length === 0) {
+    return badRequest("No valid fields to update");
+  }
 
-  const { data, error } = await admin
-    .from("bank_catalog_items")
-    .update(updates)
-    .eq("id", catalogItemId)
-    .select("*, banks ( title )")
-    .maybeSingle();
-  if (error) return fail(500, error.message);
+  if (Object.keys(bankUpdates).length > 0) {
+    const bankUpdate = await admin
+      .from("banks")
+      .update(bankUpdates)
+      .eq("id", existing.bank_id)
+      .select("id,title,description,color")
+      .maybeSingle();
+    if (bankUpdate.error) return fail(500, bankUpdate.error.message);
+    if (!bankUpdate.data) return fail(404, "Target bank not found");
+  }
+
+  let data: any = null;
+  if (Object.keys(updates).length > 0) {
+    const updateResult = await admin
+      .from("bank_catalog_items")
+      .update(updates)
+      .eq("id", catalogItemId)
+      .select("*, banks ( title, description, color )")
+      .maybeSingle();
+    if (updateResult.error) return fail(500, updateResult.error.message);
+    data = updateResult.data;
+  } else {
+    const selectResult = await admin
+      .from("bank_catalog_items")
+      .select("*, banks ( title, description, color )")
+      .eq("id", catalogItemId)
+      .maybeSingle();
+    if (selectResult.error) return fail(500, selectResult.error.message);
+    data = selectResult.data;
+  }
   if (!data) return fail(404, "Catalog item not found");
-  return ok({ item: normalizeAdminCatalogItem(data) });
+
+  const protectionChanged = typeof updates.asset_protection === "string" && updates.asset_protection !== existing.asset_protection;
+  const metadataChanged = Object.keys(bankUpdates).length > 0 || Object.prototype.hasOwnProperty.call(updates, "thumbnail_path");
+  let cleanupWarning: string | null = null;
+  const thumbnailChanged = Object.prototype.hasOwnProperty.call(updates, "thumbnail_path") &&
+    normalizeOptionalHttpUrl(existing.thumbnail_path) !== normalizeOptionalHttpUrl(updates.thumbnail_path);
+  if (thumbnailChanged && extractOwnedBankThumbnailPath(existing.bank_id, existing.thumbnail_path)) {
+    cleanupWarning = await deleteManagedStoreAsset(admin, existing.thumbnail_path);
+  }
+  if (protectionChanged || metadataChanged) {
+    await swallowDiscordError(() => sendDiscordAdminActionEvent({
+      severity: "info",
+      title: protectionChanged ? "Store Bank Protection Changed" : "Store Catalog Metadata Updated",
+      description: protectionChanged
+        ? "Admin updated the linked store asset protection."
+        : "Admin synced store bank metadata.",
+      actorUserId: adminUserId,
+      bankId: asString(existing.bank_id, 80) || null,
+      catalogItemId,
+      extraFields: [
+        ...(protectionChanged
+          ? [
+              { name: "Previous Protection", value: String(existing.asset_protection || "encrypted"), inline: true },
+              { name: "Next Protection", value: String(updates.asset_protection || existing.asset_protection || "encrypted"), inline: true },
+            ]
+          : []),
+        ...(Object.prototype.hasOwnProperty.call(updates, "thumbnail_path")
+          ? [{ name: "Thumbnail Synced", value: "Yes", inline: true }]
+          : []),
+      ],
+    }));
+  }
+  return ok({ item: normalizeAdminCatalogItem(data), cleanup_warning: cleanupWarning });
 };
 
 const listAdminStorePromotions = async () => {
@@ -5050,7 +5153,7 @@ Deno.serve(async (req) => {
       const catalogItemId = asUuid(scoped[3]);
       if (!catalogItemId) return badRequest("Invalid catalog item id");
       const body = await req.json().catch(() => ({}));
-      return await patchAdminStoreCatalog(catalogItemId, body);
+      return await patchAdminStoreCatalog(catalogItemId, body, adminCheck.userId);
     }
     if (req.method === "GET" && scoped[2] === "promotions" && scoped.length === 3) return await listAdminStorePromotions();
     if (req.method === "POST" && scoped[2] === "promotions" && scoped.length === 3) {

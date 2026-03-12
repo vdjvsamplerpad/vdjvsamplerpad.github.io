@@ -1644,6 +1644,18 @@ const publishCatalogItem = async (
     storage_uploaded_at: new Date().toISOString(),
   }).eq("id", catalogItemId).select("*").single();
   if (updateError) return fail(500, updateError.message);
+  await swallowDiscordError(() => sendDiscordAdminActionEvent({
+    severity: "info",
+    title: "Store Bank Publish Completed",
+    description: "Catalog item was published and is now live for entitled buyers.",
+    actorUserId: adminUserId,
+    bankId: asString(item.bank_id, 80) || null,
+    catalogItemId,
+    extraFields: [
+      { name: "Protection", value: String(updated.asset_protection || item.asset_protection || "encrypted"), inline: true },
+      { name: "Storage Key", value: String(updated.storage_key || storageKey), inline: false },
+    ],
+  }));
   return ok({ item: updated });
 };
 
@@ -1679,6 +1691,7 @@ const startUploadPublishCatalogItem = async (
   if (bankData.deleted_at) return fail(400, "Cannot publish catalog for archived bank");
 
   const targetAsset = asString(body?.assetName, 500) || asString(body?.asset_name, 500) || item.expected_asset_name;
+  const operationType = asString(body?.operationType ?? body?.operation_type, 40) === "update" ? "update" : "create";
   const assetProtection = normalizeCatalogAssetProtection(
     body?.assetProtection ?? body?.asset_protection,
     normalizeCatalogAssetProtection(item?.asset_protection, "encrypted"),
@@ -1715,8 +1728,23 @@ const startUploadPublishCatalogItem = async (
     meta: {
       source: "start-upload-publish",
       assetProtection,
+      operationType,
     },
   });
+  await swallowDiscordError(() => sendDiscordAdminActionEvent({
+    severity: "info",
+    title: operationType === "update" ? "Store Bank Update Requested" : "Store Catalog Upload Requested",
+    description: operationType === "update"
+      ? "Admin started preparing a replacement draft asset for a linked store bank."
+      : "Admin started preparing a catalog draft upload.",
+    actorUserId: adminUserId,
+    bankId: asString(item.bank_id, 80) || null,
+    catalogItemId,
+    extraFields: [
+      { name: "Asset", value: target.assetName, inline: false },
+      { name: "Protection", value: assetProtection, inline: true },
+    ],
+  }));
   const upload = await createPresignedPutUrl(
     target.bucket,
     target.objectKey,
@@ -1823,9 +1851,11 @@ const completeUploadPublishCatalogItem = async (
   }
 
   const metaAssetProtection = asString((session.meta as Record<string, unknown>)?.assetProtection, 40);
+  const operationType = asString((session.meta as Record<string, unknown>)?.operationType, 40) === "update" ? "update" : "create";
+  const previousAssetProtection = normalizeCatalogAssetProtection(item?.asset_protection, "encrypted");
   const assetProtection = normalizeCatalogAssetProtection(
     metaAssetProtection,
-    normalizeCatalogAssetProtection(item?.asset_protection, "encrypted"),
+    previousAssetProtection,
   );
   const resolvedAssetName = getAssetNameFromStorageKey(session.storageKey)
     || asString(item?.expected_asset_name, 500)
@@ -1851,6 +1881,36 @@ const completeUploadPublishCatalogItem = async (
     nextStatus: "completed",
   });
   if (!finalized.ok) return mapFinalizeError(finalized.code);
+
+  await swallowDiscordError(() => sendDiscordAdminActionEvent({
+    severity: "info",
+    title: operationType === "update" ? "Store Bank Upload Succeeded" : "Store Catalog Upload Succeeded",
+    description: operationType === "update"
+      ? "A replacement draft asset for a linked store bank was uploaded successfully."
+      : "A catalog draft asset was uploaded successfully.",
+    actorUserId: adminUserId,
+    bankId: asString(item.bank_id, 80) || null,
+    catalogItemId,
+    extraFields: [
+      { name: "Asset", value: resolvedAssetName || String(item.expected_asset_name || "unknown"), inline: false },
+      { name: "Protection", value: assetProtection, inline: true },
+      { name: "Draft Status", value: "Pending publish", inline: true },
+    ],
+  }));
+  if (assetProtection !== previousAssetProtection) {
+    await swallowDiscordError(() => sendDiscordAdminActionEvent({
+      severity: "info",
+      title: "Store Bank Protection Changed",
+      description: "The uploaded draft changed the store asset protection mode.",
+      actorUserId: adminUserId,
+      bankId: asString(item.bank_id, 80) || null,
+      catalogItemId,
+      extraFields: [
+        { name: "Previous Protection", value: previousAssetProtection, inline: true },
+        { name: "Next Protection", value: assetProtection, inline: true },
+      ],
+    }));
+  }
 
   return ok({
     item: updated,

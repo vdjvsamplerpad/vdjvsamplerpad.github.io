@@ -60,12 +60,14 @@ export const readAdminExportUploadQueue = (): AdminExportUploadJob[] => {
     return parsed
       .map((item: any) => {
         const assetProtection: 'encrypted' | 'public' = item?.assetProtection === 'public' ? 'public' : 'encrypted';
+        const operationType: 'create' | 'update' = item?.operationType === 'update' ? 'update' : 'create';
         return {
           exportOperationId: typeof item?.exportOperationId === 'string' ? item.exportOperationId : '',
           userId: typeof item?.userId === 'string' ? item.userId : '',
           bankId: typeof item?.bankId === 'string' ? item.bankId : '',
           bankName: typeof item?.bankName === 'string' ? item.bankName : 'bank',
           catalogItemId: typeof item?.catalogItemId === 'string' ? item.catalogItemId : '',
+          operationType,
           fileName: typeof item?.fileName === 'string' ? item.fileName : '',
           assetName: typeof item?.assetName === 'string' ? item.assetName : '',
           assetProtection,
@@ -127,4 +129,3 @@ export const computeUploadRetryAt = (attempts: number): number => {
   const multiplier = Math.min(6, safeAttempts);
   return Date.now() + USER_EXPORT_UPLOAD_RETRY_BASE_MS * multiplier;
 };
-

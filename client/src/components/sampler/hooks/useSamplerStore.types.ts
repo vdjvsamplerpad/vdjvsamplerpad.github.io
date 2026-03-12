@@ -24,6 +24,19 @@ export type ExportUploadMeta = {
   duplicateOfExportOperationId?: string | null;
 };
 
+export type StoreBankAssetProtection = 'encrypted' | 'public';
+
+export type UpdateStoreBankInput = {
+  bankSnapshot: SamplerBank;
+  title: string;
+  description: string;
+  syncMetadata: boolean;
+  assetProtection: StoreBankAssetProtection;
+  exportMode: ExportAudioMode;
+  thumbnailPath?: string;
+  onProgress?: (progress: number) => void;
+};
+
 export interface SamplerStore {
   banks: SamplerBank[];
   startupRestoreCompleted: boolean;
@@ -81,6 +94,7 @@ export interface SamplerStore {
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
   ) => Promise<string>;
+  updateStoreBank: (input: UpdateStoreBankInput) => Promise<string>;
   publishDefaultBankRelease: (
     bankId: string,
     options?: { releaseNotes?: string; minAppVersion?: string }

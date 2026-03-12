@@ -19,6 +19,7 @@ import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { useOnlineStoreDownloadTransfer } from './hooks/useOnlineStoreDownloadTransfer';
 import { deriveSnapshotRestoreStatus } from './hooks/useSamplerStore.snapshotMetadata';
 import type { OnlineBankStoreImportMeta, StoreDownloadedArtifact, StoreItem, TransferState } from './onlineStore.types';
+import type { UpdateStoreBankInput } from './hooks/useSamplerStore.types';
 
 type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string };
 type BankListEntry =
@@ -86,6 +87,7 @@ interface SideMenuProps {
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
   ) => Promise<string>;
+  onUpdateStoreBank?: (input: UpdateStoreBankInput) => Promise<string>;
   midiEnabled?: boolean;
   blockedShortcutKeys: Set<string>;
   blockedMidiNotes: Set<number>;
@@ -130,6 +132,7 @@ export function SideMenu({
   onTransferPad,
   canTransferFromBank,
   onExportAdmin,
+  onUpdateStoreBank,
   midiEnabled = false,
   blockedShortcutKeys,
   blockedMidiNotes,
@@ -1730,6 +1733,15 @@ export function SideMenu({
               onUpdateBank(editingBank.id, nextUpdates);
               setShowEditDialog(false);
             }}
+            onApplyLocalBankUpdates={(updates) => {
+              const nextUpdates: Partial<SamplerBank> = { ...updates };
+              if (updates.shortcutKey === undefined && editingBank.shortcutKey) {
+                nextUpdates.disableDefaultBankShortcutLayout = true;
+              } else if (typeof updates.shortcutKey === 'string' && updates.shortcutKey.trim().length > 0) {
+                nextUpdates.disableDefaultBankShortcutLayout = false;
+              }
+              onUpdateBank(editingBank.id, nextUpdates);
+            }}
             onDelete={() => {
               if (isDefaultBankIdentity(editingBank)) return;
               setShowEditDialog(false);
@@ -1751,7 +1763,8 @@ export function SideMenu({
               }
             } : undefined}
             onExportAdmin={onExportAdmin}
-            onAdminThumbnailChange={onExportAdmin ? async (thumbnailUrl?: string) => {
+            onUpdateStoreBank={onUpdateStoreBank}
+            onAdminThumbnailChange={profile?.role === 'admin' ? async (thumbnailUrl?: string) => {
               const latestBank = banks.find((bank) => bank.id === editingBank.id);
               if (!latestBank) return;
               const currentMetadata = latestBank.bankMetadata;

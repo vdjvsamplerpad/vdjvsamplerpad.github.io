@@ -45,6 +45,7 @@ type UploadQueueRuntimeParams = {
   }) => Promise<{ releaseTag: string; releaseId: number; assetName: string; fileSize: number; etag: string | null }>;
   uploadAdminCatalogAsset: (input: {
     catalogItemId: string;
+    operationType?: 'create' | 'update';
     assetName: string;
     exportBlob: Blob;
     assetProtection: 'encrypted' | 'public';
@@ -259,6 +260,7 @@ export const useSamplerStoreUploadQueueRuntime = (params: UploadQueueRuntimePara
     bankId: string;
     bankName: string;
     catalogItemId: string;
+    operationType: 'create' | 'update';
     fileName: string;
     assetName: string;
     assetProtection: 'encrypted' | 'public';

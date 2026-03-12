@@ -165,6 +165,7 @@ export const uploadUserExportAsset = async (input: {
 
 export const uploadAdminCatalogAsset = async (input: {
   catalogItemId: string;
+  operationType?: 'create' | 'update';
   assetName: string;
   exportBlob: Blob;
   assetProtection: 'encrypted' | 'public';
@@ -182,6 +183,7 @@ export const uploadAdminCatalogAsset = async (input: {
       assetName: input.assetName,
       fileSize: input.exportBlob.size,
       assetProtection: input.assetProtection,
+      operationType: input.operationType || 'create',
     }),
   });
   const startPayload = await startResponse.json().catch(() => ({} as StartAdminCatalogUploadPublishResult & { ok?: boolean; error?: string }));
@@ -259,6 +261,28 @@ export const uploadAdminCatalogAsset = async (input: {
     assetName: typeof data?.assetName === 'string' ? data.assetName : expectedAssetName,
     fileSize: Number(data?.fileSize || input.exportBlob.size),
   };
+};
+
+export const patchAdminCatalogItem = async (input: {
+  catalogItemId: string;
+  updates: Record<string, unknown>;
+}): Promise<Record<string, unknown>> => {
+  const headers = await getAuthHeaders(true);
+  const response = await fetch(edgeFunctionUrl('store-api', `admin/store/catalog/${input.catalogItemId}`), {
+    method: 'PATCH',
+    cache: 'no-store',
+    credentials: 'omit',
+    headers: {
+      ...headers,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input.updates),
+  });
+  const payload = await response.json().catch(() => ({} as { ok?: boolean; error?: string; data?: unknown }));
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.error || `Catalog patch failed (${response.status})`);
+  }
+  return (payload?.data && typeof payload.data === 'object' ? payload.data : payload) as Record<string, unknown>;
 };
 
 export const uploadDefaultBankReleaseArchive = async (input: {

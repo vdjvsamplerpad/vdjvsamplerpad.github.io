@@ -272,6 +272,7 @@ export const PadGrid = React.memo(function PadGrid({
   const handlePadDrop = (e: React.DragEvent, index: number) => {
     if (editMode && draggedIndex !== null) {
       e.preventDefault();
+      e.stopPropagation();
       if (draggedIndex !== index) {
         onReorderPads(draggedIndex, index);
       }
@@ -280,6 +281,7 @@ export const PadGrid = React.memo(function PadGrid({
       return;
     }
 
+    e.stopPropagation();
     void handleDrop(e);
     setDragOverIndex(null);
   };

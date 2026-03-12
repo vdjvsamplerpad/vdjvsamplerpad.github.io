@@ -93,6 +93,14 @@ export function SamplerPadAppDialogs({
   error,
   onErrorClose,
 }: SamplerPadAppDialogsProps) {
+  const normalizedError = error?.trim() || null;
+  const isLimitedDialog = Boolean(normalizedError && normalizedError.toLowerCase().startsWith('limited:'));
+  const errorDialogTitle = isLimitedDialog ? 'Limited' : 'Error';
+  const errorDialogAccentClass = isLimitedDialog ? 'text-amber-500' : 'text-red-600';
+  const errorDialogSurfaceClass = theme === 'dark'
+    ? (isLimitedDialog ? 'bg-gray-800 border-amber-500' : 'bg-gray-800 border-red-500')
+    : (isLimitedDialog ? 'bg-white border-amber-500' : 'bg-white border-red-500');
+
   return (
     <>
       <Dialog open={Boolean(remoteSnapshotPrompt)} onOpenChange={(open) => { if (!open) onSkipRemoteSnapshotPrompt(); }}>
@@ -255,9 +263,9 @@ export function SamplerPadAppDialogs({
       />
 
       <Dialog open={showErrorDialog} onOpenChange={onShowErrorDialogChange}>
-        <DialogContent className={`sm:max-w-md ${theme === 'dark' ? 'bg-gray-800 border-red-500' : 'bg-white border-red-500'}`} aria-describedby={undefined}>
+        <DialogContent className={`sm:max-w-md ${errorDialogSurfaceClass}`} aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle className="text-red-600">Error</DialogTitle>
+            <DialogTitle className={errorDialogAccentClass}>{errorDialogTitle}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className={`text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>

@@ -12,6 +12,15 @@ type QuotaPolicy = {
 
 const EMPTY_HOTCUES: [number | null, number | null, number | null, number | null] = [null, null, null, null];
 
+const buildPadCapReachedMessage = (padCap: number): string =>
+  `LIMITED: Max ${padCap} pads allowed per bank. Remove a pad or message us on facebook for expansion.`;
+
+const buildDeviceBankLimitMessage = (bankCap: number, action: string): string =>
+  `LIMITED: You reached your device bank limit (${bankCap}). Remove a bank before ${action}.`;
+
+const buildOwnedBankQuotaMessage = (bankQuota: number, detail: string): string =>
+  `LIMITED: You reached your owned bank quota (${bankQuota}). ${detail} Message us on facebook for expansion.`;
+
 const resolveResetDuplicateEndTimeMs = (pad: PadData): number => {
   if (typeof pad.audioDurationMs === 'number' && Number.isFinite(pad.audioDurationMs) && pad.audioDurationMs > 0) {
     return Math.max(0, Math.round(pad.audioDurationMs));
@@ -73,12 +82,17 @@ export const runDuplicateBankPipeline = async (
   const isAdminUser = profileRole === 'admin';
   if (!isAdminUser) {
     if (currentBanks.length >= quotaPolicy.deviceTotalBankCap) {
-      throw new Error(`You reached your device bank limit (${quotaPolicy.deviceTotalBankCap}). Remove a bank before duplicating.`);
+      throw new Error(buildDeviceBankLimitMessage(quotaPolicy.deviceTotalBankCap, 'duplicating.'));
     }
     if (isOwnedCountedBankForQuota(sourceBank)) {
       const ownedUsed = countOwnedCountedBanks(currentBanks);
       if (ownedUsed >= quotaPolicy.ownedBankQuota) {
-        throw new Error(`You reached your owned bank quota (${quotaPolicy.ownedBankQuota}). Remove an owned bank before duplicating. Message us on facebook for expansion.`);
+        throw new Error(
+          buildOwnedBankQuotaMessage(
+            quotaPolicy.ownedBankQuota,
+            'Remove an owned bank before duplicating.'
+          )
+        );
       }
     }
   }
@@ -241,8 +255,8 @@ export const runDuplicatePadPipeline = async (
   const currentBanks = banksRef.current;
   const sourceBank = currentBanks.find((bank) => bank.id === bankId);
   if (!sourceBank) throw new Error('We could not find that bank.');
-  if (profileRole !== 'admin' && isOwnedCountedBankForQuota(sourceBank) && sourceBank.pads.length >= quotaPolicy.ownedBankPadCap) {
-    throw new Error(`Max ${quotaPolicy.ownedBankPadCap} pads allowed for owned banks. Remove a pad first.`);
+  if (profileRole !== 'admin' && sourceBank.pads.length >= quotaPolicy.ownedBankPadCap) {
+    throw new Error(buildPadCapReachedMessage(quotaPolicy.ownedBankPadCap));
   }
 
   const sourcePad = sourceBank.pads.find((pad) => pad.id === padId);

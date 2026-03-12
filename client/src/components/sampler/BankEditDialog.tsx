@@ -9,10 +9,12 @@ import { useAuth } from '@/hooks/useAuth';
 import { isReservedShortcutCombo, normalizeShortcutKey, normalizeStoredShortcutKey, RESERVED_SHORTCUT_KEYS } from '@/lib/keyboard-shortcuts';
 import { MidiMessage } from '@/lib/midi';
 import { BankEditAdminExportDialog } from './BankEditAdminExportDialog';
+import { BankEditUpdateStoreDialog } from './BankEditUpdateStoreDialog';
 import { BankEditCoreForm } from './BankEditCoreForm';
 import { bankColorOptions, formatBankEditDate } from './bankEdit.shared';
 import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { prepareManagedImageUpload, validateManagedImageFile } from '@/lib/image-upload';
+import type { UpdateStoreBankInput } from './hooks/useSamplerStore.types';
 
 interface BankEditDialogProps {
   bank: SamplerBank;
@@ -22,6 +24,7 @@ interface BankEditDialogProps {
   onOpenChange: (open: boolean) => void;
   theme: 'light' | 'dark';
   onSave: (updates: Partial<SamplerBank>) => void;
+  onApplyLocalBankUpdates?: (updates: Partial<SamplerBank>) => void;
   onDelete: () => void;
   onExport: () => void;
   onClearPadShortcuts?: () => void;
@@ -38,6 +41,7 @@ interface BankEditDialogProps {
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
   ) => Promise<string>;
+  onUpdateStoreBank?: (input: UpdateStoreBankInput) => Promise<string>;
   onDuplicate?: (onProgress?: (progress: number) => void) => Promise<void> | void;
   midiEnabled?: boolean;
   blockedShortcutKeys?: Set<string>;
@@ -53,12 +57,14 @@ export function BankEditDialog({
   onOpenChange,
   theme,
   onSave,
+  onApplyLocalBankUpdates,
   onDelete,
   onExport,
   onClearPadShortcuts,
   onClearPadMidi,
   onAdminThumbnailChange,
   onExportAdmin,
+  onUpdateStoreBank,
   onDuplicate,
   midiEnabled = false,
   blockedShortcutKeys,
@@ -79,6 +85,7 @@ export function BankEditDialog({
   const [midiLearnActive, setMidiLearnActive] = React.useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
   const [showAdminExport, setShowAdminExport] = React.useState(false);
+  const [showStoreUpdateDialog, setShowStoreUpdateDialog] = React.useState(false);
   const [adminTitle, setAdminTitle] = React.useState(bank.name);
   const [adminDescription, setAdminDescription] = React.useState('');
   const [adminAddToDatabase, setAdminAddToDatabase] = React.useState(false);
@@ -89,6 +96,17 @@ export function BankEditDialog({
   const [adminExportProgress, setAdminExportProgress] = React.useState(0);
   const [adminExportStatus, setAdminExportStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
   const [adminExportError, setAdminExportError] = React.useState<string>('');
+  const [storeUpdateTitle, setStoreUpdateTitle] = React.useState(bank.name);
+  const [storeUpdateDescription, setStoreUpdateDescription] = React.useState(bank.bankMetadata?.description || '');
+  const [storeUpdateSyncMetadata, setStoreUpdateSyncMetadata] = React.useState(true);
+  const [storeUpdateProtection, setStoreUpdateProtection] = React.useState<'encrypted' | 'public'>(
+    bank.bankMetadata?.password ? 'encrypted' : 'public'
+  );
+  const [storeUpdateExportMode, setStoreUpdateExportMode] = React.useState<'fast' | 'compact'>('fast');
+  const [showStoreUpdateProgress, setShowStoreUpdateProgress] = React.useState(false);
+  const [storeUpdateProgress, setStoreUpdateProgress] = React.useState(0);
+  const [storeUpdateStatus, setStoreUpdateStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
+  const [storeUpdateError, setStoreUpdateError] = React.useState('');
   const [adminThumbnailFile, setAdminThumbnailFile] = React.useState<File | null>(null);
   const [adminThumbnailPreviewUrl, setAdminThumbnailPreviewUrl] = React.useState<string | null>(null);
   const [adminThumbnailUploading, setAdminThumbnailUploading] = React.useState(false);
@@ -123,6 +141,16 @@ export function BankEditDialog({
       setAdminAllowExport(true); // Default to true when Add to Database is disabled
       setAdminPublicCatalogAsset(false);
       setAdminExportMode('fast');
+      setShowStoreUpdateDialog(false);
+      setStoreUpdateTitle(bank.name);
+      setStoreUpdateDescription(bank.bankMetadata?.description || '');
+      setStoreUpdateSyncMetadata(true);
+      setStoreUpdateProtection(bank.bankMetadata?.password ? 'encrypted' : 'public');
+      setStoreUpdateExportMode('fast');
+      setShowStoreUpdateProgress(false);
+      setStoreUpdateProgress(0);
+      setStoreUpdateStatus('loading');
+      setStoreUpdateError('');
       setShowDuplicateConfirm(false);
       setShowDuplicateProgress(false);
       setDuplicateProgress(0);
@@ -273,6 +301,60 @@ export function BankEditDialog({
     });
   };
 
+  const buildPendingBankMetadata = React.useCallback((input?: {
+    includeStoreMetadata?: boolean;
+    description?: string;
+    title?: string;
+  }) => {
+    const nextBankMetadata = bank.bankMetadata
+      ? { ...bank.bankMetadata }
+      : (hideThumbnailPreview
+        ? {
+            password: Boolean(bank.isAdminBank),
+            transferable: bank.transferable ?? true,
+            exportable: bank.exportable ?? true,
+          }
+        : undefined);
+
+    if (nextBankMetadata) {
+      if (hideThumbnailPreview) {
+        nextBankMetadata.hideThumbnailPreview = true;
+      } else {
+        delete nextBankMetadata.hideThumbnailPreview;
+      }
+      if (input?.includeStoreMetadata) {
+        nextBankMetadata.title = input.title || name;
+        nextBankMetadata.description = input.description || '';
+        nextBankMetadata.color = defaultColor;
+      }
+    }
+
+    return nextBankMetadata;
+  }, [bank.bankMetadata, bank.exportable, bank.isAdminBank, bank.transferable, defaultColor, hideThumbnailPreview, name]);
+
+  const buildPendingBankUpdates = React.useCallback((input?: {
+    includeStoreMetadata?: boolean;
+    description?: string;
+    title?: string;
+  }): Partial<SamplerBank> => ({
+    name,
+    defaultColor,
+    shortcutKey: shortcutKey || undefined,
+    midiNote,
+    midiCC,
+    bankMetadata: buildPendingBankMetadata(input),
+  }), [buildPendingBankMetadata, defaultColor, midiCC, midiNote, name, shortcutKey]);
+
+  const buildPendingBankSnapshot = React.useCallback((input?: {
+    includeStoreMetadata?: boolean;
+    description?: string;
+    title?: string;
+  }): SamplerBank => ({
+    ...bank,
+    ...buildPendingBankUpdates(input),
+    bankMetadata: buildPendingBankMetadata(input),
+  }), [bank, buildPendingBankMetadata, buildPendingBankUpdates]);
+
   const handleDeleteClick = () => {
     if (!canDeleteBank) return;
     setShowDeleteConfirm(true);
@@ -303,6 +385,39 @@ export function BankEditDialog({
   const validateThumbnailFile = (file: File): string | null => {
     return validateManagedImageFile(file, 'thumbnail');
   };
+
+  const extractOwnedBankThumbnailPath = React.useCallback((value: string | null | undefined): string | null => {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (!normalized) return null;
+    try {
+      const parsed = new URL(normalized, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+      const publicPrefix = `/storage/v1/object/public/store-assets/`;
+      const renderPrefix = `/storage/v1/render/image/public/store-assets/`;
+      const marker = parsed.pathname.includes(publicPrefix)
+        ? publicPrefix
+        : parsed.pathname.includes(renderPrefix)
+          ? renderPrefix
+          : null;
+      if (!marker) return null;
+      const objectPath = decodeURIComponent(parsed.pathname.slice(parsed.pathname.indexOf(marker) + marker.length)).replace(/^\/+/, '');
+      const ownedPrefix = `bank-thumbnails/${bank.id}/`;
+      if (!objectPath.startsWith(ownedPrefix)) return null;
+      return objectPath;
+    } catch {
+      return null;
+    }
+  }, [bank.id]);
+
+  const removeOwnedBankThumbnail = React.useCallback(async (value: string | null | undefined): Promise<void> => {
+    const objectPath = extractOwnedBankThumbnailPath(value);
+    if (!objectPath) return;
+    const { supabase } = await import('@/lib/supabase');
+    const { error } = await supabase.storage.from('store-assets').remove([objectPath]);
+    if (!error) return;
+    const message = String(error.message || '');
+    if (/not found|does not exist|no such object/i.test(message)) return;
+    throw error instanceof Error ? error : new Error(message || 'Failed to remove thumbnail.');
+  }, [extractOwnedBankThumbnailPath]);
 
   const uploadAdminThumbnail = async (file: File): Promise<{ objectPath: string; publicUrl: string }> => {
     const { supabase } = await import('@/lib/supabase');
@@ -357,12 +472,30 @@ export function BankEditDialog({
     setAdminThumbnailUploading(true);
     setAdminThumbnailNotice('Uploading thumbnail...');
 
+    const latestStoredThumbnail = bank.bankMetadata?.thumbnailUrl;
+    let uploaded: { objectPath: string; publicUrl: string } | null = null;
     try {
-      const uploaded = await uploadAdminThumbnail(file);
+      uploaded = await uploadAdminThumbnail(file);
       await onAdminThumbnailChange(uploaded.publicUrl);
+      if (latestStoredThumbnail && latestStoredThumbnail !== uploaded.publicUrl) {
+        try {
+          await removeOwnedBankThumbnail(latestStoredThumbnail);
+        } catch (cleanupError) {
+          setAdminThumbnailNotice(
+            cleanupError instanceof Error
+              ? `Thumbnail saved. Previous thumbnail cleanup failed: ${cleanupError.message}`
+              : 'Thumbnail saved. Previous thumbnail cleanup failed.'
+          );
+          setAdminThumbnailFile(null);
+          return;
+        }
+      }
       setAdminThumbnailNotice('Thumbnail saved.');
       setAdminThumbnailFile(null);
     } catch (thumbnailError) {
+      if (uploaded?.publicUrl) {
+        await removeOwnedBankThumbnail(uploaded.publicUrl).catch(() => undefined);
+      }
       setAdminThumbnailFile(null);
       setAdminThumbnailError(
         thumbnailError instanceof Error ? thumbnailError.message : 'Thumbnail upload failed.'
@@ -375,10 +508,24 @@ export function BankEditDialog({
 
   const handleThumbnailRemove = async () => {
     if (!isAdmin || !onAdminThumbnailChange || adminThumbnailUploading) return;
+    const previousThumbnailUrl = bank.bankMetadata?.thumbnailUrl;
     setAdminThumbnailFile(null);
     setAdminThumbnailError('');
     setAdminThumbnailNotice('');
     await onAdminThumbnailChange(undefined);
+    try {
+      await removeOwnedBankThumbnail(previousThumbnailUrl);
+    } catch (cleanupError) {
+      setAdminThumbnailError(
+        cleanupError instanceof Error
+          ? `Thumbnail removed, but cleanup failed: ${cleanupError.message}`
+          : 'Thumbnail removed, but cleanup failed.'
+      );
+      return;
+    }
+    if (previousThumbnailUrl) {
+      setAdminThumbnailNotice('Thumbnail removed.');
+    }
   };
 
   const handleAdminExport = async () => {
@@ -410,6 +557,59 @@ export function BankEditDialog({
     }
   };
 
+  const handleStoreUpdate = async () => {
+    if (!onUpdateStoreBank) return;
+    if (shortcutError) return;
+
+    const pendingUpdates = buildPendingBankUpdates({
+      includeStoreMetadata: storeUpdateSyncMetadata,
+      description: storeUpdateDescription,
+      title: storeUpdateTitle,
+    });
+    (onApplyLocalBankUpdates || onSave)(pendingUpdates);
+
+    setShowStoreUpdateProgress(true);
+    setStoreUpdateStatus('loading');
+    setStoreUpdateProgress(0);
+    setStoreUpdateError('');
+
+    try {
+      const updateMessage = await onUpdateStoreBank({
+        bankSnapshot: buildPendingBankSnapshot({
+          includeStoreMetadata: storeUpdateSyncMetadata,
+          description: storeUpdateDescription,
+          title: storeUpdateTitle,
+        }),
+        title: storeUpdateTitle,
+        description: storeUpdateDescription,
+        syncMetadata: storeUpdateSyncMetadata,
+        assetProtection: storeUpdateProtection,
+        exportMode: storeUpdateExportMode,
+        thumbnailPath: bank.bankMetadata?.thumbnailUrl || undefined,
+        onProgress: (progress) => {
+          setStoreUpdateProgress(progress);
+        },
+      });
+      if (storeUpdateSyncMetadata) {
+        (onApplyLocalBankUpdates || onSave)({
+          ...pendingUpdates,
+          bankMetadata: buildPendingBankMetadata({
+            includeStoreMetadata: true,
+            description: storeUpdateDescription,
+            title: storeUpdateTitle,
+          }),
+        });
+      }
+      const requiresAttention = /auto-retry queued|was not queued|upload failed|metadata sync failed/i.test(updateMessage || '');
+      setStoreUpdateProgress(100);
+      setStoreUpdateStatus(requiresAttention ? 'error' : 'success');
+      setStoreUpdateError(updateMessage || '');
+    } catch (error) {
+      setStoreUpdateStatus('error');
+      setStoreUpdateError(error instanceof Error ? error.message : 'Store bank update failed.');
+    }
+  };
+
   const handleDuplicate = async () => {
     if (!onDuplicate) return;
     setShowDuplicateConfirm(false);
@@ -433,6 +633,7 @@ export function BankEditDialog({
 
   const isAdmin = profile?.role === 'admin';
   const showDatabaseDescription = Boolean(bank.bankMetadata?.bankId);
+  const isLinkedStoreBank = isAdmin && Boolean(bank.bankMetadata?.catalogItemId);
   const isAdminOrStoreBank = Boolean(
     bank.isAdminBank ||
     bank.bankMetadata?.bankId ||
@@ -622,10 +823,19 @@ export function BankEditDialog({
               onSave={handleSave}
               onShowDuplicateConfirm={() => setShowDuplicateConfirm(true)}
               onShowAdminExport={() => setShowAdminExport(true)}
+              onShowStoreUpdate={() => {
+                setStoreUpdateTitle(name);
+                setStoreUpdateDescription(bank.bankMetadata?.description || '');
+                setStoreUpdateProtection(bank.bankMetadata?.password ? 'encrypted' : 'public');
+                setStoreUpdateSyncMetadata(true);
+                setStoreUpdateExportMode('fast');
+                setShowStoreUpdateDialog(true);
+              }}
               onExport={onExport}
               onDelete={handleDeleteClick}
               onDuplicate={onDuplicate}
               onExportAdmin={onExportAdmin}
+              onUpdateStoreBank={isLinkedStoreBank ? handleStoreUpdate : undefined}
             />
           </div>
         </DialogContent>
@@ -708,6 +918,24 @@ export function BankEditDialog({
         onExport={handleAdminExport}
       />
 
+      <BankEditUpdateStoreDialog
+        open={showStoreUpdateDialog}
+        onOpenChange={setShowStoreUpdateDialog}
+        theme={theme}
+        bank={bank}
+        title={storeUpdateTitle}
+        setTitle={setStoreUpdateTitle}
+        description={storeUpdateDescription}
+        setDescription={setStoreUpdateDescription}
+        syncMetadata={storeUpdateSyncMetadata}
+        setSyncMetadata={setStoreUpdateSyncMetadata}
+        assetProtection={storeUpdateProtection}
+        setAssetProtection={setStoreUpdateProtection}
+        exportMode={storeUpdateExportMode}
+        setExportMode={setStoreUpdateExportMode}
+        onSubmit={handleStoreUpdate}
+      />
+
       {/* Admin Export Progress Dialog */}
       <ProgressDialog
         open={showAdminExportProgress}
@@ -738,6 +966,24 @@ export function BankEditDialog({
         theme={theme}
         errorMessage={duplicateError}
         onRetry={handleDuplicate}
+      />
+
+      <ProgressDialog
+        open={showStoreUpdateProgress}
+        onOpenChange={(open) => {
+          setShowStoreUpdateProgress(open);
+          if (!open && storeUpdateStatus === 'success') {
+            setShowStoreUpdateDialog(false);
+          }
+        }}
+        title="Updating Store Bank"
+        description="Saving local .bank file and uploading a new draft asset..."
+        progress={storeUpdateProgress}
+        status={storeUpdateStatus}
+        type="export"
+        theme={theme}
+        errorMessage={storeUpdateError}
+        onRetry={handleStoreUpdate}
       />
 
     </>

@@ -260,8 +260,11 @@ export const sendDiscordNotification = async (input: {
   attachment?: DiscordAttachment | null;
   clientIp?: string | null;
   includeGeoLookup?: boolean;
+  preferExplicitWebhook?: boolean;
 }) => {
-  const webhookUrl = resolveSeverityWebhook(input.severity, input.webhook);
+  const webhookUrl = input.preferExplicitWebhook && input.webhook
+    ? input.webhook
+    : resolveSeverityWebhook(input.severity, input.webhook);
   if (!webhookUrl) return;
 
   const fields = [...(input.fields || [])];
@@ -377,6 +380,7 @@ export const sendDiscordExportEvent = async (input: {
   await sendDiscordNotification({
     webhook: input.webhook,
     severity,
+    preferExplicitWebhook: true,
     title: "Bank Export",
     description: input.status === "failed" ? "Bank export failed." : "Bank export completed.",
     fields: [
@@ -428,6 +432,7 @@ export const sendDiscordImportEvent = async (input: {
   await sendDiscordNotification({
     webhook: input.webhook,
     severity,
+    preferExplicitWebhook: true,
     title: "Bank Import",
     description: input.status === "failed" ? "Bank import failed." : "Bank import completed.",
     fields: [

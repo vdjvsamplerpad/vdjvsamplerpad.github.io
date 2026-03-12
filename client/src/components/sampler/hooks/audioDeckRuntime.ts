@@ -371,11 +371,15 @@ export class AudioDeckRuntime {
   }
 
   private buildChannelPadSnapshot(source: DeckPadSnapshot): DeckPadSnapshot {
-    const safeStartTimeMs = Number.isFinite(source.startTimeMs) ? Math.max(0, Number(source.startTimeMs)) : 0;
-    const safeEndTimeMs = Number.isFinite(source.endTimeMs) ? Math.max(0, Number(source.endTimeMs)) : 0;
+    // Channels intentionally ignore pad trim and always use the full source region.
+    const safeStartTimeMs = 0;
+    const safeEndTimeMs = 0;
     const safeAudioDurationMs = Number.isFinite(source.audioDurationMs)
       ? Math.max(0, Number(source.audioDurationMs))
-      : Math.max(safeEndTimeMs, safeStartTimeMs);
+      : Math.max(
+        Number.isFinite(source.endTimeMs) ? Math.max(0, Number(source.endTimeMs)) : 0,
+        Number.isFinite(source.startTimeMs) ? Math.max(0, Number(source.startTimeMs)) : 0
+      );
     const snapshot: DeckPadSnapshot = {
       ...source,
       padGainLinear: Number.isFinite(source.padGainLinear) ? source.padGainLinear : 1,

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Copy, Crown, Download, Loader2, Trash2 } from 'lucide-react';
+import { Copy, Crown, Download, Loader2, Trash2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -58,10 +58,12 @@ interface BankEditCoreFormProps {
   onSave: () => void;
   onShowDuplicateConfirm: () => void;
   onShowAdminExport: () => void;
+  onShowStoreUpdate: () => void;
   onExport: () => void;
   onDelete: () => void;
   onDuplicate?: () => Promise<void> | void;
   onExportAdmin?: (...args: any[]) => Promise<string>;
+  onUpdateStoreBank?: () => Promise<void> | void;
 }
 
 export function BankEditCoreForm({
@@ -103,12 +105,15 @@ export function BankEditCoreForm({
   onSave,
   onShowDuplicateConfirm,
   onShowAdminExport,
+  onShowStoreUpdate,
   onExport,
   onDelete,
   onDuplicate,
   onExportAdmin,
+  onUpdateStoreBank,
 }: BankEditCoreFormProps) {
   const canUseAdminExport = isAdmin && Boolean(onExportAdmin) && canAdminExportBankForSession(bank);
+  const canUseStoreUpdate = isAdmin && Boolean(onUpdateStoreBank) && Boolean(bank.bankMetadata?.catalogItemId);
   const canShowExportButton = canUseAdminExport || bank.exportable !== false;
 
   return (
@@ -342,7 +347,16 @@ export function BankEditCoreForm({
             <Copy className="w-4 h-4" />
           </Button>
         )}
-        {canShowExportButton && (
+        {canUseStoreUpdate ? (
+          <Button
+            onClick={onShowStoreUpdate}
+            variant="outline"
+            className="px-3"
+            title="Update Store Bank"
+          >
+            <Upload className="w-4 h-4" />
+          </Button>
+        ) : canShowExportButton && (
           <Button
             onClick={() => {
               if (canUseAdminExport) {
