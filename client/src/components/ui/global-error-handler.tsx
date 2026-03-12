@@ -2,6 +2,7 @@
 import { Button } from './button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './card';
 import { AlertTriangle, RefreshCw, Home, Bug, X } from 'lucide-react';
+import { forceFreshAppReload } from '@/lib/chunk-load-recovery';
 
 interface GlobalErrorHandlerProps {
   children: React.ReactNode;
@@ -73,7 +74,7 @@ export function GlobalErrorHandler({ children }: GlobalErrorHandlerProps) {
   };
 
   const handleReload = () => {
-    window.location.reload();
+    void forceFreshAppReload();
   };
 
   const handleGoHome = () => {

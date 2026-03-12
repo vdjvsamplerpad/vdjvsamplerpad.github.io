@@ -2,6 +2,7 @@
 import { Button } from './button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './card';
 import { AlertTriangle, RefreshCw, Home, Bug } from 'lucide-react';
+import { forceFreshAppReload } from '@/lib/chunk-load-recovery';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -79,7 +80,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   };
 
   private handleReload = () => {
-    window.location.reload();
+    void forceFreshAppReload();
   };
 
   private handleGoHome = () => {

@@ -2,6 +2,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
+import { clearChunkRecoveryAttempt, installChunkLoadRecovery } from '@/lib/chunk-load-recovery';
 import { isNativeCapacitorRuntime } from '@/lib/runtime-routes';
 
 function restoreSpaPathFromRedirect() {
@@ -140,9 +141,14 @@ function setupGlobalGestureGuards() {
 restoreSpaPathFromRedirect();
 applyPersistedThemeClass();
 setupGlobalGestureGuards();
+installChunkLoadRecovery();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>,
 );
+
+window.setTimeout(() => {
+  clearChunkRecoveryAttempt();
+}, 0);
