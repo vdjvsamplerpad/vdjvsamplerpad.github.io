@@ -641,14 +641,26 @@ export function SamplerDefaultsTab({
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
             <label className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${isDark ? 'border-gray-800 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
-              <Checkbox checked={config.uiDefaults.defaultHideShortcutLabels} onCheckedChange={(checked) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultHideShortcutLabels: checked === true } })} />
-              <span className="text-sm">Hide shortcut labels by default</span>
+              <Checkbox checked={config.uiDefaults.defaultKeyboardMappingEnabled} onCheckedChange={(checked) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultKeyboardMappingEnabled: checked === true } })} />
+              <span className="text-sm">Enable keyboard mapping by default</span>
             </label>
             <label className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${isDark ? 'border-gray-800 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
               <Checkbox checked={config.uiDefaults.defaultAutoPadBankMapping} onCheckedChange={(checked) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultAutoPadBankMapping: checked === true } })} />
               <span className="text-sm">Auto apply pad/bank mappings</span>
             </label>
           </div>
+          {config.uiDefaults.defaultKeyboardMappingEnabled ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${isDark ? 'border-gray-800 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+                <Checkbox checked={config.uiDefaults.defaultHideShortcutLabels} onCheckedChange={(checked) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultHideShortcutLabels: checked === true } })} />
+                <span className="text-sm">Hide shortcut labels by default</span>
+              </label>
+            </div>
+          ) : (
+            <div className={`rounded-lg border border-dashed px-3 py-2 text-xs ${isDark ? 'border-gray-800 bg-gray-950/20 text-gray-400' : 'border-gray-200 bg-gray-50 text-gray-600'}`}>
+              Shortcut labels stay hidden while keyboard mapping is disabled by default.
+            </div>
+          )}
         </div>
 
         <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
@@ -2490,7 +2502,7 @@ export function StoreConfigTab({
   return (
     <div className={`border rounded p-3 overflow-visible lg:h-full lg:min-h-0 lg:overflow-auto ${panelClass}`}>
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
-        <div className="space-y-5 max-w-4xl">
+        <div className="space-y-5">
           <div className={`rounded-2xl border p-4 space-y-4 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white/90'}`}>
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="space-y-1">
@@ -2529,38 +2541,44 @@ export function StoreConfigTab({
                 Core payment channels, pricing, QR, and store banner timing.
               </div>
             </div>
-            <div className="space-y-1"><Label>Store Instructions</Label>
-              <textarea value={storeConfig.instructions} onChange={(event) => onStoreConfigChange({ ...storeConfig, instructions: event.target.value })} className={`w-full min-h-[100px] rounded-md border p-2 text-sm outline-none resize-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`} placeholder="Instructions shown to users when buying banks..." />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1"><Label>GCash Number</Label><Input value={storeConfig.gcash_number} onChange={(event) => onStoreConfigChange({ ...storeConfig, gcash_number: event.target.value })} placeholder="09171234567" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>
-              <div className="space-y-1"><Label>Maya Number</Label><Input value={storeConfig.maya_number} onChange={(event) => onStoreConfigChange({ ...storeConfig, maya_number: event.target.value })} placeholder="09181234567" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label>Account Price (PHP)</Label>
-                <Input type="number" min={0} step="0.01" value={storeConfig.account_price_php} onChange={(event) => onStoreConfigChange({ ...storeConfig, account_price_php: event.target.value })} placeholder="e.g. 299.00" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />
-              </div>
-              <div className="space-y-1">
-                <Label>Banner Rotation (ms)</Label>
-                <Input type="number" min={3000} max={15000} step={500} value={storeConfig.banner_rotation_ms} onChange={(event) => onStoreConfigChange({ ...storeConfig, banner_rotation_ms: event.target.value })} placeholder="5000" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />
-                <div className={`text-[11px] ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
-                  Autoplay delay for the store banner slider. Allowed range: 3000 to 15000 ms.
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.95fr)] gap-4">
+              <div className="space-y-4">
+                <div className="space-y-1"><Label>Store Instructions</Label>
+                  <textarea value={storeConfig.instructions} onChange={(event) => onStoreConfigChange({ ...storeConfig, instructions: event.target.value })} className={`w-full min-h-[100px] rounded-md border p-2 text-sm outline-none resize-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`} placeholder="Instructions shown to users when buying banks..." />
+                </div>
+                <div className="space-y-1"><Label>FB Messenger URL</Label><Input value={storeConfig.messenger_url} onChange={(event) => onStoreConfigChange({ ...storeConfig, messenger_url: event.target.value })} placeholder="https://m.me/yourpage" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1"><Label>GCash Number</Label><Input value={storeConfig.gcash_number} onChange={(event) => onStoreConfigChange({ ...storeConfig, gcash_number: event.target.value })} placeholder="09171234567" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>
+                  <div className="space-y-1"><Label>Maya Number</Label><Input value={storeConfig.maya_number} onChange={(event) => onStoreConfigChange({ ...storeConfig, maya_number: event.target.value })} placeholder="09181234567" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>
                 </div>
               </div>
-            </div>
-            <div className="space-y-1"><Label>FB Messenger URL</Label><Input value={storeConfig.messenger_url} onChange={(event) => onStoreConfigChange({ ...storeConfig, messenger_url: event.target.value })} placeholder="https://m.me/yourpage" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>
-            <div className="space-y-1">
-              <Label>QR Payment Image</Label>
-              <div className="flex items-center gap-3">
-                {hasQrImage ? (
-                  <div className="flex flex-col gap-0.5 items-center">
-                    <img src={storeQrPreviewUrl || storeConfig.qr_image_path} alt="QR" className="w-14 h-14 rounded-md object-cover border bg-white" />
-                    <span className="text-[10px] opacity-50">{storeQrPreviewUrl ? 'New' : 'Current'}</span>
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label>Account Price (PHP)</Label>
+                    <Input type="number" min={0} step="0.01" value={storeConfig.account_price_php} onChange={(event) => onStoreConfigChange({ ...storeConfig, account_price_php: event.target.value })} placeholder="e.g. 299.00" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />
                   </div>
-                ) : <div className="w-14 h-14 rounded-md border-2 border-dashed flex items-center justify-center text-gray-400 text-xs">No QR</div>}
-                <div className="flex-1"><Input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif" onChange={onQrFileChange} disabled={loading} className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>
-                {hasQrImage && <Button size="sm" variant="outline" onClick={onRemoveQr} className="shrink-0 text-red-500">Remove</Button>}
+                  <div className="space-y-1">
+                    <Label>Banner Rotation (ms)</Label>
+                    <Input type="number" min={3000} max={15000} step={500} value={storeConfig.banner_rotation_ms} onChange={(event) => onStoreConfigChange({ ...storeConfig, banner_rotation_ms: event.target.value })} placeholder="5000" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />
+                    <div className={`text-[11px] ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
+                      Autoplay delay for the store banner slider. Allowed range: 3000 to 15000 ms.
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Label>QR Payment Image</Label>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    {hasQrImage ? (
+                      <div className="flex flex-col gap-0.5 items-center">
+                        <img src={storeQrPreviewUrl || storeConfig.qr_image_path} alt="QR" className="w-20 h-20 rounded-md object-cover border bg-white" />
+                        <span className="text-[10px] opacity-50">{storeQrPreviewUrl ? 'New' : 'Current'}</span>
+                      </div>
+                    ) : <div className="w-20 h-20 rounded-md border-2 border-dashed flex items-center justify-center text-gray-400 text-xs">No QR</div>}
+                    <div className="flex-1"><Input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif" onChange={onQrFileChange} disabled={loading} className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>
+                    {hasQrImage && <Button size="sm" variant="outline" onClick={onRemoveQr} className="shrink-0 text-red-500">Remove</Button>}
+                  </div>
+                </div>
               </div>
             </div>
           </div>

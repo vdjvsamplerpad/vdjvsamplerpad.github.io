@@ -14,6 +14,7 @@ export interface SamplerAppConfig {
     defaultMasterVolume: number;
     defaultStopMode: StopMode;
     defaultSidePanelMode: 'overlay' | 'reflow';
+    defaultKeyboardMappingEnabled: boolean;
     defaultHideShortcutLabels: boolean;
     defaultAutoPadBankMapping: boolean;
     defaultGraphicsProfile: GraphicsProfile;
@@ -72,6 +73,7 @@ export const DEFAULT_SAMPLER_APP_CONFIG: SamplerAppConfig = {
     defaultMasterVolume: 1,
     defaultStopMode: 'instant',
     defaultSidePanelMode: 'overlay',
+    defaultKeyboardMappingEnabled: false,
     defaultHideShortcutLabels: true,
     defaultAutoPadBankMapping: true,
     defaultGraphicsProfile: 'auto',
@@ -166,6 +168,7 @@ export const normalizeSamplerAppConfig = (value: unknown): SamplerAppConfig => {
       defaultMasterVolume: clampFloat(uiRaw.defaultMasterVolume, DEFAULT_SAMPLER_APP_CONFIG.uiDefaults.defaultMasterVolume, 0, 1),
       defaultStopMode: normalizeStopMode(uiRaw.defaultStopMode),
       defaultSidePanelMode: uiRaw.defaultSidePanelMode === 'reflow' ? 'reflow' : 'overlay',
+      defaultKeyboardMappingEnabled: normalizeBoolean(uiRaw.defaultKeyboardMappingEnabled, DEFAULT_SAMPLER_APP_CONFIG.uiDefaults.defaultKeyboardMappingEnabled),
       defaultHideShortcutLabels: normalizeBoolean(uiRaw.defaultHideShortcutLabels, DEFAULT_SAMPLER_APP_CONFIG.uiDefaults.defaultHideShortcutLabels),
       defaultAutoPadBankMapping: normalizeBoolean(uiRaw.defaultAutoPadBankMapping, DEFAULT_SAMPLER_APP_CONFIG.uiDefaults.defaultAutoPadBankMapping),
       defaultGraphicsProfile: normalizeGraphicsProfile(uiRaw.defaultGraphicsProfile),

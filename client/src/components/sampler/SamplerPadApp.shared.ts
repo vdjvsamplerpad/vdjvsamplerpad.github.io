@@ -20,6 +20,8 @@ export interface AppSettings {
   defaultTriggerMode: PadData['triggerMode'];
   padSizePortrait: number;
   padSizeLandscape: number;
+  keyboardMappingEnabled: boolean;
+  keyboardMappingVisibilityInitialized: boolean;
   hideShortcutLabels: boolean;
   autoPadBankMapping: boolean;
   midiEnabled: boolean;
@@ -158,6 +160,8 @@ export const createDefaultSettings = (
   defaultTriggerMode: config.padDefaults.defaultTriggerMode,
   padSizePortrait: config.uiDefaults.defaultPadSizePortrait,
   padSizeLandscape: config.uiDefaults.defaultPadSizeLandscape,
+  keyboardMappingEnabled: config.uiDefaults.defaultKeyboardMappingEnabled,
+  keyboardMappingVisibilityInitialized: config.uiDefaults.defaultKeyboardMappingEnabled,
   hideShortcutLabels: config.uiDefaults.defaultHideShortcutLabels,
   autoPadBankMapping: config.uiDefaults.defaultAutoPadBankMapping,
   midiEnabled: false,

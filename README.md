@@ -59,10 +59,10 @@ This repository powers the live web app, Android builds through Capacitor, and W
   <a href="https://www.facebook.com/PWOSoundSystem">
     <img src="https://img.shields.io/badge/Facebook%20Page-1877F2?style=for-the-badge&logo=facebook&logoColor=white" alt="Facebook Page">
   </a>
-  <a href="https://www.facebook.com/groups/pwosoundsystem/">
+  <a href="https://www.facebook.com/share/g/14esJ28V16J/">
     <img src="https://img.shields.io/badge/Facebook%20Group-0866FF?style=for-the-badge&logo=facebook&logoColor=white" alt="Facebook Group">
   </a>
-  <a href="https://www.youtube.com/@PWOSoundSystem">
+  <a href="https://www.youtube.com/@powerworkout563">
     <img src="https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube">
   </a>
   <a href="https://www.instagram.com/vdjvsamplerpad">
@@ -70,7 +70,6 @@ This repository powers the live web app, Android builds through Capacitor, and W
   </a>
 </p>
 
-> Update the social URLs above if your final public handles use different paths.
 
 ## 🍎 iOS Add To Home Screen
 

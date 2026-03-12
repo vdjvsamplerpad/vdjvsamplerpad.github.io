@@ -2100,6 +2100,25 @@ export function SamplerPadApp() {
   const activeHoldKeysRef = React.useRef<Map<string, string>>(new Map());
   const lastSelectedBankIdRef = React.useRef<string | null>(null);
 
+  const handleToggleKeyboardMappingEnabled = React.useCallback((enabled: boolean) => {
+    if (!enabled) {
+      activeHoldKeysRef.current.forEach((padId) => {
+        playbackManager.triggerHoldStop(padId);
+      });
+      activeHoldKeysRef.current.clear();
+    }
+    setSettings((prev) => ({
+      ...prev,
+      keyboardMappingEnabled: enabled,
+      keyboardMappingVisibilityInitialized: enabled
+        ? true
+        : prev.keyboardMappingVisibilityInitialized,
+      hideShortcutLabels: enabled && !prev.keyboardMappingVisibilityInitialized
+        ? true
+        : prev.hideShortcutLabels,
+    }));
+  }, [playbackManager]);
+
   React.useEffect(() => {
     if (!isDualMode && currentBankId) {
       lastSelectedBankIdRef.current = currentBankId;
@@ -2359,6 +2378,7 @@ export function SamplerPadApp() {
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (!settings.keyboardMappingEnabled) return;
       if (event.defaultPrevented) return;
       if (isEditableTarget(event.target)) return;
 
@@ -2594,6 +2614,7 @@ export function SamplerPadApp() {
     };
 
     const handleKeyUp = (event: KeyboardEvent) => {
+      if (!settings.keyboardMappingEnabled) return;
       if (event.defaultPrevented) return;
       if (isEditableTarget(event.target)) return;
 
@@ -2659,6 +2680,7 @@ export function SamplerPadApp() {
     handleBankShortcut,
     primaryBankId,
     secondaryBankId,
+    settings.keyboardMappingEnabled,
     requestEditPad,
     requestEditBank
   ]);
@@ -3279,6 +3301,7 @@ export function SamplerPadApp() {
   const layoutSizeClass = `h-[100dvh] box-border overflow-hidden ${layoutSafeAreaClass}`;
   const shouldLockPadInteractionForMixer = settings.mixerOpen && isPortraitOrSmallScreen;
   const padInteractionLockClass = shouldLockPadInteractionForMixer ? 'pointer-events-none touch-none select-none' : '';
+  const effectiveHideShortcutLabels = !settings.keyboardMappingEnabled || settings.hideShortcutLabels;
 
   const sideMenuProps = {
     open: settings.sideMenuOpen,
@@ -3310,7 +3333,7 @@ export function SamplerPadApp() {
     blockedMidiNotes,
     blockedMidiCCs,
     editBankRequest,
-    hideShortcutLabels: settings.hideShortcutLabels,
+    hideShortcutLabels: effectiveHideShortcutLabels,
     graphicsTier: effectiveGraphicsTier,
     onRequestRestoreBackup: handleRestoreBackupPrompt,
     onRequestRecoverBankFiles: handleRecoverBankPrompt,
@@ -3408,6 +3431,8 @@ export function SamplerPadApp() {
     padBankMidiNotes,
     padBankMidiCCs,
     midiNoteAssignments,
+    keyboardMappingEnabled: settings.keyboardMappingEnabled,
+    onToggleKeyboardMappingEnabled: handleToggleKeyboardMappingEnabled,
     hideShortcutLabels: settings.hideShortcutLabels,
     onToggleHideShortcutLabels: handleToggleHideShortcutLabels,
     autoPadBankMapping: settings.autoPadBankMapping,
@@ -3489,7 +3514,7 @@ export function SamplerPadApp() {
         onTransferPad={handleTransferPad}
         canTransferFromBank={canTransferFromBank}
         midiEnabled={midi.enabled && midi.accessGranted}
-        hideShortcutLabels={settings.hideShortcutLabels}
+        hideShortcutLabels={effectiveHideShortcutLabels}
         highlightedPadTarget={highlightedPadTarget}
         graphicsTier={effectiveGraphicsTier}
         editRequest={editRequest}

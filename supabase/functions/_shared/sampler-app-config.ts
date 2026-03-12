@@ -49,6 +49,7 @@ export const DEFAULT_SAMPLER_APP_CONFIG = {
     defaultMasterVolume: 1,
     defaultStopMode: "instant" as SamplerStopMode,
     defaultSidePanelMode: "overlay" as "overlay" | "reflow",
+    defaultKeyboardMappingEnabled: false,
     defaultHideShortcutLabels: true,
     defaultAutoPadBankMapping: true,
     defaultGraphicsProfile: "auto" as SamplerGraphicsProfile,
@@ -176,6 +177,10 @@ export const normalizeSamplerAppConfig = (value: unknown) => {
       ),
       defaultStopMode: normalizeStopMode(uiRaw.defaultStopMode),
       defaultSidePanelMode: uiRaw.defaultSidePanelMode === "reflow" ? "reflow" : "overlay",
+      defaultKeyboardMappingEnabled: normalizeBoolean(
+        uiRaw.defaultKeyboardMappingEnabled,
+        DEFAULT_SAMPLER_APP_CONFIG.uiDefaults.defaultKeyboardMappingEnabled,
+      ),
       defaultHideShortcutLabels: normalizeBoolean(
         uiRaw.defaultHideShortcutLabels,
         DEFAULT_SAMPLER_APP_CONFIG.uiDefaults.defaultHideShortcutLabels,

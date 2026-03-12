@@ -73,6 +73,8 @@ interface HeaderControlsProps {
   padBankMidiNotes: Set<number>;
   padBankMidiCCs: Set<number>;
   midiNoteAssignments: Array<{ note: number; type: 'pad' | 'bank'; bankName: string; padName?: string }>;
+  keyboardMappingEnabled: boolean;
+  onToggleKeyboardMappingEnabled: (enabled: boolean) => void;
   hideShortcutLabels: boolean;
   onToggleHideShortcutLabels: (hide: boolean) => void;
   autoPadBankMapping: boolean;
@@ -241,6 +243,8 @@ export function HeaderControls({
   padBankMidiNotes,
   padBankMidiCCs,
   midiNoteAssignments,
+  keyboardMappingEnabled,
+  onToggleKeyboardMappingEnabled,
   hideShortcutLabels,
   onToggleHideShortcutLabels,
   autoPadBankMapping,
@@ -717,6 +721,8 @@ export function HeaderControls({
             padBankMidiNotes={padBankMidiNotes}
             padBankMidiCCs={padBankMidiCCs}
             midiNoteAssignments={midiNoteAssignments}
+            keyboardMappingEnabled={keyboardMappingEnabled}
+            onToggleKeyboardMappingEnabled={onToggleKeyboardMappingEnabled}
             hideShortcutLabels={hideShortcutLabels}
             onToggleHideShortcutLabels={onToggleHideShortcutLabels}
             autoPadBankMapping={autoPadBankMapping}

@@ -68,6 +68,8 @@ interface AboutDialogProps {
   padBankMidiNotes: Set<number>;
   padBankMidiCCs: Set<number>;
   midiNoteAssignments: Array<{ note: number; type: 'pad' | 'bank'; bankName: string; padName?: string }>;
+  keyboardMappingEnabled: boolean;
+  onToggleKeyboardMappingEnabled: (enabled: boolean) => void;
   hideShortcutLabels: boolean;
   onToggleHideShortcutLabels: (hide: boolean) => void;
   autoPadBankMapping: boolean;
@@ -139,6 +141,8 @@ export function AboutDialog({
   padBankMidiNotes,
   padBankMidiCCs,
   midiNoteAssignments,
+  keyboardMappingEnabled,
+  onToggleKeyboardMappingEnabled,
   hideShortcutLabels,
   onToggleHideShortcutLabels,
   autoPadBankMapping,
@@ -1099,11 +1103,25 @@ export function AboutDialog({
                 )}
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-0.5">
-                    <Label className="text-xs font-medium">Hide Keyboard Shortcut</Label>
-                    <p className="text-[10px] text-gray-500">Hide key labels on pad buttons for a cleaner look.</p>
+                    <Label className="text-xs font-medium">Enable Keyboard Mapping</Label>
+                    <p className="text-[10px] text-gray-500">Turn on keyboard-triggered bank, pad, and system mappings.</p>
                   </div>
-                  <Switch checked={hideShortcutLabels} onCheckedChange={onToggleHideShortcutLabels} />
+                  <Switch checked={keyboardMappingEnabled} onCheckedChange={onToggleKeyboardMappingEnabled} />
                 </div>
+                {keyboardMappingEnabled && (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <Label className="text-xs font-medium">Hide Keyboard Shortcut</Label>
+                      <p className="text-[10px] text-gray-500">Hide key labels on pad buttons for a cleaner look.</p>
+                    </div>
+                    <Switch checked={hideShortcutLabels} onCheckedChange={onToggleHideShortcutLabels} />
+                  </div>
+                )}
+                {!keyboardMappingEnabled && (
+                  <div className="rounded-md border border-dashed px-3 py-2 text-[11px] text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                    Keyboard shortcut labels stay hidden while keyboard mapping is disabled.
+                  </div>
+                )}
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-0.5">
                     <Label className="text-xs font-medium">Auto Pad & Bank Mapping</Label>
