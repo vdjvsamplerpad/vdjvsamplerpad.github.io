@@ -78,7 +78,7 @@ export function GlobalErrorHandler({ children }: GlobalErrorHandlerProps) {
   };
 
   const handleGoHome = () => {
-    window.location.href = '/';
+    window.location.href = '/vdjv';
   };
 
   const handleReportBug = () => {

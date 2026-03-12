@@ -84,7 +84,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   };
 
   private handleGoHome = () => {
-    window.location.href = '/';
+    window.location.href = '/vdjv';
   };
 
   private handleReportBug = () => {
@@ -113,7 +113,7 @@ ${errorData.componentStack}
 Please describe what you were doing when this error occurred:
 `;
 
-    const mailtoLink = `mailto:support@vdjv.com?subject=Error Report ${errorData.errorId}&body=${encodeURIComponent(body)}`;
+    const mailtoLink = `mailto:vdjvsamplerpad@gmail.com?subject=Error Report ${errorData.errorId}&body=${encodeURIComponent(body)}`;
     window.open(mailtoLink);
   };
 
