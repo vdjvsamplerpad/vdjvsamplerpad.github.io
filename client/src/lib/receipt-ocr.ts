@@ -65,12 +65,12 @@ const detectReferenceNo = (rawText: string): string | null => {
 
   for (const line of lines) {
     if (!keywordRegex.test(line)) continue
-    const matches = line.toUpperCase().match(tokenRegex) || []
+    const matches: string[] = line.toUpperCase().match(tokenRegex) ?? []
     const picked = matches.find((token) => /\d/.test(token) && token.length >= 6)
     if (picked) return picked
   }
 
-  const allMatches = rawText.toUpperCase().match(tokenRegex) || []
+  const allMatches: string[] = rawText.toUpperCase().match(tokenRegex) ?? []
   const scored = allMatches
     .filter((token) => /\d/.test(token))
     .filter((token) => token.length >= 8)
