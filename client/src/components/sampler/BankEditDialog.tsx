@@ -13,7 +13,8 @@ import { BankEditUpdateStoreDialog } from './BankEditUpdateStoreDialog';
 import { BankEditCoreForm } from './BankEditCoreForm';
 import { bankColorOptions, formatBankEditDate } from './bankEdit.shared';
 import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
-import { prepareManagedImageUpload, validateManagedImageFile } from '@/lib/image-upload';
+import { validateManagedImageFile } from '@/lib/image-upload';
+import { deleteBlobFromDB, saveBlobToDB } from './hooks/useSamplerStore.idbStorage';
 import type { UpdateStoreBankInput } from './hooks/useSamplerStore.types';
 
 interface BankEditDialogProps {
@@ -29,7 +30,11 @@ interface BankEditDialogProps {
   onExport: () => void;
   onClearPadShortcuts?: () => void;
   onClearPadMidi?: () => void;
-  onAdminThumbnailChange?: (thumbnailUrl?: string) => void | Promise<void>;
+  onAdminThumbnailChange?: (thumbnail?: {
+    thumbnailUrl?: string;
+    thumbnailStorageKey?: string;
+    thumbnailBackend?: 'native' | 'idb';
+  }) => void | Promise<void>;
   onExportAdmin?: (
     id: string,
     title: string,
@@ -158,7 +163,7 @@ export function BankEditDialog({
       setDuplicateError('');
       setShowDiscardConfirm(false);
     }
-  }, [open, bank]);
+  }, [open, bank.id]);
 
   React.useEffect(() => {
     if (!adminThumbnailFile) {
@@ -366,92 +371,8 @@ export function BankEditDialog({
     setShowDeleteConfirm(false);
   };
 
-  const isTransientStorageError = (error: unknown): boolean => {
-    const text = (error instanceof Error ? `${error.name} ${error.message}` : String(error || '')).toLowerCase();
-    return (
-      text.includes('network') ||
-      text.includes('timeout') ||
-      text.includes('temporar') ||
-      text.includes('429') ||
-      text.includes('500') ||
-      text.includes('502') ||
-      text.includes('503') ||
-      text.includes('fetch') ||
-      text.includes('jwt expired') ||
-      text.includes('session')
-    );
-  };
-
   const validateThumbnailFile = (file: File): string | null => {
     return validateManagedImageFile(file, 'thumbnail');
-  };
-
-  const extractOwnedBankThumbnailPath = React.useCallback((value: string | null | undefined): string | null => {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (!normalized) return null;
-    try {
-      const parsed = new URL(normalized, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
-      const publicPrefix = `/storage/v1/object/public/store-assets/`;
-      const renderPrefix = `/storage/v1/render/image/public/store-assets/`;
-      const marker = parsed.pathname.includes(publicPrefix)
-        ? publicPrefix
-        : parsed.pathname.includes(renderPrefix)
-          ? renderPrefix
-          : null;
-      if (!marker) return null;
-      const objectPath = decodeURIComponent(parsed.pathname.slice(parsed.pathname.indexOf(marker) + marker.length)).replace(/^\/+/, '');
-      const ownedPrefix = `bank-thumbnails/${bank.id}/`;
-      if (!objectPath.startsWith(ownedPrefix)) return null;
-      return objectPath;
-    } catch {
-      return null;
-    }
-  }, [bank.id]);
-
-  const removeOwnedBankThumbnail = React.useCallback(async (value: string | null | undefined): Promise<void> => {
-    const objectPath = extractOwnedBankThumbnailPath(value);
-    if (!objectPath) return;
-    const { supabase } = await import('@/lib/supabase');
-    const { error } = await supabase.storage.from('store-assets').remove([objectPath]);
-    if (!error) return;
-    const message = String(error.message || '');
-    if (/not found|does not exist|no such object/i.test(message)) return;
-    throw error instanceof Error ? error : new Error(message || 'Failed to remove thumbnail.');
-  }, [extractOwnedBankThumbnailPath]);
-
-  const uploadAdminThumbnail = async (file: File): Promise<{ objectPath: string; publicUrl: string }> => {
-    const { supabase } = await import('@/lib/supabase');
-    const sessionResult = await supabase.auth.getSession();
-    if (!sessionResult.data.session) {
-      throw new Error('Your session expired. Please sign in again.');
-    }
-
-    const preparedFile = await prepareManagedImageUpload(file, 'thumbnail');
-    const ext = (preparedFile.name.split('.').pop() || 'webp').toLowerCase();
-    const suffix = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
-      ? crypto.randomUUID().slice(0, 8)
-      : Math.random().toString(36).slice(2, 10);
-    const objectPath = `bank-thumbnails/${bank.id}/${Date.now()}-${suffix}.${ext}`;
-
-    let lastError: unknown = null;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const { error } = await supabase.storage
-        .from('store-assets')
-        .upload(objectPath, preparedFile, { upsert: false, cacheControl: '3600' });
-      if (!error) {
-        const {
-          data: { publicUrl }
-        } = supabase.storage.from('store-assets').getPublicUrl(objectPath);
-        return { objectPath, publicUrl };
-      }
-      lastError = error;
-      if (attempt === 0 && isTransientStorageError(error)) {
-        await supabase.auth.getSession();
-        continue;
-      }
-      break;
-    }
-    throw lastError instanceof Error ? lastError : new Error(String(lastError || 'Thumbnail upload failed.'));
   };
 
   const handleThumbnailUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -470,35 +391,24 @@ export function BankEditDialog({
 
     setAdminThumbnailFile(file);
     setAdminThumbnailUploading(true);
-    setAdminThumbnailNotice('Uploading thumbnail...');
+    setAdminThumbnailNotice('Saving thumbnail locally...');
 
-    const latestStoredThumbnail = bank.bankMetadata?.thumbnailUrl;
-    let uploaded: { objectPath: string; publicUrl: string } | null = null;
+    const storageId = `image_bank-thumbnail-${bank.id}`;
+    const previewUrl = URL.createObjectURL(file);
     try {
-      uploaded = await uploadAdminThumbnail(file);
-      await onAdminThumbnailChange(uploaded.publicUrl);
-      if (latestStoredThumbnail && latestStoredThumbnail !== uploaded.publicUrl) {
-        try {
-          await removeOwnedBankThumbnail(latestStoredThumbnail);
-        } catch (cleanupError) {
-          setAdminThumbnailNotice(
-            cleanupError instanceof Error
-              ? `Thumbnail saved. Previous thumbnail cleanup failed: ${cleanupError.message}`
-              : 'Thumbnail saved. Previous thumbnail cleanup failed.'
-          );
-          setAdminThumbnailFile(null);
-          return;
-        }
-      }
-      setAdminThumbnailNotice('Thumbnail saved.');
+      await saveBlobToDB(storageId, file, true);
+      await onAdminThumbnailChange({
+        thumbnailUrl: previewUrl,
+        thumbnailStorageKey: storageId,
+        thumbnailBackend: 'idb',
+      });
+      setAdminThumbnailNotice('Thumbnail saved locally. It will upload only during store export or store update.');
       setAdminThumbnailFile(null);
     } catch (thumbnailError) {
-      if (uploaded?.publicUrl) {
-        await removeOwnedBankThumbnail(uploaded.publicUrl).catch(() => undefined);
-      }
+      URL.revokeObjectURL(previewUrl);
       setAdminThumbnailFile(null);
       setAdminThumbnailError(
-        thumbnailError instanceof Error ? thumbnailError.message : 'Thumbnail upload failed.'
+        thumbnailError instanceof Error ? thumbnailError.message : 'Thumbnail save failed.'
       );
       setAdminThumbnailNotice('');
     } finally {
@@ -508,13 +418,12 @@ export function BankEditDialog({
 
   const handleThumbnailRemove = async () => {
     if (!isAdmin || !onAdminThumbnailChange || adminThumbnailUploading) return;
-    const previousThumbnailUrl = bank.bankMetadata?.thumbnailUrl;
     setAdminThumbnailFile(null);
     setAdminThumbnailError('');
     setAdminThumbnailNotice('');
-    await onAdminThumbnailChange(undefined);
     try {
-      await removeOwnedBankThumbnail(previousThumbnailUrl);
+      await deleteBlobFromDB(`image_bank-thumbnail-${bank.id}`, true);
+      await onAdminThumbnailChange(undefined);
     } catch (cleanupError) {
       setAdminThumbnailError(
         cleanupError instanceof Error
@@ -523,9 +432,7 @@ export function BankEditDialog({
       );
       return;
     }
-    if (previousThumbnailUrl) {
-      setAdminThumbnailNotice('Thumbnail removed.');
-    }
+    setAdminThumbnailNotice('Thumbnail removed.');
   };
 
   const handleAdminExport = async () => {

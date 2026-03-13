@@ -44,7 +44,10 @@ import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig, type SamplerAppC
 import {
   buildPadSearchAnchorId,
   getSamplerSearchScopeOptions,
+  normalizeSamplerSearchKeywordText,
+  normalizeSamplerSearchKeywords,
   normalizeSamplerSearchToken,
+  type SamplerBankSearchResult,
   type SamplerSearchResult,
   type SamplerSearchScope,
 } from './samplerSearch';
@@ -223,9 +226,57 @@ const getTriggerWarmPriority = (mode: PadData['triggerMode']): number => {
   return 3;
 };
 
+const normalizeSearchLocatorHex = (value: string | undefined, fallback = '#22d3ee'): string => {
+  if (!value) return fallback;
+  const trimmed = value.trim();
+  const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;
+  if (!/^[0-9a-fA-F]{6}$/.test(body)) return fallback;
+  return `#${body.toLowerCase()}`;
+};
+
+const searchLocatorRgb = (hex: string): string => {
+  const normalized = normalizeSearchLocatorHex(hex).slice(1);
+  return `${parseInt(normalized.slice(0, 2), 16)} ${parseInt(normalized.slice(2, 4), 16)} ${parseInt(normalized.slice(4, 6), 16)}`;
+};
+
 type PendingSearchPadScroll = {
   bankId: string;
   padId: string;
+  padName: string;
+};
+
+type SearchLocatorState = {
+  key: number;
+  label: string;
+  colorHex: string;
+  colorRgb: string;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  durationMs: number;
+  phase: 'start' | 'travel' | 'fade';
+  tier: PerformanceTier;
+};
+
+type SearchSpotlightState = {
+  key: number;
+  x: number;
+  y: number;
+  colorRgb: string;
+  tier: PerformanceTier;
+};
+
+type AdminPadColorPaintState = {
+  color: string;
+};
+
+type AdminPadColorPaintHistoryEntry = {
+  bankId: string;
+  padId: string;
+  padName: string;
+  previousColor: string;
+  nextColor: string;
 };
 
 export function SamplerPadApp() {
@@ -451,6 +502,12 @@ export function SamplerPadApp() {
   const [pendingSearchLoadPicker, setPendingSearchLoadPicker] = React.useState<SamplerSearchResult | null>(null);
   const [pendingSearchPadScroll, setPendingSearchPadScroll] = React.useState<PendingSearchPadScroll | null>(null);
   const [highlightedPadTarget, setHighlightedPadTarget] = React.useState<PendingSearchPadScroll | null>(null);
+  const [adminPadColorPaint, setAdminPadColorPaint] = React.useState<AdminPadColorPaintState | null>(null);
+  const [lastAdminPadColorPaintChange, setLastAdminPadColorPaintChange] = React.useState<AdminPadColorPaintHistoryEntry | null>(null);
+  const [searchLocator, setSearchLocator] = React.useState<SearchLocatorState | null>(null);
+  const [searchSpotlight, setSearchSpotlight] = React.useState<SearchSpotlightState | null>(null);
+  const searchLocatorTimersRef = React.useRef<number[]>([]);
+  const searchLocatorFrameRef = React.useRef<number | null>(null);
   const searchScopeOptions = React.useMemo(() => getSamplerSearchScopeOptions(isDualMode), [isDualMode]);
   React.useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -470,6 +527,12 @@ export function SamplerPadApp() {
     }
   }, [isDualMode, searchScope]);
   const [armedLoadChannelId, setArmedLoadChannelId] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    if (!adminPadColorPaint) return;
+    if (!canUseAdminExport || !settings.editMode || searchOpen || armedLoadChannelId !== null) {
+      setAdminPadColorPaint(null);
+    }
+  }, [adminPadColorPaint, armedLoadChannelId, canUseAdminExport, searchOpen, settings.editMode]);
   const [pendingChannelLoadConfirm, setPendingChannelLoadConfirm] = React.useState<{
     channelId: number;
     pad: PadData;
@@ -1185,31 +1248,57 @@ export function SamplerPadApp() {
       });
     });
   }, [banks, effectiveAuthUser]);
+  const flattenedSearchBanks = React.useMemo<SamplerBankSearchResult[]>(() => {
+    return banks.map((bank) => ({
+      key: `bank-${bank.id}`,
+      bankId: bank.id,
+      bankName: bank.name,
+      bankDescription: typeof bank.bankMetadata?.description === 'string' ? bank.bankMetadata.description.trim() : '',
+      bankOrder: typeof bank.sortOrder === 'number' ? bank.sortOrder : 0,
+      padCount: Array.isArray(bank.pads) ? bank.pads.length : 0,
+      bankNameToken: normalizeSamplerSearchToken(bank.name),
+      bankDescriptionToken: normalizeSamplerSearchKeywordText(bank.bankMetadata?.description),
+      bankDescriptionKeywords: normalizeSamplerSearchKeywords(bank.bankMetadata?.description),
+      bankColor: bank.defaultColor || bank.bankMetadata?.color || '#3b82f6',
+      thumbnailUrl: bank.bankMetadata?.thumbnailUrl || bank.bankMetadata?.remoteSnapshotThumbnailUrl || undefined,
+      hideThumbnailPreview: Boolean(bank.bankMetadata?.hideThumbnailPreview),
+    }));
+  }, [banks]);
   const searchResultsState = React.useMemo(() => {
     const queryToken = normalizeSamplerSearchToken(debouncedSearchQuery);
-    const filteredByScope = flattenedSearchPads.filter((result) => {
+    const queryKeywords = normalizeSamplerSearchKeywords(debouncedSearchQuery);
+    const matchesScope = (bankId: string): boolean => {
       if (searchScope === 'current_bank') {
-        return Boolean(singleSearchBankId) && result.bankId === singleSearchBankId;
+        return Boolean(singleSearchBankId) && bankId === singleSearchBankId;
       }
       if (searchScope === 'visible_banks') {
-        return visibleSearchBankIds.has(result.bankId);
+        return visibleSearchBankIds.has(bankId);
       }
       if (searchScope === 'primary_bank') {
-        return Boolean(primaryBankId) && result.bankId === primaryBankId;
+        return Boolean(primaryBankId) && bankId === primaryBankId;
       }
       if (searchScope === 'secondary_bank') {
-        return Boolean(secondaryBankId) && result.bankId === secondaryBankId;
+        return Boolean(secondaryBankId) && bankId === secondaryBankId;
       }
       return true;
-    });
+    };
 
-    const filteredByQuery = queryToken
-      ? filteredByScope.filter((result) => {
+    const filteredPadsByScope = flattenedSearchPads.filter((result) => matchesScope(result.bankId));
+    const filteredBanksByScope = flattenedSearchBanks.filter((result) => matchesScope(result.bankId));
+
+    const filteredPadsByQuery = queryToken
+      ? filteredPadsByScope.filter((result) => {
           return result.padNameToken.includes(queryToken) || result.bankNameToken.includes(queryToken);
         })
-      : filteredByScope;
+      : filteredPadsByScope;
+    const filteredBanksByQuery = queryToken
+      ? filteredBanksByScope.filter((result) => (
+          result.bankNameToken.includes(queryToken) ||
+          (queryKeywords.length > 0 && queryKeywords.every((keyword) => result.bankDescriptionKeywords.includes(keyword)))
+        ))
+      : filteredBanksByScope;
 
-    const ranked = [...filteredByQuery].sort((left, right) => {
+    const rankedPads = [...filteredPadsByQuery].sort((left, right) => {
       const leftPadIndex = queryToken ? left.padNameToken.indexOf(queryToken) : -1;
       const rightPadIndex = queryToken ? right.padNameToken.indexOf(queryToken) : -1;
       const leftBankIndex = queryToken ? left.bankNameToken.indexOf(queryToken) : -1;
@@ -1225,12 +1314,38 @@ export function SamplerPadApp() {
       if (left.padOrder !== right.padOrder) return left.padOrder - right.padOrder;
       return left.padName.localeCompare(right.padName, undefined, { sensitivity: 'base' });
     });
+    const rankedBanks = [...filteredBanksByQuery].sort((left, right) => {
+      const leftNameIndex = queryToken ? left.bankNameToken.indexOf(queryToken) : -1;
+      const rightNameIndex = queryToken ? right.bankNameToken.indexOf(queryToken) : -1;
+      const leftDescriptionIndex = queryKeywords.length > 0
+        ? Math.min(...queryKeywords.map((keyword) => {
+            const index = left.bankDescriptionToken.indexOf(keyword);
+            return index >= 0 ? index : 1000;
+          }))
+        : -1;
+      const rightDescriptionIndex = queryKeywords.length > 0
+        ? Math.min(...queryKeywords.map((keyword) => {
+            const index = right.bankDescriptionToken.indexOf(keyword);
+            return index >= 0 ? index : 1000;
+          }))
+        : -1;
+      const leftScore = queryToken
+        ? Math.min(leftNameIndex >= 0 ? leftNameIndex : 1000, leftDescriptionIndex >= 0 ? leftDescriptionIndex + 120 : 1000)
+        : 0;
+      const rightScore = queryToken
+        ? Math.min(rightNameIndex >= 0 ? rightNameIndex : 1000, rightDescriptionIndex >= 0 ? rightDescriptionIndex + 120 : 1000)
+        : 0;
+      if (leftScore !== rightScore) return leftScore - rightScore;
+      if (left.bankOrder !== right.bankOrder) return left.bankOrder - right.bankOrder;
+      return left.bankName.localeCompare(right.bankName, undefined, { sensitivity: 'base' });
+    });
 
     return {
-      total: ranked.length,
-      results: ranked.slice(0, SEARCH_RESULT_LIMIT),
+      total: rankedBanks.length + rankedPads.length,
+      bankResults: rankedBanks.slice(0, Math.min(12, SEARCH_RESULT_LIMIT)),
+      padResults: rankedPads.slice(0, SEARCH_RESULT_LIMIT),
     };
-  }, [debouncedSearchQuery, flattenedSearchPads, primaryBankId, searchScope, secondaryBankId, singleSearchBankId, visibleSearchBankIds]);
+  }, [debouncedSearchQuery, flattenedSearchBanks, flattenedSearchPads, primaryBankId, searchScope, secondaryBankId, singleSearchBankId, visibleSearchBankIds]);
 
   const handleRestoreAudio = React.useCallback(() => {
     playbackManager.preUnlockAudio().catch((unlockError) => {
@@ -1740,6 +1855,26 @@ export function SamplerPadApp() {
     setSearchLoadError(null);
   }, []);
 
+  const clearSearchLocator = React.useCallback(() => {
+    searchLocatorTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+    searchLocatorTimersRef.current = [];
+    if (searchLocatorFrameRef.current !== null) {
+      window.cancelAnimationFrame(searchLocatorFrameRef.current);
+      searchLocatorFrameRef.current = null;
+    }
+    setSearchLocator(null);
+    setSearchSpotlight(null);
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      searchLocatorTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+      if (searchLocatorFrameRef.current !== null) {
+        window.cancelAnimationFrame(searchLocatorFrameRef.current);
+      }
+    };
+  }, []);
+
   const toggleSearchOverlay = React.useCallback(() => {
     setSearchOpen((prev) => {
       const next = !prev;
@@ -1783,6 +1918,7 @@ export function SamplerPadApp() {
   const handleSearchGo = React.useCallback((result: SamplerSearchResult) => {
     setSearchLoadError(null);
     setPendingSearchLoadPicker(null);
+    clearSearchLocator();
 
     if (isDualMode) {
       if (searchScope === 'primary_bank') {
@@ -1797,13 +1933,41 @@ export function SamplerPadApp() {
       setCurrentBank(result.bankId);
     }
 
-    setPendingSearchPadScroll({ bankId: result.bankId, padId: result.padId });
-    setHighlightedPadTarget({ bankId: result.bankId, padId: result.padId });
+    setPendingSearchPadScroll({ bankId: result.bankId, padId: result.padId, padName: result.padName });
+    setHighlightedPadTarget(null);
     closeSearchOverlay();
-  }, [closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
+  }, [clearSearchLocator, closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
+  const handleSearchOpenBank = React.useCallback((
+    result: SamplerBankSearchResult,
+    target: 'auto' | 'primary' | 'secondary' = 'auto'
+  ) => {
+    setSearchLoadError(null);
+    setPendingSearchLoadPicker(null);
+    clearSearchLocator();
+
+    if (isDualMode) {
+      if (target === 'primary') {
+        setPrimaryBank(result.bankId);
+      } else if (target === 'secondary') {
+        setSecondaryBank(result.bankId);
+      } else if (searchScope === 'primary_bank') {
+        setPrimaryBank(result.bankId);
+      } else if (searchScope === 'secondary_bank') {
+        setSecondaryBank(result.bankId);
+      } else if (!visibleSearchBankIds.has(result.bankId)) {
+        setSearchLoadError('Choose Primary or Secondary to open a bank outside the current dual-bank view.');
+        return;
+      }
+    } else {
+      setCurrentBank(result.bankId);
+    }
+
+    closeSearchOverlay();
+  }, [clearSearchLocator, closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
   const handleSearchEdit = React.useCallback((result: SamplerSearchResult) => {
     setSearchLoadError(null);
     setPendingSearchLoadPicker(null);
+    clearSearchLocator();
 
     if (isDualMode) {
       if (searchScope === 'primary_bank') {
@@ -1818,11 +1982,11 @@ export function SamplerPadApp() {
       setCurrentBank(result.bankId);
     }
 
-    setPendingSearchPadScroll({ bankId: result.bankId, padId: result.padId });
-    setHighlightedPadTarget({ bankId: result.bankId, padId: result.padId });
+    setPendingSearchPadScroll({ bankId: result.bankId, padId: result.padId, padName: result.padName });
+    setHighlightedPadTarget(null);
     setEditRequest({ padId: result.padId, token: Date.now() });
     closeSearchOverlay();
-  }, [closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
+  }, [clearSearchLocator, closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
 
   const runSearchLoad = React.useCallback(async (result: SamplerSearchResult, channelId: number): Promise<boolean> => {
     if (!result.canLoad) {
@@ -1881,6 +2045,64 @@ export function SamplerPadApp() {
     void runSearchLoad(pendingSearchLoadPicker, channelId);
   }, [pendingSearchLoadPicker, runSearchLoad]);
 
+  const launchSearchLocator = React.useCallback((targetEl: HTMLElement, target: PendingSearchPadScroll) => {
+    const isMotionOff = typeof document !== 'undefined' && document.documentElement.classList.contains('motion-off');
+    clearSearchLocator();
+    const targetBank = banks.find((entry) => entry.id === target.bankId);
+    const colorHex = normalizeSearchLocatorHex(targetBank?.defaultColor, '#22d3ee');
+    const nextKey = Date.now() + Math.floor(Math.random() * 1000);
+    const rect = targetEl.getBoundingClientRect();
+    const spotlightX = rect.left + rect.width / 2;
+    const spotlightY = rect.top + rect.height / 2;
+    setSearchSpotlight({
+      key: nextKey,
+      x: spotlightX,
+      y: spotlightY,
+      colorRgb: searchLocatorRgb(colorHex),
+      tier: effectiveGraphicsTier,
+    });
+    if (effectiveGraphicsTier === 'lowest' || isMotionOff) {
+      setHighlightedPadTarget(target);
+      searchLocatorTimersRef.current.push(window.setTimeout(() => {
+        setSearchSpotlight((current) => current?.key === nextKey ? null : current);
+      }, SEARCH_HIGHLIGHT_CLEAR_MS));
+      return;
+    }
+    const durationMs = effectiveGraphicsTier === 'high' ? 620 : effectiveGraphicsTier === 'medium' ? 520 : 420;
+    const nextState: SearchLocatorState = {
+      key: nextKey,
+      label: target.padName,
+      colorHex,
+      colorRgb: searchLocatorRgb(colorHex),
+      startX: window.innerWidth / 2,
+      startY: window.innerHeight / 2,
+      endX: rect.left + rect.width / 2,
+      endY: rect.top + rect.height / 2,
+      durationMs,
+      phase: 'start',
+      tier: effectiveGraphicsTier,
+    };
+    setSearchLocator(nextState);
+
+    searchLocatorFrameRef.current = window.requestAnimationFrame(() => {
+      setSearchLocator((current) => current?.key === nextKey ? { ...current, phase: 'travel' } : current);
+      searchLocatorFrameRef.current = null;
+    });
+
+    searchLocatorTimersRef.current.push(window.setTimeout(() => {
+      setHighlightedPadTarget(target);
+      setSearchLocator((current) => current?.key === nextKey ? { ...current, phase: 'fade' } : current);
+    }, Math.max(220, durationMs - 40)));
+
+    searchLocatorTimersRef.current.push(window.setTimeout(() => {
+      setSearchLocator((current) => current?.key === nextKey ? null : current);
+    }, durationMs + 220));
+
+    searchLocatorTimersRef.current.push(window.setTimeout(() => {
+      setSearchSpotlight((current) => current?.key === nextKey ? null : current);
+    }, durationMs + 520));
+  }, [banks, clearSearchLocator, effectiveGraphicsTier]);
+
   React.useEffect(() => {
     if (!pendingSearchPadScroll) return;
     const isVisible =
@@ -1891,14 +2113,56 @@ export function SamplerPadApp() {
     let cancelled = false;
     let attempt = 0;
     const anchorId = buildPadSearchAnchorId(pendingSearchPadScroll.bankId, pendingSearchPadScroll.padId);
+    let settleFrameId: number | null = null;
 
     const tryScroll = () => {
       if (cancelled) return;
       const element = document.getElementById(anchorId);
       if (element) {
         element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-        setHighlightedPadTarget(pendingSearchPadScroll);
-        setPendingSearchPadScroll(null);
+        const settleStart = window.performance.now();
+        let stableFrames = 0;
+        let settleAttempts = 0;
+        let previousRect: DOMRect | null = null;
+        let previousScrollY = window.scrollY;
+        let previousScrollX = window.scrollX;
+        const settleAndLaunch = () => {
+          if (cancelled) return;
+          const settledElement = document.getElementById(anchorId) as HTMLElement | null;
+          if (!settledElement) {
+            setPendingSearchPadScroll(null);
+            return;
+          }
+          const rect = settledElement.getBoundingClientRect();
+          const scrollStable =
+            Math.abs(window.scrollY - previousScrollY) < 1 &&
+            Math.abs(window.scrollX - previousScrollX) < 1;
+          const rectStable = Boolean(
+            previousRect &&
+            Math.abs(rect.left - previousRect.left) < 1 &&
+            Math.abs(rect.top - previousRect.top) < 1
+          );
+          if (scrollStable && rectStable) {
+            stableFrames += 1;
+          } else {
+            stableFrames = 0;
+          }
+          previousRect = rect;
+          previousScrollY = window.scrollY;
+          previousScrollX = window.scrollX;
+          settleAttempts += 1;
+          const elapsed = window.performance.now() - settleStart;
+          if ((elapsed >= 180 && stableFrames >= 4) || elapsed >= 520 || settleAttempts >= 28) {
+            launchSearchLocator(settledElement, pendingSearchPadScroll);
+            setPendingSearchPadScroll(null);
+            return;
+          }
+          settleFrameId = window.requestAnimationFrame(settleAndLaunch);
+        };
+        window.setTimeout(() => {
+          if (cancelled) return;
+          settleFrameId = window.requestAnimationFrame(settleAndLaunch);
+        }, 120);
         return;
       }
       attempt += 1;
@@ -1912,8 +2176,11 @@ export function SamplerPadApp() {
     window.requestAnimationFrame(tryScroll);
     return () => {
       cancelled = true;
+      if (settleFrameId !== null) {
+        window.cancelAnimationFrame(settleFrameId);
+      }
     };
-  }, [currentBankId, isDualMode, pendingSearchPadScroll, primaryBankId, secondaryBankId]);
+  }, [currentBankId, isDualMode, launchSearchLocator, pendingSearchPadScroll, primaryBankId, secondaryBankId]);
 
   React.useEffect(() => {
     if (!highlightedPadTarget) return;
@@ -1993,23 +2260,23 @@ export function SamplerPadApp() {
     deleteBank(bankId);
   }, [banks, playbackManager, deleteBank]);
 
-  // Handle pad updates with error handling
-  const handleUpdatePad = React.useCallback(
-    async (bankId: string, id: string, updatedPad: any) => {
+  const persistPadUpdate = React.useCallback(
+    async (preferredBankId: string, id: string, updatedPad: Partial<PadData>) => {
       try {
-        // Look for the pad across all banks, in case bankId is stale
-        let targetBank = banks.find(b => b.pads.some(p => p.id === id));
+        let targetBank = banks.find((bank) => bank.id === preferredBankId && bank.pads.some((pad) => pad.id === id));
+        if (!targetBank) {
+          targetBank = banks.find((bank) => bank.pads.some((pad) => pad.id === id));
+        }
         if (!targetBank) {
           throw new Error('Pad not found');
         }
 
-        const currentPad = targetBank.pads.find(p => p.id === id);
+        const currentPad = targetBank.pads.find((pad) => pad.id === id);
         if (!currentPad) {
           throw new Error('Pad not found');
         }
 
-        // Merge updated fields with existing pad
-        const mergedPad = {
+        const mergedPad: PadData = {
           ...currentPad,
           ...updatedPad,
           imageData:
@@ -2023,6 +2290,7 @@ export function SamplerPadApp() {
         };
 
         await updatePad(targetBank.id, id, mergedPad);
+        return { ok: true as const, bankId: targetBank.id, currentPad };
       } catch (error) {
         if (error instanceof Error) {
           setError(error.message);
@@ -2030,10 +2298,52 @@ export function SamplerPadApp() {
           setError('Failed to update pad. Please try again.');
         }
         setShowErrorDialog(true);
+        return { ok: false as const };
       }
     },
     [banks, updatePad]
   );
+
+  // Handle pad updates with error handling
+  const handleUpdatePad = React.useCallback(
+    async (bankId: string, id: string, updatedPad: Partial<PadData>) => {
+      await persistPadUpdate(bankId, id, updatedPad);
+    },
+    [persistPadUpdate]
+  );
+
+  const handleStartAdminPadColorPaint = React.useCallback((color: string) => {
+    setAdminPadColorPaint({ color });
+  }, []);
+
+  const handleStopAdminPadColorPaint = React.useCallback(() => {
+    setAdminPadColorPaint(null);
+  }, []);
+
+  const handleAdminPadColorPaint = React.useCallback(async (bankId: string, pad: PadData) => {
+    if (!canUseAdminExport || !settings.editMode || !adminPadColorPaint) return;
+    if (pad.color === adminPadColorPaint.color) return;
+    const result = await persistPadUpdate(bankId, pad.id, { color: adminPadColorPaint.color });
+    if (!result.ok) return;
+    setLastAdminPadColorPaintChange({
+      bankId: result.bankId,
+      padId: pad.id,
+      padName: pad.name,
+      previousColor: pad.color,
+      nextColor: adminPadColorPaint.color,
+    });
+  }, [adminPadColorPaint, canUseAdminExport, persistPadUpdate, settings.editMode]);
+
+  const handleUndoAdminPadColorPaint = React.useCallback(async () => {
+    if (!lastAdminPadColorPaintChange) return;
+    const result = await persistPadUpdate(
+      lastAdminPadColorPaintChange.bankId,
+      lastAdminPadColorPaintChange.padId,
+      { color: lastAdminPadColorPaintChange.previousColor }
+    );
+    if (!result.ok) return;
+    setLastAdminPadColorPaintChange(null);
+  }, [lastAdminPadColorPaintChange, persistPadUpdate]);
 
   const saveBankScroll = React.useCallback((bankId: string | null, scrollTop: number) => {
     if (!bankId) return;
@@ -3385,6 +3695,9 @@ export function SamplerPadApp() {
     mixerOpen: settings.mixerOpen,
     searchOpen,
     channelLoadArmed: armedLoadChannelId !== null,
+    adminPadColorPaintActive: Boolean(adminPadColorPaint),
+    adminPadColorPaintColor: adminPadColorPaint?.color || null,
+    adminPadColorPaintCanUndo: lastAdminPadColorPaintChange !== null,
     theme,
     windowWidth,
     onFileUpload: handleFileUpload,
@@ -3400,6 +3713,9 @@ export function SamplerPadApp() {
     onToggleMixer: () => handleMixerToggle(!settings.mixerOpen),
     onToggleSearch: toggleSearchOverlay,
     onCancelChannelLoad: handleCancelChannelLoadFromHeader,
+    onStartAdminPadColorPaint: handleStartAdminPadColorPaint,
+    onStopAdminPadColorPaint: handleStopAdminPadColorPaint,
+    onUndoAdminPadColorPaint: handleUndoAdminPadColorPaint,
     onToggleTheme: toggleTheme,
     onExitDualMode: () => setPrimaryBank(null),
     onPadSizeChange: handlePadSizeChange,
@@ -3517,6 +3833,8 @@ export function SamplerPadApp() {
         canTransferFromBank={canTransferFromBank}
         midiEnabled={midi.enabled && midi.accessGranted}
         hideShortcutLabels={effectiveHideShortcutLabels}
+        adminPadColorPaintActive={Boolean(adminPadColorPaint)}
+        onAdminPadColorPaint={handleAdminPadColorPaint}
         highlightedPadTarget={highlightedPadTarget}
         graphicsTier={effectiveGraphicsTier}
         editRequest={editRequest}
@@ -3564,6 +3882,52 @@ export function SamplerPadApp() {
         onErrorClose={handleErrorClose}
       />
 
+      {searchLocator ? (
+        <div className="pointer-events-none fixed inset-0 z-[130] overflow-hidden" aria-hidden="true">
+          <div
+            className={`sampler-search-locator sampler-search-locator-${searchLocator.tier}`}
+            style={{
+              left: `${searchLocator.phase === 'start' ? searchLocator.startX : searchLocator.endX}px`,
+              top: `${searchLocator.phase === 'start' ? searchLocator.startY : searchLocator.endY}px`,
+              opacity: searchLocator.phase === 'fade' ? 0 : 1,
+              transform: `translate(-50%, -50%) scale(${
+                searchLocator.phase === 'start'
+                  ? (searchLocator.tier === 'high' ? 1.14 : 1.08)
+                  : searchLocator.phase === 'travel'
+                    ? (searchLocator.tier === 'high' ? 0.76 : searchLocator.tier === 'medium' ? 0.8 : 0.84)
+                    : 0.58
+              })`,
+              transitionProperty: 'left, top, transform, opacity',
+              transitionDuration: `${searchLocator.durationMs}ms, ${searchLocator.durationMs}ms, ${Math.max(220, Math.round(searchLocator.durationMs * 0.9))}ms, 180ms`,
+              transitionTimingFunction: 'cubic-bezier(0.18, 0.82, 0.2, 1)',
+              ['--sampler-search-locator-rgb' as string]: searchLocator.colorRgb,
+              ['--sampler-search-locator-color' as string]: searchLocator.colorHex,
+            }}
+          >
+            <div className="sampler-search-locator-core">
+              <span className="sampler-search-locator-label">
+                {searchLocator.label}
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {searchSpotlight ? (
+        <div
+          className={`pointer-events-none fixed inset-0 z-[128] overflow-hidden sampler-search-spotlight sampler-search-spotlight-${searchSpotlight.tier}`}
+          aria-hidden="true"
+          style={{
+            ['--sampler-search-spotlight-x' as string]: `${searchSpotlight.x}px`,
+            ['--sampler-search-spotlight-y' as string]: `${searchSpotlight.y}px`,
+            ['--sampler-search-spotlight-rgb' as string]: searchSpotlight.colorRgb,
+          }}
+        >
+          <div className="sampler-search-spotlight-dim" />
+          <div className="sampler-search-spotlight-core" />
+        </div>
+      ) : null}
+
       <SamplerSearchOverlay
         open={searchOpen}
         onOpenChange={(open) => {
@@ -3579,12 +3943,16 @@ export function SamplerPadApp() {
         scope={searchScope}
         scopeOptions={searchScopeOptions}
         onScopeChange={setSearchScope}
-        results={searchResultsState.results}
+        bankResults={searchResultsState.bankResults}
+        padResults={searchResultsState.padResults}
         totalMatchCount={searchResultsState.total}
         onGo={handleSearchGo}
+        onOpenBank={handleSearchOpenBank}
         onEdit={handleSearchEdit}
         onLoad={handleSearchLoad}
         showEditAction={settings.editMode}
+        isDualMode={isDualMode}
+        graphicsTier={effectiveGraphicsTier}
         loadTargetSelection={pendingSearchLoadPicker}
         channelStates={channelStates}
         armedLoadChannelId={armedLoadChannelId}

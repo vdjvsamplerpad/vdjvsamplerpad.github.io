@@ -41,6 +41,12 @@ const STORE_BUTTON_CONFETTI = [
   { key: 'c5', className: '-top-3 right-8 bg-fuchsia-300', delay: '420ms', duration: '2.5s', drift: '-10px', rotate: '28deg' },
 ];
 
+const withAlpha = (hex: string, alphaHex: string): string => {
+  const normalized = hex.trim().replace('#', '');
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return hex;
+  return `#${normalized}${alphaHex}`;
+};
+
 interface SideMenuProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -247,6 +253,7 @@ export function SideMenu({
   }, []);
 
   const isHighGraphics = graphicsTier === 'high';
+  const isLowGraphics = graphicsTier === 'low';
   const isMediumGraphics = graphicsTier === 'medium';
   const showEnhancedStoreButton = isHighGraphics;
   const storeButtonMotionStyle = showEnhancedStoreButton
@@ -1021,6 +1028,13 @@ export function SideMenu({
     const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
     return luminance > 0.5 ? '#000000' : '#ffffff';
   };
+  const getBackgroundLuminance = (backgroundColor: string) => {
+    const hex = backgroundColor.replace('#', '');
+    const r = parseInt(hex.substr(0, 2), 16);
+    const g = parseInt(hex.substr(2, 2), 16);
+    const b = parseInt(hex.substr(4, 2), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  };
 
   const canAcceptDrop = (bankId: string) => true;
 
@@ -1142,7 +1156,7 @@ export function SideMenu({
                   <>
                     <div
                       aria-hidden="true"
-                      className={`pointer-events-none absolute inset-0 -z-10 rounded-xl blur-md opacity-80 animate-pulse ${theme === 'dark'
+                      className={`pointer-events-none absolute inset-0 -z-10 rounded-xl blur-md opacity-65 animate-pulse ${theme === 'dark'
                         ? 'bg-gradient-to-r from-fuchsia-500/55 via-indigo-400/55 to-cyan-400/55'
                         : 'bg-gradient-to-r from-fuchsia-300/65 via-indigo-300/65 to-cyan-300/65'
                         }`}
@@ -1165,7 +1179,7 @@ export function SideMenu({
                 )}
                 <Button
                   onClick={() => setShowStoreDialog(true)}
-                  className={`relative min-w-0 w-full px-2 sm:px-3 text-[13px] sm:text-sm gap-0 transition-all duration-200 ${showEnhancedStoreButton ? 'shadow-[0_0_18px_rgba(99,102,241,0.35)] hover:scale-[1.02]' : ''} ${theme === 'dark'
+                  className={`relative min-w-0 w-full px-2 sm:px-3 text-[13px] sm:text-sm gap-0 transition-all duration-200 ${showEnhancedStoreButton ? 'shadow-[0_0_14px_rgba(99,102,241,0.26)]' : ''} ${theme === 'dark'
                     ? 'bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500'
                     : 'bg-indigo-50 border-indigo-300 text-indigo-700 hover:bg-indigo-100'
                     }`}
@@ -1243,37 +1257,67 @@ export function SideMenu({
                 const isActive = !isPreview && (isPrimary || isSecondary || isCurrent);
                 const isDragOver = !isPreview && dragOverBankId === bankId;
                 const bankShortcutLabel = !isPreview ? normalizeStoredShortcutKey(bank?.shortcutKey) : undefined;
-                const shouldUseBankColorText = (!isActive || isLowestGraphics)
-                  && !(thumbnailUrl && !isActive && !isLowestGraphics && !isMediumGraphics);
-                const isHighThumbnailCard = isHighGraphics && !isActive && !isLowestGraphics && !!thumbnailUrl;
+                const isHighThumbnailCard = isHighGraphics && !isActive && !!thumbnailUrl;
+                const isMediumGradientCard = isMediumGraphics && !isActive && !!thumbnailUrl;
+                const bankColorLuminance = getBackgroundLuminance(bankColor);
+                const isLightFlatBankColor = !thumbnailUrl && bankColorLuminance > 0.88;
+                const shouldUseBankColorText = !isActive && !isHighThumbnailCard && !isMediumGradientCard;
                 const bankTextColorStyle = shouldUseBankColorText
                   ? { color: getTextColorForBackground(bankColor) }
                   : undefined;
                 const highThumbnailTextStyle = isHighThumbnailCard
-                  ? { color: '#ffffff', textShadow: '0 1px 2px rgba(0, 0, 0, 0.75)' }
+                  ? { color: '#ffffff', textShadow: '0 2px 6px rgba(0, 0, 0, 0.92)' }
                   : undefined;
+                const highReadableBankTextStyle = isHighGraphics && isHighThumbnailCard
+                  ? { textShadow: '0 2px 6px rgba(0, 0, 0, 0.88)' }
+                  : undefined;
+                const resolvedBankTextStyle = {
+                  ...(isHighThumbnailCard ? highThumbnailTextStyle : bankTextColorStyle),
+                  ...(highReadableBankTextStyle || {}),
+                };
+                const bankCardSpacingClass = isHighGraphics
+                  ? 'p-2.5 rounded-xl'
+                  : isLowestGraphics
+                    ? 'p-1.5 rounded-md'
+                    : 'p-2 rounded-lg';
+                const bankTitleClass = isHighGraphics ? 'font-semibold text-[15px]' : 'font-medium text-sm';
+                const bankMetaClass = isHighGraphics ? 'text-[11px] opacity-85' : 'text-xs opacity-75';
+                const bankActionButtonClass = isHighGraphics ? 'p-1.5 h-7 w-7' : 'p-1 h-6 w-6';
+                const bankOrderButtonClass = isHighGraphics ? 'p-0 h-4 w-5' : 'p-0 h-3 w-4';
+                const bankShortcutChipClass = isHighGraphics
+                  ? 'max-w-[76px] rounded px-2 py-1 text-[10px]'
+                  : 'max-w-[64px] rounded px-2 py-0.5 text-[10px]';
                 const inactiveBankCardStyle = !isActive
                   ? {
-                    backgroundColor: bankColor,
-                    borderColor: bankColor,
+                    backgroundColor: isLowestGraphics
+                      ? withAlpha(bankColor, theme === 'dark' ? 'CC' : 'D9')
+                      : isLowGraphics
+                        ? withAlpha(bankColor, theme === 'dark' ? 'B8' : 'CC')
+                        : bankColor,
+                    borderColor: withAlpha(bankColor, theme === 'dark' ? 'EE' : 'D9'),
                     ...(isHighGraphics
                       ? {
-                        boxShadow: `inset 0 0 0 3px ${bankColor}`,
+                        boxShadow: `inset 0 0 0 2px ${withAlpha(bankColor, 'CC')}`,
                       }
                       : {}),
-                    ...(thumbnailUrl
-                      ? isMediumGraphics
-                        ? {
-                          backgroundImage: `linear-gradient(to right, transparent 0%, ${bankColor} 70%), url(${thumbnailUrl})`,
-                          backgroundSize: 'cover, cover',
-                          backgroundPosition: 'center, left center',
-                        }
-                        : {
-                          backgroundImage: `url(${thumbnailUrl})`,
-                          backgroundSize: 'cover',
-                          backgroundPosition: 'center',
-                        }
+                    ...(isLightFlatBankColor && theme === 'light'
+                      ? {
+                        boxShadow: `${isHighGraphics ? 'inset 0 0 0 2px rgba(148,163,184,0.55)' : 'inset 0 0 0 1.5px rgba(148,163,184,0.48)'}, 0 1px 0 rgba(15,23,42,0.04)`,
+                      }
                       : {}),
+                    ...(isMediumGradientCard
+                      ? {
+                        backgroundImage: `linear-gradient(to right, ${withAlpha(bankColor, theme === 'dark' ? 'F0' : 'E6')} 0%, ${withAlpha(bankColor, theme === 'dark' ? 'B8' : '99')} 34%, transparent 78%), url(${thumbnailUrl})`,
+                        backgroundSize: 'cover, cover',
+                        backgroundPosition: 'center, right center',
+                      }
+                      : isHighThumbnailCard
+                        ? {
+                          backgroundImage: `linear-gradient(to right, ${withAlpha(bankColor, 'F2')} 0%, ${withAlpha(bankColor, 'AA')} 32%, transparent 76%), url(${thumbnailUrl})`,
+                          backgroundSize: 'cover, cover',
+                          backgroundPosition: 'center, center',
+                        }
+                        : {}),
                   }
                   : undefined;
                 const activeLabel = isPrimary ? 'PRIMARY' : isSecondary ? 'SECONDARY' : isCurrent ? 'CURRENT' : null;
@@ -1310,7 +1354,7 @@ export function SideMenu({
                     ? '#a855f7'
                     : isCurrent
                       ? '#22c55e'
-                      : bankColor;
+                      : withAlpha(bankColor, 'E6');
                 const handleBankSelect = () => {
                   if (isPreview) {
                     handlePreviewBankInteraction(`Please sign in to open "${bankName}".`);
@@ -1330,11 +1374,16 @@ export function SideMenu({
                 return (
                   <div
                     key={isPreview ? `preview:${preview?.catalogItemId || bankId}` : bankId}
-                    className={`p-2 rounded-lg border-[1.5px] ${isLowestGraphics ? 'transition-none' : 'transition-all duration-200'} relative overflow-hidden ${isDragOver
+                    className={`${bankCardSpacingClass} border-[1.5px] ${isLowestGraphics ? 'transition-none' : 'transition-all duration-200'} relative overflow-hidden ${isDragOver
                       ? 'ring-4 ring-orange-400 scale-[1.02] bg-orange-200'
                       : ''
                       } ${isLowestGraphics
-                        ? 'cursor-pointer'
+                        ? (isActive
+                          ? theme === 'dark'
+                            ? 'cursor-pointer bg-slate-900/95 text-white shadow-[0_10px_24px_-18px_rgba(15,23,42,0.95)]'
+                            : 'cursor-pointer bg-white text-gray-900 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.35)]'
+                          : 'cursor-pointer'
+                        )
                         : isActive
                         ? activeAccentClass
                         : theme === 'dark'
@@ -1343,7 +1392,9 @@ export function SideMenu({
                       }`}
                     style={isLowestGraphics
                       ? {
-                        backgroundColor: bankColor,
+                        backgroundColor: isActive
+                          ? undefined
+                          : withAlpha(bankColor, theme === 'dark' ? 'CC' : 'D9'),
                         borderColor: lowestAccentBorder,
                         borderWidth: isActive ? '2px' : undefined,
                         boxShadow: isActive ? `inset 0 0 0 2px ${lowestAccentBorder}` : undefined,
@@ -1387,14 +1438,23 @@ export function SideMenu({
                             </span>
                           </div>
                         )}
-                        <h3 className="font-medium text-sm truncate" title={bankName} style={isHighThumbnailCard ? highThumbnailTextStyle : bankTextColorStyle}>
+                        <h3 className={`${bankTitleClass} truncate`} title={bankName} style={resolvedBankTextStyle}>
                           {bankName.length > 15 ? `${bankName.substring(0, 15)}...` : bankName}
                         </h3>
                         {!isPreview && (
                           <div className="mt-0.5 flex flex-wrap items-center gap-1">
-                            <p className="text-xs opacity-75" style={isHighThumbnailCard ? highThumbnailTextStyle : bankTextColorStyle}>
+                            <p className={bankMetaClass} style={resolvedBankTextStyle}>
                               {bank?.pads.length || 0} pad{bank?.pads.length !== 1 ? 's' : ''}
                             </p>
+                            {bankShortcutLabel && !hideShortcutLabels && (
+                              <span
+                                className={`${bankShortcutChipClass} ml-auto font-semibold uppercase tracking-wide truncate text-right ${isHighThumbnailCard ? 'bg-black/45' : 'bg-black/20'}`}
+                                style={resolvedBankTextStyle}
+                                title={bankShortcutLabel}
+                              >
+                                {bankShortcutLabel}
+                              </span>
+                            )}
                             {restoreStatus === 'needs_download' && (
                               <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${theme === 'dark'
                                 ? 'bg-indigo-500/15 text-indigo-200'
@@ -1429,7 +1489,7 @@ export function SideMenu({
                                 style={{ width: `${normalizeProgress(snapshotTransfer.progress)}%` }}
                               />
                             </div>
-                            <p className="text-[10px] opacity-80" style={isHighThumbnailCard ? highThumbnailTextStyle : bankTextColorStyle}>
+                            <p className="text-[10px] opacity-80" style={resolvedBankTextStyle}>
                               {snapshotTransfer.phase === 'importing'
                                 ? `Importing ${normalizeProgress(snapshotTransfer.progress)}%`
                                 : snapshotTransfer.phase === 'downloading'
@@ -1439,15 +1499,6 @@ export function SideMenu({
                           </div>
                         )}
                       </div>
-                      {bankShortcutLabel && !hideShortcutLabels && (
-                        <span
-                          className={`max-w-[64px] shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide truncate ${isHighThumbnailCard ? 'bg-black/45' : 'bg-black/20'}`}
-                          style={isHighThumbnailCard ? highThumbnailTextStyle : bankTextColorStyle}
-                          title={bankShortcutLabel}
-                        >
-                          {bankShortcutLabel}
-                        </span>
-                      )}
                       <div className="flex items-center gap-1 shrink-0">
                         <div className="flex flex-col gap-0">
                           <Button
@@ -1462,7 +1513,7 @@ export function SideMenu({
                               onMoveBankUp(bankId);
                             }}
                             disabled={!isPreview && !canMoveUp(bankId)}
-                            className={`p-0 h-3 w-4 transition-all duration-200 ${isHighThumbnailCard
+                            className={`${bankOrderButtonClass} transition-all duration-200 ${isHighThumbnailCard
                               ? 'text-white/85 hover:text-white hover:bg-black/35 disabled:text-white/30'
                               : theme === 'dark'
                                 ? 'text-gray-400 hover:text-white hover:bg-gray-600 disabled:text-gray-600'
@@ -1470,7 +1521,7 @@ export function SideMenu({
                               }`}
                             title="Move up"
                           >
-                            <ChevronUp className="w-3 h-3" />
+                            <ChevronUp className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
                           </Button>
                           <Button
                             variant="ghost"
@@ -1484,7 +1535,7 @@ export function SideMenu({
                               onMoveBankDown(bankId);
                             }}
                             disabled={!isPreview && !canMoveDown(bankId)}
-                            className={`p-0 h-3 w-4 transition-all duration-200 ${isHighThumbnailCard
+                            className={`${bankOrderButtonClass} transition-all duration-200 ${isHighThumbnailCard
                               ? 'text-white/85 hover:text-white hover:bg-black/35 disabled:text-white/30'
                               : theme === 'dark'
                                 ? 'text-gray-400 hover:text-white hover:bg-gray-600 disabled:text-gray-600'
@@ -1492,7 +1543,7 @@ export function SideMenu({
                               }`}
                             title="Move down"
                           >
-                            <ChevronDown className="w-3 h-3" />
+                            <ChevronDown className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
                           </Button>
                         </div>
 
@@ -1512,7 +1563,7 @@ export function SideMenu({
                               handlePrimaryClick(bankId);
                             }}
                           disabled={!isPreview && bankId === secondaryBankId}
-                          className={`p-1 h-6 w-6 transition-all duration-200 ${isPrimary
+                          className={`${bankActionButtonClass} transition-all duration-200 ${isPrimary
                             ? theme === 'dark'
                               ? 'bg-yellow-500 text-yellow-300 hover:bg-yellow-400'
                               : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
@@ -1524,7 +1575,7 @@ export function SideMenu({
                             }`}
                           title={isPrimary ? 'Primary (click to exit dual mode)' : 'Set as Primary'}
                         >
-                          <Crown className="w-3 h-3" />
+                          <Crown className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
                         </Button>
 
                         <Button
@@ -1546,14 +1597,14 @@ export function SideMenu({
                               }
                               if (bank) handleEditBank(bank);
                             }}
-                          className={`p-1 h-6 w-6 transition-all duration-200 ${isHighThumbnailCard
+                          className={`${bankActionButtonClass} transition-all duration-200 ${isHighThumbnailCard
                             ? 'text-white/85 hover:text-white hover:bg-black/35'
                             : theme === 'dark'
                               ? 'text-gray-400 hover:text-white hover:bg-gray-600'
                               : 'text-gray-600 hover:text-gray-900 hover:bg-white'
                             }`}
                         >
-                          <Settings className="w-3 h-3" />
+                          <Settings className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
                         </Button>
                       </div>
                     </div>
@@ -1764,29 +1815,43 @@ export function SideMenu({
             } : undefined}
             onExportAdmin={onExportAdmin}
             onUpdateStoreBank={onUpdateStoreBank}
-            onAdminThumbnailChange={profile?.role === 'admin' ? async (thumbnailUrl?: string) => {
+            onAdminThumbnailChange={profile?.role === 'admin' ? async (thumbnail) => {
               const latestBank = banks.find((bank) => bank.id === editingBank.id);
               if (!latestBank) return;
               const currentMetadata = latestBank.bankMetadata;
-              if (!thumbnailUrl && !currentMetadata?.thumbnailUrl) return;
+              const nextThumbnailUrl = thumbnail?.thumbnailUrl;
+              if (!nextThumbnailUrl && !currentMetadata?.thumbnailUrl && !currentMetadata?.thumbnailStorageKey) return;
+
+              const previousBlobUrl = currentMetadata?.thumbnailUrl;
+              if (
+                previousBlobUrl &&
+                previousBlobUrl.startsWith('blob:') &&
+                previousBlobUrl !== nextThumbnailUrl
+              ) {
+                try { URL.revokeObjectURL(previousBlobUrl); } catch {}
+              }
 
               if (currentMetadata) {
                 onUpdateBank(latestBank.id, {
                   bankMetadata: {
                     ...currentMetadata,
-                    thumbnailUrl: thumbnailUrl || undefined,
+                    thumbnailUrl: nextThumbnailUrl || undefined,
+                    thumbnailStorageKey: thumbnail?.thumbnailStorageKey,
+                    thumbnailBackend: thumbnail?.thumbnailBackend,
                   }
                 });
                 return;
               }
 
-              if (thumbnailUrl) {
+              if (nextThumbnailUrl) {
                 onUpdateBank(latestBank.id, {
                   bankMetadata: {
                     password: false,
                     transferable: typeof latestBank.transferable === 'boolean' ? latestBank.transferable : true,
                     exportable: latestBank.exportable,
-                    thumbnailUrl,
+                    thumbnailUrl: nextThumbnailUrl,
+                    thumbnailStorageKey: thumbnail?.thumbnailStorageKey,
+                    thumbnailBackend: thumbnail?.thumbnailBackend,
                   }
                 });
               }

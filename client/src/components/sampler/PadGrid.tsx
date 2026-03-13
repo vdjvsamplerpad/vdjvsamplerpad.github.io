@@ -48,6 +48,8 @@ export interface PadGridProps {
   blockedMidiNotes?: Set<number>;
   blockedMidiCCs?: Set<number>;
   hideShortcutLabel?: boolean;
+  adminPadColorPaintActive?: boolean;
+  onAdminPadColorPaint?: (bankId: string, pad: PadData) => void | Promise<void>;
   graphicsTier?: import('@/lib/performance-monitor').PerformanceTier;
   editRequest?: { padId: string; token: number } | null;
   channelLoadArmed?: boolean;
@@ -86,6 +88,8 @@ export const PadGrid = React.memo(function PadGrid({
   blockedMidiNotes,
   blockedMidiCCs,
   hideShortcutLabel = false,
+  adminPadColorPaintActive = false,
+  onAdminPadColorPaint,
   graphicsTier = 'low',
   editRequest = null,
   channelLoadArmed = false,
@@ -205,6 +209,10 @@ export const PadGrid = React.memo(function PadGrid({
   };
 
   const handlePadDragStartFromPad = (e: React.DragEvent, pad: PadData, sourceBankId: string, index: number) => {
+    if (adminPadColorPaintActive) {
+      e.preventDefault();
+      return;
+    }
     handlePadDragStart(e, index);
     if (onPadDragStart) {
       onPadDragStart(e, pad, sourceBankId);
@@ -230,7 +238,7 @@ export const PadGrid = React.memo(function PadGrid({
   const aspectRatio = 'aspect-square';
 
   const handlePadDragStart = (e: React.DragEvent, index: number) => {
-    if (!editMode) return;
+    if (!editMode || adminPadColorPaintActive) return;
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = 'move';
   };
@@ -244,13 +252,13 @@ export const PadGrid = React.memo(function PadGrid({
       return;
     }
 
-    if (!editMode || draggedIndex === null) return;
+    if (!editMode || adminPadColorPaintActive || draggedIndex === null) return;
     e.preventDefault();
     setDragOverIndex(index);
   };
 
   const handlePadDragEnd = () => {
-    if (!editMode) return;
+    if (!editMode || adminPadColorPaintActive) return;
     if (draggedIndex !== null && dragOverIndex !== null && draggedIndex !== dragOverIndex) {
       onReorderPads(draggedIndex, dragOverIndex);
     }
@@ -270,7 +278,7 @@ export const PadGrid = React.memo(function PadGrid({
   };
 
   const handlePadDrop = (e: React.DragEvent, index: number) => {
-    if (editMode && draggedIndex !== null) {
+    if (editMode && !adminPadColorPaintActive && draggedIndex !== null) {
       e.preventDefault();
       e.stopPropagation();
       if (draggedIndex !== index) {
@@ -334,7 +342,7 @@ export const PadGrid = React.memo(function PadGrid({
 
   return (
     <div
-      className={`grid ${gap} w-full min-w-0 max-w-full overflow-x-hidden transition-all duration-200 ${dragOverPadTransfer
+      className={`grid ${gap} w-full min-w-0 max-w-full overflow-x-hidden transition-all duration-200 ${adminPadColorPaintActive ? 'cursor-crosshair' : ''} ${dragOverPadTransfer
         ? 'ring-4 ring-orange-400 ring-offset-2 ring-offset-transparent bg-orange-50 dark:bg-orange-900/20 rounded-2xl p-2'
         : channelLoadArmed
           ? 'rounded-2xl shadow-[inset_0_0_0_2px_rgba(16,185,129,0.65)] bg-emerald-50/20 dark:bg-emerald-900/10'
@@ -420,6 +428,8 @@ export const PadGrid = React.memo(function PadGrid({
             blockedMidiNotes={blockedMidiNotes}
             blockedMidiCCs={blockedMidiCCs}
             hideShortcutLabel={hideShortcutLabel}
+            adminColorPaintActive={adminPadColorPaintActive}
+            onAdminPaintPad={onAdminPadColorPaint}
             graphicsTier={graphicsTier}
             editRequestToken={editRequest?.padId === pad.id ? editRequest.token : undefined}
             channelLoadArmed={channelLoadArmed}

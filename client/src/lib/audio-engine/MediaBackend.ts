@@ -40,6 +40,8 @@ export class MediaBackend implements IAudioBackend {
     private preservePitch = false;
     private manualRateOverride: number | null = null;
     private playAttemptToken = 0;
+    private desiredPlaybackToken = 0;
+    private desiredPlaybackState: 'playing' | 'stopped' = 'stopped';
 
     // Track active media elements to cap resource use.
     private static activeElements = new Set<HTMLAudioElement>();
@@ -130,6 +132,8 @@ export class MediaBackend implements IAudioBackend {
         }
         this.playing = false;
         const playToken = ++this.playAttemptToken;
+        this.desiredPlaybackToken = playToken;
+        this.desiredPlaybackState = 'playing';
         this.regionEndedDispatched = false;
         if (audio.loop || (!this.regionLoopEnabled && !this.hasTrimRegion())) {
             this.stopRegionMonitor();
@@ -141,8 +145,17 @@ export class MediaBackend implements IAudioBackend {
         if (playResult && typeof (playResult as Promise<void>).then === 'function') {
             (playResult as Promise<void>)
                 .then(() => {
-                    if (this.playAttemptToken !== playToken) return;
                     if (!this.audioElement || this.audioElement !== audio) return;
+                    if (this.playAttemptToken !== playToken) {
+                        if (this.desiredPlaybackState !== 'playing' && this.desiredPlaybackToken !== playToken) {
+                            this.forceStopStalePlayback(audio);
+                        }
+                        return;
+                    }
+                    if (this.desiredPlaybackState !== 'playing' || this.desiredPlaybackToken !== playToken) {
+                        this.forceStopStalePlayback(audio);
+                        return;
+                    }
                     this.playing = true;
                 })
                 .catch(() => {
@@ -161,6 +174,8 @@ export class MediaBackend implements IAudioBackend {
     stop(): void {
         if (!this.audioElement) return;
         this.playAttemptToken += 1;
+        this.desiredPlaybackToken = this.playAttemptToken;
+        this.desiredPlaybackState = 'stopped';
         this.cancelLoopWrap();
         this.stopRegionMonitor();
         this.regionEndedDispatched = false;
@@ -172,6 +187,8 @@ export class MediaBackend implements IAudioBackend {
     pause(): void {
         if (!this.audioElement) return;
         this.playAttemptToken += 1;
+        this.desiredPlaybackToken = this.playAttemptToken;
+        this.desiredPlaybackState = 'stopped';
         this.cancelLoopWrap();
         this.stopRegionMonitor();
         this.audioElement.pause();
@@ -180,13 +197,35 @@ export class MediaBackend implements IAudioBackend {
 
     resume(): void {
         if (!this.audioElement) return;
+        const audio = this.audioElement;
+        const playToken = ++this.playAttemptToken;
+        this.desiredPlaybackToken = playToken;
+        this.desiredPlaybackState = 'playing';
         if (this.audioElement.loop || (!this.regionLoopEnabled && !this.hasTrimRegion())) {
             this.stopRegionMonitor();
         } else {
             this.startRegionMonitor();
         }
-        this.audioElement.play().catch(() => { });
-        this.playing = true;
+        const playResult = audio.play();
+        if (playResult && typeof (playResult as Promise<void>).then === 'function') {
+            (playResult as Promise<void>)
+                .then(() => {
+                    if (!this.audioElement || this.audioElement !== audio) return;
+                    if (this.playAttemptToken !== playToken || this.desiredPlaybackState !== 'playing' || this.desiredPlaybackToken !== playToken) {
+                        this.forceStopStalePlayback(audio);
+                        return;
+                    }
+                    this.playing = true;
+                })
+                .catch(() => {
+                    if (this.playAttemptToken !== playToken) return;
+                    if (!this.audioElement || this.audioElement !== audio) return;
+                    this.stopRegionMonitor();
+                    this.playing = false;
+                });
+            return;
+        }
+        this.playing = !audio.paused;
     }
 
     seek(ms: number): void {
@@ -300,6 +339,8 @@ export class MediaBackend implements IAudioBackend {
 
     private disposeElement(): void {
         this.playAttemptToken += 1;
+        this.desiredPlaybackToken = this.playAttemptToken;
+        this.desiredPlaybackState = 'stopped';
         if (this.audioElement) {
             this.cancelLoopWrap();
             this.stopRegionMonitor();
@@ -313,6 +354,20 @@ export class MediaBackend implements IAudioBackend {
         this.sourceNode = null;
         this.sourceConnected = false;
         this.manualRateOverride = null;
+    }
+
+    private forceStopStalePlayback(audio: HTMLAudioElement): void {
+        try {
+            audio.pause();
+        } catch {
+        }
+        try {
+            audio.currentTime = 0;
+        } catch {
+        }
+        this.stopRegionMonitor();
+        this.regionEndedDispatched = false;
+        this.playing = false;
     }
 
     private enforceElementLimit(): void {

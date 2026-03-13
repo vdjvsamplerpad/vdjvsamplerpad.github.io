@@ -12,7 +12,7 @@ import { PadData, SamplerBank } from './types/sampler';
 import { WaveformTrim } from './WaveformTrim';
 import { isReservedShortcutCombo, normalizeShortcutKey, normalizeStoredShortcutKey, RESERVED_SHORTCUT_KEYS } from '@/lib/keyboard-shortcuts';
 import { MidiMessage } from '@/lib/midi';
-import { LED_COLOR_PALETTE } from '@/lib/led-colors';
+import { EXTRA_PAD_COLORS, PRIMARY_PAD_COLORS } from './padColorPalette';
 
 interface PadEditDialogProps {
   pad: PadData;
@@ -77,40 +77,6 @@ const resolveSourceDurationMs = (pad: PadData): number => {
   const cachedObservedDuration = getCachedObservedDurationMs(pad.audioUrl);
   return Math.max(explicitDuration, cachedObservedDuration);
 };
-
-const PAD_PRIMARY_COLOR_NAMES = [
-  'Dim Gray',
-  'Gray',
-  'White',
-  'Red',
-  'Amber',
-  'Orange',
-  'Light Yellow',
-  'Yellow',
-  'Green',
-  'Aqua',
-  'Blue',
-  'Pure Blue',
-  'Violet',
-  'Purple',
-  'Hot Pink',
-  'Hot Pink 2',
-  'Deep Magenta',
-  'Deep Brown 2'
-];
-
-const colorOptions = LED_COLOR_PALETTE
-  .filter((entry) => entry.velocity > 0)
-  .filter((entry, index, arr) => arr.findIndex((item) => item.hex === entry.hex) === index)
-  .map((entry) => ({ label: entry.name, value: entry.hex }));
-
-const primaryPadColors = PAD_PRIMARY_COLOR_NAMES
-  .map((name) => colorOptions.find((entry) => entry.label === name))
-  .filter(Boolean) as Array<{ label: string; value: string }>;
-
-const extraPadColors = colorOptions.filter(
-  (entry) => !primaryPadColors.some((primary) => primary.value === entry.value)
-);
 
 export function PadEditDialog({
   pad,
@@ -968,7 +934,7 @@ export function PadEditDialog({
               <div className="space-y-2">
                 <Label>Pad Color</Label>
                 <div className="flex gap-1 flex-wrap">
-                  {(showAllColors ? [...primaryPadColors, ...extraPadColors] : primaryPadColors).map((colorOption) => (
+                  {(showAllColors ? [...PRIMARY_PAD_COLORS, ...EXTRA_PAD_COLORS] : PRIMARY_PAD_COLORS).map((colorOption) => (
                     <button
                       key={colorOption.value}
                       onClick={() => setColor(colorOption.value)}
@@ -978,7 +944,7 @@ export function PadEditDialog({
                       title={colorOption.label}
                     />
                   ))}
-                  {extraPadColors.length > 0 && (
+                  {EXTRA_PAD_COLORS.length > 0 && (
                     <Button
                       type="button"
                       variant="outline"

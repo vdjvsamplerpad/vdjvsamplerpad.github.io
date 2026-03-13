@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -960,6 +960,9 @@ export function AboutDialog({
       <DialogContent className="w-[96vw] max-h-[92vh] overflow-hidden sm:max-w-4xl backdrop-blur-md bg-white/95 border-gray-300 dark:bg-gray-800/95 dark:border-gray-600">
         <DialogHeader className="pb-2 border-b border-gray-200 dark:border-gray-700">
           <DialogTitle>Setting</DialogTitle>
+          <DialogDescription>
+            Configure app preferences, MIDI mappings, channel controls, and backup tools.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2 max-h-[calc(92vh-96px)] overflow-y-auto pr-1 text-sm">
           <div className={`grid gap-2 ${isAuthenticated ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1'}`}>

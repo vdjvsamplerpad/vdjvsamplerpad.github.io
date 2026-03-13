@@ -40,6 +40,8 @@ interface SamplerPadProps {
   blockedMidiNotes?: Set<number>;
   blockedMidiCCs?: Set<number>;
   hideShortcutLabel?: boolean;
+  adminColorPaintActive?: boolean;
+  onAdminPaintPad?: (bankId: string, pad: PadData) => void | Promise<void>;
   graphicsTier?: import('@/lib/performance-monitor').PerformanceTier;
   editRequestToken?: number;
   channelLoadArmed?: boolean;
@@ -89,6 +91,11 @@ const getContrastTextColor = (hex: string): '#111827' | '#ffffff' => {
   return luminance > 0.62 ? '#111827' : '#ffffff';
 };
 
+const withAlpha = (hex: string, alphaHex: string): string => {
+  const normalized = normalizeHexColor(hex).slice(1);
+  return `#${normalized}${alphaHex}`;
+};
+
 export const SamplerPad = React.memo(function SamplerPad({
   pad,
   bankId,
@@ -117,6 +124,8 @@ export const SamplerPad = React.memo(function SamplerPad({
   blockedMidiNotes,
   blockedMidiCCs,
   hideShortcutLabel = false,
+  adminColorPaintActive = false,
+  onAdminPaintPad,
   graphicsTier = 'low',
   editRequestToken,
   channelLoadArmed = false,
@@ -220,6 +229,12 @@ export const SamplerPad = React.memo(function SamplerPad({
       return;
     }
 
+    if (adminColorPaintActive && editMode && onAdminPaintPad) {
+      e.preventDefault();
+      void onAdminPaintPad(bankId, pad);
+      return;
+    }
+
     if (channelLoadArmed && onSelectPadForChannelLoad) {
       onSelectPadForChannelLoad(pad, bankId, bankName);
       return;
@@ -310,7 +325,7 @@ export const SamplerPad = React.memo(function SamplerPad({
   };
 
   const handleDragStart = (e: React.DragEvent) => {
-    if (!editMode) {
+    if (!editMode || adminColorPaintActive) {
       e.preventDefault();
       return;
     }
@@ -431,6 +446,8 @@ export const SamplerPad = React.memo(function SamplerPad({
   };
 
   const isLowestGraphics = graphicsTier === 'lowest';
+  const isHighGraphics = graphicsTier === 'high';
+  const isMediumGraphics = graphicsTier === 'medium';
   const shouldShowImage = !isLowestGraphics && pad.imageUrl && !imageError;
   const shouldShowText = !shouldShowImage;
   const isSnapshotMissingPad = Boolean(pad.missingMediaExpected && !pad.audioUrl);
@@ -515,10 +532,10 @@ export const SamplerPad = React.memo(function SamplerPad({
 
   const getEditModeClasses = () => {
     if (editMode) {
-      return 'cursor-grab active:cursor-grabbing perf-high:shadow-[inset_0_0_0_3px_rgba(251,146,60,0.95),inset_0_0_0_4px_rgba(0,0,0,0.12)] perf-medium:shadow-[inset_0_0_0_2px_rgba(251,146,60,0.95)] perf-low:ring-2 perf-low:ring-orange-400 perf-lowest:ring-2 perf-lowest:ring-orange-500';
+      return 'cursor-grab active:cursor-grabbing';
     }
     if (channelLoadArmed) {
-      return 'cursor-pointer perf-high:shadow-[inset_0_0_0_3px_rgba(16,185,129,0.95),inset_0_0_0_4px_rgba(0,0,0,0.12)] perf-medium:shadow-[inset_0_0_0_2px_rgba(16,185,129,0.95)] perf-low:ring-2 perf-low:ring-emerald-400 perf-lowest:ring-2 perf-lowest:ring-emerald-500';
+      return 'cursor-pointer';
     }
     return 'cursor-pointer';
   };
@@ -539,11 +556,25 @@ export const SamplerPad = React.memo(function SamplerPad({
   const playTextClass = playTextColor === '#111827' ? 'text-gray-900' : 'text-white';
   const isUnmutePlayingMuted = pad.triggerMode === 'unmute' && isPlaying && isSoftMuted;
   const isUnmutePlayingAudible = pad.triggerMode === 'unmute' && isPlaying && !isSoftMuted;
+  const isStopperPad = pad.playbackMode === 'stopper';
   const lowestGraphicsTextColor = React.useMemo(() => getContrastTextColor(normalizedPadColor), [normalizedPadColor]);
   const lowestGraphicsTextClass = lowestGraphicsTextColor === '#111827' ? 'text-gray-900' : 'text-white';
-  const inactiveBackgroundColor = isLowestGraphics
-    ? normalizedPadColor
-    : `${normalizedPadColor}${theme === 'dark' ? 'CC' : 'E6'}`;
+  const inactiveTextColor = React.useMemo(() => getContrastTextColor(normalizedPadColor), [normalizedPadColor]);
+  const inactiveTextClass = inactiveTextColor === '#111827' ? 'text-gray-900' : 'text-white';
+  const inactiveBackgroundColor = withAlpha(
+    normalizedPadColor,
+    isLowestGraphics
+      ? (theme === 'dark' ? 'CC' : 'D9')
+      : (theme === 'dark' ? 'CC' : 'E6')
+  );
+  const highReadabilityTextShadow = '0 2px 6px rgba(0,0,0,0.92)';
+  const stopperOuterStrokeColor = '#991b1b';
+  const stopperInnerStrokeColor = lowestGraphicsTextColor === '#111827'
+    ? 'rgba(17,24,39,0.72)'
+    : 'rgba(255,255,255,0.92)';
+  const stopperStrokeShadow = theme === 'dark'
+    ? '0 0 0 1px rgba(127,29,29,0.35)'
+    : '0 0 0 1px rgba(127,29,29,0.18)';
   const isMotionOff =
     typeof document !== 'undefined' && document.documentElement.classList.contains('motion-off');
 
@@ -597,7 +628,7 @@ export const SamplerPad = React.memo(function SamplerPad({
         onPointerUp={pad.triggerMode === 'hold' && !editMode ? handlePointerRelease : undefined}
         onPointerCancel={pad.triggerMode === 'hold' && !editMode ? handlePointerRelease : undefined}
         onPointerLeave={pad.triggerMode === 'hold' && !editMode ? handlePointerLeave : undefined}
-        draggable={editMode}
+        draggable={editMode && !adminColorPaintActive}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         // Added title for native browser tooltip on hover (shows full name)
@@ -613,6 +644,7 @@ export const SamplerPad = React.memo(function SamplerPad({
           perf-high:shadow-sm perf-high:hover:shadow-md
           perf-low:shadow-none
           perf-lowest:shadow-none
+          ${adminColorPaintActive ? 'cursor-crosshair' : ''}
           ${isDragging ? 'z-50' : ''}
           ${isPlaying
             ? `${playTextClass} ring-2 ${isUnmutePlayingMuted
@@ -669,28 +701,45 @@ export const SamplerPad = React.memo(function SamplerPad({
             )}
           </>
         )}
-        {(editMode || channelLoadArmed) && !isLowestGraphics && (
+        {isStopperPad && (
+          <>
+            <div
+              className="absolute inset-[1px] z-[15] rounded-[0.68rem] pointer-events-none border-[3px]"
+              style={{
+                borderColor: stopperOuterStrokeColor,
+                boxShadow: stopperStrokeShadow,
+              }}
+            />
+            <div
+              className="absolute inset-[5px] z-[16] rounded-[0.5rem] pointer-events-none border"
+              style={{
+                borderColor: stopperInnerStrokeColor,
+              }}
+            />
+          </>
+        )}
+        {(editMode || channelLoadArmed) && (
           <div
-            className={`absolute bottom-1 right-1 z-20 rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wide pointer-events-none ${
+            className="absolute inset-[3px] z-20 rounded-[0.62rem] pointer-events-none border-2"
+            style={{ borderColor: editMode ? '#f59e0b' : '#10b981' }}
+          />
+        )}
+        {(editMode || channelLoadArmed) && (
+          <div
+            className={`absolute bottom-1 right-1 z-20 rounded px-1.5 py-0.5 font-bold tracking-wide pointer-events-none ${
+              isLowestGraphics ? 'text-[8px]' : 'text-[9px]'
+            } ${
               editMode
-                ? (theme === 'dark' ? 'bg-amber-500/85 text-amber-950' : 'bg-amber-500 text-white')
-                : (theme === 'dark' ? 'bg-emerald-500/85 text-emerald-950' : 'bg-emerald-500 text-white')
+                ? 'bg-amber-500 text-white'
+                : 'bg-emerald-500 text-white'
             }`}
+            style={{
+              textShadow: isHighGraphics ? highReadabilityTextShadow : '0 1px 2px rgba(0,0,0,0.55)',
+              boxShadow: isHighGraphics ? '0 3px 8px rgba(0,0,0,0.4)' : '0 2px 6px rgba(0,0,0,0.22)',
+            }}
           >
             {editMode ? 'EDIT' : 'LOAD'}
           </div>
-        )}
-        {(editMode || channelLoadArmed) && isLowestGraphics && (
-          <>
-            <div
-              className="absolute inset-[3px] z-20 rounded-[0.62rem] pointer-events-none border-2"
-              style={{ borderColor: editMode ? '#f59e0b' : '#10b981' }}
-            />
-            <div
-              className="absolute bottom-1 right-1 z-20 h-2.5 w-2.5 rounded-sm pointer-events-none"
-              style={{ backgroundColor: editMode ? '#f59e0b' : '#10b981' }}
-            />
-          </>
         )}
         {isPadMediaRehydrating && !editMode && !channelLoadArmed && (
           <div
@@ -848,9 +897,9 @@ export const SamplerPad = React.memo(function SamplerPad({
                   ? `${playTextClass} drop-shadow-none`
                   : isLowestGraphics
                     ? `${lowestGraphicsTextClass} drop-shadow-none`
-                  : theme === 'dark'
-                    ? 'text-white perf-high:drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] perf-medium:drop-shadow-[0_1px_2px_rgba(0,0,0,0.75)] perf-low:drop-shadow-none'
-                    : 'text-gray-900 perf-high:drop-shadow-[0_2px_4px_rgba(255,255,255,0.9)] perf-medium:drop-shadow-[0_1px_2px_rgba(255,255,255,0.75)] perf-low:drop-shadow-none'
+                  : inactiveTextColor === '#111827'
+                    ? 'text-gray-900 perf-high:drop-shadow-none perf-medium:drop-shadow-none perf-low:drop-shadow-none'
+                    : 'text-white perf-high:drop-shadow-[0_3px_6px_rgba(0,0,0,0.96)] perf-medium:drop-shadow-[0_1px_2px_rgba(0,0,0,0.75)] perf-low:drop-shadow-none'
                   }`}
                 style={{
                   // Responsive font sizing that scales with viewport and pad size
@@ -858,14 +907,14 @@ export const SamplerPad = React.memo(function SamplerPad({
                   // Minimum sizes ensure readability even on very small pads
                   fontSize: padSize <= 4
                     ? (isLowestGraphics
-                      ? `${Math.round(14 * fontScale)}px`
+                      ? `${Math.round(15 * fontScale)}px`
                       : `clamp(${Math.round(12 * fontScale)}px, min(6vw, 6vh, 1.4em), ${Math.round(24 * fontScale)}px)`)
                     : padSize <= 8
                       ? (isLowestGraphics
-                        ? `${Math.round(12 * fontScale)}px`
+                        ? `${Math.round(13 * fontScale)}px`
                         : `clamp(${Math.round(11 * fontScale)}px, min(5vw, 5vh, 1.2em), ${Math.round(20 * fontScale)}px)`)
                       : (isLowestGraphics
-                        ? `${Math.round(10 * fontScale)}px`
+                        ? `${Math.round(11 * fontScale)}px`
                         : `clamp(${Math.round(10 * fontScale)}px, min(4vw, 4vh, 1.1em), ${Math.round(16 * fontScale)}px)`),
                   padding: '1px 2px',
                   maxWidth: 'calc(100% - 4px)',
@@ -877,7 +926,16 @@ export const SamplerPad = React.memo(function SamplerPad({
                   justifyContent: 'center',
                   width: '100%',
                   height: '100%',
-                  boxSizing: 'border-box'
+                  boxSizing: 'border-box',
+                  textShadow: isPlaying || isLowestGraphics
+                    ? undefined
+                    : inactiveTextColor === '#111827'
+                      ? undefined
+                      : isHighGraphics
+                        ? highReadabilityTextShadow
+                        : isMediumGraphics
+                          ? '0 1px 2px rgba(0,0,0,0.72)'
+                          : undefined,
                 }}
               >
                 {pad.name}

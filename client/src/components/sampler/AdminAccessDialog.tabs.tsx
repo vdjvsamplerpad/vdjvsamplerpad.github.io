@@ -5,8 +5,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
+import { CopyableValue, copyTextToClipboard } from '@/components/ui/copyable-value';
 import type { AdminAccountRegistrationRequest, DefaultBankRelease, LandingDownloadConfig, LandingPlatformKey, LandingVersionKey } from '@/lib/admin-api';
-import { Check, ChevronDown, ChevronUp, EyeOff, Loader2, Plus, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, EyeOff, Loader2, Plus, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
 import type { SamplerAppConfig, SamplerShortcutAction } from './samplerAppConfig';
 import type {
   AdminDialogTheme,
@@ -335,6 +336,40 @@ const formatCountdownRemaining = (expiresAt: string | null | undefined, nowMs: n
   return `${minutes}m remaining`;
 };
 
+function InlineCopyButton({
+  value,
+  label,
+}: {
+  value: string;
+  label: string;
+}) {
+  const [copied, setCopied] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1400);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  if (!String(value || '').trim()) return null;
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="h-8 w-8 shrink-0"
+      onClick={() => {
+        void copyTextToClipboard(value).then(() => setCopied(true)).catch(() => undefined);
+      }}
+      title={copied ? `Copied ${label}` : `Copy ${label}`}
+      aria-label={copied ? `Copied ${label}` : `Copy ${label}`}
+    >
+      {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+    </Button>
+  );
+}
+
 const LANDING_VERSION_OPTIONS: LandingVersionKey[] = ['V1', 'V2', 'V3'];
 const LANDING_PLATFORM_OPTIONS: LandingPlatformKey[] = ['android', 'ios', 'windows', 'macos'];
 
@@ -469,21 +504,24 @@ export function LandingDownloadTab({
                     <div className="text-xs font-semibold uppercase tracking-wide opacity-70">{platform}</div>
                     <div className="space-y-1">
                       <Label>Download Link</Label>
-                      <Input
-                        value={config.downloadLinks[version][platform]}
-                        onChange={(event) => onConfigChange({
-                          ...config,
-                          downloadLinks: {
-                            ...config.downloadLinks,
-                            [version]: {
-                              ...config.downloadLinks[version],
-                              [platform]: event.target.value,
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={config.downloadLinks[version][platform]}
+                          onChange={(event) => onConfigChange({
+                            ...config,
+                            downloadLinks: {
+                              ...config.downloadLinks,
+                              [version]: {
+                                ...config.downloadLinks[version],
+                                [platform]: event.target.value,
+                              },
                             },
-                          },
-                        })}
-                        placeholder="https://..."
-                        className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
-                      />
+                          })}
+                          placeholder="https://..."
+                          className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                        />
+                        <InlineCopyButton value={config.downloadLinks[version][platform]} label={`${version} ${platform} download link`} />
+                      </div>
                     </div>
                     <div className="space-y-1">
                       <Label>Platform Description</Label>
@@ -988,14 +1026,38 @@ export function AccountRequestsTab({
                     <div className="flex items-center gap-2 flex-wrap">
                       <h4 className="font-bold text-sm truncate">{req.display_name || 'No Name'}</h4>
                     </div>
-                    <div className={`text-[11px] mt-0.5 ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>
-                      {req.display_name || 'No Name'} - {req.email}
+                    <div className={`mt-0.5 flex items-center gap-1 text-[11px] ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>
+                      <span className="shrink-0">{req.display_name || 'No Name'} -</span>
+                      <CopyableValue
+                        value={req.email || '-'}
+                        label="account request email"
+                        className="min-w-0 max-w-full"
+                        valueClassName="text-inherit"
+                        buttonClassName="h-5 w-5"
+                      />
                     </div>
                     <div className={`text-xs mt-1 grid grid-cols-2 gap-x-6 gap-y-0.5 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
                       <div><span className="opacity-70">Channel:</span> <span className="uppercase font-medium">{req.payment_channel}</span></div>
                       <div><span className="opacity-70">Name:</span> {req.payer_name || '-'}</div>
-                      <div><span className="opacity-70">Ref:</span> <span className="font-mono">{req.reference_no || '-'}</span></div>
+                      <div>
+                        <span className="opacity-70">Ref:</span>{' '}
+                        <CopyableValue
+                          value={req.reference_no || '-'}
+                          label="account request reference"
+                          valueClassName="font-mono text-inherit"
+                          buttonClassName="h-5 w-5"
+                        />
+                      </div>
                       <div><span className="opacity-70">Date:</span> {new Date(req.created_at).toLocaleString()}</div>
+                      <div className="col-span-2">
+                        <span className="opacity-70">Request ID:</span>{' '}
+                        <CopyableValue
+                          value={req.id}
+                          label="account request id"
+                          valueClassName="font-mono text-inherit"
+                          buttonClassName="h-5 w-5"
+                        />
+                      </div>
                       {req.reviewed_at && (
                         <div className="col-span-2">
                           <span className="opacity-70">Reviewed:</span> {new Date(req.reviewed_at).toLocaleString()}
@@ -1003,7 +1065,15 @@ export function AccountRequestsTab({
                         </div>
                       )}
                       {req.approved_auth_user_id && (
-                        <div className="col-span-2"><span className="opacity-70">Approved User:</span> <span className="font-mono">{req.approved_auth_user_id}</span></div>
+                        <div className="col-span-2">
+                          <span className="opacity-70">Approved User:</span>{' '}
+                          <CopyableValue
+                            value={req.approved_auth_user_id}
+                            label="approved user id"
+                            valueClassName="font-mono text-inherit"
+                            buttonClassName="h-5 w-5"
+                          />
+                        </div>
                       )}
                       {req.decision_source && (
                         <div><span className="opacity-70">Decision:</span> {formatAutomationLabel(req.decision_source)}</div>
@@ -1011,8 +1081,28 @@ export function AccountRequestsTab({
                       {req.automation_result && (
                         <div><span className="opacity-70">Auto Check:</span> {formatAutomationLabel(req.automation_result)}</div>
                       )}
-                      {req.ocr_reference_no && <div><span className="opacity-70">OCR Ref:</span> <span className="font-mono">{req.ocr_reference_no}</span></div>}
-                      {req.ocr_recipient_number && <div><span className="opacity-70">OCR Wallet:</span> <span className="font-mono">{req.ocr_recipient_number}</span></div>}
+                      {req.ocr_reference_no && (
+                        <div>
+                          <span className="opacity-70">OCR Ref:</span>{' '}
+                          <CopyableValue
+                            value={req.ocr_reference_no}
+                            label="ocr reference"
+                            valueClassName="font-mono text-inherit"
+                            buttonClassName="h-5 w-5"
+                          />
+                        </div>
+                      )}
+                      {req.ocr_recipient_number && (
+                        <div>
+                          <span className="opacity-70">OCR Wallet:</span>{' '}
+                          <CopyableValue
+                            value={req.ocr_recipient_number}
+                            label="ocr wallet number"
+                            valueClassName="font-mono text-inherit"
+                            buttonClassName="h-5 w-5"
+                          />
+                        </div>
+                      )}
                       {typeof req.ocr_amount_php === 'number' && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
                       {req.ocr_status && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
                       {req.ocr_provider && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
@@ -1135,20 +1225,76 @@ export function StoreRequestsTab({
                       )}
                     </div>
                     {req.user_profile && (
-                      <div className={`text-[11px] mt-0.5 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>
-                        {req.user_profile.display_name || 'No Name'} - {req.user_profile.email}
+                      <div className={`mt-0.5 flex items-center gap-1 text-[11px] ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>
+                        <span className="shrink-0">{req.user_profile.display_name || 'No Name'} -</span>
+                        <CopyableValue
+                          value={req.user_profile.email || '-'}
+                          label="store request email"
+                          className="min-w-0 max-w-full"
+                          valueClassName="text-inherit"
+                          buttonClassName="h-5 w-5"
+                        />
                       </div>
                     )}
                     <div className={`text-xs mt-1 grid grid-cols-2 gap-x-6 gap-y-0.5 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
                       <div><span className="opacity-70">Channel:</span> <span className="uppercase font-medium">{req.payment_channel}</span></div>
                       <div><span className="opacity-70">Name:</span> {req.payer_name}</div>
-                      <div><span className="opacity-70">Ref:</span> <span className="font-mono">{req.reference_no}</span></div>
+                      <div>
+                        <span className="opacity-70">Ref:</span>{' '}
+                        <CopyableValue
+                          value={req.reference_no}
+                          label="store request reference"
+                          valueClassName="font-mono text-inherit"
+                          buttonClassName="h-5 w-5"
+                        />
+                      </div>
                       <div><span className="opacity-70">Date:</span> {new Date(req.created_at).toLocaleDateString()}</div>
+                      <div className="col-span-2">
+                        <span className="opacity-70">Request ID:</span>{' '}
+                        <CopyableValue
+                          value={req.id}
+                          label="store request id"
+                          valueClassName="font-mono text-inherit"
+                          buttonClassName="h-5 w-5"
+                        />
+                        {req.batch_id ? (
+                          <>
+                            <span className="mx-1 opacity-50">|</span>
+                            <span className="opacity-70">Batch:</span>{' '}
+                            <CopyableValue
+                              value={req.batch_id}
+                              label="store request batch id"
+                              valueClassName="font-mono text-inherit"
+                              buttonClassName="h-5 w-5"
+                            />
+                          </>
+                        ) : null}
+                      </div>
                       <div className="col-span-2"><span className="opacity-70">Amount:</span> {req.hasTbdAmount ? 'TBD' : `PHP ${req.totalAmountPhp.toLocaleString()}`}</div>
                       {req.decision_source && <div><span className="opacity-70">Decision:</span> {formatAutomationLabel(req.decision_source)}</div>}
                       {req.automation_result && <div><span className="opacity-70">Auto Check:</span> {formatAutomationLabel(req.automation_result)}</div>}
-                      {req.ocr_reference_no && <div><span className="opacity-70">OCR Ref:</span> <span className="font-mono">{req.ocr_reference_no}</span></div>}
-                      {req.ocr_recipient_number && <div><span className="opacity-70">OCR Wallet:</span> <span className="font-mono">{req.ocr_recipient_number}</span></div>}
+                      {req.ocr_reference_no && (
+                        <div>
+                          <span className="opacity-70">OCR Ref:</span>{' '}
+                          <CopyableValue
+                            value={req.ocr_reference_no}
+                            label="ocr reference"
+                            valueClassName="font-mono text-inherit"
+                            buttonClassName="h-5 w-5"
+                          />
+                        </div>
+                      )}
+                      {req.ocr_recipient_number && (
+                        <div>
+                          <span className="opacity-70">OCR Wallet:</span>{' '}
+                          <CopyableValue
+                            value={req.ocr_recipient_number}
+                            label="ocr wallet number"
+                            valueClassName="font-mono text-inherit"
+                            buttonClassName="h-5 w-5"
+                          />
+                        </div>
+                      )}
                       {typeof req.ocr_amount_php === 'number' && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
                       {req.ocr_status && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
                       {req.ocr_provider && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
@@ -2546,7 +2692,13 @@ export function StoreConfigTab({
                 <div className="space-y-1"><Label>Store Instructions</Label>
                   <textarea value={storeConfig.instructions} onChange={(event) => onStoreConfigChange({ ...storeConfig, instructions: event.target.value })} className={`w-full min-h-[100px] rounded-md border p-2 text-sm outline-none resize-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`} placeholder="Instructions shown to users when buying banks..." />
                 </div>
-                <div className="space-y-1"><Label>FB Messenger URL</Label><Input value={storeConfig.messenger_url} onChange={(event) => onStoreConfigChange({ ...storeConfig, messenger_url: event.target.value })} placeholder="https://m.me/yourpage" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>
+                <div className="space-y-1">
+                  <Label>FB Messenger URL</Label>
+                  <div className="flex items-center gap-2">
+                    <Input value={storeConfig.messenger_url} onChange={(event) => onStoreConfigChange({ ...storeConfig, messenger_url: event.target.value })} placeholder="https://m.me/yourpage" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />
+                    <InlineCopyButton value={storeConfig.messenger_url} label="Messenger URL" />
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1"><Label>GCash Number</Label><Input value={storeConfig.gcash_number} onChange={(event) => onStoreConfigChange({ ...storeConfig, gcash_number: event.target.value })} placeholder="09171234567" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>
                   <div className="space-y-1"><Label>Maya Number</Label><Input value={storeConfig.maya_number} onChange={(event) => onStoreConfigChange({ ...storeConfig, maya_number: event.target.value })} placeholder="09181234567" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} /></div>

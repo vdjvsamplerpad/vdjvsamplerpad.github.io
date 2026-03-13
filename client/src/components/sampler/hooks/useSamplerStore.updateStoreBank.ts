@@ -3,6 +3,7 @@ import type { BankMetadata, SamplerBank } from '../types/sampler';
 import type { AdminCatalogUploadPublishResult } from './useSamplerStore.exportUpload';
 import type { StoreBankAssetProtection } from './useSamplerStore.types';
 import { derivePassword } from '@/lib/bank-utils';
+import { ensureManagedStoreThumbnail } from './storeThumbnailUpload';
 
 type SamplerPad = SamplerBank['pads'][number];
 type ExportAudioMode = 'fast' | 'compact';
@@ -183,6 +184,9 @@ export const runUpdateStoreBankPipeline = async (
     writeOperationDiagnosticsLog,
   } = deps;
 
+  const isHttpUrl = (value: string | null | undefined): value is string =>
+    typeof value === 'string' && /^https?:\/\//i.test(value.trim());
+
   if (!user || profileRole !== 'admin') throw new Error('Only admins can update store banks.');
   const catalogItemId = typeof bankSnapshot.bankMetadata?.catalogItemId === 'string'
     ? bankSnapshot.bankMetadata.catalogItemId.trim()
@@ -208,6 +212,7 @@ export const runUpdateStoreBankPipeline = async (
   let archiveCompletedAt = exportStartedAt;
   let saveCompletedAt = exportStartedAt;
   let exportedArchiveBytes = 0;
+  let managedThumbnailCleanup: (() => Promise<void>) | null = null;
 
   try {
     onProgress?.(5);
@@ -372,12 +377,27 @@ export const runUpdateStoreBankPipeline = async (
       }
     }
 
+    let durableThumbnailPath: string | undefined = isHttpUrl(thumbnailPath) ? thumbnailPath : undefined;
+    if (syncMetadata && thumbnailPath) {
+      const managedThumbnail = await ensureManagedStoreThumbnail({
+        bankId: bankSnapshot.bankMetadata?.bankId || bankSnapshot.id,
+        thumbnailPath,
+        inferImageExtFromPath,
+      });
+      durableThumbnailPath = managedThumbnail.url;
+      managedThumbnailCleanup = managedThumbnail.uploaded ? managedThumbnail.cleanup : null;
+      addOperationStage(diagnostics, 'thumbnail-uploaded-for-store', {
+        catalogItemId,
+        uploaded: managedThumbnail.uploaded,
+      });
+    }
+
     const sanitizedMetadata = buildStoreReleaseMetadata({
       bank: bankSnapshot,
       title: normalizedTitle,
       description,
       assetProtection,
-      thumbnailPath,
+      thumbnailPath: durableThumbnailPath,
       embeddedThumbnailAssetPath,
     });
 
@@ -484,13 +504,13 @@ export const runUpdateStoreBankPipeline = async (
             title: normalizedTitle,
             description,
             color: bankSnapshot.defaultColor,
-            thumbnail_path: thumbnailPath || null,
+            thumbnail_path: durableThumbnailPath || null,
           },
         });
         metadataSynced = true;
         addOperationStage(diagnostics, 'catalog-metadata-synced', {
           catalogItemId,
-          thumbnailPath: thumbnailPath || null,
+          thumbnailPath: durableThumbnailPath || null,
         });
       } catch (metadataError) {
         metadataWarningMessage = ` Store metadata sync failed. (${
@@ -523,6 +543,9 @@ export const runUpdateStoreBankPipeline = async (
     const metadataMessage = metadataSynced ? ' Store metadata synced.' : '';
     return `${saveResult.message || 'Store bank update exported successfully.'}${metadataMessage}${metadataWarningMessage}${uploadWarningMessage}${uploadWarningMessage ? '' : ' Draft asset uploaded. Publish it from Admin Access > Catalog when ready.'}`;
   } catch (error) {
+    if (typeof managedThumbnailCleanup === 'function') {
+      await managedThumbnailCleanup().catch(() => undefined);
+    }
     const now = getNowMs();
     const partialTiming = {
       totalMs: Math.round(now - exportStartedAt),

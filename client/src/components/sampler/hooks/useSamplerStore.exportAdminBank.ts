@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import type { BankMetadata, SamplerBank } from '../types/sampler';
 import type { AdminCatalogUploadPublishResult } from './useSamplerStore.exportUpload';
+import { ensureManagedStoreThumbnail } from './storeThumbnailUpload';
 
 type SamplerPad = SamplerBank['pads'][number];
 
@@ -161,6 +162,9 @@ export const runExportAdminBankPipeline = async (
     writeOperationDiagnosticsLog,
   } = deps;
 
+  const isHttpUrl = (value: string | null | undefined): value is string =>
+    typeof value === 'string' && /^https?:\/\//i.test(value.trim());
+
   if (!user || profileRole !== 'admin') throw new Error('Only admins can do this action.');
   const bank = banks.find((b) => b.id === id);
   if (!bank) throw new Error('We could not find that bank.');
@@ -182,6 +186,7 @@ export const runExportAdminBankPipeline = async (
   let archiveCompletedAt = exportStartedAt;
   let saveCompletedAt = exportStartedAt;
   let exportedArchiveBytes = 0;
+  let managedThumbnailCleanup: (() => Promise<void>) | null = null;
 
   try {
     onProgress?.(5);
@@ -366,6 +371,7 @@ export const runExportAdminBankPipeline = async (
     let catalogDraftId: string | null = null;
     let uploadBankId = bank.id;
     let signedTokenWarningMessage = '';
+    let durableThumbnailPath: string | undefined = isHttpUrl(thumbnailPath) ? thumbnailPath : undefined;
 
     if (addToDatabase) {
       addOperationStage(diagnostics, 'db-create');
@@ -375,6 +381,20 @@ export const runExportAdminBankPipeline = async (
       uploadBankId = adminBank.id;
       fileName = `${normalizedTitle.replace(/[^a-z0-9]/gi, '_')}_${adminBank.id}.bank`;
 
+      if (thumbnailPath) {
+        const managedThumbnail = await ensureManagedStoreThumbnail({
+          bankId: adminBank.id,
+          thumbnailPath,
+          inferImageExtFromPath,
+        });
+        durableThumbnailPath = managedThumbnail.url;
+        managedThumbnailCleanup = managedThumbnail.uploaded ? managedThumbnail.cleanup : null;
+        addOperationStage(diagnostics, 'thumbnail-uploaded-for-store', {
+          bankId: adminBank.id,
+          uploaded: managedThumbnail.uploaded,
+        });
+      }
+
       addBankMetadata(zip, {
         password: !publicCatalogAsset,
         transferable: true,
@@ -383,7 +403,7 @@ export const runExportAdminBankPipeline = async (
         description,
         color: bank.defaultColor,
         bankId: adminBank.id,
-        thumbnailUrl: thumbnailPath,
+        thumbnailUrl: durableThumbnailPath,
         thumbnailAssetPath: embeddedThumbnailAssetPath,
         hideThumbnailPreview: bank.bankMetadata?.hideThumbnailPreview,
       });
@@ -398,7 +418,7 @@ export const runExportAdminBankPipeline = async (
           method: 'POST',
           body: {
             expected_asset_name: fileName,
-            thumbnail_path: thumbnailPath,
+            thumbnail_path: durableThumbnailPath,
             asset_protection: publicCatalogAsset ? 'public' : 'encrypted',
           },
         });
@@ -478,7 +498,7 @@ export const runExportAdminBankPipeline = async (
         title,
         description,
         color: bank.defaultColor,
-        thumbnailUrl: thumbnailPath,
+        thumbnailUrl: durableThumbnailPath,
         thumbnailAssetPath: embeddedThumbnailAssetPath,
         hideThumbnailPreview: bank.bankMetadata?.hideThumbnailPreview,
         adminExportToken: signedAdminExportToken?.token,
@@ -598,6 +618,9 @@ export const runExportAdminBankPipeline = async (
     onProgress?.(100);
     return `${saveResult.message || 'Admin bank exported successfully.'}${uploadWarningMessage}${signedTokenWarningMessage}`;
   } catch (error) {
+    if (typeof managedThumbnailCleanup === 'function') {
+      await managedThumbnailCleanup().catch(() => undefined);
+    }
     const now = getNowMs();
     const partialTiming = {
       totalMs: Math.round(now - exportStartedAt),

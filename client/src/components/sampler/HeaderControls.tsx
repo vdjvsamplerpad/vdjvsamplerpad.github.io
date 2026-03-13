@@ -1,6 +1,7 @@
 ﻿import * as React from 'react';
 import { Button } from '@/components/ui/button';
-import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2 } from 'lucide-react';
 import type { SamplerBank, StopMode } from './types/sampler';
 import { createPortal } from 'react-dom';
 import { getCachedUser, useAuth } from '@/hooks/useAuth';
@@ -11,6 +12,7 @@ import type { DefaultBankSourceOption } from './AdminAccessDialog.shared';
 import type { LoginModal as LoginModalType } from '@/components/auth/LoginModal';
 import type { AboutDialog as AboutDialogType } from '@/components/ui/about-dialog';
 import type { HeaderAdminDebugPanel as HeaderAdminDebugPanelType } from './HeaderAdminDebugPanel';
+import { EXTRA_PAD_COLORS, PRIMARY_PAD_COLORS, getPadColorOptionLabel } from './padColorPalette';
 
 const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then((module) => ({ default: module.LoginModal }))) as unknown as typeof LoginModalType;
 const AboutDialog = React.lazy(() => import('@/components/ui/about-dialog').then((module) => ({ default: module.AboutDialog }))) as unknown as typeof AboutDialogType;
@@ -30,6 +32,9 @@ interface HeaderControlsProps {
   mixerOpen: boolean;
   searchOpen: boolean;
   channelLoadArmed: boolean;
+  adminPadColorPaintActive: boolean;
+  adminPadColorPaintColor: string | null;
+  adminPadColorPaintCanUndo: boolean;
   theme: 'light' | 'dark';
   windowWidth: number;
   onFileUpload: (file: File, targetBankId?: string) => void;
@@ -40,6 +45,9 @@ interface HeaderControlsProps {
   onToggleMixer: () => void;
   onToggleSearch: () => void;
   onCancelChannelLoad: () => void;
+  onStartAdminPadColorPaint: (color: string) => void;
+  onStopAdminPadColorPaint: () => void;
+  onUndoAdminPadColorPaint: () => void;
   onToggleTheme: () => void;
   onExitDualMode: () => void;
   onPadSizeChange: (size: number) => void;
@@ -200,6 +208,9 @@ export function HeaderControls({
   mixerOpen,
   searchOpen,
   channelLoadArmed,
+  adminPadColorPaintActive,
+  adminPadColorPaintColor,
+  adminPadColorPaintCanUndo,
   theme,
   windowWidth,
   onFileUpload,
@@ -210,6 +221,9 @@ export function HeaderControls({
   onToggleMixer,
   onToggleSearch,
   onCancelChannelLoad,
+  onStartAdminPadColorPaint,
+  onStopAdminPadColorPaint,
+  onUndoAdminPadColorPaint,
   onToggleTheme,
   onExitDualMode,
   onPadSizeChange,
@@ -275,6 +289,9 @@ export function HeaderControls({
   const [AdminAccessDialog, setAdminAccessDialog] = React.useState<React.ComponentType<any> | null>(null);
   const [showLoginModal, setShowLoginModal] = React.useState(false);
   const [aboutOpen, setAboutOpen] = React.useState(false);
+  const [showPadColorPaintDialog, setShowPadColorPaintDialog] = React.useState(false);
+  const [showAllPadColors, setShowAllPadColors] = React.useState(false);
+  const [pendingPadColor, setPendingPadColor] = React.useState<string>(adminPadColorPaintColor || PRIMARY_PAD_COLORS[0]?.value || '#f59e0b');
   const appVersion = (import.meta as any).env?.VITE_APP_VERSION || 'unknown';
   const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.onFullscreenChange);
 
@@ -321,6 +338,11 @@ export function HeaderControls({
   }, []);
 
   React.useEffect(() => {
+    if (!showPadColorPaintDialog) return;
+    setPendingPadColor(adminPadColorPaintColor || PRIMARY_PAD_COLORS[0]?.value || '#f59e0b');
+  }, [adminPadColorPaintColor, showPadColorPaintDialog]);
+
+  React.useEffect(() => {
     if (!isElectronWindowControlsAvailable) return;
     let mounted = true;
 
@@ -360,6 +382,11 @@ export function HeaderControls({
         onToggleSearch();
         return;
       }
+      if (normalizedKey === 'escape' && adminPadColorPaintActive) {
+        onStopAdminPadColorPaint();
+        pushNotice({ variant: 'info', message: 'Color Paint Mode cancelled.' });
+        return;
+      }
       if (normalizedKey === 'escape' && searchOpen) {
         onToggleSearch();
       }
@@ -367,7 +394,7 @@ export function HeaderControls({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onToggleSearch, searchOpen, windowWidth]);
+  }, [adminPadColorPaintActive, onStopAdminPadColorPaint, onToggleSearch, pushNotice, searchOpen, windowWidth]);
 
   // Show greeting notification when user logs in
   React.useEffect(() => {
@@ -477,6 +504,42 @@ export function HeaderControls({
     prevAuthTransitionRef.current = authTransition.status;
   }, [authTransition.status, isAuthenticated, pushNotice]);
 
+  const padColorPaintBlockedReason = !editMode
+    ? 'Enter Edit Mode before using Color Paint Mode.'
+    : channelLoadArmed
+      ? 'Cancel channel load mode before using Color Paint Mode.'
+      : searchOpen
+        ? 'Close search before using Color Paint Mode.'
+        : null;
+
+  const handlePadColorPaintButton = React.useCallback(() => {
+    if (adminPadColorPaintActive) {
+      onStopAdminPadColorPaint();
+      pushNotice({ variant: 'info', message: 'Color Paint Mode cancelled.' });
+      return;
+    }
+    if (padColorPaintBlockedReason) {
+      pushNotice({ variant: 'info', message: padColorPaintBlockedReason });
+      return;
+    }
+    setShowPadColorPaintDialog(true);
+  }, [adminPadColorPaintActive, onStopAdminPadColorPaint, padColorPaintBlockedReason, pushNotice]);
+
+  const handleConfirmPadColorPaint = React.useCallback(() => {
+    onStartAdminPadColorPaint(pendingPadColor);
+    setShowPadColorPaintDialog(false);
+    setShowAllPadColors(false);
+    pushNotice({
+      variant: 'success',
+      message: `Color Paint Mode active: ${getPadColorOptionLabel(pendingPadColor)}. Click pads to recolor them.`,
+    });
+  }, [onStartAdminPadColorPaint, pendingPadColor, pushNotice]);
+
+  const handleUndoPadColorPaint = React.useCallback(() => {
+    onUndoAdminPadColorPaint();
+    pushNotice({ variant: 'info', message: 'Undid the last painted pad color.' });
+  }, [onUndoAdminPadColorPaint, pushNotice]);
+
   return (
     <>
       {/* Slide-down notifications */}
@@ -578,6 +641,44 @@ export function HeaderControls({
             <Pencil className="w-4 h-4" />
             {!isMobileScreen && (isMobileScreen ? '' : editMode ? 'Exit Edit' : 'Edit')}
           </Button>
+
+          {isAdmin && (
+            <Button
+              onClick={handlePadColorPaintButton}
+              variant="outline"
+              size={isMobileScreen ? "sm" : "default"}
+              className={`${isMobileScreen ? 'w-10' : 'w-28'} transition-all duration-200 ${
+                adminPadColorPaintActive
+                  ? theme === 'dark'
+                    ? 'bg-fuchsia-500 border-fuchsia-400 text-fuchsia-100'
+                    : 'bg-fuchsia-50 border-fuchsia-300 text-fuchsia-700'
+                  : theme === 'dark'
+                    ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-fuchsia-500 hover:border-fuchsia-400 hover:text-fuchsia-100'
+                    : 'bg-white border-gray-300 text-gray-700 hover:bg-fuchsia-50 hover:border-fuchsia-300 hover:text-fuchsia-700'
+              }`}
+              title={adminPadColorPaintActive ? 'Cancel Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
+            >
+              <Palette className="w-4 h-4" />
+              {!isMobileScreen && (adminPadColorPaintActive ? 'Cancel Paint' : 'Color Paint')}
+            </Button>
+          )}
+
+          {isAdmin && adminPadColorPaintCanUndo && (
+            <Button
+              onClick={handleUndoPadColorPaint}
+              variant="outline"
+              size={isMobileScreen ? "sm" : "default"}
+              className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${
+                theme === 'dark'
+                  ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-slate-500 hover:border-slate-400 hover:text-white'
+                  : 'bg-white border-gray-300 text-gray-700 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700'
+              }`}
+              title="Undo last painted pad color"
+            >
+              <Undo2 className="w-4 h-4" />
+              {!isMobileScreen && 'Undo'}
+            </Button>
+          )}
 
           {/* Search Button */}
           <Button
@@ -695,7 +796,73 @@ export function HeaderControls({
             </Button>
           )}
         </div>
+
+        {isAdmin && adminPadColorPaintActive && adminPadColorPaintColor && (
+          <div className={`mx-auto mb-2 inline-flex max-w-[92vw] items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
+            theme === 'dark'
+              ? 'border-fuchsia-400/40 bg-fuchsia-500/10 text-fuchsia-100'
+              : 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700'
+          }`}>
+            <Palette className="h-3.5 w-3.5" />
+            <span>Color Paint Mode</span>
+            <span className="inline-block h-3.5 w-3.5 rounded-full border border-white/60" style={{ backgroundColor: adminPadColorPaintColor }} />
+            <span>{getPadColorOptionLabel(adminPadColorPaintColor)}</span>
+            <span className={theme === 'dark' ? 'text-fuchsia-200/80' : 'text-fuchsia-600/80'}>
+              Click pads to recolor. Press Esc or tap the paint button to cancel.
+            </span>
+          </div>
+        )}
       </header>
+
+      <Dialog open={showPadColorPaintDialog} onOpenChange={setShowPadColorPaintDialog}>
+        <DialogContent className={theme === 'dark' ? 'border-gray-700 bg-gray-950 text-gray-100' : ''}>
+          <DialogHeader>
+            <DialogTitle>Color Paint Mode</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className={`text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+              Select a pad color, then confirm to enter admin-only paint mode. Clicking pads will save the new color immediately.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {(showAllPadColors ? [...PRIMARY_PAD_COLORS, ...EXTRA_PAD_COLORS] : PRIMARY_PAD_COLORS).map((colorOption) => (
+                <button
+                  key={colorOption.value}
+                  type="button"
+                  onClick={() => setPendingPadColor(colorOption.value)}
+                  className={`h-8 w-8 rounded-full border-2 transition-all ${
+                    pendingPadColor === colorOption.value ? 'scale-110 border-white shadow-lg' : (theme === 'dark' ? 'border-gray-500' : 'border-gray-300')
+                  }`}
+                  style={{ backgroundColor: colorOption.value }}
+                  title={colorOption.label}
+                />
+              ))}
+              {EXTRA_PAD_COLORS.length > 0 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2 text-xs"
+                  onClick={() => setShowAllPadColors((prev) => !prev)}
+                >
+                  {showAllPadColors ? 'Less' : 'More'}
+                </Button>
+              )}
+            </div>
+            <div className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${theme === 'dark' ? 'border-gray-800 bg-gray-900/80' : 'border-gray-200 bg-gray-50'}`}>
+              <span className="inline-block h-4 w-4 rounded-full border border-white/70" style={{ backgroundColor: pendingPadColor }} />
+              <span className="text-sm font-medium">{getPadColorOptionLabel(pendingPadColor)}</span>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setShowPadColorPaintDialog(false)}>
+                Cancel
+              </Button>
+              <Button type="button" onClick={handleConfirmPadColorPaint}>
+                Start Paint Mode
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {isAdmin && AdminAccessDialog && (
         <AdminAccessDialog

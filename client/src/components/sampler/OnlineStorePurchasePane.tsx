@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { ArrowRight, Download, ExternalLink, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { CopyableValue } from '@/components/ui/copyable-value';
 import {
     PaymentChannel,
     PaymentConfig,
@@ -140,13 +141,25 @@ export function OnlineStorePurchasePane({
                         {paymentConfig.gcash_number && (
                             <div className={`p-3 rounded-lg border flex flex-col gap-1 items-center justify-center text-center ${isDark ? 'bg-blue-900/20 border-blue-500/30' : 'bg-blue-50 border-blue-100'}`}>
                                 <span className="text-xs font-bold text-blue-500 uppercase tracking-wider">GCash</span>
-                                <span className={`font-mono text-lg font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>{paymentConfig.gcash_number}</span>
+                                <CopyableValue
+                                    value={paymentConfig.gcash_number}
+                                    label="GCash number"
+                                    className="max-w-full"
+                                    valueClassName={`font-mono text-lg font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}
+                                    buttonClassName={isDark ? 'text-blue-200 hover:bg-blue-400/15' : 'text-blue-700 hover:bg-blue-100'}
+                                />
                             </div>
                         )}
                         {paymentConfig.maya_number && (
                             <div className={`p-3 rounded-lg border flex flex-col gap-1 items-center justify-center text-center ${isDark ? 'bg-green-900/20 border-green-500/30' : 'bg-green-50 border-green-100'}`}>
                                 <span className="text-xs font-bold text-green-500 uppercase tracking-wider">Maya</span>
-                                <span className={`font-mono text-lg font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>{paymentConfig.maya_number}</span>
+                                <CopyableValue
+                                    value={paymentConfig.maya_number}
+                                    label="Maya number"
+                                    className="max-w-full"
+                                    valueClassName={`font-mono text-lg font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}
+                                    buttonClassName={isDark ? 'text-green-200 hover:bg-green-400/15' : 'text-green-700 hover:bg-green-100'}
+                                />
                             </div>
                         )}
                     </div>

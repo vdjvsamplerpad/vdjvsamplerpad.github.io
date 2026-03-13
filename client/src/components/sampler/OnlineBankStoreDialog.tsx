@@ -644,8 +644,8 @@ export function OnlineBankStoreDialog({ open, onOpenChange, theme, importedBankI
                                     amountValue={purchaseReceipt.amountText}
                                     lineItems={[
                                         { label: 'Payment for', value: `${purchaseReceipt.itemCount} bank${purchaseReceipt.itemCount > 1 ? 's' : ''}` },
-                                        { label: 'VDJV Receipt No', value: purchaseReceipt.receiptNo },
-                                        { label: 'Payment Reference', value: purchaseReceipt.paymentReference },
+                                        { label: 'VDJV Receipt No', value: purchaseReceipt.receiptNo, copyValue: purchaseReceipt.receiptNo },
+                                        { label: 'Payment Reference', value: purchaseReceipt.paymentReference, copyValue: purchaseReceipt.paymentReference },
                                         { label: 'Submitted', value: new Date(purchaseReceipt.submittedAt).toLocaleString() },
                                     ]}
                                     receiptFileName={`bank-store-receipt-${new Date(purchaseReceipt.submittedAt).toISOString().replace(/[:.]/g, '-')}.png`}

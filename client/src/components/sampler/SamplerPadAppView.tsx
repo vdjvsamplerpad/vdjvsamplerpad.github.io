@@ -92,6 +92,8 @@ interface SamplerPadAppViewProps {
   canTransferFromBank: (bankId: string) => boolean;
   midiEnabled: boolean;
   hideShortcutLabels: boolean;
+  adminPadColorPaintActive: boolean;
+  onAdminPadColorPaint: (bankId: string, pad: PadData) => void | Promise<void>;
   highlightedPadTarget: { bankId: string; padId: string } | null;
   graphicsTier: PerformanceTier;
   editRequest: { padId: string; token: number } | null;
@@ -221,6 +223,8 @@ export function SamplerPadAppView({
   canTransferFromBank,
   midiEnabled,
   hideShortcutLabels,
+  adminPadColorPaintActive,
+  onAdminPadColorPaint,
   highlightedPadTarget,
   graphicsTier,
   editRequest,
@@ -384,6 +388,8 @@ export function SamplerPadAppView({
                     canTransferFromBank={canTransferFromBank}
                     midiEnabled={midiEnabled}
                     hideShortcutLabel={hideShortcutLabels}
+                    adminPadColorPaintActive={adminPadColorPaintActive}
+                    onAdminPadColorPaint={onAdminPadColorPaint}
                     graphicsTier={graphicsTier}
                     editRequest={editRequest}
                     blockedShortcutKeys={blockedShortcutKeys}
@@ -439,6 +445,8 @@ export function SamplerPadAppView({
                       canTransferFromBank={canTransferFromBank}
                       midiEnabled={midiEnabled}
                       hideShortcutLabel={hideShortcutLabels}
+                      adminPadColorPaintActive={adminPadColorPaintActive}
+                      onAdminPadColorPaint={onAdminPadColorPaint}
                       graphicsTier={graphicsTier}
                       editRequest={editRequest}
                       blockedShortcutKeys={blockedShortcutKeys}
@@ -497,6 +505,8 @@ export function SamplerPadAppView({
                   canTransferFromBank={canTransferFromBank}
                   midiEnabled={midiEnabled}
                   hideShortcutLabel={hideShortcutLabels}
+                  adminPadColorPaintActive={adminPadColorPaintActive}
+                  onAdminPadColorPaint={onAdminPadColorPaint}
                   graphicsTier={graphicsTier}
                   editRequest={editRequest}
                   blockedShortcutKeys={blockedShortcutKeys}

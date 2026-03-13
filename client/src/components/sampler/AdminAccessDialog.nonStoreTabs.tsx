@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { CopyableValue } from '@/components/ui/copyable-value';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -391,7 +392,16 @@ function HomeTab({
               {(homeData?.queues?.accountRequests || []).map((row) => (
                 <div key={row.id} className={`rounded border px-2 py-1 text-xs ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
                   <div className="font-medium truncate">{row.display_name || row.email || 'Unknown'}</div>
-                  <div className="opacity-70 truncate">{row.email || '-'} | {row.payment_channel || '-'}</div>
+                  <div className="flex items-center gap-1 opacity-70 min-w-0">
+                    <CopyableValue
+                      value={row.email || '-'}
+                      label="account request email"
+                      className="max-w-full min-w-0 flex-1"
+                      valueClassName="text-inherit"
+                      buttonClassName="h-5 w-5"
+                    />
+                    <span className="shrink-0">| {row.payment_channel || '-'}</span>
+                  </div>
                 </div>
               ))}
               {!homeLoading && (homeData?.queues?.accountRequests || []).length === 0 && (
@@ -549,7 +559,15 @@ function AssignmentsTab({
               {assignmentUsers.map((user) => (
                 <TableRow key={user.id} className={`flex flex-col md:table-row cursor-pointer rounded md:rounded-none border md:border-none p-2 md:p-0 ${selectedUserId === user.id ? (theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100') : ''}`} onClick={() => onSelectUser(user.id)}>
                   <TableCell className="block md:table-cell font-medium max-w-[200px] truncate border-none md:border-b pb-0 md:pb-4" title={user.display_name}>{user.display_name}</TableCell>
-                  <TableCell className="block md:table-cell text-xs opacity-70 max-w-[220px] truncate border-none md:border-b pt-0 md:pt-4" title={user.email || ''}>{user.email || '-'}</TableCell>
+                  <TableCell className="block md:table-cell text-xs opacity-70 max-w-[220px] border-none md:border-b pt-0 md:pt-4">
+                    <CopyableValue
+                      value={user.email || '-'}
+                      label="user email"
+                      className="max-w-full"
+                      valueClassName="block max-w-full truncate text-inherit"
+                      buttonClassName="h-5 w-5"
+                    />
+                  </TableCell>
                 </TableRow>
               ))}
               {!usersLoading && assignmentUsers.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={2} className="block md:table-cell text-center py-3 opacity-70">No users</TableCell></TableRow>}
@@ -712,7 +730,16 @@ function UsersTab({
             {users.map((user) => (
               <TableRow key={user.id} className="flex flex-col md:table-row border border-gray-200 dark:border-gray-800 rounded-lg md:rounded-none md:border-none p-3 md:p-0 relative">
                 <TableCell className="block md:table-cell pb-1 md:pb-4 font-medium text-base truncate pr-16 border-none md:border-b">{user.display_name}</TableCell>
-                <TableCell className="block md:table-cell py-1 md:py-4 text-xs opacity-70 border-none md:border-b"><span className="md:hidden font-semibold">Email: </span>{user.email || '-'}</TableCell>
+                <TableCell className="block md:table-cell py-1 md:py-4 text-xs opacity-70 border-none md:border-b">
+                  <span className="md:hidden font-semibold">Email: </span>
+                  <CopyableValue
+                    value={user.email || '-'}
+                    label="user email"
+                    className="max-w-full"
+                    valueClassName="inline-block max-w-[220px] truncate text-inherit align-middle"
+                    buttonClassName="h-5 w-5"
+                  />
+                </TableCell>
                 <TableCell className="hidden md:table-cell">{user.created_at ? new Date(user.created_at).toLocaleString() : '-'}</TableCell>
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : '-'}</TableCell>
                 <TableCell className="block md:table-cell py-1 md:py-4 border-none md:border-b">
@@ -775,7 +802,15 @@ function ActiveTab({
             {activeUsersRows.map((row) => (
               <TableRow key={row.user_id} className="flex flex-col md:table-row border border-gray-200 dark:border-gray-800 rounded-lg md:rounded-none md:border-none p-3 md:p-0">
                 <TableCell className="block md:table-cell font-mono text-xs border-none md:border-b pb-1 md:pb-4"><span className="md:hidden font-semibold font-sans">ID: </span>{row.user_id.slice(0, 8)}...</TableCell>
-                <TableCell className="block md:table-cell font-medium border-none md:border-b py-0 md:py-4">{row.email || '-'}</TableCell>
+                <TableCell className="block md:table-cell font-medium border-none md:border-b py-0 md:py-4">
+                  <CopyableValue
+                    value={row.email || '-'}
+                    label="active session email"
+                    className="max-w-full"
+                    valueClassName="block max-w-[220px] truncate text-inherit"
+                    buttonClassName="h-5 w-5"
+                  />
+                </TableCell>
                 <TableCell className="block md:table-cell text-xs opacity-70 border-none md:border-b py-0 md:py-4"><span className="md:hidden font-semibold opacity-100">Device: </span>{row.device_name || '-'}</TableCell>
                 <TableCell className="block md:table-cell text-xs opacity-70 border-none md:border-b py-0 md:py-4">{[row.platform, row.browser, row.os].filter(Boolean).join(' / ') || '-'}</TableCell>
                 <TableCell className="block md:table-cell text-xs font-medium text-cyan-600 dark:text-cyan-400 border-none md:border-b pt-1 md:pt-4"><span className="md:hidden font-semibold text-gray-500 dark:text-gray-400 mr-1">Last seen: </span>{new Date(row.last_seen_at).toLocaleString()}</TableCell>
@@ -951,7 +986,16 @@ function ActivityTab({
                       <TableCell className="block md:table-cell pt-1 md:py-4 pb-2 md:pb-4 border-none md:border-b">
                         <span className={`text-xs px-2 py-1 rounded ${row.status === 'failed' ? 'bg-red-600/20 text-red-500' : 'bg-emerald-600/20 text-emerald-500'}`}>{row.status}</span>
                       </TableCell>
-                      <TableCell className="block md:table-cell py-1 md:py-4 text-sm max-w-[220px] truncate border-none md:border-b" title={row.email || row.display_name || ''}><span className="md:hidden font-semibold mr-1 text-xs opacity-70">User:</span>{row.email || row.display_name || '-'}</TableCell>
+                      <TableCell className="block md:table-cell py-1 md:py-4 text-sm max-w-[220px] border-none md:border-b">
+                        <span className="md:hidden font-semibold mr-1 text-xs opacity-70">User:</span>
+                        <CopyableValue
+                          value={row.email || row.display_name || '-'}
+                          label="activity user"
+                          className="max-w-full"
+                          valueClassName="inline-block max-w-[180px] truncate text-inherit align-middle"
+                          buttonClassName="h-5 w-5"
+                        />
+                      </TableCell>
                       <TableCell className="block md:table-cell py-1 md:py-4 text-sm max-w-[180px] truncate border-none md:border-b" title={row.bank_name || ''}><span className="md:hidden font-semibold mr-1 text-xs opacity-70">Bank:</span>{row.bank_name || '-'}</TableCell>
                       <TableCell className="block md:table-cell pt-1 md:pt-4 text-sm border-none md:border-b"><span className="md:hidden font-semibold mr-1 text-xs opacity-70">Phase:</span>{phase}</TableCell>
                     </TableRow>
@@ -1065,7 +1109,16 @@ function ActivityTab({
                   <TableCell className="block md:table-cell pb-1 md:pb-4 text-xs font-medium border-none md:border-b opacity-70">{row.created_at ? new Date(row.created_at).toLocaleString() : '-'}</TableCell>
                   <TableCell className="block md:table-cell font-semibold text-sm border-none md:border-b py-0 md:py-4">{row.event_type}</TableCell>
                   <TableCell className="block md:table-cell pt-1 md:py-4 pb-2 md:pb-4 border-none md:border-b"><span className={`text-xs px-2 py-1 rounded ${row.status === 'failed' ? 'bg-red-600/20 text-red-500' : 'bg-emerald-600/20 text-emerald-500'}`}>{row.status}</span></TableCell>
-                  <TableCell className="block md:table-cell py-1 md:py-4 text-sm max-w-[220px] truncate border-none md:border-b" title={row.email || row.display_name || ''}><span className="md:hidden font-semibold mr-1 text-xs opacity-70">User:</span>{row.email || row.display_name || '-'}</TableCell>
+                  <TableCell className="block md:table-cell py-1 md:py-4 text-sm max-w-[220px] border-none md:border-b">
+                    <span className="md:hidden font-semibold mr-1 text-xs opacity-70">User:</span>
+                    <CopyableValue
+                      value={row.email || row.display_name || '-'}
+                      label="activity user"
+                      className="max-w-full"
+                      valueClassName="inline-block max-w-[180px] truncate text-inherit align-middle"
+                      buttonClassName="h-5 w-5"
+                    />
+                  </TableCell>
                   <TableCell className="block md:table-cell py-1 md:py-4 text-sm max-w-[160px] truncate border-none md:border-b" title={row.bank_name || ''}><span className="md:hidden font-semibold mr-1 text-xs opacity-70">Bank:</span>{row.bank_name || '-'}</TableCell>
                   <TableCell className={`block md:table-cell py-1 md:py-4 text-sm max-w-[300px] truncate border-none md:border-b ${row.error_message ? 'text-red-500' : ''}`} title={row.error_message || ''}><span className="md:hidden font-semibold mr-1 text-xs opacity-70">Error:</span>{row.error_message || '-'}</TableCell>
                 </TableRow>

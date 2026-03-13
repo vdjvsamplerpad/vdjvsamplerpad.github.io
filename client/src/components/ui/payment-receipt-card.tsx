@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Check, Clock3, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { CopyableValue } from '@/components/ui/copyable-value'
 
 const RECEIPT_EXPORT_FOLDER_NAME = 'VDJV-Receipts'
 const ANDROID_DOWNLOAD_ROOT = '/storage/emulated/0/Download'
@@ -9,6 +10,7 @@ export type PaymentReceiptLineItem = {
   label: string
   value: string
   hint?: string
+  copyValue?: string
 }
 
 export type PaymentReceiptAction = {
@@ -145,6 +147,7 @@ export function PaymentReceiptCard({
     const width = Math.max(320, Math.ceil(rect.width))
     const height = Math.max(320, Math.ceil(rect.height))
     const cloned = root.cloneNode(true) as HTMLElement
+    cloned.querySelectorAll('.vdjv-receipt-export-hidden').forEach((node) => node.remove())
     cloned.style.margin = '0'
     cloned.style.width = `${width}px`
 
@@ -340,7 +343,16 @@ export function PaymentReceiptCard({
                 <div className={`text-xs uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{item.label}</div>
                 {item.hint ? <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{item.hint}</div> : null}
               </div>
-              <div className="text-right font-medium break-all">{item.value}</div>
+              <div className="text-right font-medium break-all">
+                {item.copyValue ? (
+                  <CopyableValue
+                    value={item.copyValue}
+                    label={item.label}
+                    valueClassName="text-inherit font-medium"
+                    buttonClassName="vdjv-receipt-export-hidden h-5 w-5"
+                  />
+                ) : item.value}
+              </div>
             </div>
           ))}
         </div>
