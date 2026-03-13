@@ -68,6 +68,7 @@ export interface SamplerStore {
   createBank: (name: string, defaultColor: string) => void;
   setPrimaryBank: (id: string | null) => void;
   setSecondaryBank: (id: string | null) => void;
+  setVisibleBanks: (primaryId: string | null, secondaryId: string | null) => void;
   setCurrentBank: (id: string | null) => void;
   updateBank: (id: string, updates: Partial<SamplerBank>) => void;
   deleteBank: (id: string) => void;
@@ -125,6 +126,11 @@ export interface SamplerStore {
     remaining: number;
     remainingOfficial: number;
     remainingUser: number;
+  }>;
+  prefetchOfficialBankMediaForOffline: (bankId: string) => Promise<{
+    candidates: number;
+    prefetched: number;
+    failed: number;
   }>;
   recoverMissingMediaFromBanks: (
     files: File[],

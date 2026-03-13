@@ -25,6 +25,7 @@ export interface MediaStorageDeps {
     backend?: MediaBackend
   ) => NativeMediaStorageTargets;
   nativeMediaRuntime: {
+    getNativeMediaPlaybackUrl: (storageKey: string) => Promise<string | null>;
     writeNativeMediaBlob: (
       padId: string,
       blob: Blob,
@@ -59,6 +60,10 @@ export const restoreFileAccessPipeline = async (
 
   if (isNativeCapacitorPlatform()) {
     for (const nativeKey of targets.nativeKeys) {
+      const playbackUrl = await nativeMediaRuntime.getNativeMediaPlaybackUrl(nativeKey);
+      if (playbackUrl) {
+        return { url: playbackUrl, storageKey: nativeKey, backend: 'native' };
+      }
       const blob = await nativeMediaRuntime.readNativeMediaBlob(nativeKey, type);
       if (blob) {
         return { url: URL.createObjectURL(blob), storageKey: nativeKey, backend: 'native' };
@@ -103,6 +108,10 @@ export const restoreFileAccessPipeline = async (
         : ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bin'];
     extensions.forEach((ext) => candidateKeys.push(`${type}/${padId}.${ext}`));
     for (const candidate of candidateKeys) {
+      const playbackUrl = await nativeMediaRuntime.getNativeMediaPlaybackUrl(candidate);
+      if (playbackUrl) {
+        return { url: playbackUrl, storageKey: candidate, backend: 'native' };
+      }
       const blob = await nativeMediaRuntime.readNativeMediaBlob(candidate, type);
       if (blob) {
         return { url: URL.createObjectURL(blob), storageKey: candidate, backend: 'native' };

@@ -1226,6 +1226,15 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   const setSecondaryBank = React.useCallback((id: string | null) => {
     runSetSecondaryBankPipeline({ id, primaryBankId }, setSecondaryBankIdState);
   }, [primaryBankId]);
+  const setVisibleBanks = React.useCallback((primaryId: string | null, secondaryId: string | null) => {
+    const nextPrimary = primaryId;
+    const nextSecondary = secondaryId && secondaryId !== primaryId ? secondaryId : null;
+    setPrimaryBankIdState(nextPrimary);
+    setSecondaryBankIdState(nextSecondary);
+    if (nextPrimary || nextSecondary) {
+      setCurrentBankIdState(null);
+    }
+  }, []);
   const setCurrentBank = React.useCallback((id: string | null) => {
     runSetCurrentBankPipeline({ id, isDualMode }, setCurrentBankIdState);
   }, [isDualMode]);
@@ -1944,11 +1953,132 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     );
   }, [rehydratePadMedia]);
 
+  const prefetchOfficialBankMediaForOffline = React.useCallback(async (bankId: string) => {
+    const bank = banksRef.current.find((entry) => entry.id === bankId);
+    if (!bank) {
+      return { candidates: 0, prefetched: 0, failed: 0 };
+    }
+
+    const isBankOfficial =
+      isDefaultBankIdentity(bank) ||
+      bank.restoreKind === 'default_bank' ||
+      bank.restoreKind === 'paid_bank' ||
+      Boolean(bank.bankMetadata?.defaultBankSource) ||
+      Boolean(bank.bankMetadata?.catalogItemId) ||
+      Boolean(bank.bankMetadata?.bankId);
+
+    const candidatePads = bank.pads.filter((pad) => {
+      const audioNeedsPrefetch = Boolean(pad.audioUrl) && !pad.audioStorageKey && !pad.audioBackend;
+      const imageNeedsPrefetch =
+        Boolean(pad.imageUrl) &&
+        pad.hasImageAsset === true &&
+        !pad.imageStorageKey &&
+        !pad.imageBackend;
+      const padIsOfficial =
+        isBankOfficial ||
+        pad.contentOrigin === 'official_admin' ||
+        pad.contentOrigin === 'official_store' ||
+        pad.restoreAssetKind === 'default_asset' ||
+        pad.restoreAssetKind === 'paid_asset';
+      return padIsOfficial && (audioNeedsPrefetch || imageNeedsPrefetch);
+    });
+
+    if (candidatePads.length === 0) {
+      return { candidates: 0, prefetched: 0, failed: 0 };
+    }
+
+    let prefetched = 0;
+    let failed = 0;
+    const nextPads = [...bank.pads];
+
+    for (let index = 0; index < candidatePads.length; index += 1) {
+      const sourcePad = candidatePads[index];
+      const padIndex = nextPads.findIndex((entry) => entry.id === sourcePad.id);
+      if (padIndex < 0) continue;
+
+      try {
+        const currentPad = nextPads[padIndex];
+        let nextPad: PadData = { ...currentPad };
+        let changed = false;
+
+        const audioNeedsPrefetch = Boolean(currentPad.audioUrl) && !currentPad.audioStorageKey && !currentPad.audioBackend;
+        if (audioNeedsPrefetch) {
+          const audioBlob = await loadPadMediaBlobWithUrlFallback(currentPad, 'audio');
+          if (!audioBlob) throw new Error(`Failed to cache audio for "${currentPad.name}".`);
+          const storedAudio = await storeFile(
+            currentPad.id,
+            new File([audioBlob], `${currentPad.id}.audio`, { type: audioBlob.type || 'application/octet-stream' }),
+            'audio'
+          );
+          nextPad = {
+            ...nextPad,
+            audioUrl: URL.createObjectURL(audioBlob),
+            audioStorageKey: storedAudio.storageKey,
+            audioBackend: storedAudio.backend,
+          };
+          changed = true;
+        }
+
+        const imageNeedsPrefetch =
+          Boolean(currentPad.imageUrl) &&
+          currentPad.hasImageAsset === true &&
+          !currentPad.imageStorageKey &&
+          !currentPad.imageBackend;
+        if (imageNeedsPrefetch) {
+          const imageBlob = await loadPadMediaBlobWithUrlFallback(currentPad, 'image');
+          if (imageBlob) {
+            const storedImage = await storeFile(
+              currentPad.id,
+              new File([imageBlob], `${currentPad.id}.image`, { type: imageBlob.type || 'application/octet-stream' }),
+              'image'
+            );
+            nextPad = {
+              ...nextPad,
+              imageUrl: URL.createObjectURL(imageBlob),
+              imageStorageKey: storedImage.storageKey,
+              imageBackend: storedImage.backend,
+              hasImageAsset: true,
+            };
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          nextPads[padIndex] = nextPad;
+          prefetched += 1;
+        }
+      } catch {
+        failed += 1;
+      }
+
+      if ((index + 1) % 4 === 0) {
+        await yieldToMainThread();
+      }
+    }
+
+    if (prefetched > 0) {
+      setBanks((prev) => prev.map((entry) => (
+        entry.id === bankId
+          ? {
+              ...entry,
+              pads: nextPads,
+            }
+          : entry
+      )));
+    }
+
+    return {
+      candidates: candidatePads.length,
+      prefetched,
+      failed,
+    };
+  }, [loadPadMediaBlobWithUrlFallback, setBanks, storeFile, yieldToMainThread]);
+
 
   return {
     banks, startupRestoreCompleted, primaryBankId, secondaryBankId, currentBankId, primaryBank, secondaryBank, currentBank, isDualMode,
-    addPad, addPads, updatePad, removePad, createBank, setPrimaryBank, setSecondaryBank, setCurrentBank, updateBank, deleteBank, duplicateBank, duplicatePad, importBank, exportBank, reorderPads, moveBankUp, moveBankDown, transferPad, exportAdminBank, updateStoreBank, publishDefaultBankRelease, canTransferFromBank,
-    exportAppBackup, restoreAppBackup, applySamplerMetadataSnapshot, relinkPadAudioFromFile, rehydratePadMedia, rehydrateMissingMediaInBank, recoverMissingMediaFromBanks,
+    addPad, addPads, updatePad, removePad, createBank, setPrimaryBank, setSecondaryBank, setVisibleBanks, setCurrentBank, updateBank, deleteBank, duplicateBank, duplicatePad, importBank, exportBank, reorderPads, moveBankUp, moveBankDown, transferPad, exportAdminBank, updateStoreBank, publishDefaultBankRelease, canTransferFromBank,
+    exportAppBackup, restoreAppBackup, applySamplerMetadataSnapshot, relinkPadAudioFromFile, rehydratePadMedia, rehydrateMissingMediaInBank, prefetchOfficialBankMediaForOffline, recoverMissingMediaFromBanks,
   };
 }
 

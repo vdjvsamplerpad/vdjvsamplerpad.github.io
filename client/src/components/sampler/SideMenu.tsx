@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { ProgressDialog } from '@/components/ui/progress-dialog';
-import { Plus, X, Crown, RotateCcw, ChevronUp, ChevronDown, Loader2, Settings, ShoppingCart } from 'lucide-react';
+import { Plus, X, Crown, RotateCcw, ChevronUp, ChevronDown, Loader2, Settings, ShoppingCart, ArrowDownToLine } from 'lucide-react';
 import { SamplerBank, PadData } from './types/sampler';
 const BankEditDialog = React.lazy(() => import('./BankEditDialog').then(m => ({ default: m.BankEditDialog })));
 import type { OnlineBankStoreDialog as OnlineBankStoreDialogType } from './OnlineBankStoreDialog';
@@ -110,6 +110,11 @@ interface SideMenuProps {
     remainingOfficial: number;
     remainingUser: number;
   }>;
+  onPrefetchOfficialBankMediaForOffline: (bankId: string) => Promise<{
+    candidates: number;
+    prefetched: number;
+    failed: number;
+  }>;
   defaultBankColor?: string;
 }
 
@@ -149,9 +154,19 @@ export function SideMenu({
   onRequestRestoreBackup,
   onRequestRecoverBankFiles,
   onRetryBankMissingMedia,
+  onPrefetchOfficialBankMediaForOffline,
   defaultBankColor = '#3b82f6',
 }: SideMenuProps) {
   const logoSrc = `${import.meta.env.BASE_URL}assets/logo.png`;
+  const isNativeCapacitorRuntime = React.useMemo(
+    () => typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.()),
+    []
+  );
+  const isElectronRuntime = React.useMemo(
+    () => typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent),
+    []
+  );
+  const shouldShowOfflinePrefetchAction = !isNativeCapacitorRuntime && !isElectronRuntime;
   const [showCreateDialog, setShowCreateDialog] = React.useState(false);
   const [showStoreDialog, setShowStoreDialog] = React.useState(false);
   const [showEditDialog, setShowEditDialog] = React.useState(false);
@@ -175,6 +190,7 @@ export function SideMenu({
   const [dragOverBankId, setDragOverBankId] = React.useState<string | null>(null);
   const [renderContent, setRenderContent] = React.useState(open);
   const [pendingBulkClearAction, setPendingBulkClearAction] = React.useState<'keys' | 'midi' | null>(null);
+  const [offlinePrefetchBusyBankId, setOfflinePrefetchBusyBankId] = React.useState<string | null>(null);
 
 
   // ETA Calculation State
@@ -535,6 +551,34 @@ export function SideMenu({
       setSnapshotRecoverBusyBankId(null);
     }
   }, [onRetryBankMissingMedia, pushNotice]);
+
+  const handleOfflinePrefetch = React.useCallback(async (bankId: string) => {
+    setOfflinePrefetchBusyBankId(bankId);
+    try {
+      const result = await onPrefetchOfficialBankMediaForOffline(bankId);
+      if (result.candidates === 0) {
+        pushNotice({ variant: 'info', message: 'This bank is already available offline on this device.' });
+        return;
+      }
+      if (result.prefetched > 0 && result.failed === 0) {
+        pushNotice({
+          variant: 'success',
+          message: `Offline-ready: cached ${result.prefetched} pad${result.prefetched === 1 ? '' : 's'} for this bank.`,
+        });
+        return;
+      }
+      if (result.prefetched > 0) {
+        pushNotice({
+          variant: 'info',
+          message: `Cached ${result.prefetched} pad${result.prefetched === 1 ? '' : 's'} offline. ${result.failed} pad${result.failed === 1 ? '' : 's'} still need network.`,
+        });
+        return;
+      }
+      pushNotice({ variant: 'error', message: 'Could not cache this bank for offline use.' });
+    } finally {
+      setOfflinePrefetchBusyBankId(null);
+    }
+  }, [onPrefetchOfficialBankMediaForOffline, pushNotice]);
 
   // Manage loading state - CHANGED
   // We removed the timeout. It will now keep loading indefinitely until at least one bank is detected.
@@ -1574,9 +1618,38 @@ export function SideMenu({
                                 : 'text-gray-600 hover:text-yellow-700 hover:bg-yellow-100'
                             }`}
                           title={isPrimary ? 'Primary (click to exit dual mode)' : 'Set as Primary'}
-                        >
-                          <Crown className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
-                        </Button>
+                          >
+                            <Crown className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
+                          </Button>
+
+                        {shouldShowOfflinePrefetchAction && !isPreview && bank && isDefaultBankIdentity(bank) && bank.pads.some((pad) => {
+                          const hasUrlBackedAudio = Boolean(pad.audioUrl) && !pad.audioStorageKey && !pad.audioBackend;
+                          const hasUrlBackedImage = Boolean(pad.imageUrl) && pad.hasImageAsset === true && !pad.imageStorageKey && !pad.imageBackend;
+                          return hasUrlBackedAudio || hasUrlBackedImage;
+                        }) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleOfflinePrefetch(bankId);
+                            }}
+                            disabled={offlinePrefetchBusyBankId === bankId}
+                            className={`${bankActionButtonClass} transition-all duration-200 ${isHighThumbnailCard
+                              ? 'text-white/85 hover:text-white hover:bg-black/35'
+                              : theme === 'dark'
+                                ? 'text-gray-400 hover:text-white hover:bg-gray-600'
+                                : 'text-gray-600 hover:text-gray-900 hover:bg-white'
+                              }`}
+                            title={offlinePrefetchBusyBankId === bankId ? 'Caching bank for offline use...' : 'Make available offline'}
+                          >
+                            {offlinePrefetchBusyBankId === bankId ? (
+                              <Loader2 className={`${isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} animate-spin`} />
+                            ) : (
+                              <ArrowDownToLine className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
+                            )}
+                          </Button>
+                        )}
 
                         <Button
                           variant="ghost"

@@ -684,7 +684,7 @@ export function SamplerDefaultsTab({
             </label>
             <label className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${isDark ? 'border-gray-800 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
               <Checkbox checked={config.uiDefaults.defaultAutoPadBankMapping} onCheckedChange={(checked) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultAutoPadBankMapping: checked === true } })} />
-              <span className="text-sm">Auto apply pad/bank mappings</span>
+              <span className="text-sm">Auto fill missing pad/bank mappings</span>
             </label>
           </div>
           {config.uiDefaults.defaultKeyboardMappingEnabled ? (

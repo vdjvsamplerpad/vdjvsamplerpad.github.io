@@ -26,10 +26,13 @@ interface SamplerSearchOverlayProps {
   totalMatchCount: number;
   onGo: (result: SamplerSearchResult) => void;
   onOpenBank: (result: SamplerBankSearchResult, target?: 'auto' | 'primary' | 'secondary') => void;
+  onEditBank: (result: SamplerBankSearchResult) => void;
   onEdit: (result: SamplerSearchResult) => void;
   onLoad: (result: SamplerSearchResult) => void;
   showEditAction: boolean;
   isDualMode: boolean;
+  primaryBankId: string | null;
+  secondaryBankId: string | null;
   graphicsTier: PerformanceTier;
   loadTargetSelection: SamplerSearchResult | null;
   channelStates: ChannelDeckState[];
@@ -58,13 +61,16 @@ const statusToneClass = (
     : 'border-gray-200 bg-gray-50 text-gray-600';
 };
 
-const getBankColorLuminance = (hex: string): number => {
-  const normalized = hex.trim().replace('#', '');
-  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return 0.5;
-  const r = parseInt(normalized.slice(0, 2), 16);
-  const g = parseInt(normalized.slice(2, 4), 16);
-  const b = parseInt(normalized.slice(4, 6), 16);
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+const getTileContentTone = (color: string | undefined): 'light' | 'dark' => {
+  if (!color) return 'light';
+  const normalized = color.trim();
+  const hex = normalized.startsWith('#') ? normalized.slice(1) : normalized;
+  if (!/^[0-9a-f]{6}$/i.test(hex)) return 'light';
+  const r = Number.parseInt(hex.slice(0, 2), 16);
+  const g = Number.parseInt(hex.slice(2, 4), 16);
+  const b = Number.parseInt(hex.slice(4, 6), 16);
+  const luminance = (0.299 * r) + (0.587 * g) + (0.114 * b);
+  return luminance > 180 ? 'dark' : 'light';
 };
 
 export function SamplerSearchOverlay({
@@ -81,11 +87,14 @@ export function SamplerSearchOverlay({
   totalMatchCount,
   onGo,
   onOpenBank,
+  onEditBank,
   onEdit,
   onLoad,
   showEditAction,
   isDualMode,
-  graphicsTier,
+  primaryBankId,
+  secondaryBankId,
+  graphicsTier: _graphicsTier,
   loadTargetSelection,
   channelStates,
   armedLoadChannelId,
@@ -96,9 +105,6 @@ export function SamplerSearchOverlay({
   const inputRef = React.useRef<HTMLInputElement | null>(null);
   const isDark = theme === 'dark';
   const visibleResultCount = bankResults.length + padResults.length;
-  const showThumbnailPreview = graphicsTier === 'high' || graphicsTier === 'medium';
-  const compactBankVisual = graphicsTier === 'lowest' || graphicsTier === 'low';
-  const highBankCard = graphicsTier === 'high';
 
   React.useEffect(() => {
     if (!open) return;
@@ -110,7 +116,7 @@ export function SamplerSearchOverlay({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-describedby={undefined}
-        className={`sm:max-w-3xl p-0 overflow-hidden ${isDark ? 'bg-gray-900 border-gray-700 text-gray-100' : 'bg-white border-gray-200 text-gray-900'}`}
+        className={`left-0 right-0 top-0 bottom-0 h-[100svh] w-auto max-w-none max-h-[100svh] translate-x-0 translate-y-0 flex flex-col gap-0 rounded-none border-x-0 border-b-0 p-0 overflow-hidden sm:left-[50%] sm:right-auto sm:top-[50%] sm:bottom-auto sm:h-auto sm:w-full sm:max-w-3xl sm:max-h-[85vh] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-lg sm:border ${isDark ? 'bg-gray-900 border-gray-700 text-gray-100' : 'bg-white border-gray-200 text-gray-900'}`}
       >
         <DialogHeader className={`px-4 pt-4 pb-3 border-b ${isDark ? 'border-gray-800' : 'border-gray-200'}`}>
           <div className="flex items-start justify-between gap-3">
@@ -121,7 +127,7 @@ export function SamplerSearchOverlay({
           </div>
         </DialogHeader>
 
-        <div className="px-4 py-4 space-y-4">
+        <div className="min-h-0 flex flex-1 flex-col overflow-hidden px-4 py-4 space-y-4">
           <div className="space-y-3">
             <div className="relative">
               <Search className={`absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${isDark ? 'text-gray-400' : 'text-gray-500'}`} />
@@ -146,7 +152,7 @@ export function SamplerSearchOverlay({
                   {option.label}
                 </Button>
               ))}
-              <div className={`ml-auto text-xs self-center ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+              <div className={`basis-full text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'} md:ml-auto md:basis-auto md:self-center`}>
                 {totalMatchCount > visibleResultCount
                   ? `Showing ${visibleResultCount} of ${totalMatchCount} matches`
                   : `${totalMatchCount} match${totalMatchCount === 1 ? '' : 'es'}`}
@@ -207,7 +213,7 @@ export function SamplerSearchOverlay({
             </div>
           ) : null}
 
-          <div className="max-h-[60vh] overflow-y-auto pr-1 space-y-4">
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-1 space-y-4">
             {visibleResultCount === 0 ? (
               <div className={`rounded-2xl border px-4 py-8 text-center text-sm ${isDark ? 'border-gray-800 bg-gray-950/40 text-gray-400' : 'border-gray-200 bg-gray-50 text-gray-500'}`}>
                 No banks or loaded pads match this search.
@@ -219,19 +225,11 @@ export function SamplerSearchOverlay({
                     <div className={`px-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
                       Banks
                     </div>
-                    {bankResults.map((result) => (
-                      (() => {
-                        const bankLuminance = getBankColorLuminance(result.bankColor);
-                        const isLightBankColor = bankLuminance > 0.72;
-                        const useDarkBankText = isLightBankColor && isDark;
-                        const folderIconClass = isLightBankColor ? 'text-gray-950/85' : 'text-white';
-                        const bankTitleClass = useDarkBankText ? 'text-gray-950' : 'text-white';
-                        const bankMetaClass = useDarkBankText ? 'text-gray-900/85' : (isDark ? 'text-gray-300' : 'text-gray-700');
-                        const bankDescriptionClass = useDarkBankText ? 'text-gray-900/80' : (isDark ? 'text-gray-300/90' : 'text-gray-700/80');
-                        const bankTextShadow = useDarkBankText
-                          ? '0 1px 0 rgba(255,255,255,0.32), 0 0 12px rgba(255,255,255,0.18)'
-                          : '0 1px 2px rgba(0,0,0,0.78), 0 0 12px rgba(0,0,0,0.42)';
-                        return (
+                    {bankResults.map((result) => {
+                      const isPrimaryBank = primaryBankId === result.bankId;
+                      const isSecondaryBank = secondaryBankId === result.bankId;
+                      const tileTone = getTileContentTone(result.bankColor);
+                      return (
                       <div
                         key={result.key}
                         role="button"
@@ -243,71 +241,70 @@ export function SamplerSearchOverlay({
                             onOpenBank(result, 'auto');
                           }
                         }}
-                        className={`w-full rounded-2xl border ${highBankCard ? 'p-4' : 'p-3'} text-left transition-colors focus:outline-none focus:ring-2 ${isDark ? 'border-gray-800 bg-gray-950/40 hover:border-cyan-400/40 hover:bg-gray-950/70 focus:ring-cyan-400/50' : 'border-gray-200 bg-white hover:border-cyan-300 hover:bg-cyan-50/40 focus:ring-cyan-300/70'}`}
-                        style={{
-                          backgroundColor: !showThumbnailPreview || !result.thumbnailUrl || result.hideThumbnailPreview
-                            ? undefined
-                            : (isDark ? `${result.bankColor}1F` : `${result.bankColor}12`),
-                          backgroundImage: showThumbnailPreview && result.thumbnailUrl && !result.hideThumbnailPreview
-                            ? `linear-gradient(to right, ${
-                                isDark && isLightBankColor
-                                  ? `${result.bankColor}D8`
-                                  : `${result.bankColor}E6`
-                              } 0%, ${
-                                isDark && isLightBankColor
-                                  ? `${result.bankColor}7A`
-                                  : `${result.bankColor}9C`
-                              } 36%, ${isDark ? 'rgba(3,7,18,0.82)' : 'rgba(255,255,255,0.74)'} 72%), url(${result.thumbnailUrl})`
-                            : undefined,
-                          backgroundSize: showThumbnailPreview && result.thumbnailUrl && !result.hideThumbnailPreview ? 'cover' : undefined,
-                          backgroundPosition: showThumbnailPreview && result.thumbnailUrl && !result.hideThumbnailPreview ? 'center' : undefined,
-                        }}
+                        className={`w-full overflow-hidden rounded-2xl border p-3 text-left transition-colors focus:outline-none focus:ring-2 ${isDark ? 'border-gray-800 bg-gray-950/40 hover:border-cyan-400/40 hover:bg-gray-950/70 focus:ring-cyan-400/50' : 'border-gray-200 bg-white hover:border-cyan-300 hover:bg-cyan-50/40 focus:ring-cyan-300/70'}`}
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div className={`min-w-0 flex items-start ${highBankCard ? 'gap-4' : 'gap-3'}`}>
-                            <div
-                              className={`shrink-0 overflow-hidden rounded-xl border ${compactBankVisual ? 'h-10 w-10' : highBankCard ? 'h-14 w-14' : 'h-12 w-12'} ${isDark ? 'border-white/10 bg-gray-950/70' : 'border-black/10 bg-white'}`}
-                              style={{
-                                backgroundColor: result.bankColor,
-                              }}
-                            >
-                              <div className="flex h-full w-full items-center justify-center">
-                                <FolderOpen className={`${compactBankVisual ? 'h-4 w-4' : highBankCard ? 'h-6 w-6' : 'h-5 w-5'} ${folderIconClass}`} />
+                          <div className="min-w-0 flex flex-1 items-start gap-3">
+                            {result.thumbnailUrl && !result.hideThumbnailPreview ? (
+                              <div className={`h-10 w-10 shrink-0 overflow-hidden rounded-xl border ${isDark ? 'border-white/10 bg-gray-950/70' : 'border-black/10 bg-white'}`}>
+                                <img
+                                  src={result.thumbnailUrl}
+                                  alt={`${result.bankName} thumbnail`}
+                                  className="h-full w-full object-cover"
+                                  loading="lazy"
+                                  draggable={false}
+                                />
                               </div>
-                            </div>
-                            <div className="min-w-0">
+                            ) : (
                               <div
-                                className={`truncate font-semibold ${highBankCard ? 'text-[15px]' : 'text-sm'} ${bankTitleClass}`}
-                                style={{ textShadow: bankTextShadow }}
+                                className={`h-10 w-10 shrink-0 overflow-hidden rounded-xl border ${isDark ? 'border-white/10 bg-gray-950/70' : 'border-black/10 bg-white'}`}
+                                style={{ backgroundColor: result.bankColor }}
                               >
+                                <div className="flex h-full w-full items-center justify-center">
+                                  {result.padCount > 0 ? (
+                                    <span className={`text-sm font-black leading-none ${tileTone === 'dark' ? 'text-gray-900' : 'text-white'}`}>
+                                      {result.padCount}
+                                    </span>
+                                  ) : (
+                                    <FolderOpen className={`h-4 w-4 ${tileTone === 'dark' ? 'text-gray-900' : 'text-white'}`} />
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className={`truncate text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
                                 {result.bankName}
                               </div>
-                              <div
-                                className={`mt-2 flex items-center gap-2 text-xs ${bankMetaClass}`}
-                                style={{ textShadow: bankTextShadow }}
-                              >
-                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${statusToneClass(theme, 'muted')}`}>
-                                  Bank
-                                </span>
-                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${statusToneClass(theme, 'ready')}`}>
-                                  {result.padCount} Pad{result.padCount === 1 ? '' : 's'}
-                                </span>
-                                {result.bankDescription ? (
-                                  <span className={`min-w-0 truncate ${bankDescriptionClass}`}>
-                                    {result.bankDescription}
-                                  </span>
-                                ) : null}
-                              </div>
+                              {result.bankDescription ? (
+                                <div className={`mt-1 truncate text-xs ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+                                  {result.bankDescription}
+                                </div>
+                              ) : null}
                             </div>
                           </div>
-                          <div className="flex shrink-0 items-center gap-2">
+                          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 self-center">
+                            {showEditAction ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                className="h-8 px-3 text-xs"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  onEditBank(result);
+                                }}
+                              >
+                                Edit
+                              </Button>
+                            ) : null}
                             {isDualMode ? (
                               <>
                                 <Button
                                   type="button"
                                   size="sm"
-                                  variant="outline"
-                                  className="h-8 px-3 text-xs"
+                                  variant={isPrimaryBank ? 'default' : 'outline'}
+                                  disabled={isPrimaryBank}
+                                  className={`h-8 px-2.5 text-[11px] ${isPrimaryBank ? 'cursor-default opacity-100' : ''}`}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     onOpenBank(result, 'primary');
@@ -318,7 +315,9 @@ export function SamplerSearchOverlay({
                                 <Button
                                   type="button"
                                   size="sm"
-                                  className="h-8 px-3 text-xs"
+                                  variant={isSecondaryBank ? 'default' : 'secondary'}
+                                  disabled={isSecondaryBank}
+                                  className={`h-8 px-2.5 text-[11px] ${isSecondaryBank ? 'cursor-default opacity-100' : ''}`}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     onOpenBank(result, 'secondary');
@@ -343,9 +342,8 @@ export function SamplerSearchOverlay({
                           </div>
                         </div>
                       </div>
-                        );
-                      })()
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : null}
 
@@ -375,22 +373,11 @@ export function SamplerSearchOverlay({
                               {result.bankName}
                             </div>
                             <div className="mt-2 flex flex-wrap gap-1.5">
-                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${statusToneClass(theme, 'muted')}`}>
-                                Go
-                              </span>
-                              {result.canLoad ? (
-                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${statusToneClass(theme, 'ready')}`}>
-                                  Load Ready
-                                </span>
-                              ) : result.loadAvailability === 'login_required' ? (
-                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${statusToneClass(theme, 'warn')}`}>
-                                  Login Required
-                                </span>
-                              ) : (
+                              {result.loadAvailability === 'missing_audio' ? (
                                 <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${statusToneClass(theme, 'warn')}`}>
                                   Missing Audio
                                 </span>
-                              )}
+                              ) : null}
                               {result.hasMissingImage ? (
                                 <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${statusToneClass(theme, 'muted')}`}>
                                   Missing Image

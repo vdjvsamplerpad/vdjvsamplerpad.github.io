@@ -1128,7 +1128,7 @@ export function AboutDialog({
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-0.5">
                     <Label className="text-xs font-medium">Auto Pad & Bank Mapping</Label>
-                    <p className="text-[10px] text-gray-500">Auto-assign default keyboard mappings on new/imported content.</p>
+                    <p className="text-[10px] text-gray-500">Fill missing default keyboard mappings on new, imported, or duplicated content without overwriting existing assignments.</p>
                   </div>
                   <Switch checked={autoPadBankMapping} onCheckedChange={onToggleAutoPadBankMapping} />
                 </div>

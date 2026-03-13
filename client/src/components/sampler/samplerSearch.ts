@@ -3,9 +3,7 @@ import type { ChannelDeckState } from './types/sampler';
 export type SamplerSearchScope =
   | 'all_banks'
   | 'current_bank'
-  | 'visible_banks'
-  | 'primary_bank'
-  | 'secondary_bank';
+  | 'visible_banks';
 
 export const getSamplerSearchScopeOptions = (
   isDualMode: boolean
@@ -13,9 +11,7 @@ export const getSamplerSearchScopeOptions = (
   isDualMode
     ? [
         { key: 'all_banks', label: 'All Banks' },
-        { key: 'primary_bank', label: 'Primary Bank' },
-        { key: 'secondary_bank', label: 'Secondary Bank' },
-        { key: 'visible_banks', label: 'Visible Banks' },
+        { key: 'visible_banks', label: 'Current View' },
       ]
     : [
         { key: 'all_banks', label: 'All Banks' },

@@ -300,6 +300,7 @@ export function SamplerPadApp() {
     createBank,
     setPrimaryBank,
     setSecondaryBank,
+    setVisibleBanks,
     setCurrentBank,
     updateBank,
     deleteBank,
@@ -321,6 +322,7 @@ export function SamplerPadApp() {
     relinkPadAudioFromFile,
     rehydratePadMedia,
     rehydrateMissingMediaInBank,
+    prefetchOfficialBankMediaForOffline,
     recoverMissingMediaFromBanks
   } = useSamplerStore({ samplerConfig });
 
@@ -522,7 +524,7 @@ export function SamplerPadApp() {
       }
       return;
     }
-    if (searchScope === 'primary_bank' || searchScope === 'secondary_bank' || searchScope === 'visible_banks') {
+    if (searchScope === 'visible_banks') {
       setSearchScope('current_bank');
     }
   }, [isDualMode, searchScope]);
@@ -865,57 +867,9 @@ export function SamplerPadApp() {
     ];
   }, [isMac]);
 
-  const applyDefaultLayoutToBank = React.useCallback((bankId: string | null) => {
-    if (!settings.autoPadBankMapping) return;
-    if (!bankId) return;
-    const bank = banks.find((entry) => entry.id === bankId);
-    if (!bank) return;
-    if (bank.disableDefaultPadShortcutLayout) return;
-    const sortedPads = [...bank.pads].sort((a, b) => (a.position || 0) - (b.position || 0));
-    sortedPads.forEach((pad, index) => {
-      const desiredKey = defaultPadShortcutLayout[index] || undefined;
-      if (pad.shortcutKey !== desiredKey) {
-        updatePad(bank.id, pad.id, { ...pad, shortcutKey: desiredKey });
-      }
-    });
-  }, [banks, defaultPadShortcutLayout, settings.autoPadBankMapping, updatePad]);
-
   const orderedBanks = React.useMemo(() => {
     return [...banks].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
   }, [banks]);
-
-  const lastAppliedLayoutRef = React.useRef<{ primary?: string | null; secondary?: string | null; single?: string | null }>({});
-  React.useEffect(() => {
-    if (!settings.autoPadBankMapping) return;
-    if (isDualMode) {
-      if (primaryBankId && lastAppliedLayoutRef.current.primary !== primaryBankId) {
-        applyDefaultLayoutToBank(primaryBankId);
-        lastAppliedLayoutRef.current.primary = primaryBankId;
-      }
-      if (secondaryBankId && lastAppliedLayoutRef.current.secondary !== secondaryBankId) {
-        applyDefaultLayoutToBank(secondaryBankId);
-        lastAppliedLayoutRef.current.secondary = secondaryBankId;
-      }
-    } else if (currentBankId && lastAppliedLayoutRef.current.single !== currentBankId) {
-      applyDefaultLayoutToBank(currentBankId);
-      lastAppliedLayoutRef.current.single = currentBankId;
-    }
-  }, [applyDefaultLayoutToBank, currentBankId, isDualMode, primaryBankId, secondaryBankId, settings.autoPadBankMapping]);
-
-  const previousPadCountsRef = React.useRef<Map<string, number>>(new Map());
-  React.useEffect(() => {
-    const previousCounts = previousPadCountsRef.current;
-    const nextCounts = new Map<string, number>();
-    banks.forEach((bank) => {
-      const currentCount = bank.pads.length;
-      const previousCount = previousCounts.get(bank.id) ?? 0;
-      nextCounts.set(bank.id, currentCount);
-      if (settings.autoPadBankMapping && previousCount === 0 && currentCount > 0) {
-        applyDefaultLayoutToBank(bank.id);
-      }
-    });
-    previousPadCountsRef.current = nextCounts;
-  }, [banks, applyDefaultLayoutToBank, settings.autoPadBankMapping]);
 
   const {
     pendingChannelCountConfirm,
@@ -972,6 +926,93 @@ export function SamplerPadApp() {
     orderedBanks,
     normalizeStoredShortcutKey
   });
+
+  const findNextAvailableDefaultPadShortcut = React.useCallback((
+    preferredIndex: number,
+    usedKeys: Set<string>
+  ): string | undefined => {
+    const candidateOrder = [
+      preferredIndex,
+      ...defaultPadShortcutLayout.map((_, index) => index).filter((index) => index !== preferredIndex),
+    ];
+    for (const index of candidateOrder) {
+      const candidate = defaultPadShortcutLayout[index];
+      if (!candidate) continue;
+      const normalized =
+        normalizeStoredShortcutKey(candidate) ||
+        normalizeShortcutKey(candidate, candidate.startsWith('Numpad') ? { code: candidate } : undefined);
+      if (!normalized || usedKeys.has(normalized)) continue;
+      return normalized;
+    }
+    return undefined;
+  }, [defaultPadShortcutLayout, normalizeStoredShortcutKey]);
+
+  const applyDefaultLayoutToBank = React.useCallback((bankId: string | null) => {
+    if (!settings.autoPadBankMapping) return;
+    if (!bankId) return;
+    const bank = banks.find((entry) => entry.id === bankId);
+    if (!bank) return;
+    if (bank.disableDefaultPadShortcutLayout) return;
+
+    const sortedPads = [...bank.pads].sort((a, b) => (a.position || 0) - (b.position || 0));
+    const usedKeys = new Set<string>();
+    blockedShortcutKeys.forEach((key) => usedKeys.add(key));
+    bankShortcutMap.forEach((_, key) => usedKeys.add(key));
+    sortedPads.forEach((pad) => {
+      const existingKey = normalizeStoredShortcutKey(pad.shortcutKey);
+      if (existingKey) usedKeys.add(existingKey);
+    });
+
+    sortedPads.forEach((pad, index) => {
+      const existingKey = normalizeStoredShortcutKey(pad.shortcutKey);
+      if (existingKey) return;
+      const nextKey = findNextAvailableDefaultPadShortcut(index, usedKeys);
+      if (!nextKey) return;
+      usedKeys.add(nextKey);
+      updatePad(bank.id, pad.id, { ...pad, shortcutKey: nextKey });
+    });
+  }, [
+    bankShortcutMap,
+    banks,
+    blockedShortcutKeys,
+    findNextAvailableDefaultPadShortcut,
+    normalizeStoredShortcutKey,
+    settings.autoPadBankMapping,
+    updatePad
+  ]);
+
+  const lastAppliedLayoutRef = React.useRef<{ primary?: string | null; secondary?: string | null; single?: string | null }>({});
+  React.useEffect(() => {
+    if (!settings.autoPadBankMapping) return;
+    if (isDualMode) {
+      if (primaryBankId && lastAppliedLayoutRef.current.primary !== primaryBankId) {
+        applyDefaultLayoutToBank(primaryBankId);
+        lastAppliedLayoutRef.current.primary = primaryBankId;
+      }
+      if (secondaryBankId && lastAppliedLayoutRef.current.secondary !== secondaryBankId) {
+        applyDefaultLayoutToBank(secondaryBankId);
+        lastAppliedLayoutRef.current.secondary = secondaryBankId;
+      }
+    } else if (currentBankId && lastAppliedLayoutRef.current.single !== currentBankId) {
+      applyDefaultLayoutToBank(currentBankId);
+      lastAppliedLayoutRef.current.single = currentBankId;
+    }
+  }, [applyDefaultLayoutToBank, currentBankId, isDualMode, primaryBankId, secondaryBankId, settings.autoPadBankMapping]);
+
+  const previousPadCountsRef = React.useRef<Map<string, number>>(new Map());
+  React.useEffect(() => {
+    const previousCounts = previousPadCountsRef.current;
+    const nextCounts = new Map<string, number>();
+    banks.forEach((bank) => {
+      const currentCount = bank.pads.length;
+      const previousCount = previousCounts.get(bank.id) ?? 0;
+      nextCounts.set(bank.id, currentCount);
+      if (settings.autoPadBankMapping && previousCount === 0 && currentCount > 0) {
+        applyDefaultLayoutToBank(bank.id);
+      }
+    });
+    previousPadCountsRef.current = nextCounts;
+  }, [banks, applyDefaultLayoutToBank, settings.autoPadBankMapping]);
 
   React.useEffect(() => {
     if (loading) return;
@@ -1273,12 +1314,6 @@ export function SamplerPadApp() {
       }
       if (searchScope === 'visible_banks') {
         return visibleSearchBankIds.has(bankId);
-      }
-      if (searchScope === 'primary_bank') {
-        return Boolean(primaryBankId) && bankId === primaryBankId;
-      }
-      if (searchScope === 'secondary_bank') {
-        return Boolean(secondaryBankId) && bankId === secondaryBankId;
       }
       return true;
     };
@@ -1915,28 +1950,54 @@ export function SamplerPadApp() {
     return armedLoadChannelId;
   }, [armedLoadChannelId]);
 
+  const applyDualSearchBankSelection = React.useCallback((
+    bankId: string,
+    target: 'auto' | 'primary' | 'secondary' = 'auto'
+  ) => {
+    if (!isDualMode) {
+      setCurrentBank(bankId);
+      return;
+    }
+
+    const isPrimarySelected = primaryBankId === bankId;
+    const isSecondarySelected = secondaryBankId === bankId;
+
+    if (target === 'auto') {
+      if (isPrimarySelected || isSecondarySelected) return;
+      setSecondaryBank(bankId);
+      return;
+    }
+
+    if (target === 'primary') {
+      if (isPrimarySelected) return;
+      if (isSecondarySelected) {
+        setVisibleBanks(bankId, primaryBankId);
+        return;
+      }
+      setPrimaryBank(bankId);
+      return;
+    }
+
+    if (isSecondarySelected) return;
+    if (isPrimarySelected) {
+      if (!secondaryBankId) return;
+      setVisibleBanks(secondaryBankId, bankId);
+      return;
+    }
+    setSecondaryBank(bankId);
+  }, [isDualMode, primaryBankId, secondaryBankId, setCurrentBank, setPrimaryBank, setSecondaryBank, setVisibleBanks]);
+
   const handleSearchGo = React.useCallback((result: SamplerSearchResult) => {
     setSearchLoadError(null);
     setPendingSearchLoadPicker(null);
     clearSearchLocator();
 
-    if (isDualMode) {
-      if (searchScope === 'primary_bank') {
-        setPrimaryBank(result.bankId);
-      } else if (searchScope === 'secondary_bank') {
-        setSecondaryBank(result.bankId);
-      } else if (!visibleSearchBankIds.has(result.bankId)) {
-        setSearchLoadError('Pick Primary Bank or Secondary Bank before jumping to a bank outside the current view.');
-        return;
-      }
-    } else {
-      setCurrentBank(result.bankId);
-    }
+    applyDualSearchBankSelection(result.bankId, 'auto');
 
     setPendingSearchPadScroll({ bankId: result.bankId, padId: result.padId, padName: result.padName });
     setHighlightedPadTarget(null);
     closeSearchOverlay();
-  }, [clearSearchLocator, closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
+  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay]);
   const handleSearchOpenBank = React.useCallback((
     result: SamplerBankSearchResult,
     target: 'auto' | 'primary' | 'secondary' = 'auto'
@@ -1945,48 +2006,32 @@ export function SamplerPadApp() {
     setPendingSearchLoadPicker(null);
     clearSearchLocator();
 
-    if (isDualMode) {
-      if (target === 'primary') {
-        setPrimaryBank(result.bankId);
-      } else if (target === 'secondary') {
-        setSecondaryBank(result.bankId);
-      } else if (searchScope === 'primary_bank') {
-        setPrimaryBank(result.bankId);
-      } else if (searchScope === 'secondary_bank') {
-        setSecondaryBank(result.bankId);
-      } else if (!visibleSearchBankIds.has(result.bankId)) {
-        setSearchLoadError('Choose Primary or Secondary to open a bank outside the current dual-bank view.');
-        return;
-      }
-    } else {
-      setCurrentBank(result.bankId);
-    }
+    applyDualSearchBankSelection(result.bankId, target);
 
     closeSearchOverlay();
-  }, [clearSearchLocator, closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
+  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay]);
+  const handleSearchEditBank = React.useCallback((result: SamplerBankSearchResult) => {
+    setSearchLoadError(null);
+    setPendingSearchLoadPicker(null);
+    clearSearchLocator();
+
+    applyDualSearchBankSelection(result.bankId, 'auto');
+
+    setEditBankRequest({ bankId: result.bankId, token: Date.now() });
+    closeSearchOverlay();
+  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay]);
   const handleSearchEdit = React.useCallback((result: SamplerSearchResult) => {
     setSearchLoadError(null);
     setPendingSearchLoadPicker(null);
     clearSearchLocator();
 
-    if (isDualMode) {
-      if (searchScope === 'primary_bank') {
-        setPrimaryBank(result.bankId);
-      } else if (searchScope === 'secondary_bank') {
-        setSecondaryBank(result.bankId);
-      } else if (!visibleSearchBankIds.has(result.bankId)) {
-        setSearchLoadError('Pick Primary Bank or Secondary Bank before editing a pad outside the current view.');
-        return;
-      }
-    } else {
-      setCurrentBank(result.bankId);
-    }
+    applyDualSearchBankSelection(result.bankId, 'auto');
 
     setPendingSearchPadScroll({ bankId: result.bankId, padId: result.padId, padName: result.padName });
     setHighlightedPadTarget(null);
     setEditRequest({ padId: result.padId, token: Date.now() });
     closeSearchOverlay();
-  }, [clearSearchLocator, closeSearchOverlay, isDualMode, searchScope, setCurrentBank, setPrimaryBank, setSecondaryBank, visibleSearchBankIds]);
+  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay]);
 
   const runSearchLoad = React.useCallback(async (result: SamplerSearchResult, channelId: number): Promise<boolean> => {
     if (!result.canLoad) {
@@ -3650,6 +3695,7 @@ export function SamplerPadApp() {
     onRequestRestoreBackup: handleRestoreBackupPrompt,
     onRequestRecoverBankFiles: handleRecoverBankPrompt,
     onRetryBankMissingMedia: rehydrateMissingMediaInBank,
+    onPrefetchOfficialBankMediaForOffline: prefetchOfficialBankMediaForOffline,
     defaultBankColor: samplerConfig.bankDefaults.defaultBankColor,
   };
 
@@ -3948,10 +3994,13 @@ export function SamplerPadApp() {
         totalMatchCount={searchResultsState.total}
         onGo={handleSearchGo}
         onOpenBank={handleSearchOpenBank}
+        onEditBank={handleSearchEditBank}
         onEdit={handleSearchEdit}
         onLoad={handleSearchLoad}
         showEditAction={settings.editMode}
         isDualMode={isDualMode}
+        primaryBankId={primaryBankId}
+        secondaryBankId={secondaryBankId}
         graphicsTier={effectiveGraphicsTier}
         loadTargetSelection={pendingSearchLoadPicker}
         channelStates={channelStates}

@@ -124,6 +124,7 @@
     "productName": "VDJV Sampler Pad",
     "asar": true,
     "directories": {
+      "buildResources": "build",
       "output": "release"
     },
     "files": [
@@ -157,7 +158,7 @@
         }
       ],
       "artifactName": "VDJV-Sampler-Pad-Setup-${version}-${arch}.${ext}",
-      "icon": "build/icon.ico"
+      "icon": "icon.ico"
     },
     "nsis": {
       "oneClick": false,

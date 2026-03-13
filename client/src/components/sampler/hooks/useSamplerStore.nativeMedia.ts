@@ -193,6 +193,7 @@ export const createNativeMediaRuntime = (deps: NativeMediaRuntimeDeps) => {
   };
 
   return {
+    getNativeMediaPlaybackUrl,
     writeNativeMediaBlob,
     readNativeMediaBlob,
     readNativeMediaSize,

@@ -7,8 +7,6 @@ import { getIOSAudioService } from '@/lib/ios-audio-service';
 import type { PerformanceTier } from '@/lib/performance-monitor';
 
 const MIN_TRIM_GAP_MS = 10;
-const CURSOR_PREVIEW_MAX_MS = 4000;
-
 interface WaveformTrimProps {
   audioUrl: string;
   startTimeMs: number;
@@ -1076,7 +1074,7 @@ export function WaveformTrim({
           durationMs,
           Math.max(
             previewStartMs + 600,
-            previewStartMs + Math.min(CURSOR_PREVIEW_MAX_MS, Math.max(1200, effectiveDuration))
+            previewStartMs + Math.max(1200, effectiveDuration)
           )
         )
         : renderEndTimeMs;
