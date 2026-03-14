@@ -72,6 +72,7 @@ export class AudioEngineCore implements LifecycleDelegate {
     private isPrewarmed = false;
 
     private transports = new Map<string, ManagedTransport>();
+    private transportRegistrationQueue = new Map<string, Promise<void>>();
     private stateListeners = new Set<() => void>();
     private notifyTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -518,6 +519,26 @@ export class AudioEngineCore implements LifecycleDelegate {
     }
 
     async registerTransport(
+        padId: string,
+        state: Omit<TransportState, 'isPlaying' | 'isPaused' | 'progress' | 'playStartTime' | 'backendType' | 'softMuted'>,
+    ): Promise<void> {
+        const previousRegistration = this.transportRegistrationQueue.get(padId) ?? Promise.resolve();
+        const registration = previousRegistration
+            .catch(() => { /* keep queue moving after a failed registration */ })
+            .then(async () => {
+                await this.performRegisterTransport(padId, state);
+            });
+        this.transportRegistrationQueue.set(padId, registration);
+        try {
+            await registration;
+        } finally {
+            if (this.transportRegistrationQueue.get(padId) === registration) {
+                this.transportRegistrationQueue.delete(padId);
+            }
+        }
+    }
+
+    private async performRegisterTransport(
         padId: string,
         state: Omit<TransportState, 'isPlaying' | 'isPaused' | 'progress' | 'playStartTime' | 'backendType' | 'softMuted'>,
     ): Promise<void> {
@@ -1032,6 +1053,7 @@ export class AudioEngineCore implements LifecycleDelegate {
 
     private destroy(): void {
         this.lifecycle.destroy();
+        this.transportRegistrationQueue.clear();
         for (const [padId] of this.transports) {
             this.disposeTransport(padId);
         }

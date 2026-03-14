@@ -95,8 +95,11 @@ export const runSelectedBankHydrationPipeline = async (
   for (const bankId of selectedBankIds) {
     const current = banksRef.current.find((bank) => bank.id === bankId);
     if (!current || !Array.isArray(current.pads) || current.pads.length === 0) continue;
+    const hasPersistentThumbnail = Boolean(
+      current.bankMetadata?.thumbnailStorageKey || current.bankMetadata?.thumbnailBackend
+    );
     const missingBefore = current.pads.filter((pad) => padNeedsMediaHydration(pad)).length;
-    if (missingBefore <= 0) {
+    if (missingBefore <= 0 && !hasPersistentThumbnail) {
       delete retryAttemptsRef.current[bankId];
       continue;
     }
@@ -141,11 +144,15 @@ export const runSelectedBankHydrationPipeline = async (
 
     const missingAfter = hydrated.pads.filter((pad) => padNeedsMediaHydration(pad)).length;
 
-    if (!improved && missingAfter > 0 && current.bankMetadata?.thumbnailStorageKey) {
+    if (hasPersistentThumbnail) {
+      const previousThumbnailUrl = hydrated.bankMetadata?.thumbnailUrl;
       const hydratedWithThumbnail = await rehydrateBankMediaFromStorage(hydrated);
       if (isCancelled() || runIdRef.current !== runId) return;
       hydrated = hydratedWithThumbnail;
-      const thumbnailImproved = hydrated.bankMetadata?.thumbnailUrl !== current.bankMetadata?.thumbnailUrl;
+      const thumbnailImproved =
+        hydrated.bankMetadata?.thumbnailUrl !== previousThumbnailUrl ||
+        hydrated.bankMetadata?.thumbnailStorageKey !== current.bankMetadata?.thumbnailStorageKey ||
+        hydrated.bankMetadata?.thumbnailBackend !== current.bankMetadata?.thumbnailBackend;
       if (thumbnailImproved) {
         improved = true;
         setBanks((prev) => {
