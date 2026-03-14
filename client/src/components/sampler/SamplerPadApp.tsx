@@ -54,6 +54,9 @@ import {
 const PAD_SIZE_MIN = 2;
 const PAD_SIZE_MAX_PORTRAIT = 8;
 const PAD_SIZE_MAX_LANDSCAPE = 16;
+const MIXER_OVERLAY_WIDTH_PX = 384;
+const MIXER_OVERLAY_MAX_VIEWPORT_RATIO = 0.95;
+const MIN_VISIBLE_PAD_COLUMNS_FOR_MIXER_TAP = 2;
 const DEFAULT_BANK_SOURCE_ID = 'vdjv-default-bank-source';
 const SEARCH_RESULT_LIMIT = 40;
 const SEARCH_INPUT_DEBOUNCE_MS = 120;
@@ -3755,7 +3758,20 @@ export function SamplerPadApp() {
 
   const layoutSafeAreaClass = isNativeAndroid() ? 'vdjv-safe-area-vertical' : 'vdjv-safe-area';
   const layoutSizeClass = `h-[100dvh] box-border overflow-hidden ${layoutSafeAreaClass}`;
-  const shouldLockPadInteractionForMixer = settings.mixerOpen && isPortraitOrSmallScreen;
+  const mixerOverlayBlockerWidth = React.useMemo(() => {
+    if (!settings.mixerOpen || !isPortraitOrSmallScreen) return 0;
+    return Math.min(MIXER_OVERLAY_WIDTH_PX, Math.round(windowWidth * MIXER_OVERLAY_MAX_VIEWPORT_RATIO));
+  }, [isPortraitOrSmallScreen, settings.mixerOpen, windowWidth]);
+  const estimatedVisiblePadColumnsDuringMixerOverlay = React.useMemo(() => {
+    if (!settings.mixerOpen || !isPortraitOrSmallScreen || windowWidth <= 0) return getGridColumns;
+    const visibleWidth = Math.max(0, windowWidth - mixerOverlayBlockerWidth);
+    return (visibleWidth / windowWidth) * getGridColumns;
+  }, [getGridColumns, isPortraitOrSmallScreen, mixerOverlayBlockerWidth, settings.mixerOpen, windowWidth]);
+  const shouldLockPadInteractionForMixer = React.useMemo(() => {
+    if (!settings.mixerOpen || !isPortraitOrSmallScreen) return false;
+    if (isDualMode) return false;
+    return estimatedVisiblePadColumnsDuringMixerOverlay < MIN_VISIBLE_PAD_COLUMNS_FOR_MIXER_TAP;
+  }, [estimatedVisiblePadColumnsDuringMixerOverlay, isDualMode, isPortraitOrSmallScreen, settings.mixerOpen]);
   const padInteractionLockClass = shouldLockPadInteractionForMixer ? 'pointer-events-none touch-none select-none' : '';
   const effectiveHideShortcutLabels = !settings.keyboardMappingEnabled || settings.hideShortcutLabels;
 
@@ -3944,6 +3960,7 @@ export function SamplerPadApp() {
         getMainContentPadding={getMainContentPadding}
         usePortraitDualStack={usePortraitDualStack}
         padInteractionLockClass={padInteractionLockClass}
+        padInteractionBlockerWidth={mixerOverlayBlockerWidth}
         isDualMode={isDualMode}
         displayPrimary={displayPrimary}
         displaySecondary={displaySecondary}

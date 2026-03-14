@@ -1496,10 +1496,9 @@ export function VolumeMixer({
                     </div>
                   )}
 
-                  <div className="mt-1.5 space-y-1">
-                    <div className="flex justify-between text-[10px] text-gray-500 dark:text-gray-400">
-                      <span>Channel Volume</span>
-                      <span>{Math.round(displayedVolume * 100)}%</span>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <div className="shrink-0 text-[10px] text-gray-500 dark:text-gray-400">
+                      VOL
                     </div>
                     <Slider
                       value={[displayedVolume * 100]}
@@ -1508,10 +1507,13 @@ export function VolumeMixer({
                       step={0.1}
                       onValueChange={([value]) => handleChannelVolumeDrag(channel.channelId, value / 100)}
                       onValueCommit={([value]) => handleChannelVolumeCommit(channel.channelId, value / 100)}
-                      className="h-8 px-1 touch-none"
+                      className="h-8 flex-1 px-1 touch-none"
                       onPointerDownCapture={stopSliderPointerPropagation}
                       onTouchStartCapture={stopSliderTouchPropagation}
                     />
+                    <div className="w-10 shrink-0 text-right text-[10px] text-gray-500 dark:text-gray-400">
+                      {Math.round(displayedVolume * 100)}%
+                    </div>
                   </div>
                 </div>
               );
@@ -1538,9 +1540,11 @@ export function VolumeMixer({
               return (
                 <div key={pad.padId} className={`rounded-md border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-white'}`}>
                   <div className="flex items-center gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-xs font-medium truncate">{pad.padName}</div>
-                      <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">{pad.bankName}</div>
+                    <div className="min-w-0 flex flex-1 items-baseline gap-1.5 overflow-hidden">
+                      <div className="min-w-0 truncate text-xs font-medium">{pad.padName}</div>
+                      <div className="min-w-0 truncate text-[10px] text-gray-500 dark:text-gray-400">
+                        {pad.bankName}
+                      </div>
                     </div>
                     <Button
                       type="button"
@@ -1553,10 +1557,9 @@ export function VolumeMixer({
                       <Square className="h-4 w-4" />
                     </Button>
                   </div>
-                  <div className={`mt-2 space-y-1 ${isMobile ? 'pb-0.5' : ''}`}>
-                    <div className="flex justify-between text-[10px] text-gray-500 dark:text-gray-400">
-                      <span>{formatMs(progress)} / {formatMs(duration)}</span>
-                      <span>{Math.round(pad.volume * 100)}%</span>
+                  <div className={`mt-2 flex items-center gap-2 ${isMobile ? 'pb-0.5' : ''}`}>
+                    <div className="shrink-0 text-[10px] text-gray-500 dark:text-gray-400">
+                      {formatMs(progress)} / {formatMs(duration)}
                     </div>
                     <Slider
                       value={[pad.volume * 100]}
@@ -1564,10 +1567,13 @@ export function VolumeMixer({
                       max={100}
                       step={1}
                       onValueChange={([value]) => onPadVolumeChange(pad.padId, value / 100)}
-                      className="h-8 px-1 touch-none"
+                      className="h-8 flex-1 px-1 touch-none"
                       onPointerDownCapture={stopSliderPointerPropagation}
                       onTouchStartCapture={stopSliderTouchPropagation}
                     />
+                    <div className="w-10 shrink-0 text-right text-[10px] text-gray-500 dark:text-gray-400">
+                      {Math.round(pad.volume * 100)}%
+                    </div>
                   </div>
                 </div>
               );

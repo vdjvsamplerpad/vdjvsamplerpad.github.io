@@ -552,17 +552,17 @@ export function HeaderControls({
         : null;
 
   const handlePadColorPaintButton = React.useCallback(() => {
-    if (adminPadColorPaintActive) {
-      onStopAdminPadColorPaint();
-      pushNotice({ variant: 'info', message: 'Color Paint Mode cancelled.' });
-      return;
-    }
     if (padColorPaintBlockedReason) {
       pushNotice({ variant: 'info', message: padColorPaintBlockedReason });
       return;
     }
     setShowPadColorPaintDialog(true);
-  }, [adminPadColorPaintActive, onStopAdminPadColorPaint, padColorPaintBlockedReason, pushNotice]);
+  }, [padColorPaintBlockedReason, pushNotice]);
+
+  const handleStopPadColorPaint = React.useCallback(() => {
+    onStopAdminPadColorPaint();
+    pushNotice({ variant: 'info', message: 'Color Paint Mode cancelled.' });
+  }, [onStopAdminPadColorPaint, pushNotice]);
 
   const handleConfirmPadColorPaint = React.useCallback(() => {
     onStartAdminPadColorPaint(pendingPadColor);
@@ -681,7 +681,7 @@ export function HeaderControls({
             {!isMobileScreen && (isMobileScreen ? '' : editMode ? 'Exit Edit' : 'Edit')}
           </Button>
 
-          {isAdmin && (
+          {isAdmin && editMode && (
             <Button
               onClick={handlePadColorPaintButton}
               variant="outline"
@@ -695,10 +695,10 @@ export function HeaderControls({
                     ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-fuchsia-500 hover:border-fuchsia-400 hover:text-fuchsia-100'
                     : 'bg-white border-gray-300 text-gray-700 hover:bg-fuchsia-50 hover:border-fuchsia-300 hover:text-fuchsia-700'
               }`}
-              title={adminPadColorPaintActive ? 'Cancel Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
+              title={adminPadColorPaintActive ? 'Change paint color' : (padColorPaintBlockedReason || 'Color Paint Mode')}
             >
               <Palette className="w-4 h-4" />
-              {!isMobileScreen && (adminPadColorPaintActive ? 'Cancel Paint' : 'Color Paint')}
+              {!isMobileScreen && (adminPadColorPaintActive ? 'Change Color' : 'Color Paint')}
             </Button>
           )}
 
@@ -854,7 +854,7 @@ export function HeaderControls({
         </div>
 
         {isAdmin && adminPadColorPaintActive && adminPadColorPaintColor && (
-          <div className={`mx-auto mb-2 inline-flex max-w-[92vw] items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
+          <div className={`mx-auto mb-2 inline-flex max-w-[92vw] flex-wrap items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
             theme === 'dark'
               ? 'border-fuchsia-400/40 bg-fuchsia-500/10 text-fuchsia-100'
               : 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700'
@@ -864,8 +864,21 @@ export function HeaderControls({
             <span className="inline-block h-3.5 w-3.5 rounded-full border border-white/60" style={{ backgroundColor: adminPadColorPaintColor }} />
             <span>{getPadColorOptionLabel(adminPadColorPaintColor)}</span>
             <span className={theme === 'dark' ? 'text-fuchsia-200/80' : 'text-fuchsia-600/80'}>
-              Click pads to recolor. Press Esc or tap the paint button to cancel.
+              Click pads to recolor. Press Esc or stop paint to return to normal edit mode.
             </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleStopPadColorPaint}
+              className={`h-7 px-2 text-[11px] ${
+                theme === 'dark'
+                  ? 'border-fuchsia-300/40 bg-fuchsia-500/10 text-fuchsia-100 hover:bg-fuchsia-500/20'
+                  : 'border-fuchsia-300 bg-white text-fuchsia-700 hover:bg-fuchsia-100'
+              }`}
+            >
+              Stop Paint
+            </Button>
           </div>
         )}
       </header>
@@ -873,11 +886,13 @@ export function HeaderControls({
       <Dialog open={showPadColorPaintDialog} onOpenChange={setShowPadColorPaintDialog}>
         <DialogContent className={theme === 'dark' ? 'border-gray-700 bg-gray-950 text-gray-100' : ''}>
           <DialogHeader>
-            <DialogTitle>Color Paint Mode</DialogTitle>
+            <DialogTitle>{adminPadColorPaintActive ? 'Change Paint Color' : 'Color Paint Mode'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className={`text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
-              Select a pad color, then confirm to enter admin-only paint mode. Clicking pads will save the new color immediately.
+              {adminPadColorPaintActive
+                ? 'Choose a new paint color. Your next pad clicks will use it immediately.'
+                : 'Select a pad color, then confirm to enter admin-only paint mode. Clicking pads will save the new color immediately.'}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {(showAllPadColors ? [...PRIMARY_PAD_COLORS, ...EXTRA_PAD_COLORS] : PRIMARY_PAD_COLORS).map((colorOption) => (
@@ -913,7 +928,7 @@ export function HeaderControls({
                 Cancel
               </Button>
               <Button type="button" onClick={handleConfirmPadColorPaint}>
-                Start Paint Mode
+                {adminPadColorPaintActive ? 'Apply Color' : 'Start Paint Mode'}
               </Button>
             </div>
           </div>

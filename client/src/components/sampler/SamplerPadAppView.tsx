@@ -57,6 +57,7 @@ interface SamplerPadAppViewProps {
   getMainContentPadding: string;
   usePortraitDualStack: boolean;
   padInteractionLockClass: string;
+  padInteractionBlockerWidth: number;
   isDualMode: boolean;
   displayPrimary: SamplerBank | null;
   displaySecondary: SamplerBank | null;
@@ -188,6 +189,7 @@ export function SamplerPadAppView({
   getMainContentPadding,
   usePortraitDualStack,
   padInteractionLockClass,
+  padInteractionBlockerWidth,
   isDualMode,
   displayPrimary,
   displaySecondary,
@@ -316,6 +318,17 @@ export function SamplerPadAppView({
     };
   }, [showVolumeMixer]);
 
+  const renderPadInteractionBlocker = () => {
+    if (padInteractionBlockerWidth <= 0) return null;
+    return (
+      <div
+        aria-hidden="true"
+        className="absolute inset-y-0 right-0 z-20 touch-none select-none"
+        style={{ width: `${padInteractionBlockerWidth}px` }}
+      />
+    );
+  };
+
   return (
     <div className={`${layoutSizeClass} transition-colors duration-150 ease-out ${theme === 'dark' ? 'bg-gray-900' : 'bg-gray-50'} flex`}>
       <React.Suspense fallback={sideMenuProps.open ? renderPanelFallback(theme, 'left', 'w-64', 'Loading Banks...') : null}>
@@ -350,7 +363,7 @@ export function SamplerPadAppView({
           <HeaderControls {...headerControlsProps} />
 
           {isDualMode ? (
-            <div className={`${usePortraitDualStack ? 'flex flex-col gap-2' : 'flex gap-1 md:gap-2'} flex-1 min-h-0 min-w-0 ${padInteractionLockClass}`}>
+            <div className={`relative ${usePortraitDualStack ? 'flex flex-col gap-2' : 'flex gap-1 md:gap-2'} flex-1 min-h-0 min-w-0 ${padInteractionLockClass}`}>
               <div className="flex-1 min-w-0 min-h-0">
                 <div
                   ref={primaryScrollRef}
@@ -466,61 +479,65 @@ export function SamplerPadAppView({
                   renderEmptyState(theme, 'Select a secondary bank from the sidebar')
                 )}
               </div>
+              {renderPadInteractionBlocker()}
             </div>
           ) : (
             singleBank ? (
-              <div
-                ref={singleScrollRef}
-                onScroll={() => {
-                  const container = singleScrollRef.current;
-                  if (!container || !currentBankId) return;
-                  singleFallbackScrollRef.current = container.scrollTop;
-                  saveBankScroll(currentBankId, container.scrollTop);
-                }}
-                className={`flex-1 min-w-0 min-h-0 overflow-y-auto overscroll-contain ${padInteractionLockClass}`}
-              >
-                <PadGrid
-                  pads={singleBank.pads || []}
-                  bankId={currentBankId || ''}
-                  bankName={singleBank.name || ''}
-                  allBanks={banks}
-                  allPads={allPads}
-                  editMode={editMode}
-                  globalMuted={globalMuted}
-                  masterVolume={masterVolume}
-                  padSize={padSize}
-                  theme={theme}
-                  stopMode={stopMode}
-                  windowWidth={windowWidth}
-                  onUpdatePad={onUpdatePad}
-                  onRemovePad={(id) => onRemovePad(currentBankId || '', id)}
-                  onDuplicatePad={onDuplicatePad}
-                  onRelinkMissingPadMedia={onRelinkMissingPadMedia}
-                  onRehydratePadMedia={async (bankId, padId) => Boolean(await onRehydratePadMedia(bankId, padId))}
-                  onReorderPads={(fromIndex, toIndex) => onReorderPads(currentBankId || '', fromIndex, toIndex)}
-                  onFileUpload={onFileUpload}
-                  onPadDragStart={onPadDragStart}
-                  onTransferPad={onTransferPad}
-                  availableBanks={availableBanks}
-                  canTransferFromBank={canTransferFromBank}
-                  midiEnabled={midiEnabled}
-                  hideShortcutLabel={hideShortcutLabels}
-                  adminPadColorPaintActive={adminPadColorPaintActive}
-                  onAdminPadColorPaint={onAdminPadColorPaint}
-                  graphicsTier={graphicsTier}
-                  editRequest={editRequest}
-                  blockedShortcutKeys={blockedShortcutKeys}
-                  blockedMidiNotes={blockedMidiNotes}
-                  blockedMidiCCs={blockedMidiCCs}
-                  channelLoadArmed={channelLoadArmed}
-                  onSelectPadForChannelLoad={onSelectPadForChannelLoad}
-                  highlightedPadId={highlightedPadTarget?.bankId === (currentBankId || '') ? highlightedPadTarget.padId : null}
-                  requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
-                    singleBank &&
-                    (singleBank.sourceBankId === defaultBankSourceId || isDefaultBankIdentity(singleBank))
-                  )}
-                  onRequireLogin={onRequireLogin}
-                />
+              <div className={`relative flex-1 min-w-0 min-h-0 ${padInteractionLockClass}`}>
+                <div
+                  ref={singleScrollRef}
+                  onScroll={() => {
+                    const container = singleScrollRef.current;
+                    if (!container || !currentBankId) return;
+                    singleFallbackScrollRef.current = container.scrollTop;
+                    saveBankScroll(currentBankId, container.scrollTop);
+                  }}
+                  className="h-full min-w-0 min-h-0 overflow-y-auto overscroll-contain"
+                >
+                  <PadGrid
+                    pads={singleBank.pads || []}
+                    bankId={currentBankId || ''}
+                    bankName={singleBank.name || ''}
+                    allBanks={banks}
+                    allPads={allPads}
+                    editMode={editMode}
+                    globalMuted={globalMuted}
+                    masterVolume={masterVolume}
+                    padSize={padSize}
+                    theme={theme}
+                    stopMode={stopMode}
+                    windowWidth={windowWidth}
+                    onUpdatePad={onUpdatePad}
+                    onRemovePad={(id) => onRemovePad(currentBankId || '', id)}
+                    onDuplicatePad={onDuplicatePad}
+                    onRelinkMissingPadMedia={onRelinkMissingPadMedia}
+                    onRehydratePadMedia={async (bankId, padId) => Boolean(await onRehydratePadMedia(bankId, padId))}
+                    onReorderPads={(fromIndex, toIndex) => onReorderPads(currentBankId || '', fromIndex, toIndex)}
+                    onFileUpload={onFileUpload}
+                    onPadDragStart={onPadDragStart}
+                    onTransferPad={onTransferPad}
+                    availableBanks={availableBanks}
+                    canTransferFromBank={canTransferFromBank}
+                    midiEnabled={midiEnabled}
+                    hideShortcutLabel={hideShortcutLabels}
+                    adminPadColorPaintActive={adminPadColorPaintActive}
+                    onAdminPadColorPaint={onAdminPadColorPaint}
+                    graphicsTier={graphicsTier}
+                    editRequest={editRequest}
+                    blockedShortcutKeys={blockedShortcutKeys}
+                    blockedMidiNotes={blockedMidiNotes}
+                    blockedMidiCCs={blockedMidiCCs}
+                    channelLoadArmed={channelLoadArmed}
+                    onSelectPadForChannelLoad={onSelectPadForChannelLoad}
+                    highlightedPadId={highlightedPadTarget?.bankId === (currentBankId || '') ? highlightedPadTarget.padId : null}
+                    requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
+                      singleBank &&
+                      (singleBank.sourceBankId === defaultBankSourceId || isDefaultBankIdentity(singleBank))
+                    )}
+                    onRequireLogin={onRequireLogin}
+                  />
+                </div>
+                {renderPadInteractionBlocker()}
               </div>
             ) : (
               renderEmptyState(theme, 'Select a bank from the sidebar to get started')
