@@ -179,6 +179,8 @@ interface StorePromotionsTabProps {
   panelClass: string;
   loading: boolean;
   promotions: StorePromotion[];
+  page: number;
+  totalPages: number;
   stats: { total: number; active: number; scheduled: number; expired: number; inactive: number };
   catalogDrafts: CatalogDraft[];
   editingPromotionId: string | null;
@@ -210,6 +212,7 @@ interface StorePromotionsTabProps {
     is_active: boolean;
     target_bank_ids: string[];
   }) => void;
+  onPageChange: (page: number) => void;
   onEdit: (promotion: StorePromotion) => void;
   onReset: () => void;
   onSave: () => Promise<boolean>;
@@ -1551,11 +1554,14 @@ export function StorePromotionsTab({
   panelClass,
   loading,
   promotions,
+  page,
+  totalPages,
   stats,
   catalogDrafts,
   editingPromotionId,
   form,
   onFormChange,
+  onPageChange,
   onEdit,
   onReset,
   onSave,
@@ -1605,6 +1611,8 @@ export function StorePromotionsTab({
       panelClass={panelClass}
       loading={loading}
       promotions={promotions}
+      page={page}
+      totalPages={totalPages}
       stats={stats}
       bankOptions={bankOptions}
       editingPromotionId={editingPromotionId}
@@ -1613,6 +1621,7 @@ export function StorePromotionsTab({
       editorOpen={editorOpen}
       onEditorOpenChange={handleEditorOpenChange}
       onCreate={handleCreate}
+      onPageChange={onPageChange}
       onEdit={handleEdit}
       onReset={onReset}
       onSave={handleSave}
@@ -1802,6 +1811,8 @@ function StorePromotionsSurface({
   panelClass,
   loading,
   promotions,
+  page,
+  totalPages,
   stats,
   bankOptions,
   editingPromotionId,
@@ -1810,6 +1821,7 @@ function StorePromotionsSurface({
   editorOpen,
   onEditorOpenChange,
   onCreate,
+  onPageChange,
   onEdit,
   onReset,
   onSave,
@@ -1821,6 +1833,8 @@ function StorePromotionsSurface({
   panelClass: string;
   loading: boolean;
   promotions: StorePromotion[];
+  page: number;
+  totalPages: number;
   stats: { total: number; active: number; scheduled: number; expired: number; inactive: number };
   bankOptions: Array<{ id: string; label: string }>;
   editingPromotionId: string | null;
@@ -1829,6 +1843,7 @@ function StorePromotionsSurface({
   editorOpen: boolean;
   onEditorOpenChange: (open: boolean) => void;
   onCreate: () => void;
+  onPageChange: (page: number) => void;
   onEdit: (promotion: StorePromotion) => void;
   onReset: () => void;
   onSave: () => Promise<void>;
@@ -1950,6 +1965,7 @@ function StorePromotionsSurface({
                   </div>
                 </div>
               ))}
+              <Pagination page={page} totalPages={totalPages} onPageChange={onPageChange} />
             </div>
           )}
         </div>

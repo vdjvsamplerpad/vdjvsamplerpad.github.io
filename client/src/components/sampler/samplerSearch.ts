@@ -19,7 +19,7 @@ export const getSamplerSearchScopeOptions = (
       ]
 );
 
-export type SamplerSearchLoadAvailability = 'ready' | 'missing_audio' | 'login_required';
+export type SamplerSearchLoadAvailability = 'ready' | 'sync_on_open' | 'missing_audio' | 'login_required';
 
 export interface SamplerSearchResult {
   key: string;

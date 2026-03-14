@@ -116,7 +116,10 @@ interface HeaderControlsProps {
 const LOGIN_GREETING_STORAGE_PREFIX = 'vdjv-login-greeting';
 
 // Slide-down notification UI used by the header.
-type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string }
+type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string; closing?: boolean }
+const MAX_ACTIVE_NOTICES = 2;
+const NOTICE_EXIT_MS = 220;
+const NOTICE_AUTO_DISMISS_MS = 4000;
 
 const getLocalGreetingDayKey = (date: Date): string => {
   const year = date.getFullYear();
@@ -127,17 +130,53 @@ const getLocalGreetingDayKey = (date: Date): string => {
 
 function useNotices() {
   const [notices, setNotices] = React.useState<Notice[]>([])
+  const removalTimersRef = React.useRef<Record<string, number>>({})
+
+  const clearRemovalTimer = React.useCallback((id: string) => {
+    const timer = removalTimersRef.current[id]
+    if (typeof timer !== 'number') return
+    window.clearTimeout(timer)
+    delete removalTimersRef.current[id]
+  }, [])
+
+  const removeNow = React.useCallback((id: string) => {
+    clearRemovalTimer(id)
+    setNotices((arr) => arr.filter((n) => n.id !== id))
+  }, [clearRemovalTimer])
 
   const pushNotice = React.useCallback((n: Omit<Notice, 'id'>) => {
     const id = (typeof crypto !== 'undefined' && 'randomUUID' in crypto) ? (crypto as any).randomUUID() : String(Date.now() + Math.random())
     const notice: Notice = { id, ...n }
-    setNotices((arr) => [notice, ...arr])
-    // Auto-dismiss after 4s.
-    setTimeout(() => dismiss(id), 4000)
-  }, [])
+    setNotices((arr) => {
+      const active = arr.filter((entry) => !entry.closing)
+      const duplicate = active.some((entry) => entry.variant === notice.variant && entry.message === notice.message)
+      if (duplicate) return arr
+
+      let next = [...active, notice]
+      if (next.length > MAX_ACTIVE_NOTICES) {
+        const [oldest, ...rest] = next
+        next = [{ ...oldest, closing: true }, ...rest]
+        window.setTimeout(() => removeNow(oldest.id), NOTICE_EXIT_MS)
+      }
+      return next
+    })
+    window.setTimeout(() => dismiss(id), NOTICE_AUTO_DISMISS_MS)
+  }, [removeNow])
 
   const dismiss = React.useCallback((id: string) => {
-    setNotices((arr) => arr.filter((n) => n.id !== id))
+    setNotices((arr) => {
+      const target = arr.find((entry) => entry.id === id)
+      if (!target) return arr
+      if (target.closing) return arr
+      return arr.map((entry) => (entry.id === id ? { ...entry, closing: true } : entry))
+    })
+    clearRemovalTimer(id)
+    removalTimersRef.current[id] = window.setTimeout(() => removeNow(id), NOTICE_EXIT_MS)
+  }, [clearRemovalTimer, removeNow])
+
+  React.useEffect(() => () => {
+    Object.values(removalTimersRef.current).forEach((timer) => window.clearTimeout(timer))
+    removalTimersRef.current = {}
   }, [])
 
   return { notices, pushNotice, dismiss }
@@ -177,7 +216,7 @@ function NoticeItem({ notice, dismiss, theme }: { notice: Notice; dismiss: (id: 
 
   return (
     <div
-      className={`${base} ${colors} ${show ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-3'}`}
+      className={`${base} ${colors} ${notice.closing ? 'opacity-0 -translate-y-3 scale-[0.98]' : show ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-3 scale-[0.98]'}`}
       onMouseEnter={() => setShow(true)}
       onMouseLeave={() => setShow(true)}
     >
@@ -793,6 +832,23 @@ export function HeaderControls({
             >
               <Shield className="w-4 h-4" />
               {!isMobileScreen && 'Admin Access'}
+            </Button>
+          )}
+
+          {isDualMode && (
+            <Button
+              onClick={onExitDualMode}
+              variant="outline"
+              size="default"
+              className={`w-36 transition-all duration-200 ${
+                theme === 'dark'
+                  ? 'bg-amber-500/15 border-amber-400 text-amber-200 hover:bg-amber-500/30 hover:border-amber-300'
+                  : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100 hover:border-amber-400'
+              }`}
+              title="Exit dual mode"
+            >
+              <X className="w-4 h-4" />
+              <span>Exit Dual Mode</span>
             </Button>
           )}
         </div>

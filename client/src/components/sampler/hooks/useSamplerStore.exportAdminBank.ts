@@ -1,11 +1,10 @@
 import JSZip from 'jszip';
 import type { BankMetadata, SamplerBank } from '../types/sampler';
 import type { AdminCatalogUploadPublishResult } from './useSamplerStore.exportUpload';
+import type { ExportAudioMode } from './useSamplerStore.types';
 import { ensureManagedStoreThumbnail } from './storeThumbnailUpload';
 
 type SamplerPad = SamplerBank['pads'][number];
-
-export type ExportAudioMode = 'fast' | 'compact';
 
 type ExportDiagnosticsLike = {
   operationId: string;
@@ -22,6 +21,12 @@ type SaveExportFileResult = {
 type TrimAudioResult = {
   blob: Blob;
   newDurationMs: number;
+};
+
+type TranscodeAudioToMP3Result = {
+  blob: Blob;
+  newDurationMs: number;
+  appliedTrim: boolean;
 };
 
 type SignedAdminExportTokenResult = {
@@ -42,6 +47,7 @@ type EnqueueAdminExportUploadInput = {
   fileName: string;
   assetName: string;
   assetProtection: 'encrypted' | 'public';
+  exportAudioMode?: ExportAudioMode;
   fileSize: number;
   fileSha256: string | null;
   padNames: string[];
@@ -86,6 +92,18 @@ export interface RunExportAdminBankDeps {
     endTimeMs?: number,
     formatHint?: string
   ) => Promise<TrimAudioResult>;
+  remapSavedHotcuesForBakedTrim: (
+    hotcues: SamplerPad['savedHotcuesMs'],
+    startMs: number,
+    trimmedDurationMs: number
+  ) => [number | null, number | null, number | null, number | null];
+  transcodeAudioToMP3: (input: {
+    source: Blob;
+    startTimeMs?: number;
+    endTimeMs?: number;
+    applyTrim?: boolean;
+    bitrate?: number;
+  }) => Promise<TranscodeAudioToMP3Result>;
   detectAudioFormat: (blob: Blob) => string;
   sha256HexFromBlob: (blob: Blob) => Promise<string>;
   sha256HexFromText: (text: string) => Promise<string>;
@@ -145,6 +163,8 @@ export const runExportAdminBankPipeline = async (
     loadPadMediaBlob,
     shouldAttemptTrim,
     trimAudio,
+    remapSavedHotcuesForBakedTrim,
+    transcodeAudioToMP3,
     detectAudioFormat,
     sha256HexFromBlob,
     sha256HexFromText,
@@ -237,13 +257,44 @@ export const runExportAdminBankPipeline = async (
         const sourceBlob = await loadPadMediaBlob(pad, 'audio');
         if (sourceBlob) {
           let audioBlob = sourceBlob;
-          if (shouldAttemptTrim(pad, exportMode)) {
+          const shouldBakeTrim = shouldAttemptTrim(pad, 'compact');
+          if (exportMode === 'trim_mp3') {
+            const mp3Result = await transcodeAudioToMP3({
+              source: sourceBlob,
+              startTimeMs: pad.startTimeMs,
+              endTimeMs: pad.endTimeMs,
+              applyTrim: shouldBakeTrim,
+              bitrate: 128,
+            });
+            audioBlob = mp3Result.blob;
+            if (exportPad && mp3Result.appliedTrim) {
+              exportPad.startTimeMs = 0;
+              exportPad.endTimeMs = mp3Result.newDurationMs;
+              exportPad.savedHotcuesMs = remapSavedHotcuesForBakedTrim(
+                pad.savedHotcuesMs,
+                pad.startTimeMs,
+                mp3Result.newDurationMs
+              );
+            }
+            addOperationStage(diagnostics, mp3Result.appliedTrim ? 'audio-trim-mp3' : 'audio-mp3-transcoded', {
+              padId: pad.id,
+              padName: pad.name || 'Untitled Pad',
+              originalBytes: sourceBlob.size,
+              outputBytes: audioBlob.size,
+              bitrate: 128,
+            });
+          } else if (shouldAttemptTrim(pad, exportMode)) {
             try {
               const trimResult = await trimAudio(sourceBlob, pad.startTimeMs, pad.endTimeMs, detectAudioFormat(sourceBlob));
               audioBlob = trimResult.blob;
               if (exportPad) {
                 exportPad.startTimeMs = 0;
                 exportPad.endTimeMs = trimResult.newDurationMs;
+                exportPad.savedHotcuesMs = remapSavedHotcuesForBakedTrim(
+                  pad.savedHotcuesMs,
+                  pad.startTimeMs,
+                  trimResult.newDurationMs
+                );
               }
               addOperationStage(diagnostics, 'audio-trimmed', {
                 padId: pad.id,
@@ -320,7 +371,7 @@ export const runExportAdminBankPipeline = async (
     diagnostics.metrics.uniqueImageAssets = imageHashToPath.size;
     diagnostics.metrics.dedupedAudioReuses = dedupedAudioReuses;
     diagnostics.metrics.dedupedImageReuses = dedupedImageReuses;
-    diagnostics.metrics.exportAudioMode = exportMode === 'compact' ? 1 : 0;
+    diagnostics.metrics.exportAudioMode = exportMode === 'fast' ? 0 : exportMode === 'compact' ? 1 : 2;
     mediaCompletedAt = getNowMs();
 
     const bankData = {
@@ -578,6 +629,7 @@ export const runExportAdminBankPipeline = async (
               fileName,
               assetName: fileName,
               assetProtection: publicCatalogAsset ? 'public' : 'encrypted',
+              exportAudioMode: exportMode,
               fileSize: outputBlob.size,
               fileSha256: queuedSha256,
               padNames: bank.pads.map((pad) => pad.name || 'Untitled Pad'),

@@ -27,6 +27,17 @@ export const IS_IOS =
 export const IS_ANDROID =
     typeof navigator !== 'undefined' && /Android/.test(navigator.userAgent);
 
+export const IS_CAPACITOR_NATIVE =
+    typeof window !== 'undefined' &&
+    Boolean((window as any).Capacitor?.isNativePlatform?.());
+
+export const IS_ELECTRON =
+    typeof window !== 'undefined' &&
+    (
+        /Electron/i.test(navigator.userAgent) ||
+        Boolean((window as Window & { process?: { versions?: { electron?: string } } }).process?.versions?.electron)
+    );
+
 /** Audio limits */
 export const DEFAULT_MAX_PAD_AUDIO_BYTES = 52_428_800; // 50 MB
 export const DEFAULT_MAX_PAD_AUDIO_DURATION_MS = 1_200_000; // 20 min
@@ -37,6 +48,10 @@ export const IOS_MEDIA_SIZE_THRESHOLD_BYTES = 15_728_640; // 15 MB
 
 /** iOS memory cap for decoded AudioBuffers */
 export const IOS_MAX_BUFFER_MEMORY = 50 * 1024 * 1024;
+export const ANDROID_MAX_BUFFER_MEMORY = 64 * 1024 * 1024;
+export const CAPACITOR_NATIVE_MAX_BUFFER_MEMORY = 72 * 1024 * 1024;
+export const LOW_MEMORY_WEB_MAX_BUFFER_MEMORY = 96 * 1024 * 1024;
+export const DESKTOP_MAX_BUFFER_MEMORY = 160 * 1024 * 1024;
 
 /** Chrome limit is ~1000; keep a safety margin */
 export const MAX_AUDIO_ELEMENTS = 800;

@@ -24,6 +24,7 @@ type ActivitySortBy = "created_at" | "event_type" | "status" | "email" | "bank_n
 type ActivityUploadResult = "success" | "failed" | "duplicate_no_change";
 type ActivityScope = "export" | "auth" | "non_export" | "all";
 type CatalogAssetProtection = "encrypted" | "public";
+type ActiveSessionSortBy = "user_id" | "email" | "device_name" | "platform" | "last_seen_at";
 
 type AdminRoute = {
   section: string;
@@ -86,6 +87,20 @@ const swallowDiscordError = async (task: () => Promise<void>) => {
 
 const normalizeSortDir = (value: string | null): SortDirection => {
   return String(value || "").toLowerCase() === "asc" ? "asc" : "desc";
+};
+
+const normalizeActiveSessionSortBy = (value: string | null): ActiveSessionSortBy => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (
+    normalized === "user_id" ||
+    normalized === "email" ||
+    normalized === "device_name" ||
+    normalized === "platform" ||
+    normalized === "last_seen_at"
+  ) {
+    return normalized as ActiveSessionSortBy;
+  }
+  return "last_seen_at";
 };
 
 const normalizeActivitySortBy = (value: string | null): ActivitySortBy => {
@@ -187,6 +202,11 @@ const sortRows = <T,>(
   if (!compare) return rows;
   const sorted = [...rows].sort(compare);
   return sortDir === "asc" ? sorted : sorted.reverse();
+};
+
+const paginateRows = <T,>(rows: T[], page: number, perPage: number): T[] => {
+  const from = (page - 1) * perPage;
+  return rows.slice(from, from + perPage);
 };
 
 const parseRoute = (pathname: string): AdminRoute => {
@@ -388,18 +408,25 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
   const url = new URL(req.url);
   const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
   const page = Math.max(1, Number(url.searchParams.get("page") || 1));
-  const perPage = Math.max(1, Math.min(500, Number(url.searchParams.get("perPage") || 100)));
+  const perPage = Math.max(1, Math.min(2000, Number(url.searchParams.get("perPage") || 100)));
   const includeAdmins = String(url.searchParams.get("includeAdmins") || "false").toLowerCase() === "true";
   const sortBy = String(url.searchParams.get("sortBy") || "created_at");
   const sortDir = normalizeSortDir(url.searchParams.get("sortDir"));
 
-  const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
-  if (error) return fail(500, error.message);
   const samplerConfigResult = await getNormalizedSamplerAppConfig(admin);
   if (samplerConfigResult.error) return fail(500, samplerConfigResult.error.message);
   const quotaDefaults = samplerConfigResult.config.quotaDefaults;
 
-  const authUsers = data?.users || [];
+  const authUsers: any[] = [];
+  const authBatchSize = 500;
+  for (let authPage = 1; authPage <= 40; authPage += 1) {
+    const { data, error } = await admin.auth.admin.listUsers({ page: authPage, perPage: authBatchSize });
+    if (error) return fail(500, error.message);
+    const batch = Array.isArray(data?.users) ? data.users : [];
+    authUsers.push(...batch);
+    if (batch.length < authBatchSize) break;
+  }
+
   const userIds = authUsers.map((user) => user.id);
   const { data: profileRows, error: profileError } = userIds.length
     ? await admin
@@ -450,7 +477,7 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
   });
 
   return ok({
-    users: sorted,
+    users: paginateRows(sorted, page, perPage),
     page,
     perPage,
     total: sorted.length,
@@ -463,43 +490,76 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
 const listActiveSessions = async (req: Request, admin: ReturnType<typeof createServiceClient>) => {
   const url = new URL(req.url);
   const q = asString(url.searchParams.get("q"), 120)?.toLowerCase() || "";
-  const limit = Math.max(1, Math.min(500, Number(url.searchParams.get("limit") || 200)));
+  const page = Math.max(1, Number(url.searchParams.get("page") || 1));
+  const perPage = Math.max(1, Math.min(200, Number(url.searchParams.get("perPage") || 100)));
+  const sortBy = normalizeActiveSessionSortBy(url.searchParams.get("sortBy"));
+  const sortDir = normalizeSortDir(url.searchParams.get("sortDir"));
 
   const { data: sessions, error: sessionsError } = await admin
     .from("v_active_sessions_now")
     .select("*")
     .order("last_seen_at", { ascending: false })
-    .limit(limit);
+    .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT);
   if (sessionsError) return fail(500, sessionsError.message);
 
   const rows = Array.isArray(sessions) ? sessions : [];
   const { data: admins } = await admin.from("profiles").select("id").eq("role", "admin");
   const adminIds = new Set((admins || []).map((a: any) => a.id));
   const nonAdminRows = rows.filter((row: any) => !adminIds.has(row?.user_id));
+  const latestByUser = new Map<string, any>();
+  for (const row of nonAdminRows) {
+    const userId = String(row?.user_id || "");
+    if (!userId) continue;
+    const previous = latestByUser.get(userId);
+    if (!previous || compareNullableDate(previous?.last_seen_at, row?.last_seen_at) < 0) {
+      latestByUser.set(userId, row);
+    }
+  }
+
+  const dedupedRows = Array.from(latestByUser.values());
   const filtered = q
-    ? nonAdminRows.filter((row: any) => {
+    ? dedupedRows.filter((row: any) => {
       const text = [
+        row?.user_id,
         row?.email,
         row?.device_name,
         row?.platform,
         row?.browser,
         row?.os,
-        row?.session_key,
-        row?.user_id,
-        row?.device_fingerprint,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       return text.includes(q);
     })
-    : nonAdminRows;
+    : dedupedRows;
 
-  const uniqueActiveUsers = new Set(filtered.map((row: any) => row.user_id)).size;
+  const sorted = sortRows(filtered, sortBy, sortDir, {
+    user_id: (a, b) => compareNullableText(a.user_id, b.user_id),
+    email: (a, b) => compareNullableText(a.email, b.email),
+    device_name: (a, b) => compareNullableText(a.device_name, b.device_name),
+    platform: (a, b) => compareNullableText(
+      [a.platform, a.browser, a.os].filter(Boolean).join(" / "),
+      [b.platform, b.browser, b.os].filter(Boolean).join(" / "),
+    ),
+    last_seen_at: (a, b) => compareNullableDate(a.last_seen_at, b.last_seen_at),
+  });
+
+  const filteredSessionCount = q
+    ? nonAdminRows.filter((row: any) => {
+      const matchedUser = latestByUser.get(String(row?.user_id || ""));
+      return filtered.includes(matchedUser);
+    }).length
+    : nonAdminRows.length;
+
   return ok({
-    counts: { activeSessions: filtered.length, activeUsers: uniqueActiveUsers },
-    sessions: filtered,
-    total: filtered.length,
+    counts: { activeSessions: filteredSessionCount, activeUsers: filtered.length },
+    sessions: paginateRows(sorted, page, perPage),
+    total: sorted.length,
+    page,
+    perPage,
+    sortBy,
+    sortDir,
   });
 };
 
@@ -703,6 +763,8 @@ const resetPassword = async (
 const listBanks = async (req: Request, admin: ReturnType<typeof createServiceClient>) => {
   const url = new URL(req.url);
   const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
+  const page = Math.max(1, Number(url.searchParams.get("page") || 1));
+  const perPage = Math.max(1, Math.min(2000, Number(url.searchParams.get("perPage") || 100)));
   const sortBy = String(url.searchParams.get("sortBy") || "created_at");
   const sortDir = normalizeSortDir(url.searchParams.get("sortDir"));
   const includeDeleted = parseBooleanFlag(url.searchParams.get("includeDeleted"), false);
@@ -779,7 +841,15 @@ const listBanks = async (req: Request, admin: ReturnType<typeof createServiceCli
     access_count: (a, b) => a.access_count - b.access_count,
   });
 
-  return ok({ banks: sorted, total: sorted.length, sortBy, sortDir, includeDeleted });
+  return ok({
+    banks: paginateRows(sorted, page, perPage),
+    total: sorted.length,
+    page,
+    perPage,
+    sortBy,
+    sortDir,
+    includeDeleted,
+  });
 };
 
 const listActivity = async (req: Request, admin: ReturnType<typeof createServiceClient>) => {

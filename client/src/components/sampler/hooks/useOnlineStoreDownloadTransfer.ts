@@ -196,7 +196,7 @@ export function useOnlineStoreDownloadTransfer({
                 if (!token) throw new Error('Please sign in to continue.');
 
                 const downloadHeaders = { Authorization: `Bearer ${token}` };
-                if (item.is_paid || item.requires_grant) {
+                if (item.asset_protection === 'encrypted' || item.is_paid || item.requires_grant) {
                     const keyTicketUrl = edgeFunctionUrl('store-api', `download-key/${item.id}`);
                     pushDownloadDebugLog('info', 'download_key_request', {
                         catalogItemId: item.id,

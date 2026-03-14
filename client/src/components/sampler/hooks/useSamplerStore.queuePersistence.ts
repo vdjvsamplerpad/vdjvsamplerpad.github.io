@@ -1,4 +1,5 @@
 import type { AdminExportUploadJob, UserExportUploadJob } from './useSamplerStore.uploadQueue';
+import type { ExportAudioMode } from './useSamplerStore.types';
 
 export const USER_EXPORT_UPLOAD_QUEUE_KEY = 'vdjv-user-export-upload-queue-v1';
 export const USER_EXPORT_UPLOAD_MAX_ATTEMPTS = 3;
@@ -61,6 +62,14 @@ export const readAdminExportUploadQueue = (): AdminExportUploadJob[] => {
       .map((item: any) => {
         const assetProtection: 'encrypted' | 'public' = item?.assetProtection === 'public' ? 'public' : 'encrypted';
         const operationType: 'create' | 'update' = item?.operationType === 'update' ? 'update' : 'create';
+        const exportAudioMode: ExportAudioMode | undefined =
+          item?.exportAudioMode === 'trim_mp3'
+            ? 'trim_mp3'
+            : item?.exportAudioMode === 'compact'
+              ? 'compact'
+              : item?.exportAudioMode === 'fast'
+                ? 'fast'
+                : undefined;
         return {
           exportOperationId: typeof item?.exportOperationId === 'string' ? item.exportOperationId : '',
           userId: typeof item?.userId === 'string' ? item.userId : '',
@@ -71,6 +80,7 @@ export const readAdminExportUploadQueue = (): AdminExportUploadJob[] => {
           fileName: typeof item?.fileName === 'string' ? item.fileName : '',
           assetName: typeof item?.assetName === 'string' ? item.assetName : '',
           assetProtection,
+          exportAudioMode,
           fileSize: Number(item?.fileSize || 0),
           fileSha256: typeof item?.fileSha256 === 'string' ? item.fileSha256 : null,
           createdAt: typeof item?.createdAt === 'string' ? item.createdAt : new Date(now).toISOString(),

@@ -71,6 +71,8 @@ interface AssignmentsTabProps {
   usersLoading: boolean;
   usersQuery: string;
   assignmentUsers: AdminUser[];
+  assignmentUsersPage: number;
+  assignmentUsersTotalPages: number;
   assignmentUserSortBy: AssignmentUserSortBy;
   assignmentUserSortDir: SortDirection;
   selectedUserId: string;
@@ -82,6 +84,8 @@ interface AssignmentsTabProps {
   allGrantIds: string[];
   allRevokeIds: string[];
   assignmentBanks: AdminBank[];
+  assignmentBanksPage: number;
+  assignmentBanksTotalPages: number;
   assignmentBankSortBy: AssignmentBankSortBy;
   assignmentBankSortDir: SortDirection;
   selectedBankIds: Set<string>;
@@ -89,10 +93,12 @@ interface AssignmentsTabProps {
   banksLoading: boolean;
   onUsersQueryChange: (value: string) => void;
   onRefreshUsers: () => void;
+  onAssignmentUsersPageChange: (page: number) => void;
   onToggleAssignmentUserSort: (next: AssignmentUserSortBy) => void;
   onSelectUser: (id: string) => void;
   onGrant: (ids: string[]) => void;
   onRevoke: (ids: string[]) => void;
+  onAssignmentBanksPageChange: (page: number) => void;
   onToggleAssignmentBankSort: (next: AssignmentBankSortBy) => void;
   onToggleBankSelection: (id: string) => void;
 }
@@ -103,10 +109,13 @@ interface BanksTabProps {
   banksLoading: boolean;
   banksQuery: string;
   banks: AdminBank[];
+  banksPage: number;
+  banksTotalPages: number;
   banksSortBy: BankSortBy;
   banksSortDir: SortDirection;
   onBanksQueryChange: (value: string) => void;
   onRefreshBanks: () => void;
+  onBanksPageChange: (page: number) => void;
   onToggleBankSort: (next: BankSortBy) => void;
   onOpenBankAccess: (bank: AdminBank) => void;
   onEditBank: (bank: AdminBank) => void;
@@ -119,10 +128,13 @@ interface UsersTabProps {
   usersLoading: boolean;
   usersQuery: string;
   users: AdminUser[];
+  usersPage: number;
+  usersTotalPages: number;
   usersSortBy: UserSortBy;
   usersSortDir: SortDirection;
   onUsersQueryChange: (value: string) => void;
   onRefreshUsers: () => void;
+  onUsersPageChange: (page: number) => void;
   onToggleUserSort: (next: UserSortBy) => void;
   onOpenCreateUser: () => void;
   onOpenUserDetails: (user: AdminUser) => void;
@@ -136,9 +148,12 @@ interface ActiveTabProps {
   activeLoading: boolean;
   activeCounts: { activeUsers: number; activeSessions: number };
   activeUsersRows: ActiveSessionRow[];
+  activePage: number;
+  activeTotalPages: number;
   activeSortBy: ActiveSortBy;
   activeSortDir: SortDirection;
   onRefreshActive: () => void;
+  onActivePageChange: (page: number) => void;
   onToggleActiveSort: (next: ActiveSortBy) => void;
 }
 
@@ -507,6 +522,8 @@ function AssignmentsTab({
   usersLoading,
   usersQuery,
   assignmentUsers,
+  assignmentUsersPage,
+  assignmentUsersTotalPages,
   assignmentUserSortBy,
   assignmentUserSortDir,
   selectedUserId,
@@ -518,6 +535,8 @@ function AssignmentsTab({
   allGrantIds,
   allRevokeIds,
   assignmentBanks,
+  assignmentBanksPage,
+  assignmentBanksTotalPages,
   assignmentBankSortBy,
   assignmentBankSortDir,
   selectedBankIds,
@@ -525,10 +544,12 @@ function AssignmentsTab({
   banksLoading,
   onUsersQueryChange,
   onRefreshUsers,
+  onAssignmentUsersPageChange,
   onToggleAssignmentUserSort,
   onSelectUser,
   onGrant,
   onRevoke,
+  onAssignmentBanksPageChange,
   onToggleAssignmentBankSort,
   onToggleBankSelection,
 }: AssignmentsTabProps) {
@@ -574,6 +595,7 @@ function AssignmentsTab({
             </TableBody>
           </Table>
         </div>
+        <Pagination page={assignmentUsersPage} totalPages={assignmentUsersTotalPages} onPageChange={onAssignmentUsersPageChange} />
       </div>
 
       <div className={`border rounded p-3 space-y-3 ${DESKTOP_SECTION_CARD_CLASS} ${cardClass}`}>
@@ -615,6 +637,7 @@ function AssignmentsTab({
             </TableBody>
           </Table>
         </div>
+        <Pagination page={assignmentBanksPage} totalPages={assignmentBanksTotalPages} onPageChange={onAssignmentBanksPageChange} />
       </div>
     </div>
   );
@@ -626,10 +649,13 @@ function BanksTab({
   banksLoading,
   banksQuery,
   banks,
+  banksPage,
+  banksTotalPages,
   banksSortBy,
   banksSortDir,
   onBanksQueryChange,
   onRefreshBanks,
+  onBanksPageChange,
   onToggleBankSort,
   onOpenBankAccess,
   onEditBank,
@@ -683,6 +709,7 @@ function BanksTab({
           </TableBody>
         </Table>
       </div>
+      <Pagination page={banksPage} totalPages={banksTotalPages} onPageChange={onBanksPageChange} />
     </div>
   );
 }
@@ -693,10 +720,13 @@ function UsersTab({
   usersLoading,
   usersQuery,
   users,
+  usersPage,
+  usersTotalPages,
   usersSortBy,
   usersSortDir,
   onUsersQueryChange,
   onRefreshUsers,
+  onUsersPageChange,
   onToggleUserSort,
   onOpenCreateUser,
   onOpenUserDetails,
@@ -755,6 +785,7 @@ function UsersTab({
           </TableBody>
         </Table>
       </div>
+      <Pagination page={usersPage} totalPages={usersTotalPages} onPageChange={onUsersPageChange} />
     </div>
   );
 }
@@ -766,9 +797,12 @@ function ActiveTab({
   activeLoading,
   activeCounts,
   activeUsersRows,
+  activePage,
+  activeTotalPages,
   activeSortBy,
   activeSortDir,
   onRefreshActive,
+  onActivePageChange,
   onToggleActiveSort,
 }: ActiveTabProps) {
   return (
@@ -820,6 +854,7 @@ function ActiveTab({
           </TableBody>
         </Table>
       </div>
+      <Pagination page={activePage} totalPages={activeTotalPages} onPageChange={onActivePageChange} />
     </div>
   );
 }

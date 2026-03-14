@@ -14,6 +14,14 @@ interface Window {
   electronAPI?: {
     toggleFullscreen?: () => Promise<boolean>;
     getFullscreenState?: () => Promise<boolean>;
+    transcodeAudioToMp3?: (payload: {
+      audioBytes: Uint8Array | ArrayBuffer;
+      mimeType?: string;
+      startTimeMs?: number;
+      endTimeMs?: number;
+      applyTrim?: boolean;
+      bitrate?: number;
+    }) => Promise<{ audioBytes: Uint8Array | ArrayBuffer }>;
     onFullscreenChange?: (callback: (isFullscreen: boolean) => void) => (() => void) | void;
   };
 }

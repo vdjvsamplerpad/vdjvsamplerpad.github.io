@@ -25,6 +25,58 @@ import {
 import { summarizeMissingMedia, padNeedsMediaHydration } from './useSamplerStore.padHelpers';
 import { type SamplerMediaHelpers } from './useSamplerStore.mediaRuntime';
 
+const MAX_NATIVE_BACKGROUND_HYDRATION_PADS = 320;
+const MAX_DESKTOP_BACKGROUND_HYDRATION_PADS = 480;
+const BANK_MEDIA_DEHYDRATE_IDLE_MS = 15_000;
+const MIN_BANKS_FOR_MEDIA_DEHYDRATION = 5;
+const MAX_RECENT_WARM_BANKS = 1;
+const DECK_LOADED_BANKS_EVENT = 'vdjv-deck-loaded-banks-changed';
+const DECK_PLAYBACK_EVENT = 'vdjv-deck-playback-changed';
+
+const isBlobUrl = (value: string | null | undefined): value is string =>
+  typeof value === 'string' && value.startsWith('blob:');
+
+const bankHasBlobMedia = (bank: SamplerBank): boolean => {
+  if (isBlobUrl(bank.bankMetadata?.thumbnailUrl)) return true;
+  return (bank.pads || []).some((pad) => isBlobUrl(pad.audioUrl) || isBlobUrl(pad.imageUrl));
+};
+
+const dehydrateBankMedia = (bank: SamplerBank): SamplerBank => {
+  let changed = false;
+
+  const nextPads = (bank.pads || []).map((pad) => {
+    let nextPad = pad;
+    if (isBlobUrl(pad.audioUrl)) {
+      try { URL.revokeObjectURL(pad.audioUrl); } catch {}
+      nextPad = { ...nextPad, audioUrl: null };
+      changed = true;
+    }
+    if (isBlobUrl(pad.imageUrl)) {
+      try { URL.revokeObjectURL(pad.imageUrl); } catch {}
+      nextPad = { ...nextPad, imageUrl: null };
+      changed = true;
+    }
+    return nextPad;
+  });
+
+  let nextMetadata = bank.bankMetadata;
+  if (isBlobUrl(bank.bankMetadata?.thumbnailUrl)) {
+    try { URL.revokeObjectURL(bank.bankMetadata.thumbnailUrl); } catch {}
+    nextMetadata = {
+      ...bank.bankMetadata,
+      thumbnailUrl: undefined,
+    };
+    changed = true;
+  }
+
+  if (!changed) return bank;
+  return {
+    ...bank,
+    pads: nextPads,
+    bankMetadata: nextMetadata,
+  };
+};
+
 interface UseSamplerStoreBankLifecycleParams {
   banks: SamplerBank[];
   banksRef: React.MutableRefObject<SamplerBank[]>;
@@ -46,6 +98,7 @@ interface UseSamplerStoreBankLifecycleParams {
   setDefaultBankSourceRevision: React.Dispatch<React.SetStateAction<number>>;
   selectedBankHydrationRetryNonce: number;
   setSelectedBankHydrationRetryNonce: React.Dispatch<React.SetStateAction<number>>;
+  rehydratePadMediaFromStorage: (pad: PadData) => Promise<PadData>;
   rehydrateBankMediaFromStorage: (bank: SamplerBank) => Promise<SamplerBank>;
   setBanks: React.Dispatch<React.SetStateAction<SamplerBank[]>>;
   yieldToMainThread: () => Promise<void>;
@@ -95,6 +148,7 @@ export function useSamplerStoreBankLifecycle({
   setDefaultBankSourceRevision,
   selectedBankHydrationRetryNonce,
   setSelectedBankHydrationRetryNonce,
+  rehydratePadMediaFromStorage,
   rehydrateBankMediaFromStorage,
   setBanks,
   yieldToMainThread,
@@ -122,11 +176,69 @@ export function useSamplerStoreBankLifecycle({
   previousHydratedRef,
   guestDefaultSelectionPendingRef,
 }: UseSamplerStoreBankLifecycleParams): void {
+  const recentBankOrderRef = React.useRef<string[]>([]);
+  const bankMediaDehydrateTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deckLoadedBankIdsRef = React.useRef<Set<string>>(new Set());
+  const hasActiveDeckPlaybackRef = React.useRef(false);
+  const [deckPlaybackNonce, setDeckPlaybackNonce] = React.useState(0);
+
   React.useEffect(() => {
     return () => {
       clearSelectedBankHydrationRetryTimer(selectedBankHydrationRetryTimerRef);
+      if (bankMediaDehydrateTimerRef.current !== null) {
+        clearTimeout(bankMediaDehydrateTimerRef.current);
+        bankMediaDehydrateTimerRef.current = null;
+      }
     };
   }, [selectedBankHydrationRetryTimerRef]);
+
+  React.useEffect(() => {
+    const activeIds = [currentBankId, primaryBankId, secondaryBankId].filter(
+      (value): value is string => typeof value === 'string' && value.length > 0
+    );
+    if (activeIds.length === 0) return;
+
+    recentBankOrderRef.current = [
+      ...activeIds,
+      ...recentBankOrderRef.current.filter((id) => !activeIds.includes(id)),
+    ];
+  }, [currentBankId, primaryBankId, secondaryBankId]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleDeckLoadedBanksChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ bankIds?: unknown }>).detail;
+      const bankIds = Array.isArray(detail?.bankIds)
+        ? detail.bankIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
+        : [];
+      deckLoadedBankIdsRef.current = new Set(bankIds);
+    };
+
+    window.addEventListener(DECK_LOADED_BANKS_EVENT, handleDeckLoadedBanksChanged as EventListener);
+    return () => {
+      deckLoadedBankIdsRef.current = new Set();
+      window.removeEventListener(DECK_LOADED_BANKS_EVENT, handleDeckLoadedBanksChanged as EventListener);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleDeckPlaybackChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ isPlaying?: unknown }>).detail;
+      const nextValue = detail?.isPlaying === true;
+      if (hasActiveDeckPlaybackRef.current === nextValue) return;
+      hasActiveDeckPlaybackRef.current = nextValue;
+      setDeckPlaybackNonce((value) => value + 1);
+    };
+
+    window.addEventListener(DECK_PLAYBACK_EVENT, handleDeckPlaybackChanged as EventListener);
+    return () => {
+      hasActiveDeckPlaybackRef.current = false;
+      window.removeEventListener(DECK_PLAYBACK_EVENT, handleDeckPlaybackChanged as EventListener);
+    };
+  }, []);
 
   const queueSelectedBankHydrationRetry = React.useCallback((bankId: string) => {
     queueSelectedBankHydrationRetryPipeline(bankId, {
@@ -168,6 +280,7 @@ export function useSamplerStoreBankLifecycle({
           banksRef,
           runIdRef: selectedBankHydrationRunIdRef,
           retryAttemptsRef: selectedBankHydrationRetryAttemptsRef,
+          rehydratePadMediaFromStorage,
           rehydrateBankMediaFromStorage,
           setBanks,
           padNeedsMediaHydration,
@@ -190,6 +303,7 @@ export function useSamplerStoreBankLifecycle({
     isDefaultBankSyncing,
     primaryBankId,
     queueSelectedBankHydrationRetry,
+    rehydratePadMediaFromStorage,
     rehydrateBankMediaFromStorage,
     secondaryBankId,
     selectedBankHydrationRetryAttemptsRef,
@@ -207,10 +321,20 @@ export function useSamplerStoreBankLifecycle({
     if (startupMediaRestoreInProgressRef.current) return;
     if (backgroundBankHydrationInProgressRef.current) return;
 
+    const totalPads = banks.reduce((sum, bank) => sum + (Array.isArray(bank.pads) ? bank.pads.length : 0), 0);
+    const isNativeCapacitor =
+      typeof window !== 'undefined' &&
+      Boolean((window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
+    const backgroundHydrationPadLimit = isNativeCapacitor
+      ? MAX_NATIVE_BACKGROUND_HYDRATION_PADS
+      : MAX_DESKTOP_BACKGROUND_HYDRATION_PADS;
+    if (totalPads > backgroundHydrationPadLimit) return;
+
     const hasMissingMedia = banks.some((bank) =>
       Array.isArray(bank.pads) && bank.pads.some((pad) => padNeedsMediaHydration(pad))
     );
     if (!hasMissingMedia) return;
+    if (hasActiveDeckPlaybackRef.current) return;
 
     const runId = backgroundBankHydrationRunIdRef.current + 1;
     backgroundBankHydrationRunIdRef.current = runId;
@@ -274,6 +398,71 @@ export function useSamplerStoreBankLifecycle({
     startupMediaRestoreInProgressRef,
     startupRestoreCompleted,
     yieldToMainThread,
+    deckPlaybackNonce,
+  ]);
+
+  React.useEffect(() => {
+    const isNativeCapacitor =
+      typeof window !== 'undefined' &&
+      Boolean((window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
+    if (isNativeCapacitor) return;
+    if (!isBanksHydrated) return;
+    if (!startupRestoreCompleted) return;
+    if (banks.length < MIN_BANKS_FOR_MEDIA_DEHYDRATION) return;
+    if (hasActiveDeckPlaybackRef.current) return;
+
+    if (bankMediaDehydrateTimerRef.current !== null) {
+      clearTimeout(bankMediaDehydrateTimerRef.current);
+    }
+
+    bankMediaDehydrateTimerRef.current = setTimeout(() => {
+      const activeIds = new Set(
+        [currentBankId, primaryBankId, secondaryBankId].filter(
+          (value): value is string => typeof value === 'string' && value.length > 0
+        )
+      );
+      const extraWarmIds = recentBankOrderRef.current
+        .filter((id) => !activeIds.has(id))
+        .slice(0, MAX_RECENT_WARM_BANKS);
+      const defaultBankIds = banks
+        .filter((bank) => isDefaultBankIdentity(bank))
+        .map((bank) => bank.id);
+      const preserveIds = new Set<string>([
+        ...activeIds,
+        ...extraWarmIds,
+        ...defaultBankIds,
+        ...deckLoadedBankIdsRef.current,
+      ]);
+
+      setBanks((prev) => {
+        let changed = false;
+        const next = prev.map((bank) => {
+          if (preserveIds.has(bank.id)) return bank;
+          if (!bankHasBlobMedia(bank)) return bank;
+          const dehydrated = dehydrateBankMedia(bank);
+          if (dehydrated !== bank) changed = true;
+          return dehydrated;
+        });
+        return changed ? next : prev;
+      });
+      bankMediaDehydrateTimerRef.current = null;
+    }, BANK_MEDIA_DEHYDRATE_IDLE_MS);
+
+    return () => {
+      if (bankMediaDehydrateTimerRef.current !== null) {
+        clearTimeout(bankMediaDehydrateTimerRef.current);
+        bankMediaDehydrateTimerRef.current = null;
+      }
+    };
+  }, [
+    banks,
+    currentBankId,
+    isBanksHydrated,
+    primaryBankId,
+    secondaryBankId,
+    setBanks,
+    startupRestoreCompleted,
+    deckPlaybackNonce,
   ]);
 
   const loadInstalledDefaultBankSource = React.useCallback(async (

@@ -2,6 +2,11 @@ import type { PadData, SamplerBank } from '../types/sampler';
 
 type SetState<T> = (value: T | ((prev: T) => T)) => void;
 
+const replacePadInBank = (bank: SamplerBank, padId: string, nextPad: PadData): SamplerBank => ({
+  ...bank,
+  pads: bank.pads.map((pad) => (pad.id === padId ? nextPad : pad)),
+});
+
 export const clearSelectedBankHydrationRetryTimer = (
   timerRef: { current: ReturnType<typeof setTimeout> | null }
 ): void => {
@@ -62,6 +67,7 @@ export const runSelectedBankHydrationPipeline = async (
     banksRef: { current: SamplerBank[] };
     runIdRef: { current: number };
     retryAttemptsRef: { current: Record<string, number> };
+    rehydratePadMediaFromStorage: (pad: PadData) => Promise<PadData>;
     rehydrateBankMediaFromStorage: (bank: SamplerBank) => Promise<SamplerBank>;
     setBanks: SetState<SamplerBank[]>;
     padNeedsMediaHydration: (pad: PadData) => boolean;
@@ -78,6 +84,7 @@ export const runSelectedBankHydrationPipeline = async (
     banksRef,
     runIdRef,
     retryAttemptsRef,
+    rehydratePadMediaFromStorage,
     rehydrateBankMediaFromStorage,
     setBanks,
     padNeedsMediaHydration,
@@ -94,19 +101,61 @@ export const runSelectedBankHydrationPipeline = async (
       continue;
     }
 
-    const hydrated = await rehydrateBankMediaFromStorage(current);
-    if (isCancelled() || runIdRef.current !== runId) return;
-    const missingAfter = hydrated.pads.filter((pad) => padNeedsMediaHydration(pad)).length;
-    const improved = missingAfter < missingBefore;
+    let hydrated = current;
+    let improved = false;
 
-    if (improved) {
-      setBanks((prev) => {
-        const targetIndex = prev.findIndex((bank) => bank.id === hydrated.id);
-        if (targetIndex < 0) return prev;
-        const next = [...prev];
-        next[targetIndex] = hydrated;
-        return next;
-      });
+    for (let index = 0; index < current.pads.length; index += 1) {
+      const currentPad = hydrated.pads[index];
+      if (!currentPad || !padNeedsMediaHydration(currentPad)) continue;
+
+      const restoredPad = await rehydratePadMediaFromStorage(currentPad);
+      if (isCancelled() || runIdRef.current !== runId) return;
+
+      const padImproved = !padNeedsMediaHydration(restoredPad);
+      const padChanged =
+        restoredPad !== currentPad ||
+        restoredPad.audioUrl !== currentPad.audioUrl ||
+        restoredPad.imageUrl !== currentPad.imageUrl ||
+        restoredPad.audioStorageKey !== currentPad.audioStorageKey ||
+        restoredPad.imageStorageKey !== currentPad.imageStorageKey ||
+        restoredPad.audioBackend !== currentPad.audioBackend ||
+        restoredPad.imageBackend !== currentPad.imageBackend;
+
+      if (padChanged) {
+        hydrated = replacePadInBank(hydrated, currentPad.id, restoredPad);
+        setBanks((prev) => {
+          const targetIndex = prev.findIndex((bank) => bank.id === hydrated.id);
+          if (targetIndex < 0) return prev;
+          const next = [...prev];
+          next[targetIndex] = hydrated;
+          return next;
+        });
+      }
+
+      if (padImproved) {
+        improved = true;
+      }
+
+      await yieldToMainThread();
+    }
+
+    const missingAfter = hydrated.pads.filter((pad) => padNeedsMediaHydration(pad)).length;
+
+    if (!improved && missingAfter > 0 && current.bankMetadata?.thumbnailStorageKey) {
+      const hydratedWithThumbnail = await rehydrateBankMediaFromStorage(hydrated);
+      if (isCancelled() || runIdRef.current !== runId) return;
+      hydrated = hydratedWithThumbnail;
+      const thumbnailImproved = hydrated.bankMetadata?.thumbnailUrl !== current.bankMetadata?.thumbnailUrl;
+      if (thumbnailImproved) {
+        improved = true;
+        setBanks((prev) => {
+          const targetIndex = prev.findIndex((bank) => bank.id === hydrated.id);
+          if (targetIndex < 0) return prev;
+          const next = [...prev];
+          next[targetIndex] = hydrated;
+          return next;
+        });
+      }
     }
 
     if (missingAfter <= 0) {
@@ -118,4 +167,3 @@ export const runSelectedBankHydrationPipeline = async (
     await yieldToMainThread();
   }
 };
-

@@ -1,8 +1,8 @@
-import lamejs from 'lamejs';
+import * as lamejs from 'lamejs';
 import { PadData, SamplerBank } from '../types/sampler';
 
 export type DetectedAudioFormat = 'mp3' | 'wav' | 'ogg' | 'unknown';
-export type ExportAudioMode = 'fast' | 'compact';
+export type ExportAudioMode = 'fast' | 'compact' | 'trim_mp3';
 
 export const fileToBase64 = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -103,15 +103,50 @@ const audioBufferToWavBlob = (audioBuffer: AudioBuffer): Blob => {
   return new Blob([buffer], { type: 'audio/wav' });
 };
 
+const MP3_SUPPORTED_SAMPLE_RATES = [48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000] as const;
+
+const resolveNearestSupportedMp3SampleRate = (sampleRate: number): number => {
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) return 44100;
+  let best: number = MP3_SUPPORTED_SAMPLE_RATES[0];
+  let bestDistance = Math.abs(best - sampleRate);
+  for (const candidate of MP3_SUPPORTED_SAMPLE_RATES) {
+    const distance = Math.abs(candidate - sampleRate);
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
+};
+
+const resampleAudioBuffer = async (
+  audioBuffer: AudioBuffer,
+  targetSampleRate: number
+): Promise<AudioBuffer> => {
+  if (!Number.isFinite(targetSampleRate) || targetSampleRate <= 0 || audioBuffer.sampleRate === targetSampleRate) {
+    return audioBuffer;
+  }
+  const frameCount = Math.max(1, Math.ceil(audioBuffer.duration * targetSampleRate));
+  const OfflineContextClass =
+    window.OfflineAudioContext ||
+    (window as Window & { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext;
+  const offlineContext = new OfflineContextClass(audioBuffer.numberOfChannels, frameCount, targetSampleRate);
+  const source = offlineContext.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(offlineContext.destination);
+  source.start(0);
+  return await offlineContext.startRendering();
+};
+
 const encodeAudioBufferToMP3 = (
   audioBuffer: AudioBuffer,
   bitrate: number = 128
-): { blob: Blob; format: 'mp3' | 'wav' } => {
-  const numChannels = audioBuffer.numberOfChannels;
-  const sampleRate = audioBuffer.sampleRate;
+): { blob: Blob; format: 'mp3' | 'wav'; errorMessage?: string } => {
+  const numChannels = Math.max(1, Math.min(2, audioBuffer.numberOfChannels));
+  const sampleRate = resolveNearestSupportedMp3SampleRate(audioBuffer.sampleRate);
   try {
     const leftChannel = audioBuffer.getChannelData(0);
-    const rightChannel = numChannels > 1 ? audioBuffer.getChannelData(1) : leftChannel;
+    const rightChannel = numChannels > 1 && audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : leftChannel;
     const convertToInt16 = (samples: Float32Array): Int16Array => {
       const int16 = new Int16Array(samples.length);
       for (let i = 0; i < samples.length; i++) {
@@ -142,9 +177,21 @@ const encodeAudioBufferToMP3 = (
       offset += chunk.length;
     }
     return { blob: new Blob([result], { type: 'audio/mp3' }), format: 'mp3' };
-  } catch (_error) {
-    return { blob: audioBufferToWavBlob(audioBuffer), format: 'wav' };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { blob: audioBufferToWavBlob(audioBuffer), format: 'wav', errorMessage };
   }
+};
+
+const encodeAudioBufferToMP3Strict = (
+  audioBuffer: AudioBuffer,
+  bitrate: number = 128
+): Blob => {
+  const result = encodeAudioBufferToMP3(audioBuffer, bitrate);
+  if (result.format !== 'mp3') {
+    throw new Error(result.errorMessage ? `MP3 encoding failed: ${result.errorMessage}` : 'MP3 encoding failed.');
+  }
+  return result.blob;
 };
 
 export const trimAudio = async (
@@ -179,6 +226,110 @@ export const trimAudio = async (
   } finally {
     await audioContext.close();
   }
+};
+
+export const transcodeAudioToMP3 = async (
+  audioBlob: Blob,
+  options?: {
+    startTimeMs?: number;
+    endTimeMs?: number;
+    applyTrim?: boolean;
+    bitrate?: number;
+  }
+): Promise<{ blob: Blob; newDurationMs: number; appliedTrim: boolean }> => {
+  const arrayBuffer = await audioBlob.arrayBuffer();
+  const arrayBufferCopy = arrayBuffer.slice(0);
+  const AudioContextClass = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  const audioContext = new AudioContextClass();
+  try {
+    const audioBuffer = await audioContext.decodeAudioData(arrayBufferCopy);
+    const sampleRate = audioBuffer.sampleRate;
+    const requestedStartMs = Number.isFinite(options?.startTimeMs) ? Math.max(0, options?.startTimeMs || 0) : 0;
+    const requestedEndMs = Number.isFinite(options?.endTimeMs) ? Math.max(0, options?.endTimeMs || 0) : 0;
+    const shouldBakeTrim = options?.applyTrim === true && requestedEndMs > requestedStartMs;
+
+    let bufferForExport = audioBuffer;
+    let appliedTrim = false;
+    let trimmedLength = audioBuffer.length;
+
+    if (shouldBakeTrim) {
+      const startSample = Math.floor((requestedStartMs / 1000) * sampleRate);
+      const endSample = Math.min(Math.floor((requestedEndMs / 1000) * sampleRate), audioBuffer.length);
+      trimmedLength = endSample - startSample;
+      if (trimmedLength > 0) {
+        const trimmedBuffer = audioContext.createBuffer(audioBuffer.numberOfChannels, trimmedLength, sampleRate);
+        for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+          const originalData = audioBuffer.getChannelData(channel);
+          const trimmedData = trimmedBuffer.getChannelData(channel);
+          for (let i = 0; i < trimmedLength; i++) trimmedData[i] = originalData[startSample + i];
+        }
+        bufferForExport = trimmedBuffer;
+        appliedTrim = true;
+      }
+    }
+
+    const electronMp3Transcoder = typeof window !== 'undefined' ? window.electronAPI?.transcodeAudioToMp3 : undefined;
+    if (electronMp3Transcoder) {
+      const response = await electronMp3Transcoder({
+        audioBytes: new Uint8Array(arrayBuffer),
+        mimeType: audioBlob.type,
+        startTimeMs: requestedStartMs,
+        endTimeMs: requestedEndMs,
+        applyTrim: appliedTrim,
+        bitrate: options?.bitrate ?? 128,
+      });
+      const returnedBytes = response.audioBytes;
+      const normalizedBytes =
+        returnedBytes instanceof Uint8Array
+          ? returnedBytes
+          : returnedBytes instanceof ArrayBuffer
+            ? new Uint8Array(returnedBytes)
+            : new Uint8Array();
+      if (normalizedBytes.byteLength <= 0) {
+        throw new Error('Electron MP3 export returned no audio data.');
+      }
+      const newDurationMs = (Math.max(1, appliedTrim ? trimmedLength : audioBuffer.length) / sampleRate) * 1000;
+      return { blob: new Blob([normalizedBytes], { type: 'audio/mp3' }), newDurationMs, appliedTrim };
+    }
+
+    const mp3ReadyBuffer = await resampleAudioBuffer(
+      bufferForExport,
+      resolveNearestSupportedMp3SampleRate(bufferForExport.sampleRate)
+    );
+    const blob = encodeAudioBufferToMP3Strict(mp3ReadyBuffer, options?.bitrate ?? 128);
+    const newDurationMs = (bufferForExport.length / sampleRate) * 1000;
+    return { blob, newDurationMs, appliedTrim };
+  } finally {
+    await audioContext.close();
+  }
+};
+
+export const remapSavedHotcuesForBakedTrim = (
+  hotcues: PadData['savedHotcuesMs'],
+  startMs: number,
+  trimmedDurationMs: number
+): [number | null, number | null, number | null, number | null] => {
+  const safeStartMs = Number.isFinite(startMs) ? Math.max(0, startMs) : 0;
+  const safeMaxMs = Number.isFinite(trimmedDurationMs) ? Math.max(0, trimmedDurationMs) : 0;
+  const values = Array.isArray(hotcues)
+    ? (hotcues.slice(0, 4) as [number | null, number | null, number | null, number | null])
+    : [null, null, null, null];
+  const normalizeCue = (cue: number | null): number | null => {
+    if (typeof cue !== 'number' || !Number.isFinite(cue) || cue < 0) return null;
+    if (safeMaxMs <= 0) return Math.max(0, cue);
+    const absoluteToRelative = cue - safeStartMs;
+    const baseValue =
+      absoluteToRelative >= 0 && absoluteToRelative <= safeMaxMs
+        ? absoluteToRelative
+        : cue;
+    return Math.max(0, Math.min(safeMaxMs, baseValue));
+  };
+  return [
+    normalizeCue(values[0]),
+    normalizeCue(values[1]),
+    normalizeCue(values[2]),
+    normalizeCue(values[3]),
+  ];
 };
 
 const BAKED_TRIM_MIN_DELTA_MS = 10000;

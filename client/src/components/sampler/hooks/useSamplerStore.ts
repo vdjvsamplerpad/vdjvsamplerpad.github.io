@@ -42,7 +42,9 @@ import {
   buildDuplicatePadName,
   detectAudioFormat,
   fileToBase64,
+  remapSavedHotcuesForBakedTrim,
   shouldAttemptTrim,
+  transcodeAudioToMP3,
   trimAudio,
 } from './useSamplerStore.helpers';
 import {
@@ -188,6 +190,20 @@ const isNativeCapacitorPlatform = (): boolean => {
   const capacitor = (window as any).Capacitor;
   return capacitor?.isNativePlatform?.() === true;
 };
+
+const transcodeAudioToMP3ForExport = (input: {
+  source: Blob;
+  startTimeMs?: number;
+  endTimeMs?: number;
+  applyTrim?: boolean;
+  bitrate?: number;
+}) =>
+  transcodeAudioToMP3(input.source, {
+    startTimeMs: input.startTimeMs,
+    endTimeMs: input.endTimeMs,
+    applyTrim: input.applyTrim,
+    bitrate: input.bitrate,
+  });
 
 const EXPORT_FOLDER_NAME = 'VDJV-Export';
 const ANDROID_DOWNLOAD_ROOT = '/storage/emulated/0/Download';
@@ -693,6 +709,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     setDefaultBankSourceRevision,
     selectedBankHydrationRetryNonce,
     setSelectedBankHydrationRetryNonce,
+    rehydratePadMediaFromStorage,
     rehydrateBankMediaFromStorage,
     setBanks,
     yieldToMainThread,
@@ -1432,6 +1449,8 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         loadPadMediaBlob,
         shouldAttemptTrim,
         trimAudio,
+        remapSavedHotcuesForBakedTrim,
+        transcodeAudioToMP3: transcodeAudioToMP3ForExport,
         detectAudioFormat,
         sha256HexFromBlob,
         sha256HexFromText,
@@ -1475,6 +1494,8 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         loadPadMediaBlob,
         shouldAttemptTrim,
         trimAudio,
+        remapSavedHotcuesForBakedTrim,
+        transcodeAudioToMP3: transcodeAudioToMP3ForExport,
         detectAudioFormat,
         sha256HexFromBlob,
         sha256HexFromText,
@@ -1538,6 +1559,8 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         loadPadMediaBlob,
         shouldAttemptTrim,
         trimAudio,
+        remapSavedHotcuesForBakedTrim,
+        transcodeAudioToMP3: transcodeAudioToMP3ForExport,
         detectAudioFormat,
         sha256HexFromBlob,
         sha256HexFromText,

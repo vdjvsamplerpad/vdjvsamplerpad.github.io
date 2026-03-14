@@ -19,9 +19,12 @@ import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { useOnlineStoreDownloadTransfer } from './hooks/useOnlineStoreDownloadTransfer';
 import { deriveSnapshotRestoreStatus } from './hooks/useSamplerStore.snapshotMetadata';
 import type { OnlineBankStoreImportMeta, StoreDownloadedArtifact, StoreItem, TransferState } from './onlineStore.types';
-import type { UpdateStoreBankInput } from './hooks/useSamplerStore.types';
+import type { ExportAudioMode, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
 
-type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string };
+type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string; closing?: boolean };
+const MAX_ACTIVE_NOTICES = 2;
+const NOTICE_EXIT_MS = 220;
+const NOTICE_AUTO_DISMISS_MS = 5000;
 type BankListEntry =
   | { kind: 'real'; bank: SamplerBank }
   | { kind: 'preview'; preview: GuestStorePreviewBank };
@@ -89,7 +92,7 @@ interface SideMenuProps {
     addToDatabase: boolean,
     allowExport: boolean,
     publicCatalogAsset: boolean,
-    exportMode: 'fast' | 'compact',
+    exportMode: ExportAudioMode,
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
   ) => Promise<string>;
@@ -202,6 +205,7 @@ export function SideMenu({
 
   // Toast notification state
   const [notices, setNotices] = React.useState<Notice[]>([]);
+  const noticeRemovalTimersRef = React.useRef<Record<string, number>>({});
   const [snapshotBankAction, setSnapshotBankAction] = React.useState<{
     kind: 'download' | 'recover';
     bankId: string;
@@ -210,17 +214,50 @@ export function SideMenu({
   const [snapshotTransfers, setSnapshotTransfers] = React.useState<Record<string, TransferState>>({});
   const downloadedArtifactsRef = React.useRef<Record<string, StoreDownloadedArtifact>>({});
 
+  const clearNoticeRemovalTimer = React.useCallback((id: string) => {
+    const timer = noticeRemovalTimersRef.current[id];
+    if (typeof timer !== 'number') return;
+    window.clearTimeout(timer);
+    delete noticeRemovalTimersRef.current[id];
+  }, []);
+
+  const removeNoticeNow = React.useCallback((id: string) => {
+    clearNoticeRemovalTimer(id);
+    setNotices((arr) => arr.filter((notice) => notice.id !== id));
+  }, [clearNoticeRemovalTimer]);
+
+  const dismissNotice = React.useCallback((id: string) => {
+    setNotices((arr) => {
+      const target = arr.find((notice) => notice.id === id);
+      if (!target || target.closing) return arr;
+      return arr.map((notice) => (notice.id === id ? { ...notice, closing: true } : notice));
+    });
+    clearNoticeRemovalTimer(id);
+    noticeRemovalTimersRef.current[id] = window.setTimeout(() => removeNoticeNow(id), NOTICE_EXIT_MS);
+  }, [clearNoticeRemovalTimer, removeNoticeNow]);
+
   const pushNotice = React.useCallback((n: Omit<Notice, 'id'>) => {
     const id = (typeof crypto !== 'undefined' && 'randomUUID' in crypto) ? (crypto as any).randomUUID() : String(Date.now() + Math.random());
     const notice: Notice = { id, ...n };
-    setNotices((arr) => [notice, ...arr]);
-    setTimeout(() => {
-      setNotices((arr) => arr.filter((n) => n.id !== id));
-    }, 5000);
-  }, []);
+    setNotices((arr) => {
+      const active = arr.filter((entry) => !entry.closing);
+      const duplicate = active.some((entry) => entry.variant === notice.variant && entry.message === notice.message);
+      if (duplicate) return arr;
 
-  const dismissNotice = React.useCallback((id: string) => {
-    setNotices((arr) => arr.filter((n) => n.id !== id));
+      let next = [...active, notice];
+      if (next.length > MAX_ACTIVE_NOTICES) {
+        const [oldest, ...rest] = next;
+        next = [{ ...oldest, closing: true }, ...rest];
+        window.setTimeout(() => removeNoticeNow(oldest.id), NOTICE_EXIT_MS);
+      }
+      return next;
+    });
+    window.setTimeout(() => dismissNotice(id), NOTICE_AUTO_DISMISS_MS);
+  }, [dismissNotice, removeNoticeNow]);
+
+  React.useEffect(() => () => {
+    Object.values(noticeRemovalTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+    noticeRemovalTimersRef.current = {};
   }, []);
 
   const executeClearPadShortcuts = React.useCallback(() => {
@@ -507,6 +544,7 @@ export function SideMenu({
       snapshot_target_bank_id: bank.id,
       is_paid: requiresGrant,
       requires_grant: requiresGrant,
+      asset_protection: requiresGrant ? 'encrypted' : 'public',
       is_pinned: false,
       is_owned: true,
       is_free_download: !requiresGrant,
@@ -2073,7 +2111,7 @@ function NoticeItem({ notice, dismiss, theme }: { notice: Notice; dismiss: (id: 
 
   return (
     <div
-      className={`${base} ${colors} ${show ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-3'}`}
+      className={`${base} ${colors} ${notice.closing ? 'opacity-0 -translate-y-3 scale-[0.98]' : show ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-3 scale-[0.98]'}`}
       onMouseEnter={() => setShow(true)}
       onMouseLeave={() => setShow(true)}
     >

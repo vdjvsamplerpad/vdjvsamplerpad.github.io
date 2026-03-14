@@ -286,7 +286,15 @@ export const adminApi = {
       sortDir: input.sortDir ?? 'desc',
       includeAdmins: input.includeAdmins ?? false,
     });
-    return callAdmin<{ users: AdminUser[]; total: number }>('GET', `users${query}`);
+    return callAdmin<{
+      users: AdminUser[];
+      total: number;
+      page: number;
+      perPage: number;
+      sortBy: string;
+      sortDir: SortDirection;
+      includeAdmins: boolean;
+    }>('GET', `users${query}`);
   },
 
   async createUser(input: { email: string; password: string; displayName?: string }) {
@@ -320,15 +328,27 @@ export const adminApi = {
 
   async listBanks(input: {
     q?: string;
+    page?: number;
+    perPage?: number;
     sortBy?: 'title' | 'created_at' | 'access_count';
     sortDir?: SortDirection;
   }) {
     const query = toQueryString({
       q: input.q,
+      page: input.page ?? 1,
+      perPage: input.perPage ?? 100,
       sortBy: input.sortBy ?? 'created_at',
       sortDir: input.sortDir ?? 'desc',
     });
-    return callAdmin<{ banks: AdminBank[]; total: number }>('GET', `banks${query}`);
+    return callAdmin<{
+      banks: AdminBank[];
+      total: number;
+      page: number;
+      perPage: number;
+      sortBy: string;
+      sortDir: SortDirection;
+      includeDeleted: boolean;
+    }>('GET', `banks${query}`);
   },
 
   async updateBank(bankId: string, input: { title: string; description?: string; color?: string | null }) {
@@ -367,12 +387,29 @@ export const adminApi = {
     return callAdmin<{ userId: string; bankIds: string[]; revokedCount: number }>('POST', `access/user/${userId}/revoke`, { bankIds });
   },
 
-  async listActiveSessions(input: { q?: string; limit?: number }) {
+  async listActiveSessions(input: {
+    q?: string;
+    page?: number;
+    perPage?: number;
+    sortBy?: 'user_id' | 'email' | 'device_name' | 'platform' | 'last_seen_at';
+    sortDir?: SortDirection;
+  }) {
     const query = toQueryString({
       q: input.q,
-      limit: input.limit ?? 300,
+      page: input.page ?? 1,
+      perPage: input.perPage ?? 100,
+      sortBy: input.sortBy ?? 'last_seen_at',
+      sortDir: input.sortDir ?? 'desc',
     });
-    return callAdmin<{ counts: { activeUsers: number; activeSessions: number }; sessions: ActiveSessionRow[]; total: number }>(
+    return callAdmin<{
+      counts: { activeUsers: number; activeSessions: number };
+      sessions: ActiveSessionRow[];
+      total: number;
+      page: number;
+      perPage: number;
+      sortBy: string;
+      sortDir: SortDirection;
+    }>(
       'GET',
       `active-sessions${query}`,
     );

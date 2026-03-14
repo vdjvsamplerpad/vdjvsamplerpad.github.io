@@ -1,4 +1,5 @@
 import type { PrepareUserExportUploadResult } from './useSamplerStore.exportUpload';
+import type { ExportAudioMode } from './useSamplerStore.types';
 import { deleteBlobFromDB, getBlobFromDB, saveBlobToDB } from './useSamplerStore.idbStorage';
 
 export interface UserExportUploadJob {
@@ -26,6 +27,7 @@ export interface AdminExportUploadJob {
   fileName: string;
   assetName: string;
   assetProtection: 'encrypted' | 'public';
+  exportAudioMode?: ExportAudioMode;
   fileSize: number;
   fileSha256: string | null;
   createdAt: string;
@@ -178,6 +180,7 @@ export const enqueueAdminExportUploadJob = (
     fileName: string;
     assetName: string;
     assetProtection: 'encrypted' | 'public';
+    exportAudioMode?: ExportAudioMode;
     fileSize: number;
     fileSha256: string | null;
     padNames: string[];
@@ -201,6 +204,7 @@ export const enqueueAdminExportUploadJob = (
       fileName: input.fileName,
       assetName: input.assetName,
     assetProtection: input.assetProtection,
+    exportAudioMode: input.exportAudioMode,
     fileSize: input.fileSize,
     fileSha256: input.fileSha256,
     createdAt: new Date(now).toISOString(),

@@ -373,6 +373,11 @@ export function SamplerSearchOverlay({
                               {result.bankName}
                             </div>
                             <div className="mt-2 flex flex-wrap gap-1.5">
+                              {result.loadAvailability === 'sync_on_open' ? (
+                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${statusToneClass(theme, 'muted')}`}>
+                                  Sync on Open
+                                </span>
+                              ) : null}
                               {result.loadAvailability === 'missing_audio' ? (
                                 <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${statusToneClass(theme, 'warn')}`}>
                                   Missing Audio

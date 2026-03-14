@@ -7,8 +7,14 @@
  */
 
 import {
+    ANDROID_MAX_BUFFER_MEMORY,
+    CAPACITOR_NATIVE_MAX_BUFFER_MEMORY,
+    DESKTOP_MAX_BUFFER_MEMORY,
+    LOW_MEMORY_WEB_MAX_BUFFER_MEMORY,
     type IAudioBackend,
     type TransportState,
+    IS_CAPACITOR_NATIVE,
+    IS_ELECTRON,
     IOS_MAX_BUFFER_MEMORY,
     IS_IOS,
     IS_ANDROID,
@@ -81,10 +87,11 @@ export class BufferBackend implements IAudioBackend {
             const audioBuffer = await this.ctx.decodeAudioData(arrayBuffer);
 
             const size = BufferBackend.getBufferSize(audioBuffer);
+            const maxBufferMemory = BufferBackend.getMaxBufferMemory();
 
             // Memory management: evict old buffers if over limit.
-            if (IS_IOS && BufferBackend.bufferMemoryUsage + size > IOS_MAX_BUFFER_MEMORY) {
-                BufferBackend.evictOldest(size);
+            if (BufferBackend.bufferMemoryUsage + size > maxBufferMemory) {
+                BufferBackend.evictOldest(size, maxBufferMemory);
             }
 
             BufferBackend.bufferCache.set(url, audioBuffer);
@@ -622,19 +629,38 @@ export class BufferBackend implements IAudioBackend {
         return buffer.length * buffer.numberOfChannels * 4;
     }
 
+    private static getMaxBufferMemory(): number {
+        if (IS_IOS) return IOS_MAX_BUFFER_MEMORY;
+        if (IS_ANDROID) return ANDROID_MAX_BUFFER_MEMORY;
+        if (IS_CAPACITOR_NATIVE) return CAPACITOR_NATIVE_MAX_BUFFER_MEMORY;
+        if (IS_ELECTRON) return DESKTOP_MAX_BUFFER_MEMORY;
+
+        const deviceMemory =
+            typeof navigator !== 'undefined' &&
+            typeof (navigator as Navigator & { deviceMemory?: number }).deviceMemory === 'number'
+                ? Number((navigator as Navigator & { deviceMemory?: number }).deviceMemory)
+                : null;
+
+        if (deviceMemory !== null && Number.isFinite(deviceMemory) && deviceMemory > 0 && deviceMemory <= 4) {
+            return LOW_MEMORY_WEB_MAX_BUFFER_MEMORY;
+        }
+
+        return DESKTOP_MAX_BUFFER_MEMORY;
+    }
+
     private resolvePlaybackRate(): number {
         const pitchRate = Math.pow(2, (Number.isFinite(this.currentPitch) ? this.currentPitch : 0) / 12);
         const tempoRate = Number.isFinite(this.currentTempoRate) ? Math.max(0.05, this.currentTempoRate) : 1;
         return Math.max(0.05, pitchRate * tempoRate);
     }
 
-    private static evictOldest(neededBytes: number): void {
+    private static evictOldest(neededBytes: number, maxBufferMemory: number): void {
         const entries = Array.from(BufferBackend.bufferAccessTime.entries())
             .sort((a, b) => a[1] - b[1]);
 
         let freed = 0;
         for (const [url] of entries) {
-            if (BufferBackend.bufferMemoryUsage + neededBytes - freed <= IOS_MAX_BUFFER_MEMORY) break;
+            if (BufferBackend.bufferMemoryUsage + neededBytes - freed <= maxBufferMemory) break;
 
             const buf = BufferBackend.bufferCache.get(url);
             if (buf) {

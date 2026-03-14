@@ -999,7 +999,7 @@ const normalizeStoreCatalogItem = (
   const bankId = asString(item?.bank_id, 80) || "";
   let status = "buy";
   let rejectionMessage: string | null = null;
-  if (!item?.is_paid || !item?.requires_grant) status = "free_download";
+  if (!item?.requires_grant) status = "free_download";
   else if (input.userId) {
     if (input.userGrants.has(bankId) || input.approvedRequests.has(bankId)) status = "granted_download";
     else if (input.pendingRequests.has(bankId)) status = "pending";
@@ -1014,9 +1014,10 @@ const normalizeStoreCatalogItem = (
     bank_id: bankId,
     is_paid: Boolean(item?.is_paid),
     requires_grant: Boolean(item?.requires_grant),
+    asset_protection: asString(item?.asset_protection, 40)?.toLowerCase() === "public" ? "public" : "encrypted",
     is_pinned: Boolean(item?.is_pinned),
     is_owned: input.userGrants.has(bankId) || input.approvedRequests.has(bankId),
-    is_free_download: !item?.is_paid || !item?.requires_grant,
+    is_free_download: !item?.requires_grant,
     is_pending: input.pendingRequests.has(bankId),
     is_rejected: input.rejectedRequests.has(bankId),
     is_downloadable: status === "free_download" || status === "granted_download",
@@ -1666,7 +1667,7 @@ const getStoreCatalog = async (req: Request) => {
   }
 
   const catalogSelect =
-    "id,bank_id,is_paid,requires_grant,price_label,price_php,sha256,thumbnail_path,is_pinned,banks ( title, description, color, deleted_at )";
+    "id,bank_id,is_paid,requires_grant,asset_protection,price_label,price_php,sha256,thumbnail_path,is_pinned,banks ( title, description, color, deleted_at )";
   const applyCatalogSearch = (query: any): any => {
     if (!q) return query;
     const escaped = q.replace(/[,%_]/g, "");
@@ -1685,10 +1686,10 @@ const getStoreCatalog = async (req: Request) => {
 
   let { data: catalogItems, error: catalogError } = await catalogQuery;
   if (catalogError && /is_pinned/i.test(catalogError.message || "")) {
-    const fallback = await applyCatalogSearch(
+      const fallback = await applyCatalogSearch(
       admin
         .from("bank_catalog_items")
-        .select("id,bank_id,is_paid,requires_grant,price_label,price_php,sha256,thumbnail_path,banks ( title, description, color, deleted_at )")
+        .select("id,bank_id,is_paid,requires_grant,asset_protection,price_label,price_php,sha256,thumbnail_path,banks ( title, description, color, deleted_at )")
         .eq("is_published", true)
         .order("created_at", { ascending: false }),
     );

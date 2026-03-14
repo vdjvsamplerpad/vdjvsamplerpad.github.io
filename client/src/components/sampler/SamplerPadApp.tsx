@@ -65,6 +65,8 @@ const PAD_WARMUP_MOBILE_MAX_DURATION_MS = 120_000;
 const PAD_WARMUP_NATIVE_MAX_DURATION_MS = 90_000;
 const PAD_WARMUP_UNKNOWN_SAFE_MAX_BYTES = 1_500_000;
 const PAD_WARMUP_UNKNOWN_SAFE_MAX_TRIM_MS = 12_000;
+const DECK_LOADED_BANKS_EVENT = 'vdjv-deck-loaded-banks-changed';
+const DECK_PLAYBACK_EVENT = 'vdjv-deck-playback-changed';
 
 interface PadWarmupPolicy {
   maxPerBank: number;
@@ -361,6 +363,11 @@ export function SamplerPadApp() {
   const remoteSnapshotRetryCountRef = React.useRef(0);
   const remoteSnapshotPreviousUserIdRef = React.useRef<string | null>(null);
   const canUseAdminExport = profile?.role === 'admin';
+  const banksRef = React.useRef(banks);
+
+  React.useEffect(() => {
+    banksRef.current = banks;
+  }, [banks]);
 
   // Load settings from localStorage
   const [settings, setSettings] = React.useState<AppSettings>(() => {
@@ -1243,6 +1250,20 @@ export function SamplerPadApp() {
   const channelStates = playbackManager.getChannelStates();
   const legacyPlayingPads = playbackManager.getLegacyPlayingPads();
   const audioRecoveryState = playbackManager.getAudioRecoveryState();
+  const deckLoadedBankIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    channelStates.forEach((channel) => {
+      const loadedBankId = channel.loadedPadRef?.bankId;
+      const playingBankId = channel.pad?.bankId;
+      if (typeof loadedBankId === 'string' && loadedBankId.length > 0) ids.add(loadedBankId);
+      if (typeof playingBankId === 'string' && playingBankId.length > 0) ids.add(playingBankId);
+    });
+    return Array.from(ids).sort();
+  }, [channelStates]);
+  const hasActiveDeckPlayback = React.useMemo(
+    () => channelStates.some((channel) => channel.isPlaying),
+    [channelStates]
+  );
   const isIOSClient =
     typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
   const singleSearchBankId = isDualMode ? null : (currentBankId || null);
@@ -1269,9 +1290,20 @@ export function SamplerPadApp() {
         const requiresAuthToLoad =
           !effectiveAuthUser &&
           (bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isDefaultBankIdentity(bank));
+        const canRecoverAudioOnDemand = Boolean(
+          pad.audioStorageKey ||
+          pad.audioBackend ||
+          pad.missingMediaExpected ||
+          pad.restoreAssetKind ||
+          pad.sourceCatalogItemId ||
+          pad.originCatalogItemId ||
+          pad.originBankId
+        );
         const loadAvailability = requiresAuthToLoad
           ? 'login_required'
-          : (audioUrl && !missingMediaState.missingAudio ? 'ready' : 'missing_audio');
+          : (audioUrl && !missingMediaState.missingAudio
+            ? 'ready'
+            : (canRecoverAudioOnDemand ? 'sync_on_open' : 'missing_audio'));
         return [{
           key,
           bankId: bank.id,
@@ -1282,7 +1314,7 @@ export function SamplerPadApp() {
           padOrder: typeof pad.position === 'number' ? pad.position : padIndex,
           padNameToken: normalizeSamplerSearchToken(pad.name),
           bankNameToken: normalizeSamplerSearchToken(bank.name),
-          canLoad: loadAvailability === 'ready',
+          canLoad: loadAvailability === 'ready' || loadAvailability === 'sync_on_open',
           loadAvailability,
           hasMissingImage: missingMediaState.missingImage,
         }];
@@ -1381,6 +1413,35 @@ export function SamplerPadApp() {
       padResults: rankedPads.slice(0, SEARCH_RESULT_LIMIT),
     };
   }, [debouncedSearchQuery, flattenedSearchBanks, flattenedSearchPads, primaryBankId, searchScope, secondaryBankId, singleSearchBankId, visibleSearchBankIds]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent(DECK_LOADED_BANKS_EVENT, {
+      detail: { bankIds: deckLoadedBankIds },
+    }));
+  }, [deckLoadedBankIds]);
+
+  React.useEffect(() => {
+    return () => {
+      if (typeof window === 'undefined') return;
+      window.dispatchEvent(new CustomEvent(DECK_LOADED_BANKS_EVENT, {
+        detail: { bankIds: [] },
+      }));
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent(DECK_PLAYBACK_EVENT, {
+      detail: { isPlaying: hasActiveDeckPlayback },
+    }));
+    return () => {
+      if (typeof window === 'undefined') return;
+      window.dispatchEvent(new CustomEvent(DECK_PLAYBACK_EVENT, {
+        detail: { isPlaying: false },
+      }));
+    };
+  }, [hasActiveDeckPlayback]);
 
   const handleRestoreAudio = React.useCallback(() => {
     playbackManager.preUnlockAudio().catch((unlockError) => {
@@ -1852,10 +1913,46 @@ export function SamplerPadApp() {
     bankName: string
   ): Promise<boolean> => {
     try {
-      await playbackManager.registerPad(pad.id, pad, bankId, bankName);
-      const loaded = playbackManager.loadPadToChannel(channelId, pad.id);
+      const readLatestPad = () => {
+        const liveBank = banksRef.current.find((entry) => entry.id === bankId);
+        const livePad = liveBank?.pads.find((entry) => entry.id === pad.id);
+        return {
+          bankName: liveBank?.name || bankName,
+          pad: livePad || pad,
+        };
+      };
+
+      let next = readLatestPad();
+      const canAttemptPadRecovery =
+        !next.pad.audioUrl &&
+        Boolean(
+          next.pad.audioStorageKey ||
+          next.pad.audioBackend ||
+          next.pad.missingMediaExpected ||
+          next.pad.restoreAssetKind
+        );
+
+      if (canAttemptPadRecovery) {
+        const restored = await rehydratePadMedia(bankId, pad.id);
+        if (restored) {
+          for (let attempt = 0; attempt < 6; attempt += 1) {
+            await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+            next = readLatestPad();
+            if (next.pad.audioUrl) break;
+          }
+        }
+      }
+
+      if (!next.pad.audioUrl) {
+        setError(`"${next.pad.name}" is still syncing. Try again in a moment or keep the bank selected until sync completes.`);
+        setShowErrorDialog(true);
+        return false;
+      }
+
+      await playbackManager.registerPad(next.pad.id, next.pad, bankId, next.bankName);
+      const loaded = playbackManager.loadPadToChannel(channelId, next.pad.id);
       if (!loaded) {
-        setError(`Failed to load "${pad.name}" into Channel ${channelId}.`);
+        setError(`Failed to load "${next.pad.name}" into Channel ${channelId}.`);
         setShowErrorDialog(true);
         return false;
       }
@@ -1871,7 +1968,7 @@ export function SamplerPadApp() {
       setShowErrorDialog(true);
       return false;
     }
-  }, [playbackManager, shouldFocusPadsForChannelLoad, updateSetting]);
+  }, [playbackManager, rehydratePadMedia, shouldFocusPadsForChannelLoad, updateSetting]);
 
   const handleSelectPadForChannelLoad = React.useCallback((pad: PadData, bankId: string, bankName: string) => {
     if (armedLoadChannelId === null) return;
@@ -1942,6 +2039,9 @@ export function SamplerPadApp() {
   const resolveSearchLoadError = React.useCallback((result: SamplerSearchResult): string => {
     if (result.loadAvailability === 'login_required') {
       return 'Sign in before loading this protected pad.';
+    }
+    if (result.loadAvailability === 'sync_on_open') {
+      return 'This pad is still syncing. Open or load it again in a moment.';
     }
     return 'This pad cannot be loaded because usable audio is missing on this device.';
   }, []);

@@ -15,7 +15,7 @@ import { bankColorOptions, formatBankEditDate } from './bankEdit.shared';
 import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { validateManagedImageFile } from '@/lib/image-upload';
 import { deleteBlobFromDB, saveBlobToDB } from './hooks/useSamplerStore.idbStorage';
-import type { UpdateStoreBankInput } from './hooks/useSamplerStore.types';
+import type { ExportAudioMode, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
 
 interface BankEditDialogProps {
   bank: SamplerBank;
@@ -42,7 +42,7 @@ interface BankEditDialogProps {
     addToDatabase: boolean,
     allowExport: boolean,
     publicCatalogAsset: boolean,
-    exportMode: 'fast' | 'compact',
+    exportMode: ExportAudioMode,
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
   ) => Promise<string>;
@@ -96,7 +96,7 @@ export function BankEditDialog({
   const [adminAddToDatabase, setAdminAddToDatabase] = React.useState(false);
   const [adminAllowExport, setAdminAllowExport] = React.useState(false);
   const [adminPublicCatalogAsset, setAdminPublicCatalogAsset] = React.useState(false);
-  const [adminExportMode, setAdminExportMode] = React.useState<'fast' | 'compact'>('fast');
+  const [adminExportMode, setAdminExportMode] = React.useState<ExportAudioMode>('fast');
   const [showAdminExportProgress, setShowAdminExportProgress] = React.useState(false);
   const [adminExportProgress, setAdminExportProgress] = React.useState(0);
   const [adminExportStatus, setAdminExportStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
@@ -107,7 +107,7 @@ export function BankEditDialog({
   const [storeUpdateProtection, setStoreUpdateProtection] = React.useState<'encrypted' | 'public'>(
     bank.bankMetadata?.password ? 'encrypted' : 'public'
   );
-  const [storeUpdateExportMode, setStoreUpdateExportMode] = React.useState<'fast' | 'compact'>('fast');
+  const [storeUpdateExportMode, setStoreUpdateExportMode] = React.useState<ExportAudioMode>('fast');
   const [showStoreUpdateProgress, setShowStoreUpdateProgress] = React.useState(false);
   const [storeUpdateProgress, setStoreUpdateProgress] = React.useState(0);
   const [storeUpdateStatus, setStoreUpdateStatus] = React.useState<'loading' | 'success' | 'error'>('loading');

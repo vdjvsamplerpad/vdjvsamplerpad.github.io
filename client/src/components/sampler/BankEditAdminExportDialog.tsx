@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { SamplerBank } from './types/sampler';
+import type { ExportAudioMode } from './hooks/useSamplerStore.types';
 
 interface BankEditAdminExportDialogProps {
   open: boolean;
@@ -22,8 +23,8 @@ interface BankEditAdminExportDialogProps {
   setAdminAllowExport: (value: boolean) => void;
   adminPublicCatalogAsset: boolean;
   setAdminPublicCatalogAsset: (value: boolean) => void;
-  adminExportMode: 'fast' | 'compact';
-  setAdminExportMode: (value: 'fast' | 'compact') => void;
+  adminExportMode: ExportAudioMode;
+  setAdminExportMode: (value: ExportAudioMode) => void;
   onExport: () => void;
 }
 
@@ -46,6 +47,8 @@ export function BankEditAdminExportDialog({
   setAdminExportMode,
   onExport,
 }: BankEditAdminExportDialogProps) {
+  const isNativeCapacitor = typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
+  const isElectronDesktop = typeof window !== 'undefined' && Boolean(window.electronAPI?.transcodeAudioToMp3);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`sm:max-w-md backdrop-blur-md ${theme === 'dark' ? 'bg-gray-800/90' : 'bg-white/90'}`} aria-describedby={undefined}>
@@ -156,7 +159,7 @@ export function BankEditAdminExportDialog({
 
           <div className="space-y-2">
             <Label htmlFor="adminExportMode">Audio Processing</Label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className={`grid gap-2 ${isElectronDesktop ? 'grid-cols-3' : 'grid-cols-2'}`}>
               <Button
                 type="button"
                 variant={adminExportMode === 'fast' ? 'default' : 'outline'}
@@ -171,10 +174,31 @@ export function BankEditAdminExportDialog({
               >
                 Compact
               </Button>
+              {isElectronDesktop ? (
+                <Button
+                  type="button"
+                  variant={adminExportMode === 'trim_mp3' ? 'default' : 'outline'}
+                  onClick={() => setAdminExportMode('trim_mp3')}
+                >
+                  Trim + MP3
+                </Button>
+              ) : null}
             </div>
             <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-              Fast keeps original audio. Compact applies trim window and may reduce size.
+              {isElectronDesktop
+                ? 'Fast keeps original audio. Compact applies trim windows and may reduce size. Trim + MP3 trims first when applicable and always exports MP3 at 128 kbps.'
+                : 'Fast keeps original audio. Compact applies trim windows and may reduce size.'}
             </p>
+            {!isElectronDesktop ? (
+              <p className={`text-xs ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'}`}>
+                Trim + MP3 is available only in the Electron desktop build.
+              </p>
+            ) : null}
+            {isNativeCapacitor && adminExportMode === 'trim_mp3' ? (
+              <p className={`text-xs ${theme === 'dark' ? 'text-amber-300' : 'text-amber-700'}`}>
+                Mobile warning: Trim + MP3 is slower and may fail on very large banks.
+              </p>
+            ) : null}
           </div>
 
           <div className="flex gap-2 pt-4">

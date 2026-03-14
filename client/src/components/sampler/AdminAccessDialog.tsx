@@ -190,17 +190,27 @@ export function AdminAccessDialog({
 
   const [users, setUsers] = React.useState<AdminUser[]>([]);
   const [usersLoading, setUsersLoading] = React.useState(false);
+  const [usersTotal, setUsersTotal] = React.useState(0);
+  const [usersPage, setUsersPage] = React.useState(1);
   const [usersQuery, setUsersQuery] = React.useState('');
   const [usersSortBy, setUsersSortBy] = React.useState<UserSortBy>('created_at');
   const [usersSortDir, setUsersSortDir] = React.useState<SortDirection>('desc');
+  const [assignmentUsersSource, setAssignmentUsersSource] = React.useState<AdminUser[]>([]);
+  const [assignmentUsersLoading, setAssignmentUsersLoading] = React.useState(false);
+  const [assignmentUsersPage, setAssignmentUsersPage] = React.useState(1);
   const [assignmentUserSortBy, setAssignmentUserSortBy] = React.useState<AssignmentUserSortBy>('created_at');
   const [assignmentUserSortDir, setAssignmentUserSortDir] = React.useState<SortDirection>('desc');
 
   const [banks, setBanks] = React.useState<AdminBank[]>([]);
   const [banksLoading, setBanksLoading] = React.useState(false);
+  const [banksTotal, setBanksTotal] = React.useState(0);
+  const [banksPage, setBanksPage] = React.useState(1);
   const [banksQuery, setBanksQuery] = React.useState('');
   const [banksSortBy, setBanksSortBy] = React.useState<BankSortBy>('created_at');
   const [banksSortDir, setBanksSortDir] = React.useState<SortDirection>('desc');
+  const [assignmentBanksSource, setAssignmentBanksSource] = React.useState<AdminBank[]>([]);
+  const [assignmentBanksLoading, setAssignmentBanksLoading] = React.useState(false);
+  const [assignmentBanksPage, setAssignmentBanksPage] = React.useState(1);
   const [assignmentBankSortBy, setAssignmentBankSortBy] = React.useState<AssignmentBankSortBy>('title');
   const [assignmentBankSortDir, setAssignmentBankSortDir] = React.useState<SortDirection>('asc');
 
@@ -213,6 +223,8 @@ export function AdminAccessDialog({
   const [activeLoading, setActiveLoading] = React.useState(false);
   const [activeCounts, setActiveCounts] = React.useState({ activeUsers: 0, activeSessions: 0 });
   const [activeSessions, setActiveSessions] = React.useState<ActiveSessionRow[]>([]);
+  const [activeTotal, setActiveTotal] = React.useState(0);
+  const [activePage, setActivePage] = React.useState(1);
   const [activeSortBy, setActiveSortBy] = React.useState<ActiveSortBy>(initialActiveSort.sortBy);
   const [activeSortDir, setActiveSortDir] = React.useState<SortDirection>(initialActiveSort.sortDir);
   const [activityLoading, setActivityLoading] = React.useState(false);
@@ -305,6 +317,7 @@ export function AdminAccessDialog({
   const [samplerDefaultsConfig, setSamplerDefaultsConfig] = React.useState<SamplerAppConfig>(() =>
     normalizeSamplerAppConfig(DEFAULT_SAMPLER_APP_CONFIG)
   );
+  const [storePromotionsPage, setStorePromotionsPage] = React.useState(1);
 
   const [accountReqFilter, setAccountReqFilter] = React.useState<'pending' | 'history'>('pending');
   const [accountReqLoading, setAccountReqLoading] = React.useState(false);
@@ -317,7 +330,10 @@ export function AdminAccessDialog({
   const [accountReqToReject, setAccountReqToReject] = React.useState<{ id: string; message: string } | null>(null);
   const [accountReqToAssist, setAccountReqToAssist] = React.useState<{ id: string } | null>(null);
 
-  const selectedUser = React.useMemo(() => users.find((u) => u.id === selectedUserId) || null, [users, selectedUserId]);
+  const selectedUser = React.useMemo(
+    () => assignmentUsersSource.find((u) => u.id === selectedUserId) || users.find((u) => u.id === selectedUserId) || null,
+    [assignmentUsersSource, users, selectedUserId],
+  );
   const grantedBankIds = React.useMemo(() => new Set(accessRows.map((r) => r.bank_id)), [accessRows]);
   const defaultBankSourceChoices = React.useMemo(() => {
     return defaultBankSourceOptions
@@ -329,18 +345,19 @@ export function AdminAccessDialog({
   }, [defaultBankSourceOptions]);
 
   const assignmentUsers = React.useMemo(() => {
-    const sorted = [...users].sort((a, b) => {
+    const sorted = [...assignmentUsersSource].sort((a, b) => {
       if (assignmentUserSortBy === 'display_name') return String(a.display_name || '').localeCompare(String(b.display_name || ''), undefined, { sensitivity: 'base' });
       if (assignmentUserSortBy === 'email') return String(a.email || '').localeCompare(String(b.email || ''), undefined, { sensitivity: 'base' });
       const left = a.created_at ? new Date(a.created_at).getTime() : 0;
       const right = b.created_at ? new Date(b.created_at).getTime() : 0;
       return left - right;
     });
-    return assignmentUserSortDir === 'asc' ? sorted : sorted.reverse();
-  }, [users, assignmentUserSortBy, assignmentUserSortDir]);
+    const ordered = assignmentUserSortDir === 'asc' ? sorted : sorted.reverse();
+    return ordered.slice((assignmentUsersPage - 1) * PAGE_SIZE, assignmentUsersPage * PAGE_SIZE);
+  }, [assignmentUsersSource, assignmentUserSortBy, assignmentUserSortDir, assignmentUsersPage]);
 
   const assignmentBanks = React.useMemo(() => {
-    const sorted = [...banks].sort((a, b) => {
+    const sorted = [...assignmentBanksSource].sort((a, b) => {
       if (assignmentBankSortBy === 'title') {
         return String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' });
       }
@@ -351,8 +368,9 @@ export function AdminAccessDialog({
       }
       return (a.access_count || 0) - (b.access_count || 0);
     });
-    return assignmentBankSortDir === 'asc' ? sorted : sorted.reverse();
-  }, [banks, assignmentBankSortBy, assignmentBankSortDir, grantedBankIds]);
+    const ordered = assignmentBankSortDir === 'asc' ? sorted : sorted.reverse();
+    return ordered.slice((assignmentBanksPage - 1) * PAGE_SIZE, assignmentBanksPage * PAGE_SIZE);
+  }, [assignmentBanksSource, assignmentBankSortBy, assignmentBankSortDir, grantedBankIds, assignmentBanksPage]);
 
   const activeUsersRows = React.useMemo(() => {
     const map = new Map<string, ActiveSessionRow>();
@@ -378,6 +396,22 @@ export function AdminAccessDialog({
     });
     return activeSortDir === 'asc' ? rows : rows.reverse();
   }, [activeSessions, activeSortBy, activeSortDir]);
+  const pagedUsers = React.useMemo(
+    () => users.slice((usersPage - 1) * PAGE_SIZE, usersPage * PAGE_SIZE),
+    [users, usersPage],
+  );
+  const pagedBanks = React.useMemo(
+    () => banks.slice((banksPage - 1) * PAGE_SIZE, banksPage * PAGE_SIZE),
+    [banks, banksPage],
+  );
+  const pagedActiveUsers = React.useMemo(
+    () => activeUsersRows.slice((activePage - 1) * PAGE_SIZE, activePage * PAGE_SIZE),
+    [activeUsersRows, activePage],
+  );
+  const pagedStorePromotions = React.useMemo(
+    () => storePromotions.slice((storePromotionsPage - 1) * PAGE_SIZE, storePromotionsPage * PAGE_SIZE),
+    [storePromotions, storePromotionsPage],
+  );
 
   React.useEffect(() => {
     if (!error) return;
@@ -405,36 +439,88 @@ export function AdminAccessDialog({
     try {
       const data = await adminApi.listUsers({
         q: usersQuery,
-        perPage: 300,
+        page: 1,
+        perPage: 2000,
         includeAdmins: false,
         sortBy: usersSortBy,
         sortDir: usersSortDir,
       });
-      setUsers(data.users || []);
+      const nextUsers = Array.isArray(data.users) ? data.users : [];
+      setUsers(nextUsers);
+      setUsersTotal(Math.max(Number(data.total || 0), nextUsers.length));
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Could not load users.');
+      setUsers([]);
+      setUsersTotal(0);
     } finally {
       setUsersLoading(false);
     }
   }, [usersQuery, usersSortBy, usersSortDir]);
+
+  const refreshAssignmentUsers = React.useCallback(async () => {
+    setAssignmentUsersLoading(true);
+    try {
+      const data = await adminApi.listUsers({
+        q: usersQuery,
+        page: 1,
+        perPage: 2000,
+        includeAdmins: false,
+        sortBy: 'created_at',
+        sortDir: 'desc',
+      });
+      setAssignmentUsersSource(Array.isArray(data.users) ? data.users : []);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load assignment users.');
+      setAssignmentUsersSource([]);
+    } finally {
+      setAssignmentUsersLoading(false);
+    }
+  }, [usersQuery]);
 
   const refreshBanks = React.useCallback(async () => {
     setBanksLoading(true);
     try {
       const data = await adminApi.listBanks({
         q: banksQuery,
+        page: 1,
+        perPage: 2000,
         sortBy: banksSortBy,
         sortDir: banksSortDir,
       });
-      setBanks(data.banks || []);
+      const nextBanks = Array.isArray(data.banks) ? data.banks : [];
+      setBanks(nextBanks);
+      setBanksTotal(Math.max(Number(data.total || 0), nextBanks.length));
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Could not load banks.');
+      setBanks([]);
+      setBanksTotal(0);
     } finally {
       setBanksLoading(false);
     }
   }, [banksQuery, banksSortBy, banksSortDir]);
+
+  const refreshAssignmentBanks = React.useCallback(async () => {
+    setAssignmentBanksLoading(true);
+    try {
+      const data = await adminApi.listBanks({
+        q: banksQuery,
+        page: 1,
+        perPage: 2000,
+        sortBy: 'created_at',
+        sortDir: 'desc',
+      });
+      setAssignmentBanksSource(Array.isArray(data.banks) ? data.banks : []);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load assignment banks.');
+      setAssignmentBanksSource([]);
+    } finally {
+      setAssignmentBanksLoading(false);
+    }
+  }, [banksQuery]);
 
   const refreshDefaultBank = React.useCallback(async () => {
     setDefaultBankLoading(true);
@@ -595,21 +681,39 @@ export function AdminAccessDialog({
   const refreshActive = React.useCallback(async () => {
     setActiveLoading(true);
     try {
-      const data = await adminApi.listActiveSessions({ limit: 300 });
+      const data = await adminApi.listActiveSessions({
+        page: 1,
+        perPage: 2000,
+        sortBy: activeSortBy,
+        sortDir: activeSortDir,
+      });
       setActiveCounts({
         activeUsers: Number(data?.counts?.activeUsers || 0),
         activeSessions: Number(data?.counts?.activeSessions || 0),
       });
-      setActiveSessions(data?.sessions || []);
+      const nextSessions = Array.isArray(data?.sessions) ? data.sessions : [];
+      setActiveSessions(nextSessions);
+      setActiveTotal(Math.max(Number(data?.total || 0), nextSessions.length));
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Could not load active sessions.');
       setActiveCounts({ activeUsers: 0, activeSessions: 0 });
       setActiveSessions([]);
+      setActiveTotal(0);
     } finally {
       setActiveLoading(false);
     }
-  }, []);
+  }, [activeSortBy, activeSortDir]);
+
+  const refreshUserData = React.useCallback(
+    async () => Promise.all([refreshUsers(), refreshAssignmentUsers()]),
+    [refreshUsers, refreshAssignmentUsers],
+  );
+
+  const refreshBankData = React.useCallback(
+    async () => Promise.all([refreshBanks(), refreshAssignmentBanks()]),
+    [refreshBanks, refreshAssignmentBanks],
+  );
 
   const refreshActivity = React.useCallback(async () => {
     setActivityLoading(true);
@@ -747,7 +851,7 @@ export function AdminAccessDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    if (tab !== 'assignments' && tab !== 'users') return;
+    if (tab !== 'users') return;
     const timer = window.setTimeout(() => {
       void refreshUsers();
     }, 250);
@@ -756,12 +860,30 @@ export function AdminAccessDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    if (tab !== 'assignments' && tab !== 'banks') return;
+    if (tab !== 'assignments') return;
+    const timer = window.setTimeout(() => {
+      void refreshAssignmentUsers();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [open, tab, refreshAssignmentUsers]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    if (tab !== 'banks') return;
     const timer = window.setTimeout(() => {
       void refreshBanks();
     }, 250);
     return () => window.clearTimeout(timer);
   }, [open, tab, refreshBanks]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    if (tab !== 'assignments') return;
+    const timer = window.setTimeout(() => {
+      void refreshAssignmentBanks();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [open, tab, refreshAssignmentBanks]);
 
   React.useEffect(() => {
     if (!open || tab !== 'active') return;
@@ -875,6 +997,12 @@ export function AdminAccessDialog({
     }
   };
 
+  const usersTotalPages = Math.max(1, Math.ceil(users.length / PAGE_SIZE));
+  const assignmentUsersTotalPages = Math.max(1, Math.ceil(assignmentUsersSource.length / PAGE_SIZE));
+  const banksTotalPages = Math.max(1, Math.ceil(banks.length / PAGE_SIZE));
+  const assignmentBanksTotalPages = Math.max(1, Math.ceil(assignmentBanksSource.length / PAGE_SIZE));
+  const activeTotalPages = Math.max(1, Math.ceil(activeUsersRows.length / PAGE_SIZE));
+  const storePromotionsTotalPages = Math.max(1, Math.ceil(storePromotions.length / PAGE_SIZE));
   const accountReqTotalPages = Math.max(1, Math.ceil(accountReqTotal / PAGE_SIZE));
   const bankAccessTotalPages = Math.max(1, Math.ceil(bankAccessTotal / PAGE_SIZE));
   const activityTotalPages = Math.max(1, Math.ceil(activityTotal / PAGE_SIZE));
@@ -988,6 +1116,42 @@ export function AdminAccessDialog({
   }, [activeSortBy, activeSortDir]);
 
   React.useEffect(() => {
+    if (usersPage > usersTotalPages) {
+      setUsersPage(usersTotalPages);
+    }
+  }, [usersPage, usersTotalPages]);
+
+  React.useEffect(() => {
+    if (assignmentUsersPage > assignmentUsersTotalPages) {
+      setAssignmentUsersPage(assignmentUsersTotalPages);
+    }
+  }, [assignmentUsersPage, assignmentUsersTotalPages]);
+
+  React.useEffect(() => {
+    if (banksPage > banksTotalPages) {
+      setBanksPage(banksTotalPages);
+    }
+  }, [banksPage, banksTotalPages]);
+
+  React.useEffect(() => {
+    if (assignmentBanksPage > assignmentBanksTotalPages) {
+      setAssignmentBanksPage(assignmentBanksTotalPages);
+    }
+  }, [assignmentBanksPage, assignmentBanksTotalPages]);
+
+  React.useEffect(() => {
+    if (activePage > activeTotalPages) {
+      setActivePage(activeTotalPages);
+    }
+  }, [activePage, activeTotalPages]);
+
+  React.useEffect(() => {
+    if (storePromotionsPage > storePromotionsTotalPages) {
+      setStorePromotionsPage(storePromotionsTotalPages);
+    }
+  }, [storePromotionsPage, storePromotionsTotalPages]);
+
+  React.useEffect(() => {
     if (!open) return;
     if (!selectedUserId) {
       setAccessRows([]);
@@ -1017,6 +1181,7 @@ export function AdminAccessDialog({
   }, [open, tab, refreshHomeDashboard]);
 
   const toggleUserSort = (next: UserSortBy) => {
+    setUsersPage(1);
     if (usersSortBy === next) setUsersSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else {
       setUsersSortBy(next);
@@ -1025,6 +1190,7 @@ export function AdminAccessDialog({
   };
 
   const toggleBankSort = (next: BankSortBy) => {
+    setBanksPage(1);
     if (banksSortBy === next) setBanksSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else {
       setBanksSortBy(next);
@@ -1033,6 +1199,7 @@ export function AdminAccessDialog({
   };
 
   const toggleAssignmentUserSort = (next: AssignmentUserSortBy) => {
+    setAssignmentUsersPage(1);
     if (assignmentUserSortBy === next) {
       setAssignmentUserSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
       return;
@@ -1042,6 +1209,7 @@ export function AdminAccessDialog({
   };
 
   const toggleAssignmentBankSort = (next: AssignmentBankSortBy) => {
+    setAssignmentBanksPage(1);
     if (assignmentBankSortBy === next) {
       setAssignmentBankSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
       return;
@@ -1051,6 +1219,7 @@ export function AdminAccessDialog({
   };
 
   const toggleActiveSort = (next: ActiveSortBy) => {
+    setActivePage(1);
     if (activeSortBy === next) {
       setActiveSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
       return;
@@ -1093,8 +1262,8 @@ export function AdminAccessDialog({
   const selectedIds = Array.from(selectedBankIds);
   const selectedGrantIds = selectedIds.filter((id) => !grantedBankIds.has(id));
   const selectedRevokeIds = selectedIds.filter((id) => grantedBankIds.has(id));
-  const allGrantIds = banks.filter((b) => !grantedBankIds.has(b.id)).map((b) => b.id);
-  const allRevokeIds = banks.filter((b) => grantedBankIds.has(b.id)).map((b) => b.id);
+  const allGrantIds = assignmentBanksSource.filter((b) => !grantedBankIds.has(b.id)).map((b) => b.id);
+  const allRevokeIds = assignmentBanksSource.filter((b) => grantedBankIds.has(b.id)).map((b) => b.id);
 
   const doGrant = async (bankIds: string[]) => {
     if (!selectedUserId || bankIds.length === 0) return;
@@ -1103,7 +1272,7 @@ export function AdminAccessDialog({
       await adminApi.grantUserAccess(selectedUserId, bankIds);
       setInfo(`Granted ${bankIds.length} bank(s).`);
       setSelectedBankIds(new Set());
-      await Promise.all([refreshAccess(selectedUserId), refreshBanks()]);
+      await Promise.all([refreshAccess(selectedUserId), refreshBankData()]);
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Access grant failed.');
@@ -1119,7 +1288,7 @@ export function AdminAccessDialog({
       await adminApi.revokeUserAccess(selectedUserId, bankIds);
       setInfo(`Revoked ${bankIds.length} bank(s).`);
       setSelectedBankIds(new Set());
-      await Promise.all([refreshAccess(selectedUserId), refreshBanks()]);
+      await Promise.all([refreshAccess(selectedUserId), refreshBankData()]);
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Access revoke failed.');
@@ -1150,7 +1319,7 @@ export function AdminAccessDialog({
       setCreateDisplayName('');
       setCreateOpen(false);
       setInfo('User created.');
-      await refreshUsers();
+      await refreshUserData();
       setError('');
     } catch (e: any) {
       setError(e?.message || 'User could not be created.');
@@ -1197,7 +1366,7 @@ export function AdminAccessDialog({
         device_total_bank_cap: deviceTotalBankCap,
       } : prev));
       setInfo('User profile updated.');
-      await refreshUsers();
+      await refreshUserData();
       if (selectedUserId) await refreshAccess(selectedUserId);
       setDetailsOpen(false);
       setError('');
@@ -1216,7 +1385,7 @@ export function AdminAccessDialog({
       setDetailsOpen(false);
       if (selectedUserId === detailsUser.id) setSelectedUserId('');
       setInfo('User deleted.');
-      await Promise.all([refreshUsers(), refreshBanks()]);
+      await Promise.all([refreshUserData(), refreshBankData()]);
       setError('');
     } catch (e: any) {
       setError(e?.message || 'User could not be deleted.');
@@ -1230,7 +1399,7 @@ export function AdminAccessDialog({
       setDetailsUser((prev) => (prev ? { ...prev, banned_until: result.banned_until || prev.banned_until } : prev));
       setBanOpen(false);
       setInfo(`User banned for ${banHours} hour(s).`);
-      await refreshUsers();
+      await refreshUserData();
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Account restriction could not be applied.');
@@ -1243,7 +1412,7 @@ export function AdminAccessDialog({
       await adminApi.unbanUser(detailsUser.id);
       setDetailsUser((prev) => (prev ? { ...prev, banned_until: null } : prev));
       setInfo('User unbanned.');
-      await refreshUsers();
+      await refreshUserData();
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Account restriction could not be removed.');
@@ -1273,7 +1442,7 @@ export function AdminAccessDialog({
       await adminApi.updateBank(editBank.id, { title, description: editBankDesc.trim(), color: editBankColor });
       setInfo('Bank updated.');
       setEditBankOpen(false);
-      await refreshBanks();
+      await refreshBankData();
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Failed to update bank');
@@ -1289,7 +1458,7 @@ export function AdminAccessDialog({
       setInfo(`Bank "${deleteBank.title}" archived and access revoked.`);
       setDeleteBankOpen(false);
       setDeleteBank(null);
-      await Promise.all([refreshBanks(), selectedUserId ? refreshAccess(selectedUserId) : Promise.resolve()]);
+      await Promise.all([refreshBankData(), selectedUserId ? refreshAccess(selectedUserId) : Promise.resolve()]);
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Failed to archive bank');
@@ -1419,9 +1588,11 @@ export function AdminAccessDialog({
                 assignments={{
                   theme,
                   cardClass: tabCardToneClass('assignments'),
-                  usersLoading,
+                  usersLoading: assignmentUsersLoading,
                   usersQuery,
                   assignmentUsers,
+                  assignmentUsersPage,
+                  assignmentUsersTotalPages,
                   assignmentUserSortBy,
                   assignmentUserSortDir,
                   selectedUserId,
@@ -1433,17 +1604,24 @@ export function AdminAccessDialog({
                   allGrantIds,
                   allRevokeIds,
                   assignmentBanks,
+                  assignmentBanksPage,
+                  assignmentBanksTotalPages,
                   assignmentBankSortBy,
                   assignmentBankSortDir,
                   selectedBankIds,
                   grantedBankIds,
-                  banksLoading,
-                  onUsersQueryChange: setUsersQuery,
-                  onRefreshUsers: () => void refreshUsers(),
+                  banksLoading: assignmentBanksLoading,
+                  onUsersQueryChange: (value) => {
+                    setUsersQuery(value);
+                    setAssignmentUsersPage(1);
+                  },
+                  onRefreshUsers: () => void refreshAssignmentUsers(),
+                  onAssignmentUsersPageChange: setAssignmentUsersPage,
                   onToggleAssignmentUserSort: toggleAssignmentUserSort,
                   onSelectUser: setSelectedUserId,
                   onGrant: (ids) => void doGrant(ids),
                   onRevoke: (ids) => void doRevoke(ids),
+                  onAssignmentBanksPageChange: setAssignmentBanksPage,
                   onToggleAssignmentBankSort: toggleAssignmentBankSort,
                   onToggleBankSelection: toggleSelectBank,
                 }}
@@ -1452,11 +1630,17 @@ export function AdminAccessDialog({
                   panelClass: tabPanelToneClass('active'),
                   banksLoading,
                   banksQuery,
-                  banks,
+                  banks: pagedBanks,
+                  banksPage,
+                  banksTotalPages,
                   banksSortBy,
                   banksSortDir,
-                  onBanksQueryChange: setBanksQuery,
+                  onBanksQueryChange: (value) => {
+                    setBanksQuery(value);
+                    setBanksPage(1);
+                  },
                   onRefreshBanks: () => void refreshBanks(),
+                  onBanksPageChange: setBanksPage,
                   onToggleBankSort: toggleBankSort,
                   onOpenBankAccess: openBankAccessDialog,
                   onEditBank: (bank) => {
@@ -1476,11 +1660,17 @@ export function AdminAccessDialog({
                   panelClass: tabPanelToneClass('users'),
                   usersLoading,
                   usersQuery,
-                  users,
+                  users: pagedUsers,
+                  usersPage,
+                  usersTotalPages,
                   usersSortBy,
                   usersSortDir,
-                  onUsersQueryChange: setUsersQuery,
+                  onUsersQueryChange: (value) => {
+                    setUsersQuery(value);
+                    setUsersPage(1);
+                  },
                   onRefreshUsers: () => void refreshUsers(),
+                  onUsersPageChange: setUsersPage,
                   onToggleUserSort: toggleUserSort,
                   onOpenCreateUser: () => setCreateOpen(true),
                   onOpenUserDetails: openUserDetails,
@@ -1492,10 +1682,13 @@ export function AdminAccessDialog({
                   titleClass: tabTitleToneClass('active'),
                   activeLoading,
                   activeCounts,
-                  activeUsersRows,
+                  activeUsersRows: pagedActiveUsers,
+                  activePage,
+                  activeTotalPages,
                   activeSortBy,
                   activeSortDir,
                   onRefreshActive: () => void refreshActive(),
+                  onActivePageChange: setActivePage,
                   onToggleActiveSort: toggleActiveSort,
                 }}
                 activity={{
@@ -1715,12 +1908,15 @@ export function AdminAccessDialog({
                   theme={theme}
                   panelClass={tabPanelToneClass('store_promotions')}
                   loading={storeLoading}
-                  promotions={storePromotions}
+                  promotions={pagedStorePromotions}
+                  page={storePromotionsPage}
+                  totalPages={storePromotionsTotalPages}
                   stats={storePromotionStats}
                   catalogDrafts={storeDrafts}
                   editingPromotionId={editingPromotionId}
                   form={storePromotionForm}
                   onFormChange={setStorePromotionForm}
+                  onPageChange={setStorePromotionsPage}
                   onEdit={editStorePromotion}
                   onReset={resetStorePromotionForm}
                   onSave={persistStorePromotion}

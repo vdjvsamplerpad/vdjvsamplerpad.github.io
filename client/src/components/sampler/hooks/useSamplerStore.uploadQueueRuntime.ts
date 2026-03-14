@@ -8,7 +8,7 @@ import {
   type AdminExportUploadJob,
   type UserExportUploadJob,
 } from './useSamplerStore.uploadQueue';
-import type { ExportActivityPhase, ExportUploadMeta } from './useSamplerStore.types';
+import type { ExportActivityPhase, ExportAudioMode, ExportUploadMeta } from './useSamplerStore.types';
 
 type UploadQueueRuntimeParams = {
   profileRole?: string | null;
@@ -264,6 +264,7 @@ export const useSamplerStoreUploadQueueRuntime = (params: UploadQueueRuntimePara
     fileName: string;
     assetName: string;
     assetProtection: 'encrypted' | 'public';
+    exportAudioMode?: ExportAudioMode;
     fileSize: number;
     fileSha256: string | null;
     padNames: string[];
