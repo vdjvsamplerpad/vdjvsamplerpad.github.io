@@ -1,4 +1,26 @@
-const MAX_IMAGE_QUOTA = 50 * 1024 * 1024;
+const MOBILE_IMAGE_QUOTA = 100 * 1024 * 1024;
+const DESKTOP_BROWSER_IMAGE_QUOTA = 250 * 1024 * 1024;
+const ELECTRON_IMAGE_QUOTA = 350 * 1024 * 1024;
+
+const resolveMaxImageQuota = (): number => {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return MOBILE_IMAGE_QUOTA;
+  }
+
+  if (window.electronAPI) {
+    return ELECTRON_IMAGE_QUOTA;
+  }
+
+  const userAgent = navigator.userAgent || '';
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(userAgent);
+  const isNativeCapacitor = Boolean((window as any).Capacitor?.isNativePlatform?.());
+
+  if (isMobile || isNativeCapacitor) {
+    return MOBILE_IMAGE_QUOTA;
+  }
+
+  return DESKTOP_BROWSER_IMAGE_QUOTA;
+};
 
 export interface BatchFileItem {
   id: string;
@@ -53,6 +75,7 @@ export const saveBatchBlobsToDB = async (items: BatchFileItem[]) => {
   if (items.length === 0) return;
 
   const db = await openFileDB();
+  const maxImageQuota = resolveMaxImageQuota();
 
   let totalImageSize = 0;
   items.forEach((item) => {
@@ -61,7 +84,7 @@ export const saveBatchBlobsToDB = async (items: BatchFileItem[]) => {
 
   if (totalImageSize > 0) {
     const currentUsage = await getCurrentQuotaUsage();
-    if (currentUsage + totalImageSize > MAX_IMAGE_QUOTA) {
+    if (currentUsage + totalImageSize > maxImageQuota) {
       throw new Error('Pad image storage is full. Delete some pad images before adding another.');
     }
   }
@@ -128,8 +151,11 @@ export const saveBlobToDB = async (id: string, blob: Blob, isImage: boolean = fa
   try {
     const db = await openFileDB();
     if (isImage) {
+      const maxImageQuota = resolveMaxImageQuota();
       const currentUsage = await getCurrentQuotaUsage();
-      if (currentUsage + blob.size > MAX_IMAGE_QUOTA) throw new Error('Your device storage is full. Free up space and try again.');
+      if (currentUsage + blob.size > maxImageQuota) {
+        throw new Error('Local image storage is full. Remove some pad images or bank thumbnails and try again.');
+      }
     }
     return new Promise<void>((resolve, reject) => {
       const tx = db.transaction(['blobs', 'quota-info'], 'readwrite');
@@ -183,4 +209,3 @@ export const deleteBlobFromDB = async (id: string, isImage: boolean = false) => 
   } catch {
   }
 };
-

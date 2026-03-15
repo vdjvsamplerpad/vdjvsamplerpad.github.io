@@ -56,6 +56,7 @@ const PLAY_AMBER_BORDER_HEX = '#b45309';
 const PLAY_COLOR_DISTANCE_THRESHOLD = 90;
 const FORCE_WARM_LONG_DURATION_MS = 90_000;
 const TOUCH_TRIGGER_CLICK_SUPPRESS_MS = 700;
+const TRIGGER_DOT_SYNC_SETTLE_MS = 420;
 
 type RgbColor = { r: number; g: number; b: number };
 
@@ -157,12 +158,19 @@ export const SamplerPad = React.memo(function SamplerPad({
   const [isDragging, setIsDragging] = React.useState(false);
   const lastEditTokenRef = React.useRef<number | undefined>(undefined);
   const autoRehydrateRef = React.useRef<Promise<boolean> | null>(null);
+  const queuedPlaybackIntentRef = React.useRef(false);
+  const autoWarmIssuedRef = React.useRef(false);
+  const autoPlayIssuedRef = React.useRef(false);
+  const syncSettleTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevPassiveSyncingRef = React.useRef(false);
   const holdPointerIdRef = React.useRef<number | null>(null);
   const suppressClickUntilRef = React.useRef(0);
   const relinkInputRef = React.useRef<HTMLInputElement>(null);
   const [missingPadAction, setMissingPadAction] = React.useState<'custom_link' | 'official_sync' | null>(null);
   const [missingPadBusy, setMissingPadBusy] = React.useState(false);
   const [missingPadError, setMissingPadError] = React.useState<string | null>(null);
+  const [queuedPlaybackIntent, setQueuedPlaybackIntent] = React.useState(false);
+  const [hideTriggerDotAfterSync, setHideTriggerDotAfterSync] = React.useState(false);
 
   React.useEffect(() => {
     if (!editMode || !editRequestToken) return;
@@ -214,6 +222,16 @@ export const SamplerPad = React.memo(function SamplerPad({
     requiresAuthToPlay,
   ]);
 
+  const clearQueuedPlaybackIntent = React.useCallback((options?: { stopPending?: boolean }) => {
+    queuedPlaybackIntentRef.current = false;
+    autoWarmIssuedRef.current = false;
+    autoPlayIssuedRef.current = false;
+    setQueuedPlaybackIntent(false);
+    if (options?.stopPending && isPendingPlay) {
+      stopAudio();
+    }
+  }, [isPendingPlay, stopAudio]);
+
   const queueMissingPadAction = React.useCallback(() => {
     setMissingPadError(null);
     setMissingPadAction(pad.restoreAssetKind === 'custom_local_media' ? 'custom_link' : 'official_sync');
@@ -244,7 +262,15 @@ export const SamplerPad = React.memo(function SamplerPad({
       return;
     }
     if (!editMode && requestLoginForPlayback()) return;
+    if (!editMode && queuedPlaybackIntentRef.current) {
+      clearQueuedPlaybackIntent({ stopPending: true });
+      return;
+    }
     if (!editMode && isPadMediaRehydrating) {
+      queuedPlaybackIntentRef.current = true;
+      autoWarmIssuedRef.current = false;
+      autoPlayIssuedRef.current = false;
+      setQueuedPlaybackIntent(true);
       triggerPadMediaRehydrate();
       return;
     }
@@ -254,10 +280,26 @@ export const SamplerPad = React.memo(function SamplerPad({
     } else if (pad.triggerMode === 'toggle') {
       if (isPlaying) stopAudio();
       else {
+        if (shouldAutoWarmBeforePlay && !isQuarantined) {
+          queuedPlaybackIntentRef.current = true;
+          autoWarmIssuedRef.current = false;
+          autoPlayIssuedRef.current = false;
+          setQueuedPlaybackIntent(true);
+          forceWarmAudio();
+          return;
+        }
         triggerPadMediaRehydrate();
         playAudio();
       }
     } else if (pad.triggerMode !== 'hold') {
+      if (shouldAutoWarmBeforePlay && !isQuarantined) {
+        queuedPlaybackIntentRef.current = true;
+        autoWarmIssuedRef.current = false;
+        autoPlayIssuedRef.current = false;
+        setQueuedPlaybackIntent(true);
+        forceWarmAudio();
+        return;
+      }
       triggerPadMediaRehydrate();
       playAudio();
     }
@@ -276,8 +318,26 @@ export const SamplerPad = React.memo(function SamplerPad({
     if (pad.triggerMode === 'stutter') {
       if (e.pointerType === 'mouse') return;
       if (requestLoginForPlayback()) return;
+      if (queuedPlaybackIntentRef.current) {
+        clearQueuedPlaybackIntent({ stopPending: true });
+        return;
+      }
       if (isPadMediaRehydrating) {
+        queuedPlaybackIntentRef.current = true;
+        autoWarmIssuedRef.current = false;
+        autoPlayIssuedRef.current = false;
+        setQueuedPlaybackIntent(true);
         triggerPadMediaRehydrate();
+        return;
+      }
+      if (shouldAutoWarmBeforePlay && !isQuarantined) {
+        suppressClickUntilRef.current = Date.now() + TOUCH_TRIGGER_CLICK_SUPPRESS_MS;
+        e.preventDefault();
+        queuedPlaybackIntentRef.current = true;
+        autoWarmIssuedRef.current = false;
+        autoPlayIssuedRef.current = false;
+        setQueuedPlaybackIntent(true);
+        forceWarmAudio();
         return;
       }
       suppressClickUntilRef.current = Date.now() + TOUCH_TRIGGER_CLICK_SUPPRESS_MS;
@@ -472,36 +532,52 @@ export const SamplerPad = React.memo(function SamplerPad({
     return null;
   }, [pad.audioDurationMs, pad.endTimeMs, pad.startTimeMs]);
   const isLongDurationPad = estimatedPadDurationMs !== null && estimatedPadDurationMs >= FORCE_WARM_LONG_DURATION_MS;
-  const shouldShowForceWarm =
+  const shouldAutoWarmBeforePlay =
     !editMode &&
     !channelLoadArmed &&
     !requiresAuthToPlay &&
     Boolean(pad.audioUrl) &&
     !isPlaying &&
-    !isPadMediaRehydrating &&
     isLongDurationPad &&
-    (!isWarmReady || isWarming || isPendingPlay || isQuarantined);
+    !isWarmReady;
   const quarantineMinutes = Math.max(1, Math.ceil(quarantineRemainingMs / 60_000));
-  const showWarmStateIcon = shouldShowForceWarm;
-  const warmStateMode: 'blocked' | 'warming' | 'ready_to_warm' = isQuarantined
-    ? 'blocked'
-    : (isWarming || isPendingPlay)
-      ? 'warming'
-      : 'ready_to_warm';
+  const isPassiveSyncing =
+    !editMode &&
+    !channelLoadArmed &&
+    !requiresAuthToPlay &&
+    isPadMediaRehydrating;
+  const isQueuedSyncing = queuedPlaybackIntent && isPadMediaRehydrating;
+  const isQueuedWarming = queuedPlaybackIntent && !isPadMediaRehydrating && shouldAutoWarmBeforePlay;
+  const showUserFacingWarming = isQueuedWarming || isPendingPlay;
+  const showWarmStateIcon = isPassiveSyncing || showUserFacingWarming || isQuarantined;
+  const shouldShowTriggerIndicator = !showWarmStateIcon && !hideTriggerDotAfterSync;
+  const warmStateMode: 'syncing' | 'blocked' | 'warming' | null = isPassiveSyncing
+    ? 'syncing'
+    : isQuarantined
+      ? 'blocked'
+      : showUserFacingWarming
+        ? 'warming'
+        : null;
   const warmStateTitle =
-    warmStateMode === 'blocked'
-      ? `Temporarily blocked due to repeated load failures (${quarantineMinutes}m left).`
-      : warmStateMode === 'warming'
-        ? (isPendingPlay ? 'Tap to cancel pending play' : 'Warmup in progress')
-        : 'Tap to force warm this long pad (no auto-play)';
-  const warmStateIconClass = warmStateMode === 'blocked'
+    warmStateMode === 'syncing'
+      ? 'Syncing pad media'
+      : warmStateMode === 'blocked'
+        ? `Temporarily blocked due to repeated load failures (${quarantineMinutes}m left).`
+        : warmStateMode === 'warming'
+          ? (isPendingPlay ? 'Preparing playback, tap to cancel pending play' : 'Warming pad for playback')
+          : '';
+  const warmStateIconClass = warmStateMode === 'syncing'
+    ? (theme === 'dark'
+      ? 'bg-rose-500/85 text-rose-50 border-rose-300/50 hover:bg-rose-400/90'
+      : 'bg-rose-500 text-white border-rose-700 hover:bg-rose-600')
+    : warmStateMode === 'blocked'
     ? (theme === 'dark'
       ? 'bg-rose-500/85 text-rose-50 border-rose-300/50 hover:bg-rose-400/90'
       : 'bg-rose-500 text-white border-rose-700 hover:bg-rose-600')
     : warmStateMode === 'warming'
       ? (theme === 'dark'
-        ? 'bg-cyan-500/85 text-cyan-950 border-cyan-200/60 hover:bg-cyan-400/90'
-        : 'bg-cyan-500 text-white border-cyan-700 hover:bg-cyan-600')
+        ? 'bg-amber-500/85 text-amber-950 border-amber-200/60 hover:bg-amber-400/90'
+        : 'bg-amber-500 text-white border-amber-700 hover:bg-amber-600')
       : (theme === 'dark'
         ? 'bg-amber-500/85 text-amber-950 border-amber-200/60 hover:bg-amber-400/90'
         : 'bg-amber-500 text-white border-amber-700 hover:bg-amber-600');
@@ -509,26 +585,116 @@ export const SamplerPad = React.memo(function SamplerPad({
     event.stopPropagation();
     event.preventDefault();
     if (warmStateMode === 'blocked') return;
-    if (isPendingPlay) {
-      stopAudio();
+    if (warmStateMode === 'syncing') return;
+    if (warmStateMode === 'warming') {
+      clearQueuedPlaybackIntent({ stopPending: true });
       return;
     }
-    if (isWarming) return;
-    forceWarmAudio();
-  }, [forceWarmAudio, isPendingPlay, isWarming, stopAudio, warmStateMode]);
+  }, [clearQueuedPlaybackIntent, warmStateMode]);
 
   const handleWarmStateIconKeyDown = React.useCallback((event: React.KeyboardEvent) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
     event.stopPropagation();
     if (warmStateMode === 'blocked') return;
-    if (isPendingPlay) {
-      stopAudio();
+    if (warmStateMode === 'syncing') return;
+    if (warmStateMode === 'warming') {
+      clearQueuedPlaybackIntent({ stopPending: true });
       return;
     }
-    if (isWarming) return;
-    forceWarmAudio();
-  }, [forceWarmAudio, isPendingPlay, isWarming, stopAudio, warmStateMode]);
+  }, [clearQueuedPlaybackIntent, warmStateMode]);
+
+  React.useEffect(() => {
+    if (isPassiveSyncing) {
+      if (syncSettleTimerRef.current !== null) {
+        clearTimeout(syncSettleTimerRef.current);
+        syncSettleTimerRef.current = null;
+      }
+      setHideTriggerDotAfterSync(false);
+    } else if (prevPassiveSyncingRef.current) {
+      setHideTriggerDotAfterSync(true);
+      if (syncSettleTimerRef.current !== null) {
+        clearTimeout(syncSettleTimerRef.current);
+      }
+      syncSettleTimerRef.current = setTimeout(() => {
+        syncSettleTimerRef.current = null;
+        setHideTriggerDotAfterSync(false);
+      }, TRIGGER_DOT_SYNC_SETTLE_MS);
+    }
+    prevPassiveSyncingRef.current = isPassiveSyncing;
+  }, [isPassiveSyncing]);
+
+  React.useEffect(() => {
+    return () => {
+      if (syncSettleTimerRef.current !== null) {
+        clearTimeout(syncSettleTimerRef.current);
+        syncSettleTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!queuedPlaybackIntent) {
+      queuedPlaybackIntentRef.current = false;
+      autoWarmIssuedRef.current = false;
+      autoPlayIssuedRef.current = false;
+      return;
+    }
+    if (editMode || channelLoadArmed || requiresAuthToPlay) {
+      clearQueuedPlaybackIntent();
+      return;
+    }
+    if (isPlaying) {
+      clearQueuedPlaybackIntent();
+      return;
+    }
+    if (isPadMediaRehydrating) {
+      triggerPadMediaRehydrate();
+      return;
+    }
+    if (!pad.audioUrl) return;
+    if (shouldAutoWarmBeforePlay) {
+      if (isQuarantined) {
+        clearQueuedPlaybackIntent();
+        return;
+      }
+      if (isWarmReady) {
+        if (!autoPlayIssuedRef.current) {
+          autoPlayIssuedRef.current = true;
+          playAudio();
+          clearQueuedPlaybackIntent();
+        }
+        return;
+      }
+      if (!isWarming && !isPendingPlay && !autoWarmIssuedRef.current) {
+        autoWarmIssuedRef.current = true;
+        forceWarmAudio();
+      }
+      return;
+    }
+    if (!autoPlayIssuedRef.current) {
+      autoPlayIssuedRef.current = true;
+      playAudio();
+      clearQueuedPlaybackIntent();
+    }
+  }, [
+    channelLoadArmed,
+    clearQueuedPlaybackIntent,
+    editMode,
+    forceWarmAudio,
+    isPadMediaRehydrating,
+    isPendingPlay,
+    isPlaying,
+    isQuarantined,
+    isWarmReady,
+    isWarming,
+    pad.audioUrl,
+    playAudio,
+    queuedPlaybackIntent,
+    requiresAuthToPlay,
+    shouldAutoWarmBeforePlay,
+    triggerPadMediaRehydrate,
+  ]);
 
   const getEditModeClasses = () => {
     if (editMode) {
@@ -584,14 +750,14 @@ export const SamplerPad = React.memo(function SamplerPad({
     switch (pad.triggerMode) {
       case 'toggle':
         if (isPlaying) {
-          return <Pause className={`${iconSize} text-blue-400`} />;
+          return <Pause className={`${iconSize} text-green-400`} />;
         } else {
-          return <Play className={`${iconSize} text-blue-400`} />;
+          return <Play className={`${iconSize} text-green-400`} />;
         }
       case 'hold':
-        return <MousePointer2 className={`${iconSize} text-green-400`} />;
+        return <MousePointer2 className={`${iconSize} text-blue-400`} />;
       case 'stutter':
-        return <Zap className={`${iconSize} text-orange-400`} />;
+        return <Zap className={`${iconSize} text-yellow-400`} />;
       case 'unmute':
         return <VolumeX className={`${iconSize} text-purple-400`} />;
       default:
@@ -602,11 +768,11 @@ export const SamplerPad = React.memo(function SamplerPad({
   const getTriggerModeColor = () => {
     switch (pad.triggerMode) {
       case 'toggle':
-        return '#60a5fa'; // blue-400
-      case 'hold':
         return '#4ade80'; // green-400
+      case 'hold':
+        return '#60a5fa'; // blue-400
       case 'stutter':
-        return '#fb923c'; // orange-400
+        return '#facc15'; // yellow-400
       case 'unmute':
         return '#c084fc'; // purple-400
       default:
@@ -741,18 +907,6 @@ export const SamplerPad = React.memo(function SamplerPad({
             {editMode ? 'EDIT' : 'LOAD'}
           </div>
         )}
-        {isPadMediaRehydrating && !editMode && !channelLoadArmed && (
-          <div
-            className={`absolute bottom-1 left-1 z-20 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-wide pointer-events-none flex items-center gap-1 ${
-              theme === 'dark'
-                ? 'bg-blue-500/80 text-blue-50'
-                : 'bg-blue-500 text-white'
-            }`}
-          >
-            {!isLowestGraphics ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : null}
-            <span>Syncing</span>
-          </div>
-        )}
         {isSnapshotMissingPad && !editMode && !channelLoadArmed && !missingPadBusy && (
           <div
             className={`absolute bottom-1 left-1 z-20 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-wide pointer-events-none ${
@@ -829,10 +983,10 @@ export const SamplerPad = React.memo(function SamplerPad({
               {warmStateMode === 'blocked' ? (
                 <Ban className="w-2 h-2 sm:w-2.5 sm:h-2.5" />
               ) : (
-                <Loader2 className={`w-2 h-2 sm:w-2.5 sm:h-2.5 ${warmStateMode === 'warming' ? 'animate-spin' : ''}`} />
+                <Loader2 className={`w-2 h-2 sm:w-2.5 sm:h-2.5 ${(warmStateMode === 'warming' || warmStateMode === 'syncing') ? 'animate-spin' : ''}`} />
               )}
             </div>
-          ) : (
+          ) : shouldShowTriggerIndicator ? (
             <div
               className="absolute top-0.5 sm:top-1 right-0.5 sm:right-1 pointer-events-none z-10"
               title={`Trigger: ${pad.triggerMode}`}
@@ -842,7 +996,7 @@ export const SamplerPad = React.memo(function SamplerPad({
                 style={{ backgroundColor: getTriggerModeColor() }}
               />
             </div>
-          )
+          ) : null
         ) : (
           <div className={`absolute top-0.5 right-0.5 sm:top-1 sm:right-1 p-0.5 sm:p-1 rounded-full z-10 bg-black bg-opacity-20 ${showWarmStateIcon ? '' : 'pointer-events-none'}`}>
             {showWarmStateIcon ? (
@@ -859,14 +1013,14 @@ export const SamplerPad = React.memo(function SamplerPad({
                 {warmStateMode === 'blocked' ? (
                   <Ban className="w-2 h-2 sm:w-2.5 sm:h-2.5" />
                 ) : (
-                  <Loader2 className={`w-2 h-2 sm:w-2.5 sm:h-2.5 ${warmStateMode === 'warming' ? 'animate-spin' : ''}`} />
+                  <Loader2 className={`w-2 h-2 sm:w-2.5 sm:h-2.5 ${(warmStateMode === 'warming' || warmStateMode === 'syncing') ? 'animate-spin' : ''}`} />
                 )}
               </div>
-            ) : (
+            ) : shouldShowTriggerIndicator ? (
               <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 flex items-center justify-center">
                 {getTriggerModeIcon()}
               </div>
-            )}
+            ) : null}
           </div>
         )}
 

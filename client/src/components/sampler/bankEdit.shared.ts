@@ -1,6 +1,6 @@
 import { LED_COLOR_PALETTE } from '@/lib/led-colors';
 
-const BANK_COLOR_NAMES = [
+const BANK_PRIMARY_COLOR_NAMES = [
   'Dim Gray',
   'Gray',
   'White',
@@ -31,14 +31,22 @@ const getContrastText = (hex: string) => {
   return luminance > 0.6 ? '#000000' : '#ffffff';
 };
 
-export const bankColorOptions = BANK_COLOR_NAMES
-  .map((name) => LED_COLOR_PALETTE.find((entry) => entry.name === name))
-  .filter(Boolean)
+export const bankColorOptions = LED_COLOR_PALETTE
+  .filter((entry) => entry.velocity > 0)
+  .filter((entry, index, arr) => arr.findIndex((item) => item.hex === entry.hex) === index)
   .map((entry) => ({
     label: entry!.name,
     value: entry!.hex,
     textColor: getContrastText(entry!.hex)
   }));
+
+export const primaryBankColorOptions = BANK_PRIMARY_COLOR_NAMES
+  .map((name) => bankColorOptions.find((entry) => entry.label === name))
+  .filter(Boolean) as typeof bankColorOptions;
+
+export const extraBankColorOptions = bankColorOptions.filter(
+  (entry) => !primaryBankColorOptions.some((primary) => primary.value === entry.value)
+);
 
 export const formatBankEditDate = (date: Date) => {
   return new Intl.DateTimeFormat('en-US', {

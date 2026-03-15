@@ -2,6 +2,7 @@ export interface PadData {
   id: string;
   name: string;
   audioUrl: string;
+  sourceAudioUrl?: string; // Runtime-only original full-source URL used by deck/load paths
   audioStorageKey?: string; // Persistent media key for native storage recovery
   audioBackend?: 'native' | 'idb'; // Storage backend hint for hybrid persistence
   preparedAudioUrl?: string; // Runtime-only local prepared playback URL
@@ -40,6 +41,8 @@ export interface PadData {
   // Audio Engine V3 admission metadata
   audioBytes?: number; // File size in bytes (cached at upload/import)
   audioDurationMs?: number; // Duration in ms (cached at upload/import)
+  sourceAudioBytes?: number; // Runtime-only original full-source size used by deck/load paths
+  sourceAudioDurationMs?: number; // Runtime-only original full-source duration used by deck/load paths
   audioRejectedReason?: 'size_limit' | 'duration_limit'; // Set when admission check fails
   contentOrigin?: 'user' | 'official_store' | 'official_admin'; // Ownership/provenance of this pad's content
   originBankId?: string; // Source official bank id for recovery/export policy

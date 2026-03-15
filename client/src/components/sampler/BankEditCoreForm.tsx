@@ -24,6 +24,8 @@ interface BankEditCoreFormProps {
   canDelete: boolean;
   theme: 'light' | 'dark';
   colorOptions: ColorOption[];
+  primaryColorOptions?: ColorOption[];
+  extraColorOptions?: ColorOption[];
   defaultColor: string;
   setDefaultColor: (value: string) => void;
   name: string;
@@ -71,6 +73,8 @@ export function BankEditCoreForm({
   canDelete,
   theme,
   colorOptions,
+  primaryColorOptions,
+  extraColorOptions,
   defaultColor,
   setDefaultColor,
   name,
@@ -115,6 +119,12 @@ export function BankEditCoreForm({
   const canUseAdminExport = isAdmin && Boolean(onExportAdmin) && canAdminExportBankForSession(bank);
   const canUseStoreUpdate = isAdmin && Boolean(onUpdateStoreBank) && Boolean(bank.bankMetadata?.catalogItemId);
   const canShowExportButton = canUseAdminExport || bank.exportable !== false;
+  const [showAllColors, setShowAllColors] = React.useState(false);
+  const visibleColorOptions = showAllColors
+    ? colorOptions
+    : (primaryColorOptions && primaryColorOptions.length > 0 ? primaryColorOptions : colorOptions);
+  const hasExtraColors = (extraColorOptions && extraColorOptions.length > 0)
+    || (primaryColorOptions && primaryColorOptions.length < colorOptions.length);
 
   return (
     <div className="space-y-4">
@@ -147,8 +157,9 @@ export function BankEditCoreForm({
         <div className="space-y-2">
           <Label>Bank Color</Label>
           <div className="flex gap-1 flex-wrap">
-            {colorOptions.map((colorOption) => (
+            {visibleColorOptions.map((colorOption) => (
               <button
+                type="button"
                 key={colorOption.value}
                 onClick={() => setDefaultColor(colorOption.value)}
                 className={`w-6 h-6 rounded-full border-2 transition-all ${defaultColor === colorOption.value ? 'border-white scale-110 shadow-lg' : 'border-gray-400'}`}
@@ -159,6 +170,17 @@ export function BankEditCoreForm({
                 title={colorOption.label}
               />
             ))}
+            {hasExtraColors && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-6 px-1.5 text-[10px] ml-1"
+                onClick={() => setShowAllColors((prev) => !prev)}
+              >
+                {showAllColors ? 'Less' : 'More'}
+              </Button>
+            )}
           </div>
         </div>
       </div>

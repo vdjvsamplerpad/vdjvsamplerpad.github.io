@@ -25,7 +25,7 @@ import { MidiMessage, useWebMidi } from '@/lib/midi';
 import { DEFAULT_SYSTEM_MAPPINGS, SystemAction, SystemMappings } from '@/lib/system-mappings';
 import type { MidiDeviceProfile } from '@/lib/midi/device-profiles';
 import { performanceMonitor, type PerformanceTier } from '@/lib/performance-monitor';
-import { getElectronMemoryTuningProfile } from '@/lib/electron-performance';
+import { getSamplerRuntimeTuningProfile } from '@/lib/sampler-runtime-profile';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { getCachedUser, useAuth } from '@/hooks/useAuth';
 import { getAudioTelemetry } from '@/lib/audio-telemetry';
@@ -56,6 +56,9 @@ import {
   resolvePadPlaybackAudioUrl,
   resolvePadPlaybackBytes,
   resolvePadPlaybackDurationMs,
+  resolvePadPlaybackWindow,
+  resolvePadSourceAudioUrl,
+  resolvePadSourceDurationMs,
 } from './hooks/preparedAudio';
 const PAD_SIZE_MIN = 2;
 const PAD_SIZE_MAX_PORTRAIT = 8;
@@ -71,7 +74,6 @@ const PAD_WARMUP_MAX_PER_BANK = 10;
 const PAD_WARMUP_MAX_TOTAL = 20;
 const PAD_WARMUP_IDLE_DELAY_MS = 120;
 const PAD_WARMUP_MOBILE_MAX_DURATION_MS = 120_000;
-const PAD_WARMUP_NATIVE_MAX_DURATION_MS = 90_000;
 const PAD_WARMUP_UNKNOWN_SAFE_MAX_BYTES = 1_500_000;
 const PAD_WARMUP_UNKNOWN_SAFE_MAX_TRIM_MS = 12_000;
 const DECK_LOADED_BANKS_EVENT = 'vdjv-deck-loaded-banks-changed';
@@ -114,46 +116,14 @@ const resolvePadWarmupPolicy = (): PadWarmupPolicy => {
   const nav = navigator as Navigator & { deviceMemory?: number };
   const ua = nav.userAgent || '';
   const isMobileUA = /Android|iPhone|iPad|iPod/i.test(ua);
-  const isIOSUA = /iPhone|iPad|iPod/i.test(ua);
-  const isNativeCapacitor = Boolean((window as any).Capacitor?.isNativePlatform?.());
-  const electronProfile = getElectronMemoryTuningProfile();
-
-  let base: PadWarmupPolicy;
-  if (electronProfile) {
-    base = electronProfile.warmupPolicy;
-  } else if (isNativeCapacitor) {
-    base = {
-      maxPerBank: 6,
-      maxTotal: 10,
-      idleDelayMs: 180,
-      maxDurationMs: PAD_WARMUP_NATIVE_MAX_DURATION_MS,
-      skipUnknownDuration: true
-    };
-  } else if (isIOSUA) {
-    base = {
-      maxPerBank: 5,
-      maxTotal: 8,
-      idleDelayMs: 180,
-      maxDurationMs: PAD_WARMUP_NATIVE_MAX_DURATION_MS,
-      skipUnknownDuration: true
-    };
-  } else if (isMobileUA) {
-    base = {
-      maxPerBank: 8,
-      maxTotal: 14,
-      idleDelayMs: 140,
-      maxDurationMs: PAD_WARMUP_MOBILE_MAX_DURATION_MS,
-      skipUnknownDuration: false
-    };
-  } else {
-    base = {
-      maxPerBank: 14,
-      maxTotal: 36,
-      idleDelayMs: 60,
-      maxDurationMs: null,
-      skipUnknownDuration: false
-    };
-  }
+  const runtimeProfile = getSamplerRuntimeTuningProfile();
+  const base = runtimeProfile?.warmupPolicy ?? {
+    maxPerBank: isMobileUA ? 8 : 14,
+    maxTotal: isMobileUA ? 14 : 36,
+    idleDelayMs: isMobileUA ? 140 : 60,
+    maxDurationMs: isMobileUA ? PAD_WARMUP_MOBILE_MAX_DURATION_MS : null,
+    skipUnknownDuration: isMobileUA,
+  };
 
   const deviceMemory = typeof nav.deviceMemory === 'number' && Number.isFinite(nav.deviceMemory)
     ? nav.deviceMemory
@@ -161,6 +131,7 @@ const resolvePadWarmupPolicy = (): PadWarmupPolicy => {
   const cpuCores = typeof nav.hardwareConcurrency === 'number' && Number.isFinite(nav.hardwareConcurrency)
     ? nav.hardwareConcurrency
     : null;
+  const isNativeCapacitor = runtimeProfile?.kind === 'android_capacitor' || runtimeProfile?.kind === 'ios_capacitor';
 
   let scale = 1;
   if (deviceMemory !== null) {
@@ -386,12 +357,20 @@ export function SamplerPadApp() {
     banksRef.current = banks;
   }, [banks]);
 
-  const buildPlaybackReadyPad = React.useCallback((pad: PadData): PadData => ({
-    ...pad,
-    audioUrl: resolvePadPlaybackAudioUrl(pad),
-    audioBytes: resolvePadPlaybackBytes(pad),
-    audioDurationMs: resolvePadPlaybackDurationMs(pad),
-  }), []);
+  const buildPlaybackReadyPad = React.useCallback((pad: PadData): PadData => {
+    const playbackWindow = resolvePadPlaybackWindow(pad);
+    return {
+      ...pad,
+      sourceAudioUrl: resolvePadSourceAudioUrl(pad),
+      sourceAudioBytes: pad.audioBytes,
+      sourceAudioDurationMs: resolvePadSourceDurationMs(pad),
+      audioUrl: resolvePadPlaybackAudioUrl(pad),
+      audioBytes: resolvePadPlaybackBytes(pad),
+      audioDurationMs: resolvePadPlaybackDurationMs(pad),
+      startTimeMs: playbackWindow.startTimeMs,
+      endTimeMs: playbackWindow.endTimeMs,
+    };
+  }, []);
 
   // Load settings from localStorage
   const [settings, setSettings] = React.useState<AppSettings>(() => {
@@ -2751,30 +2730,46 @@ export function SamplerPadApp() {
       for (let index = 0; index < queue.length; index += 1) {
         const item = queue[index];
         if (cancelled || runId !== warmupRunIdRef.current) return;
+        const latestBank = banksRef.current.find((entry) => entry.id === item.bankId);
+        const latestPad = latestBank?.pads.find((entry) => entry.id === item.pad.id) || item.pad;
+        const runtimePad = buildPlaybackReadyPad(latestPad);
+        const runtimeAudioUrl = runtimePad.audioUrl;
+        if (!runtimeAudioUrl) {
+          warmedPadAudioRef.current.delete(item.pad.id);
+          continue;
+        }
+        if (!isOnline && isRemoteHttpAudioUrl(runtimeAudioUrl)) {
+          warmedPadAudioRef.current.delete(item.pad.id);
+          continue;
+        }
         audioTelemetry.log('warmup_item_start', {
           runId,
           index: index + 1,
           total: queue.length,
           bankId: item.bankId,
-          padId: item.pad.id,
-          triggerMode: item.pad.triggerMode,
-          durationMs: getPadDurationForWarmup(item.pad),
-          audioBytes: item.pad.audioBytes
+          padId: latestPad.id,
+          triggerMode: latestPad.triggerMode,
+          durationMs: getPadDurationForWarmup(latestPad),
+          audioBytes: runtimePad.audioBytes
         });
         try {
-          const runtimePad = buildPlaybackReadyPad(item.pad);
-          const warmed = await playbackManager.preloadPad(runtimePad.id, runtimePad, item.bankId, item.bankName);
+          const warmed = await playbackManager.preloadPad(
+            runtimePad.id,
+            runtimePad,
+            item.bankId,
+            latestBank?.name || item.bankName
+          );
           if (warmed && !cancelled && runId === warmupRunIdRef.current) {
-            warmedPadAudioRef.current.set(item.pad.id, item.audioUrl);
+            warmedPadAudioRef.current.set(latestPad.id, runtimeAudioUrl);
           }
           audioTelemetry.log('warmup_item_result', {
             runId,
             index: index + 1,
             total: queue.length,
             bankId: item.bankId,
-            padId: item.pad.id,
+            padId: latestPad.id,
             warmed,
-            backend: playbackManager.getEngineBackendForPad(item.pad.id)
+            backend: playbackManager.getEngineBackendForPad(latestPad.id)
           }, warmed ? 'info' : 'warn');
         } catch {
           audioTelemetry.log('warmup_item_result', {
@@ -2782,7 +2777,7 @@ export function SamplerPadApp() {
             index: index + 1,
             total: queue.length,
             bankId: item.bankId,
-            padId: item.pad.id,
+            padId: latestPad.id,
             warmed: false,
             reason: 'preload_exception'
           }, 'error');

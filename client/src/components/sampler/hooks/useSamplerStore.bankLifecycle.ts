@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { getElectronMemoryTuningProfile } from '@/lib/electron-performance';
+import { getSamplerRuntimeTuningProfile } from '@/lib/sampler-runtime-profile';
 import { type PadData, type SamplerBank } from '../types/sampler';
 import { loadDefaultBankFromAssetsPipeline } from './useSamplerStore.defaultBankAssets';
 import { runDefaultBankSyncPipeline } from './useSamplerStore.defaultBankSync';
@@ -26,32 +26,38 @@ import {
 import { summarizeMissingMedia, padNeedsMediaHydration } from './useSamplerStore.padHelpers';
 import { type SamplerMediaHelpers } from './useSamplerStore.mediaRuntime';
 
-const MAX_NATIVE_BACKGROUND_HYDRATION_PADS = 320;
-const MAX_DESKTOP_BACKGROUND_HYDRATION_PADS = 480;
 const BANK_MEDIA_DEHYDRATE_IDLE_MS = 15_000;
-const MIN_BANKS_FOR_MEDIA_DEHYDRATION = 5;
-const MAX_RECENT_WARM_BANKS = 1;
 const DECK_LOADED_BANKS_EVENT = 'vdjv-deck-loaded-banks-changed';
 const DECK_PLAYBACK_EVENT = 'vdjv-deck-playback-changed';
+const PREPARED_PLAYBACK_PAD_STARTED_EVENT = 'vdjv-prepared-playback-pad-started';
+const HOT_TRANSPORT_PADS_CHANGED_EVENT = 'vdjv-audio-transport-hot-pads-changed';
 
 const isBlobUrl = (value: string | null | undefined): value is string =>
   typeof value === 'string' && value.startsWith('blob:');
 
-const bankHasBlobMedia = (bank: SamplerBank): boolean => {
-  return (bank.pads || []).some((pad) => isBlobUrl(pad.audioUrl) || isBlobUrl(pad.imageUrl) || isBlobUrl(pad.preparedAudioUrl));
+const bankHasBlobMedia = (bank: SamplerBank, preservedPadIds: Set<string> = new Set()): boolean => {
+  return (bank.pads || []).some((pad) => {
+    const preservePadMedia = preservedPadIds.has(pad.id);
+    return (
+      (!preservePadMedia && isBlobUrl(pad.audioUrl)) ||
+      (!preservePadMedia && isBlobUrl(pad.preparedAudioUrl)) ||
+      isBlobUrl(pad.imageUrl)
+    );
+  });
 };
 
-const dehydrateBankMedia = (bank: SamplerBank): SamplerBank => {
+const dehydrateBankMedia = (bank: SamplerBank, preservedPadIds: Set<string> = new Set()): SamplerBank => {
   let changed = false;
 
   const nextPads = (bank.pads || []).map((pad) => {
     let nextPad = pad;
-    if (isBlobUrl(pad.audioUrl)) {
+    const preservePadMedia = preservedPadIds.has(pad.id);
+    if (!preservePadMedia && isBlobUrl(pad.audioUrl)) {
       try { URL.revokeObjectURL(pad.audioUrl); } catch {}
       nextPad = { ...nextPad, audioUrl: null };
       changed = true;
     }
-    if (isBlobUrl(pad.preparedAudioUrl)) {
+    if (!preservePadMedia && isBlobUrl(pad.preparedAudioUrl)) {
       try { URL.revokeObjectURL(pad.preparedAudioUrl); } catch {}
       nextPad = { ...nextPad, preparedAudioUrl: undefined };
       changed = true;
@@ -171,10 +177,12 @@ export function useSamplerStoreBankLifecycle({
   guestDefaultSelectionPendingRef,
 }: UseSamplerStoreBankLifecycleParams): void {
   const recentBankOrderRef = React.useRef<string[]>([]);
+  const recentHotPadsRef = React.useRef<Array<{ bankId: string; padId: string; lastPlayedAt: number }>>([]);
   const bankMediaDehydrateTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const deckLoadedBankIdsRef = React.useRef<Set<string>>(new Set());
   const hasActiveDeckPlaybackRef = React.useRef(false);
   const [deckPlaybackNonce, setDeckPlaybackNonce] = React.useState(0);
+  const [hotPadNonce, setHotPadNonce] = React.useState(0);
 
   React.useEffect(() => {
     return () => {
@@ -213,6 +221,61 @@ export function useSamplerStoreBankLifecycle({
     return () => {
       deckLoadedBankIdsRef.current = new Set();
       window.removeEventListener(DECK_LOADED_BANKS_EVENT, handleDeckLoadedBanksChanged as EventListener);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handlePreparedPadStarted = (event: Event) => {
+      const detail = (event as CustomEvent<{ bankId?: unknown; padId?: unknown }>).detail;
+      const bankId = typeof detail?.bankId === 'string' ? detail.bankId : '';
+      const padId = typeof detail?.padId === 'string' ? detail.padId : '';
+      if (!bankId || !padId) return;
+
+      const retentionPolicy = getSamplerRuntimeTuningProfile().sessionMediaRetention;
+      const hotPadCount = retentionPolicy?.hotPadCount ?? 16;
+      const hotPadTtlMs = retentionPolicy?.hotPadTtlMs ?? 180_000;
+      const now = Date.now();
+      const nextEntries = [
+        { bankId, padId, lastPlayedAt: now },
+        ...recentHotPadsRef.current.filter((entry) => !(entry.bankId === bankId && entry.padId === padId) && (now - entry.lastPlayedAt) < hotPadTtlMs),
+      ].slice(0, hotPadCount);
+      recentHotPadsRef.current = nextEntries;
+      setHotPadNonce((value) => value + 1);
+    };
+
+    window.addEventListener(PREPARED_PLAYBACK_PAD_STARTED_EVENT, handlePreparedPadStarted as EventListener);
+    return () => {
+      recentHotPadsRef.current = [];
+      window.removeEventListener(PREPARED_PLAYBACK_PAD_STARTED_EVENT, handlePreparedPadStarted as EventListener);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const retentionPolicy = getSamplerRuntimeTuningProfile().sessionMediaRetention;
+    const hotPadTtlMs = retentionPolicy?.hotPadTtlMs ?? 180_000;
+    const now = Date.now();
+    recentHotPadsRef.current = recentHotPadsRef.current.filter((entry) => (now - entry.lastPlayedAt) < hotPadTtlMs);
+    const padIds = Array.from(new Set(recentHotPadsRef.current.map((entry) => entry.padId)));
+
+    window.dispatchEvent(new CustomEvent(HOT_TRANSPORT_PADS_CHANGED_EVENT, {
+      detail: {
+        padIds,
+      },
+    }));
+  }, [hotPadNonce]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    return () => {
+      window.dispatchEvent(new CustomEvent(HOT_TRANSPORT_PADS_CHANGED_EVENT, {
+        detail: {
+          padIds: [],
+        },
+      }));
     };
   }, []);
 
@@ -316,12 +379,7 @@ export function useSamplerStoreBankLifecycle({
     if (backgroundBankHydrationInProgressRef.current) return;
 
     const totalPads = banks.reduce((sum, bank) => sum + (Array.isArray(bank.pads) ? bank.pads.length : 0), 0);
-    const isNativeCapacitor =
-      typeof window !== 'undefined' &&
-      Boolean((window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
-    const backgroundHydrationPadLimit = isNativeCapacitor
-      ? MAX_NATIVE_BACKGROUND_HYDRATION_PADS
-      : getElectronMemoryTuningProfile()?.backgroundHydrationPadLimit ?? MAX_DESKTOP_BACKGROUND_HYDRATION_PADS;
+    const backgroundHydrationPadLimit = getSamplerRuntimeTuningProfile().backgroundHydrationPadLimit ?? 480;
     if (totalPads > backgroundHydrationPadLimit) return;
 
     const hasMissingMedia = banks.some((bank) =>
@@ -396,22 +454,26 @@ export function useSamplerStoreBankLifecycle({
   ]);
 
   React.useEffect(() => {
-    const isNativeCapacitor =
-      typeof window !== 'undefined' &&
-      Boolean((window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
-    if (isNativeCapacitor) return;
     if (!isBanksHydrated) return;
     if (!startupRestoreCompleted) return;
-    if (banks.length < MIN_BANKS_FOR_MEDIA_DEHYDRATION) return;
     if (hasActiveDeckPlaybackRef.current) return;
 
-    const dehydrateIdleMs = getElectronMemoryTuningProfile()?.dehydrateIdleMs ?? BANK_MEDIA_DEHYDRATE_IDLE_MS;
+    const retentionPolicy = getSamplerRuntimeTuningProfile().sessionMediaRetention;
+    if (!retentionPolicy?.enabled) return;
+    const minBanksForDehydration = retentionPolicy?.minBanksForDehydration ?? 5;
+    const maxRecentWarmBanks = retentionPolicy?.maxRecentWarmBanks ?? 1;
+    const hotPadTtlMs = retentionPolicy?.hotPadTtlMs ?? 180_000;
+    if (banks.length < minBanksForDehydration) return;
+
+    const dehydrateIdleMs = retentionPolicy?.dehydrateIdleMs ?? BANK_MEDIA_DEHYDRATE_IDLE_MS;
 
     if (bankMediaDehydrateTimerRef.current !== null) {
       clearTimeout(bankMediaDehydrateTimerRef.current);
     }
 
     bankMediaDehydrateTimerRef.current = setTimeout(() => {
+      const now = Date.now();
+      recentHotPadsRef.current = recentHotPadsRef.current.filter((entry) => (now - entry.lastPlayedAt) < hotPadTtlMs);
       const activeIds = new Set(
         [currentBankId, primaryBankId, secondaryBankId].filter(
           (value): value is string => typeof value === 'string' && value.length > 0
@@ -419,7 +481,7 @@ export function useSamplerStoreBankLifecycle({
       );
       const extraWarmIds = recentBankOrderRef.current
         .filter((id) => !activeIds.has(id))
-        .slice(0, MAX_RECENT_WARM_BANKS);
+        .slice(0, maxRecentWarmBanks);
       const defaultBankIds = banks
         .filter((bank) => isDefaultBankIdentity(bank))
         .map((bank) => bank.id);
@@ -429,13 +491,23 @@ export function useSamplerStoreBankLifecycle({
         ...defaultBankIds,
         ...deckLoadedBankIdsRef.current,
       ]);
+      const preservedPadIdsByBank = new Map<string, Set<string>>();
+      recentHotPadsRef.current.forEach((entry) => {
+        const existing = preservedPadIdsByBank.get(entry.bankId);
+        if (existing) {
+          existing.add(entry.padId);
+          return;
+        }
+        preservedPadIdsByBank.set(entry.bankId, new Set([entry.padId]));
+      });
 
       setBanks((prev) => {
         let changed = false;
         const next = prev.map((bank) => {
           if (preserveIds.has(bank.id)) return bank;
-          if (!bankHasBlobMedia(bank)) return bank;
-          const dehydrated = dehydrateBankMedia(bank);
+          const preservedPadIds = preservedPadIdsByBank.get(bank.id) ?? new Set<string>();
+          if (!bankHasBlobMedia(bank, preservedPadIds)) return bank;
+          const dehydrated = dehydrateBankMedia(bank, preservedPadIds);
           if (dehydrated !== bank) changed = true;
           return dehydrated;
         });
@@ -453,6 +525,7 @@ export function useSamplerStoreBankLifecycle({
   }, [
     banks,
     currentBankId,
+    hotPadNonce,
     isBanksHydrated,
     primaryBankId,
     secondaryBankId,

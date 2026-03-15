@@ -135,6 +135,7 @@ export interface DeckPadSnapshot {
   bankName: string;
   color: string;
   audioUrl: string;
+  sourceAudioUrl?: string;
   volume: number;
   padGainLinear: number;
   startTimeMs: number;
@@ -149,6 +150,8 @@ export interface DeckPadSnapshot {
   savedHotcuesMs: HotcueTuple;
   audioBytes?: number;
   audioDurationMs?: number;
+  sourceAudioBytes?: number;
+  sourceAudioDurationMs?: number;
 }
 
 interface DeckChannelRuntime {
@@ -374,7 +377,9 @@ export class AudioDeckRuntime {
     // Channels intentionally ignore pad trim and always use the full source region.
     const safeStartTimeMs = 0;
     const safeEndTimeMs = 0;
-    const safeAudioDurationMs = Number.isFinite(source.audioDurationMs)
+    const safeAudioDurationMs = Number.isFinite(source.sourceAudioDurationMs)
+      ? Math.max(0, Number(source.sourceAudioDurationMs))
+      : Number.isFinite(source.audioDurationMs)
       ? Math.max(0, Number(source.audioDurationMs))
       : Math.max(
         Number.isFinite(source.endTimeMs) ? Math.max(0, Number(source.endTimeMs)) : 0,
@@ -382,10 +387,12 @@ export class AudioDeckRuntime {
       );
     const snapshot: DeckPadSnapshot = {
       ...source,
+      audioUrl: source.sourceAudioUrl || source.audioUrl,
       padGainLinear: Number.isFinite(source.padGainLinear) ? source.padGainLinear : 1,
       savedHotcuesMs: cloneHotcuesTupleValue(source.savedHotcuesMs),
       startTimeMs: safeStartTimeMs,
       endTimeMs: safeEndTimeMs,
+      audioBytes: Number.isFinite(source.sourceAudioBytes) ? Math.max(0, Number(source.sourceAudioBytes)) : source.audioBytes,
       audioDurationMs: safeAudioDurationMs > 0 ? safeAudioDurationMs : undefined,
     };
     return {

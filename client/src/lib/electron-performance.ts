@@ -19,6 +19,12 @@ export interface ElectronMemoryTuningProfile {
   backgroundHydrationPadLimit: number;
   dehydrateIdleMs: number;
   bufferCacheLimitBytes: number;
+  sessionMediaRetention: {
+    minBanksForDehydration: number;
+    maxRecentWarmBanks: number;
+    hotPadCount: number;
+    hotPadTtlMs: number;
+  };
 }
 
 const GIB = 1024 * 1024 * 1024;
@@ -37,6 +43,12 @@ const ELECTRON_MEMORY_TUNING: Record<ElectronMemoryTier, ElectronMemoryTuningPro
     backgroundHydrationPadLimit: 220,
     dehydrateIdleMs: 7_000,
     bufferCacheLimitBytes: 96 * 1024 * 1024,
+    sessionMediaRetention: {
+      minBanksForDehydration: 3,
+      maxRecentWarmBanks: 1,
+      hotPadCount: 8,
+      hotPadTtlMs: 120_000,
+    },
   },
   medium: {
     tier: 'medium',
@@ -51,6 +63,12 @@ const ELECTRON_MEMORY_TUNING: Record<ElectronMemoryTier, ElectronMemoryTuningPro
     backgroundHydrationPadLimit: 320,
     dehydrateIdleMs: 10_000,
     bufferCacheLimitBytes: 128 * 1024 * 1024,
+    sessionMediaRetention: {
+      minBanksForDehydration: 5,
+      maxRecentWarmBanks: 2,
+      hotPadCount: 16,
+      hotPadTtlMs: 180_000,
+    },
   },
   high: {
     tier: 'high',
@@ -65,6 +83,12 @@ const ELECTRON_MEMORY_TUNING: Record<ElectronMemoryTier, ElectronMemoryTuningPro
     backgroundHydrationPadLimit: 480,
     dehydrateIdleMs: 15_000,
     bufferCacheLimitBytes: 160 * 1024 * 1024,
+    sessionMediaRetention: {
+      minBanksForDehydration: 7,
+      maxRecentWarmBanks: 3,
+      hotPadCount: 24,
+      hotPadTtlMs: 300_000,
+    },
   },
 };
 
@@ -122,3 +146,62 @@ export const getElectronMemoryTuningProfile = (): ElectronMemoryTuningProfile | 
   return tier ? ELECTRON_MEMORY_TUNING[tier] : null;
 };
 
+export interface DesktopSessionMediaRetentionPolicy {
+  minBanksForDehydration: number;
+  maxRecentWarmBanks: number;
+  hotPadCount: number;
+  hotPadTtlMs: number;
+  dehydrateIdleMs: number;
+}
+
+const BROWSER_DESKTOP_SESSION_RETENTION: Record<ElectronMemoryTier, DesktopSessionMediaRetentionPolicy> = {
+  low: {
+    minBanksForDehydration: 4,
+    maxRecentWarmBanks: 1,
+    hotPadCount: 8,
+    hotPadTtlMs: 120_000,
+    dehydrateIdleMs: 12_000,
+  },
+  medium: {
+    minBanksForDehydration: 5,
+    maxRecentWarmBanks: 2,
+    hotPadCount: 14,
+    hotPadTtlMs: 180_000,
+    dehydrateIdleMs: 15_000,
+  },
+  high: {
+    minBanksForDehydration: 6,
+    maxRecentWarmBanks: 3,
+    hotPadCount: 20,
+    hotPadTtlMs: 240_000,
+    dehydrateIdleMs: 18_000,
+  },
+};
+
+export const getDesktopSessionMediaRetentionPolicy = (): DesktopSessionMediaRetentionPolicy | null => {
+  const electronProfile = getElectronMemoryTuningProfile();
+  if (electronProfile) {
+    return {
+      ...electronProfile.sessionMediaRetention,
+      dehydrateIdleMs: electronProfile.dehydrateIdleMs,
+    };
+  }
+
+  if (typeof navigator === 'undefined') return null;
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const deviceMemory = typeof nav.deviceMemory === 'number' && Number.isFinite(nav.deviceMemory)
+    ? Number(nav.deviceMemory)
+    : null;
+  const cpuCores = typeof nav.hardwareConcurrency === 'number' && Number.isFinite(nav.hardwareConcurrency)
+    ? Number(nav.hardwareConcurrency)
+    : null;
+
+  let tier: ElectronMemoryTier = 'medium';
+  if ((deviceMemory !== null && deviceMemory <= 4) || (cpuCores !== null && cpuCores <= 4)) {
+    tier = 'low';
+  } else if ((deviceMemory !== null && deviceMemory >= 8) && (cpuCores !== null && cpuCores >= 8)) {
+    tier = 'high';
+  }
+
+  return BROWSER_DESKTOP_SESSION_RETENTION[tier];
+};

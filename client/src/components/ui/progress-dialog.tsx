@@ -2,7 +2,8 @@ import * as React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
-import { Download, Upload, CheckCircle, AlertCircle, Clock, ShieldCheck } from 'lucide-react';
+import { Download, Upload, CheckCircle, AlertCircle, Clock, ShieldCheck, Check, Copy } from 'lucide-react';
+import { copyTextToClipboard } from '@/components/ui/copyable-value';
 
 interface ProgressDialogProps {
   open: boolean;
@@ -43,11 +44,25 @@ export function ProgressDialog({
   hideCloseButton = false,
   useHistory = true
 }: ProgressDialogProps) {
+  const [copiedLogs, setCopiedLogs] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!copiedLogs) return;
+    const timer = window.setTimeout(() => setCopiedLogs(false), 1400);
+    return () => window.clearTimeout(timer);
+  }, [copiedLogs]);
+
   const handleDialogOpenChange = (nextOpen: boolean) => {
     // Keep dialog visible while processing to prevent accidental close on backdrop click.
     if (!nextOpen && status === 'loading') return;
     onOpenChange(nextOpen);
   };
+
+  const handleCopyLogs = React.useCallback(async () => {
+    if (!Array.isArray(logLines) || logLines.length === 0) return;
+    await copyTextToClipboard(logLines.join('\n'));
+    setCopiedLogs(true);
+  }, [logLines]);
   
   // Check if error message indicates login is required
   const needsLogin = errorMessage && (
@@ -183,17 +198,39 @@ export function ProgressDialog({
                 </div>
               )}
 
-              {status === 'loading' && Array.isArray(logLines) && logLines.length > 0 && (
-                <div className={`mt-2 rounded border p-2 max-h-28 overflow-y-auto text-[11px] leading-relaxed ${
-                  theme === 'dark'
-                    ? 'bg-gray-900/40 border-gray-700 text-gray-300'
-                    : 'bg-gray-50 border-gray-200 text-gray-700'
+            </div>
+          )}
+
+          {Array.isArray(logLines) && logLines.length > 0 && (
+            <div className={`rounded border p-2 ${
+              theme === 'dark'
+                ? 'bg-gray-900/40 border-gray-700'
+                : 'bg-gray-50 border-gray-200'
+            }`}>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
+                  theme === 'dark' ? 'text-gray-400' : 'text-gray-500'
                 }`}>
-                  {logLines.map((line, index) => (
-                    <div key={`${index}-${line}`}>{line}</div>
-                  ))}
-                </div>
-              )}
+                  Activity Log
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1.5 px-2 text-[11px]"
+                  onClick={() => void handleCopyLogs()}
+                >
+                  {copiedLogs ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copiedLogs ? 'Copied' : 'Copy'}
+                </Button>
+              </div>
+              <div className={`max-h-28 overflow-y-auto text-[11px] leading-relaxed ${
+                theme === 'dark' ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+                {logLines.map((line, index) => (
+                  <div key={`${index}-${line}`}>{line}</div>
+                ))}
+              </div>
             </div>
           )}
 

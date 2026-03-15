@@ -120,6 +120,24 @@ export const resolvePreparedAudioKind = (
   return 'source_alias';
 };
 
+export const isPreparedTrimmedPlaybackCurrent = (
+  pad: Pick<
+    PadData,
+    | 'preparedAudioKind'
+    | 'preparedStatus'
+    | 'preparedAudioStorageKey'
+    | 'preparedSourceSignature'
+    | 'audioStorageKey'
+    | 'audioUrl'
+    | 'startTimeMs'
+    | 'endTimeMs'
+    | 'audioBytes'
+    | 'audioDurationMs'
+  >
+): boolean =>
+  isPreparedAudioCurrent(pad) &&
+  (pad.preparedAudioKind === 'trimmed_lossless' || pad.preparedAudioKind === 'trimmed_mp3');
+
 export const resolvePadPlaybackAudioUrl = (
   pad: Pick<
     PadData,
@@ -131,6 +149,11 @@ export const resolvePadPlaybackAudioUrl = (
   }
   return typeof pad.audioUrl === 'string' ? pad.audioUrl.trim() : '';
 };
+
+export const resolvePadSourceAudioUrl = (
+  pad: Pick<PadData, 'audioUrl'>
+): string =>
+  typeof pad.audioUrl === 'string' ? pad.audioUrl.trim() : '';
 
 export const resolvePadPlaybackBytes = (
   pad: Pick<
@@ -151,6 +174,46 @@ export const resolvePadPlaybackDurationMs = (
   isPreparedAudioCurrent(pad) && clampNumber(pad.preparedDurationMs) !== null
     ? clampNumber(pad.preparedDurationMs) ?? undefined
     : clampNumber(pad.audioDurationMs) ?? undefined;
+
+export const resolvePadSourceDurationMs = (
+  pad: Pick<PadData, 'audioDurationMs' | 'endTimeMs' | 'startTimeMs'>
+): number | undefined => {
+  const sourceDuration = clampNumber(pad.audioDurationMs);
+  if (sourceDuration !== null) return sourceDuration;
+  const startMs = clampNumber(pad.startTimeMs) ?? 0;
+  const endMs = clampNumber(pad.endTimeMs);
+  if (endMs !== null && endMs > startMs) return endMs;
+  return undefined;
+};
+
+export const resolvePadPlaybackWindow = (
+  pad: Pick<
+    PadData,
+    | 'preparedAudioKind'
+    | 'preparedDurationMs'
+    | 'preparedStatus'
+    | 'preparedAudioStorageKey'
+    | 'preparedSourceSignature'
+    | 'audioStorageKey'
+    | 'audioUrl'
+    | 'startTimeMs'
+    | 'endTimeMs'
+    | 'audioBytes'
+    | 'audioDurationMs'
+  >
+): { startTimeMs: number; endTimeMs: number } => {
+  if (isPreparedTrimmedPlaybackCurrent(pad)) {
+    const preparedDurationMs = clampNumber(pad.preparedDurationMs) ?? 0;
+    return {
+      startTimeMs: 0,
+      endTimeMs: preparedDurationMs,
+    };
+  }
+  return {
+    startTimeMs: clampNumber(pad.startTimeMs) ?? 0,
+    endTimeMs: clampNumber(pad.endTimeMs) ?? 0,
+  };
+};
 
 export const stripPreparedAudioTransientFields = <T extends PadData>(pad: T): T => ({
   ...pad,

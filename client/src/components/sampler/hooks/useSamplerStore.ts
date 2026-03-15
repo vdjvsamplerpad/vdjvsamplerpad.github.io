@@ -192,6 +192,7 @@ import {
   type SamplerMetadataSnapshot,
 } from './useSamplerStore.snapshotMetadata';
 import { saveUserSamplerMetadataSnapshot } from '@/lib/user-sampler-snapshot-api';
+import { getSamplerRuntimeTuningProfile } from '@/lib/sampler-runtime-profile';
 
 // Detect native Android runtime.
 const isNativeAndroid = (): boolean => {
@@ -209,11 +210,6 @@ const isNativeCapacitorPlatform = (): boolean => {
   return capacitor?.isNativePlatform?.() === true;
 };
 
-const isElectronDesktopRuntime = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  return Boolean(window.electronAPI?.getSystemMemoryInfo || window.electronAPI?.transcodeAudioToMp3);
-};
-
 const transcodeAudioToMP3ForExport = (input: {
   source: Blob;
   startTimeMs?: number;
@@ -227,6 +223,68 @@ const transcodeAudioToMP3ForExport = (input: {
     applyTrim: input.applyTrim,
     bitrate: input.bitrate,
   });
+
+const withPreparedPadJobTimeout = async <T>(promise: Promise<T>, timeoutMs = 20_000): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error('Prepared playback timed out.'));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  }
+};
+
+type PreparedPlaybackDiagLevel = 'info' | 'error';
+
+const PREPARED_PLAYBACK_DIAG_EVENT = 'vdjv-prepared-playback-diag';
+const PREPARED_PLAYBACK_DIAG_WINDOW_KEY = '__vdjvPreparedPlaybackDebug';
+const PREPARED_PLAYBACK_DIAG_MAX_ENTRIES = 400;
+const PREPARED_PLAYBACK_PAD_STARTED_EVENT = 'vdjv-prepared-playback-pad-started';
+
+const emitPreparedPlaybackDiag = (
+  enabled: boolean,
+  level: PreparedPlaybackDiagLevel,
+  event: string,
+  details?: Record<string, unknown>
+): void => {
+  if (!enabled || typeof window === 'undefined') return;
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    event,
+    details: details || {},
+  };
+  const debugWindow = window as Window & {
+    [PREPARED_PLAYBACK_DIAG_WINDOW_KEY]?: Array<typeof entry>;
+    debugPreparedPlayback?: () => Array<typeof entry>;
+  };
+  const previous = Array.isArray(debugWindow[PREPARED_PLAYBACK_DIAG_WINDOW_KEY])
+    ? debugWindow[PREPARED_PLAYBACK_DIAG_WINDOW_KEY]!
+    : [];
+  const next = [...previous, entry];
+  debugWindow[PREPARED_PLAYBACK_DIAG_WINDOW_KEY] = next.slice(
+    Math.max(0, next.length - PREPARED_PLAYBACK_DIAG_MAX_ENTRIES)
+  );
+  debugWindow.debugPreparedPlayback = () => debugWindow[PREPARED_PLAYBACK_DIAG_WINDOW_KEY] || [];
+  try {
+    window.dispatchEvent(new CustomEvent(PREPARED_PLAYBACK_DIAG_EVENT, { detail: entry }));
+  } catch {
+    // Ignore dispatch issues.
+  }
+  if (level === 'error') {
+    console.error('[PreparedPlaybackDebug]', entry);
+  } else {
+    console.info('[PreparedPlaybackDebug]', entry);
+  }
+};
 
 const EXPORT_FOLDER_NAME = 'VDJV-Export';
 const ANDROID_DOWNLOAD_ROOT = '/storage/emulated/0/Download';
@@ -245,7 +303,6 @@ const MAX_NATIVE_APP_BACKUP_BYTES = 1700 * 1024 * 1024;
 const BACKUP_PART_SIZE_MOBILE_BYTES = 64 * 1024 * 1024;
 const BACKUP_PART_SIZE_DESKTOP_BYTES = 256 * 1024 * 1024;
 const MAX_BACKUP_PART_COUNT = 200;
-const MAX_NATIVE_STARTUP_RESTORE_PADS = 320;
 const MAX_CAPACITOR_NATIVE_AUDIO_WRITE_BYTES = 8 * 1024 * 1024;
 const MAX_CAPACITOR_NATIVE_IMAGE_WRITE_BYTES = 4 * 1024 * 1024;
 const MAX_CAPACITOR_BRIDGE_READ_BYTES = 6 * 1024 * 1024;
@@ -327,6 +384,7 @@ const {
 
 export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }): SamplerStore {
   const samplerConfig = options?.samplerConfig || DEFAULT_SAMPLER_APP_CONFIG;
+  const runtimeTuningProfile = React.useMemo(() => getSamplerRuntimeTuningProfile(), []);
   const playbackManager = useGlobalPlaybackManagerApi();
   const {
     user,
@@ -383,11 +441,25 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   const deckLoadedPreparedBankIdsRef = React.useRef<Set<string>>(new Set());
   const preparedQueueRunIdRef = React.useRef(0);
   const preparedQueueActiveBankIdRef = React.useRef<string | null>(null);
+  const preparedQueueInFlightRef = React.useRef(false);
+  const preparedQueueRerunRequestedRef = React.useRef(false);
+  const preparedQueueMountedRef = React.useRef(true);
   const preparedExplicitBankIdsRef = React.useRef<Set<string>>(new Set());
   const [preparedQueueNonce, setPreparedQueueNonce] = React.useState(0);
   const [preparedPlaybackActive, setPreparedPlaybackActive] = React.useState(false);
   const [preparedPlaybackIdleNonce, setPreparedPlaybackIdleNonce] = React.useState(0);
-  const preparedAutoQueueEnabled = React.useMemo(() => isElectronDesktopRuntime(), []);
+  const preparedAutoQueueEnabled = React.useMemo(
+    () => runtimeTuningProfile.preparedPlayback.autoScanOnIdle,
+    [runtimeTuningProfile]
+  );
+  const preparedQueueAfterPlayEnabled = React.useMemo(
+    () => runtimeTuningProfile.preparedPlayback.queueAfterPlay,
+    [runtimeTuningProfile]
+  );
+  const preparedPlaybackDiagEnabled = React.useMemo(
+    () => runtimeTuningProfile.preparedPlayback.diagEnabled,
+    [runtimeTuningProfile]
+  );
   const preparedLastPlaybackActivityRef = React.useRef<number>(0);
   const preparedPlaybackIdleTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [exportUploadQueue, setExportUploadQueue] = React.useState<UserExportUploadJob[]>(() => readUserExportUploadQueue());
@@ -404,6 +476,10 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     fetchedAt: 0,
     byBankId: {},
   });
+
+  React.useEffect(() => () => {
+    preparedQueueMountedRef.current = false;
+  }, []);
 
   const setHiddenProtectedBanks = React.useCallback((ownerId: string | null, hiddenBanks: SamplerBank[]) => {
     if (ownerId) {
@@ -621,19 +697,11 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   }, [rehydratePreparedAudioForPad, restoreFileAccess, yieldToMainThread]);
 
   const rehydrateBankMediaFromStorage = React.useCallback(async (bank: SamplerBank): Promise<SamplerBank> => {
-    const restoredPads: PadData[] = [];
-    for (let i = 0; i < bank.pads.length; i += 1) {
-      restoredPads.push(await rehydratePadMediaFromStorage(bank.pads[i]));
-      if ((i + 1) % 6 === 0) await yieldToMainThread();
-    }
     const thumbnailStorageId = `bank-thumbnail-${bank.id}`;
     let nextMetadata = bank.bankMetadata;
     if (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend) {
       try {
         const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
-        if (currentThumbnailUrl.startsWith('blob:')) {
-          return { ...bank, pads: restoredPads, bankMetadata: nextMetadata };
-        }
         const restoredThumbnail = await restoreFileAccess(
           thumbnailStorageId,
           'image',
@@ -649,6 +717,11 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       } catch {
         // Ignore thumbnail restore failures and keep any durable remote URL.
       }
+    }
+    const restoredPads: PadData[] = [];
+    for (let i = 0; i < bank.pads.length; i += 1) {
+      restoredPads.push(await rehydratePadMediaFromStorage(bank.pads[i]));
+      if ((i + 1) % 6 === 0) await yieldToMainThread();
     }
     return { ...bank, pads: restoredPads, bankMetadata: nextMetadata };
   }, [rehydratePadMediaFromStorage, restoreFileAccess, yieldToMainThread]);
@@ -836,7 +909,15 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     if (!shouldPreparePadAudio(normalizedPad, explicit)) return;
 
     const sourceSignature = buildPadPreparedSourceSignature(normalizedPad);
+    const diagBase = {
+      bankId,
+      padId: normalizedPad.id,
+      padName: normalizedPad.name || 'Untitled Pad',
+      explicit,
+      runId: typeof runId === 'number' ? runId : null,
+    };
     if (isPreparedAudioCurrent(normalizedPad)) {
+      emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_skip_already_ready', diagBase);
       const hydratedPrepared = await rehydratePreparedAudioForPad(normalizedPad);
       if (
         hydratedPrepared.preparedAudioUrl !== normalizedPad.preparedAudioUrl ||
@@ -854,31 +935,80 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     }));
 
     try {
-      const sourceBlob = await loadPadMediaBlobWithUrlFallback(normalizedPad, 'audio');
-      if (!sourceBlob) {
-        throw new Error('Prepared audio source could not be loaded.');
-      }
+      emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_prepare_start', diagBase);
+      const {
+        storedPrepared,
+        restoredPrepared,
+        preparedBlob,
+        preparedDurationMs,
+        preparedKind,
+      } = await withPreparedPadJobTimeout((async () => {
+        emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_load_source_start', diagBase);
+        const sourceBlob = await loadPadMediaBlobWithUrlFallback(normalizedPad, 'audio');
+        if (!sourceBlob) {
+          throw new Error('Prepared audio source could not be loaded.');
+        }
+        emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_load_source_done', {
+          ...diagBase,
+          sourceBytes: sourceBlob.size,
+        });
 
-      let preparedBlob = sourceBlob;
-      let preparedDurationMs = normalizedPad.audioDurationMs;
-      const preparedKind = resolvePreparedAudioKind(normalizedPad, explicit);
-      if (preparedKind === 'trimmed_lossless' && hasMeaningfulPreparedTrim(normalizedPad)) {
-        const trimResult = await trimAudio(
-          sourceBlob,
-          normalizedPad.startTimeMs,
-          normalizedPad.endTimeMs,
-          detectAudioFormat(sourceBlob)
+        let preparedBlob = sourceBlob;
+        let preparedDurationMs = normalizedPad.audioDurationMs;
+        const preparedKind = resolvePreparedAudioKind(normalizedPad, explicit);
+        if (preparedKind === 'trimmed_lossless' && hasMeaningfulPreparedTrim(normalizedPad)) {
+          emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_trim_start', diagBase);
+          const trimResult = await trimAudio(
+            sourceBlob,
+            normalizedPad.startTimeMs,
+            normalizedPad.endTimeMs,
+            detectAudioFormat(sourceBlob)
+          );
+          preparedBlob = trimResult.blob;
+          preparedDurationMs = trimResult.newDurationMs;
+          emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_trim_done', {
+            ...diagBase,
+            preparedBytes: preparedBlob.size,
+            preparedDurationMs,
+          });
+        }
+
+        emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_save_prepared_start', {
+          ...diagBase,
+          preparedKind,
+          preparedBytes: preparedBlob.size,
+        });
+        const storedPrepared = await savePreparedAudioBlob(normalizedPad.id, preparedBlob);
+        emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_save_prepared_done', {
+          ...diagBase,
+          preparedKind,
+          storageKey: storedPrepared.storageKey,
+          backend: storedPrepared.backend,
+        });
+        emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_restore_prepared_start', {
+          ...diagBase,
+          storageKey: storedPrepared.storageKey,
+          backend: storedPrepared.backend,
+        });
+        const restoredPrepared = await restorePreparedAudioUrl(
+          normalizedPad.id,
+          storedPrepared.storageKey,
+          storedPrepared.backend
         );
-        preparedBlob = trimResult.blob;
-        preparedDurationMs = trimResult.newDurationMs;
-      }
-
-      const storedPrepared = await savePreparedAudioBlob(normalizedPad.id, preparedBlob);
-      const restoredPrepared = await restorePreparedAudioUrl(
-        normalizedPad.id,
-        storedPrepared.storageKey,
-        storedPrepared.backend
-      );
+        emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_restore_prepared_done', {
+          ...diagBase,
+          storageKey: storedPrepared.storageKey,
+          backend: storedPrepared.backend,
+          hasUrl: Boolean(restoredPrepared.url),
+        });
+        return {
+          storedPrepared,
+          restoredPrepared,
+          preparedBlob,
+          preparedDurationMs,
+          preparedKind,
+        };
+      })());
       if (typeof runId === 'number' && preparedQueueRunIdRef.current !== runId) {
         return;
       }
@@ -913,10 +1043,22 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
           pads: nextPads,
         };
       }));
-    } catch {
+      emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'pad_prepare_ready', {
+        ...diagBase,
+        preparedKind,
+        preparedBytes: preparedBlob.size,
+        preparedDurationMs,
+        storageKey: storedPrepared.storageKey,
+        backend: storedPrepared.backend,
+      });
+    } catch (error) {
       if (typeof runId === 'number' && preparedQueueRunIdRef.current !== runId) {
         return;
       }
+      emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'error', 'pad_prepare_error', {
+        ...diagBase,
+        error: error instanceof Error ? error.message : String(error),
+      });
       updatePreparedPadState(bankId, pad.id, (currentPad) => ({
         ...currentPad,
         preparedStatus: 'error',
@@ -927,6 +1069,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     detectAudioFormat,
     loadPadMediaBlobWithUrlFallback,
     normalizePreparedPadState,
+    preparedPlaybackDiagEnabled,
     rehydratePreparedAudioForPad,
     revokePreparedAudioUrl,
     trimAudio,
@@ -982,6 +1125,12 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     options?: { explicit?: boolean }
   ): Promise<void> => {
     const explicit = options?.explicit !== false;
+    const effectiveExplicit = explicit && preparedAutoQueueEnabled;
+    emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'bank_prepare_requested', {
+      bankId,
+      explicit,
+      effectiveExplicit,
+    });
     preparedExplicitBankIdsRef.current.add(bankId);
     setBanks((prev) => prev.map((bank) => (
       bank.id !== bankId
@@ -990,7 +1139,11 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
             ...bank,
             pads: bank.pads.map((pad) => {
               const normalizedPad = normalizePreparedPadState(pad);
-              if (!shouldPreparePadAudio(normalizedPad, explicit)) return normalizedPad;
+              if (!shouldPreparePadAudio(normalizedPad, effectiveExplicit)) {
+                return normalizedPad.preparedStatus === 'queued' || normalizedPad.preparedStatus === 'preparing'
+                  ? { ...normalizedPad, preparedStatus: 'none' as const }
+                  : normalizedPad;
+              }
               if (isPreparedAudioCurrent(normalizedPad)) return normalizedPad;
               return {
                 ...normalizedPad,
@@ -1001,7 +1154,67 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
           }
     )));
     setPreparedQueueNonce((value) => value + 1);
-  }, [normalizePreparedPadState]);
+  }, [normalizePreparedPadState, preparedAutoQueueEnabled, preparedPlaybackDiagEnabled]);
+
+  const queuePreparedPadAfterPlay = React.useCallback((bankId: string, padId: string): void => {
+    if (!preparedQueueAfterPlayEnabled) return;
+    const bank = banksRef.current.find((entry) => entry.id === bankId);
+    const pad = bank?.pads.find((entry) => entry.id === padId);
+    if (!bank || !pad) return;
+    const normalizedPad = normalizePreparedPadState(pad);
+    if (!shouldPreparePadAudio(normalizedPad, false)) return;
+    if (
+      normalizedPad.preparedStatus === 'queued' ||
+      normalizedPad.preparedStatus === 'preparing' ||
+      isPreparedAudioCurrent(normalizedPad)
+    ) {
+      return;
+    }
+
+    preparedExplicitBankIdsRef.current.add(bankId);
+    setBanks((prev) => prev.map((entry) => (
+      entry.id !== bankId
+        ? entry
+        : {
+            ...entry,
+            pads: entry.pads.map((candidate) => {
+              if (candidate.id !== padId) return candidate;
+              const normalizedCandidate = normalizePreparedPadState(candidate);
+              if (!shouldPreparePadAudio(normalizedCandidate, false)) return normalizedCandidate;
+              if (
+                normalizedCandidate.preparedStatus === 'queued' ||
+                normalizedCandidate.preparedStatus === 'preparing' ||
+                isPreparedAudioCurrent(normalizedCandidate)
+              ) {
+                return normalizedCandidate;
+              }
+              return {
+                ...normalizedCandidate,
+                preparedStatus: 'queued' as const,
+                preparedSourceSignature: buildPadPreparedSourceSignature(normalizedCandidate),
+              };
+            }),
+          }
+    )));
+    setPreparedQueueNonce((value) => value + 1);
+  }, [normalizePreparedPadState, preparedQueueAfterPlayEnabled]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handlePreparedPadStarted = (event: Event) => {
+      const detail = (event as CustomEvent<{ bankId?: unknown; padId?: unknown }>).detail;
+      const bankId = typeof detail?.bankId === 'string' ? detail.bankId : '';
+      const padId = typeof detail?.padId === 'string' ? detail.padId : '';
+      if (!bankId || !padId) return;
+      queuePreparedPadAfterPlay(bankId, padId);
+    };
+
+    window.addEventListener(PREPARED_PLAYBACK_PAD_STARTED_EVENT, handlePreparedPadStarted as EventListener);
+    return () => {
+      window.removeEventListener(PREPARED_PLAYBACK_PAD_STARTED_EVENT, handlePreparedPadStarted as EventListener);
+    };
+  }, [queuePreparedPadAfterPlay]);
 
   React.useEffect(() => {
     if (!isBanksHydrated) return;
@@ -1029,57 +1242,96 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
 
     if (priorityBankIds.length === 0) return;
 
-    let cancelled = false;
+    if (preparedQueueInFlightRef.current) {
+      preparedQueueRerunRequestedRef.current = true;
+      return;
+    }
+
     const runId = preparedQueueRunIdRef.current + 1;
     preparedQueueRunIdRef.current = runId;
+    preparedQueueInFlightRef.current = true;
+    preparedQueueRerunRequestedRef.current = false;
 
     const runPreparedQueue = async () => {
-      for (const bankId of priorityBankIds) {
-        if (cancelled || preparedQueueRunIdRef.current !== runId) return;
-        const bank = banksRef.current.find((entry) => entry.id === bankId);
-        if (!bank) continue;
-        const explicit = preparedExplicitBankIdsRef.current.has(bankId);
-        const candidates = bank.pads.filter((pad) => {
-          const normalizedPad = normalizePreparedPadState(pad);
-          if (!shouldPreparePadAudio(normalizedPad, explicit)) return false;
-          if (normalizedPad.preparedStatus === 'preparing') return false;
-          return !isPreparedAudioCurrent(normalizedPad);
-        });
-        if (candidates.length === 0) {
-          if (explicit) {
-            preparedExplicitBankIdsRef.current.delete(bankId);
+      try {
+        for (const bankId of priorityBankIds) {
+          if (preparedQueueRunIdRef.current !== runId) return;
+          const bank = banksRef.current.find((entry) => entry.id === bankId);
+          if (!bank) continue;
+          const requestedExplicit = preparedExplicitBankIdsRef.current.has(bankId);
+          const explicit = requestedExplicit && preparedAutoQueueEnabled;
+          const candidates = bank.pads.filter((pad) => {
+            const normalizedPad = normalizePreparedPadState(pad);
+            if (requestedExplicit) {
+              const isQueuedRequest =
+                normalizedPad.preparedStatus === 'queued' || normalizedPad.preparedStatus === 'preparing';
+              if (!isQueuedRequest) return false;
+            }
+            if (!shouldPreparePadAudio(normalizedPad, explicit)) return false;
+            if (normalizedPad.preparedStatus === 'preparing') return false;
+            return !isPreparedAudioCurrent(normalizedPad);
+          });
+          emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'bank_prepare_queue_scan', {
+            bankId,
+            runId,
+            requestedExplicit,
+            effectiveExplicit: explicit,
+            candidateCount: candidates.length,
+          });
+          if (candidates.length === 0) {
+            if (requestedExplicit) {
+              preparedExplicitBankIdsRef.current.delete(bankId);
+            }
+            emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'bank_prepare_queue_empty', {
+              bankId,
+              runId,
+              requestedExplicit,
+            });
+            continue;
           }
-          continue;
+
+          preparedQueueActiveBankIdRef.current = bankId;
+          const prioritizedCandidates = [...candidates].sort((left, right) => {
+            const leftRank = resolvePreparedAudioClassification(left) === 'long_heavy' ? 0 : 1;
+            const rightRank = resolvePreparedAudioClassification(right) === 'long_heavy' ? 0 : 1;
+            return leftRank - rightRank;
+          });
+          emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'bank_prepare_queue_start', {
+            bankId,
+            runId,
+            candidateCount: prioritizedCandidates.length,
+          });
+
+          for (const pad of prioritizedCandidates) {
+            if (preparedQueueRunIdRef.current !== runId || preparedPlaybackActive) return;
+            await preparePadForPlayback(bankId, pad, explicit, runId);
+            await yieldToMainThread();
+          }
+
+          preparedQueueActiveBankIdRef.current = null;
+          emitPreparedPlaybackDiag(preparedPlaybackDiagEnabled, 'info', 'bank_prepare_queue_done', {
+            bankId,
+            runId,
+            requestedExplicit,
+          });
+          if (requestedExplicit) {
+            preparedExplicitBankIdsRef.current.delete(bankId);
+            setPreparedQueueNonce((value) => value + 1);
+          }
         }
-
-        preparedQueueActiveBankIdRef.current = bankId;
-        const prioritizedCandidates = [...candidates].sort((left, right) => {
-          const leftRank = resolvePreparedAudioClassification(left) === 'long_heavy' ? 0 : 1;
-          const rightRank = resolvePreparedAudioClassification(right) === 'long_heavy' ? 0 : 1;
-          return leftRank - rightRank;
-        });
-
-        for (const pad of prioritizedCandidates) {
-          if (cancelled || preparedQueueRunIdRef.current !== runId || preparedPlaybackActive) return;
-          await preparePadForPlayback(bankId, pad, explicit, runId);
-          await yieldToMainThread();
+      } finally {
+        if (preparedQueueRunIdRef.current === runId) {
+          preparedQueueActiveBankIdRef.current = null;
         }
-
-        preparedQueueActiveBankIdRef.current = null;
-        if (explicit) {
-          preparedExplicitBankIdsRef.current.delete(bankId);
+        preparedQueueInFlightRef.current = false;
+        if (preparedQueueMountedRef.current && preparedQueueRerunRequestedRef.current) {
+          preparedQueueRerunRequestedRef.current = false;
           setPreparedQueueNonce((value) => value + 1);
         }
       }
     };
 
     void runPreparedQueue();
-    return () => {
-      cancelled = true;
-      if (preparedQueueRunIdRef.current === runId) {
-        preparedQueueActiveBankIdRef.current = null;
-      }
-    };
   }, [
     banks,
     currentBankId,
@@ -1088,6 +1340,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     isDefaultBankSyncing,
     preparePadForPlayback,
     preparedPlaybackActive,
+    preparedPlaybackDiagEnabled,
     preparedPlaybackIdleNonce,
     preparedQueueNonce,
     preparedAutoQueueEnabled,
@@ -1334,7 +1587,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         pruneBanksForGuestLock,
         setHiddenProtectedBanks,
         isNativeCapacitorPlatform,
-        maxNativeStartupRestorePads: MAX_NATIVE_STARTUP_RESTORE_PADS,
+        maxNativeStartupRestorePads: runtimeTuningProfile.startupRestorePadLimit,
         yieldToMainThread,
         restoreFileAccess,
         base64ToBlob,
@@ -1348,6 +1601,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     samplerConfig.bankDefaults.defaultBankColor,
     samplerConfig.bankDefaults.defaultBankName,
     setHiddenProtectedBanks,
+    runtimeTuningProfile.startupRestorePadLimit,
     writeLastOpenBankId,
   ]);
 

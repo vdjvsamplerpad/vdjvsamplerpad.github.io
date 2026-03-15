@@ -6,6 +6,9 @@ import {
   resolvePadPlaybackAudioUrl,
   resolvePadPlaybackBytes,
   resolvePadPlaybackDurationMs,
+  resolvePadPlaybackWindow,
+  resolvePadSourceAudioUrl,
+  resolvePadSourceDurationMs,
 } from './preparedAudio';
 
 export interface AudioPlayerRuntimeSettings {
@@ -37,11 +40,13 @@ export const resolveAudioPlayerRuntimeSettings = (
 export const buildAudioPlayerPadSettings = (
   pad: PadData,
   runtimeSettings: AudioPlayerRuntimeSettings
-) => ({
+) => {
+  const playbackWindow = resolvePadPlaybackWindow(pad);
+  return ({
   triggerMode: pad.triggerMode,
   playbackMode: pad.playbackMode,
-  startTimeMs: pad.startTimeMs,
-  endTimeMs: pad.endTimeMs,
+  startTimeMs: playbackWindow.startTimeMs,
+  endTimeMs: playbackWindow.endTimeMs,
   fadeInMs: pad.fadeInMs,
   fadeOutMs: pad.fadeOutMs,
   pitch: pad.pitch,
@@ -51,7 +56,8 @@ export const buildAudioPlayerPadSettings = (
   gainDb: pad.gainDb,
   gain: pad.gain,
   savedHotcuesMs: cloneHotcuesTupleValue(pad.savedHotcuesMs),
-});
+  });
+};
 
 export const buildAudioPlayerPadMetadata = (
   pad: Pick<PadData, 'name' | 'color'>,
@@ -67,13 +73,15 @@ export const buildAudioPlayerPadMetadata = (
 export const buildAudioPlayerNextPlaySettings = (
   updatedPad: PadData,
   isIOS: boolean
-) => ({
+) => {
+  const playbackWindow = resolvePadPlaybackWindow(updatedPad);
+  return ({
   name: updatedPad.name,
   color: updatedPad.color,
   imageUrl: updatedPad.imageUrl,
   imageData: updatedPad.imageData,
-  startTimeMs: updatedPad.startTimeMs,
-  endTimeMs: updatedPad.endTimeMs,
+  startTimeMs: playbackWindow.startTimeMs,
+  endTimeMs: playbackWindow.endTimeMs,
   fadeInMs: updatedPad.fadeInMs,
   fadeOutMs: updatedPad.fadeOutMs,
   pitch: updatedPad.pitch,
@@ -85,14 +93,23 @@ export const buildAudioPlayerNextPlaySettings = (
   triggerMode: updatedPad.triggerMode,
   playbackMode: updatedPad.playbackMode,
   savedHotcuesMs: cloneHotcuesTupleValue(updatedPad.savedHotcuesMs),
-});
+  });
+};
 
-export const buildAudioPlayerRuntimePad = (pad: PadData): PadData => ({
-  ...pad,
-  audioUrl: resolvePadPlaybackAudioUrl(pad),
-  audioBytes: resolvePadPlaybackBytes(pad),
-  audioDurationMs: resolvePadPlaybackDurationMs(pad),
-});
+export const buildAudioPlayerRuntimePad = (pad: PadData): PadData => {
+  const playbackWindow = resolvePadPlaybackWindow(pad);
+  return {
+    ...pad,
+    sourceAudioUrl: resolvePadSourceAudioUrl(pad),
+    sourceAudioBytes: pad.audioBytes,
+    sourceAudioDurationMs: resolvePadSourceDurationMs(pad),
+    audioUrl: resolvePadPlaybackAudioUrl(pad),
+    audioBytes: resolvePadPlaybackBytes(pad),
+    audioDurationMs: resolvePadPlaybackDurationMs(pad),
+    startTimeMs: playbackWindow.startTimeMs,
+    endTimeMs: playbackWindow.endTimeMs,
+  };
+};
 
 export function useAudioPlayerRuntimeSync({
   pad,

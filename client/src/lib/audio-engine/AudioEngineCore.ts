@@ -48,6 +48,7 @@ const MAX_LOADED_TRANSPORTS_DESKTOP = 96;
 const TOTAL_TRANSPORT_CAP_IOS = 24;
 const TOTAL_TRANSPORT_CAP_ANDROID = 64;
 const TOTAL_TRANSPORT_CAP_DESKTOP = 192;
+const HOT_TRANSPORT_PADS_CHANGED_EVENT = 'vdjv-audio-transport-hot-pads-changed';
 
 interface ManagedTransport {
     state: TransportState;
@@ -88,6 +89,7 @@ export class AudioEngineCore implements LifecycleDelegate {
     private lastEvictedAt: number | null = null;
     private forceMediaPads = new Set<string>();
     private preservePitchFallbackPads = new Set<string>();
+    private hotTransportPadIds = new Set<string>();
 
     static getInstance(config?: Partial<EngineConfig>): AudioEngineCore {
         if (!AudioEngineCore.instance) {
@@ -118,6 +120,10 @@ export class AudioEngineCore implements LifecycleDelegate {
 
         this.lifecycle = new LifecycleManager(this);
         this.initAudioContext();
+
+        if (typeof window !== 'undefined') {
+            window.addEventListener(HOT_TRANSPORT_PADS_CHANGED_EVENT, this.handleHotTransportPadsChanged as EventListener);
+        }
     }
 
     private handleBackendEnded(padId: string, expectedBackend: IAudioBackend): void {
@@ -155,6 +161,26 @@ export class AudioEngineCore implements LifecycleDelegate {
         return true;
     }
 
+    private handleHotTransportPadsChanged = (event: Event): void => {
+        const detail = (event as CustomEvent<{ padIds?: unknown }>).detail;
+        const padIds = Array.isArray(detail?.padIds)
+            ? detail.padIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
+            : [];
+        this.hotTransportPadIds = new Set(padIds);
+    };
+
+    private compareTransportEvictionPriority(
+        left: [string, ManagedTransport],
+        right: [string, ManagedTransport]
+    ): number {
+        const leftHot = this.hotTransportPadIds.has(left[0]) ? 1 : 0;
+        const rightHot = this.hotTransportPadIds.has(right[0]) ? 1 : 0;
+        if (leftHot !== rightHot) {
+            return leftHot - rightHot;
+        }
+        return left[1].lastAccessAt - right[1].lastAccessAt;
+    }
+
     private enforceTransportBudget(excludePadId?: string): void {
         const budget = this.getLoadedTransportBudget();
         if (budget <= 0) return;
@@ -165,7 +191,7 @@ export class AudioEngineCore implements LifecycleDelegate {
         let loadedCount = loadedEntries.length;
         const evictCandidates = loadedEntries
             .filter(([padId, transport]) => padId !== excludePadId && this.canEvictTransport(transport))
-            .sort((left, right) => left[1].lastAccessAt - right[1].lastAccessAt);
+            .sort((left, right) => this.compareTransportEvictionPriority(left, right));
 
         while (loadedCount > budget && evictCandidates.length > 0) {
             const [padId] = evictCandidates.shift()!;
@@ -213,7 +239,7 @@ export class AudioEngineCore implements LifecycleDelegate {
                 const leftUnloaded = left[1].backend ? 1 : 0;
                 const rightUnloaded = right[1].backend ? 1 : 0;
                 if (leftUnloaded !== rightUnloaded) return leftUnloaded - rightUnloaded;
-                return left[1].lastAccessAt - right[1].lastAccessAt;
+                return this.compareTransportEvictionPriority(left, right);
             });
 
         while (this.transports.size > cap && removable.length > 0) {
@@ -1054,6 +1080,10 @@ export class AudioEngineCore implements LifecycleDelegate {
     private destroy(): void {
         this.lifecycle.destroy();
         this.transportRegistrationQueue.clear();
+        if (typeof window !== 'undefined') {
+            window.removeEventListener(HOT_TRANSPORT_PADS_CHANGED_EVENT, this.handleHotTransportPadsChanged as EventListener);
+        }
+        this.hotTransportPadIds.clear();
         for (const [padId] of this.transports) {
             this.disposeTransport(padId);
         }

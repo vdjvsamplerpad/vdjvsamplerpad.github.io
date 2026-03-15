@@ -377,6 +377,19 @@ export function HeaderControls({
   }, []);
 
   React.useEffect(() => {
+    const handleOpenSharedBankImport = () => {
+      setAboutOpen(true);
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          window.dispatchEvent(new Event('vdjv-open-shared-bank-import'));
+        });
+      });
+    };
+    window.addEventListener('vdjv-import-bank', handleOpenSharedBankImport as EventListener);
+    return () => window.removeEventListener('vdjv-import-bank', handleOpenSharedBankImport as EventListener);
+  }, []);
+
+  React.useEffect(() => {
     if (!showPadColorPaintDialog) return;
     setPendingPadColor(adminPadColorPaintColor || PRIMARY_PAD_COLORS[0]?.value || '#f59e0b');
   }, [adminPadColorPaintColor, showPadColorPaintDialog]);

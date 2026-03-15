@@ -29,14 +29,9 @@ const NOTICE_AUTO_DISMISS_MS = 5000;
 type BankListEntry =
   | { kind: 'real'; bank: SamplerBank }
   | { kind: 'preview'; preview: GuestStorePreviewBank };
-type ImportStageDetail = {
-  message?: string;
-  elapsedMs?: number;
-  progress?: number;
-  stageId?: string | null;
-};
 
 const EXPORT_MIN_DIALOG_MS = 900;
+const MAX_PROGRESS_LOG_LINES = 80;
 const STORE_BUTTON_CONFETTI = [
   { key: 'c1', className: '-top-2 left-3 bg-amber-300', delay: '0ms', duration: '2.1s', drift: '-8px', rotate: '-26deg' },
   { key: 'c2', className: '-top-3 right-5 bg-pink-300', delay: '260ms', duration: '2.4s', drift: '10px', rotate: '32deg' },
@@ -49,6 +44,19 @@ const withAlpha = (hex: string, alphaHex: string): string => {
   const normalized = hex.trim().replace('#', '');
   if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return hex;
   return `#${normalized}${alphaHex}`;
+};
+
+const appendProgressLogLine = (
+  setLines: React.Dispatch<React.SetStateAction<string[]>>,
+  message: string,
+) => {
+  const nextMessage = message.trim();
+  if (!nextMessage) return;
+  setLines((prev) => {
+    if (prev[prev.length - 1] === nextMessage) return prev;
+    const next = [...prev, nextMessage];
+    return next.length > MAX_PROGRESS_LOG_LINES ? next.slice(-MAX_PROGRESS_LOG_LINES) : next;
+  });
 };
 
 interface SideMenuProps {
@@ -185,27 +193,17 @@ export function SideMenu({
   const [newBankName, setNewBankName] = React.useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
   const [bankToDelete, setBankToDelete] = React.useState<SamplerBank | null>(null);
-  const [pendingImportFile, setPendingImportFile] = React.useState<File | null>(null);
 
   // Progress State
   const [showExportProgress, setShowExportProgress] = React.useState(false);
-  const [showImportProgress, setShowImportProgress] = React.useState(false);
   const [exportProgress, setExportProgress] = React.useState(0);
-  const [importProgress, setImportProgress] = React.useState(0);
   const [exportStatus, setExportStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
-  const [importStatus, setImportStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
   const [exportError, setExportError] = React.useState<string>('');
-  const [importError, setImportError] = React.useState<string>('');
-  const [importStageMessage, setImportStageMessage] = React.useState<string>('');
+  const [exportLogLines, setExportLogLines] = React.useState<string[]>([]);
   const [dragOverBankId, setDragOverBankId] = React.useState<string | null>(null);
   const [renderContent, setRenderContent] = React.useState(open);
   const [pendingBulkClearAction, setPendingBulkClearAction] = React.useState<'keys' | 'midi' | null>(null);
   const [offlinePrefetchBusyBankId, setOfflinePrefetchBusyBankId] = React.useState<string | null>(null);
-
-
-  // ETA Calculation State
-  const [importStartTime, setImportStartTime] = React.useState<number>(0);
-  const [importEta, setImportEta] = React.useState<number | null>(null);
 
   // Loading State
   const [isLoadingBanks, setIsLoadingBanks] = React.useState(true);
@@ -304,13 +302,13 @@ export function SideMenu({
     }
   }, [banks, editingBank, onUpdatePad, pushNotice]);
 
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const { user, profile } = useAuth();
-  const prevUserIdRef = React.useRef<string | null>(null);
-  const requestLoginModal = React.useCallback(() => {
-    if (typeof window === 'undefined') return;
-    window.dispatchEvent(new Event('vdjv-login-request'));
-  }, []);
+  const isAdmin = profile?.role === 'admin';
+  const lastExportMilestoneRef = React.useRef(-1);
+  const appendExportLog = React.useCallback((message: string) => {
+    if (!isAdmin) return;
+    appendProgressLogLine(setExportLogLines, message);
+  }, [isAdmin]);
 
   const isHighGraphics = graphicsTier === 'high';
   const isLowGraphics = graphicsTier === 'low';
@@ -752,277 +750,34 @@ export function SideMenu({
     }
   };
 
-  // Detect Android/WebView environment
-  const isAndroid = React.useMemo(() => /Android/.test(navigator.userAgent), []);
-  const isWebView = React.useMemo(() => {
-    return !!(window as any).Android ||
-      navigator.userAgent.includes('wv') ||
-      navigator.userAgent.includes('WebView');
-  }, []);
-
-  // Create Android/WebView compatible file input
-  const createCompatibleFileInput = React.useCallback((): HTMLInputElement => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    // Keep bank-focused MIME hints, but include wildcard fallback for Android pickers.
-    input.accept = '.bank,application/zip,application/x-zip-compressed,application/octet-stream,*/*';
-    input.setAttribute('capture', 'none');
-    input.setAttribute('autocomplete', 'off');
-    input.setAttribute('autocorrect', 'off');
-    input.setAttribute('autocapitalize', 'off');
-    input.setAttribute('spellcheck', 'false');
-    input.style.position = 'fixed';
-    input.style.left = '-9999px';
-    input.style.top = '-9999px';
-    input.style.opacity = '0';
-    document.body.appendChild(input);
-    return input;
-  }, []);
-
-  const handleImportClick = React.useCallback(() => {
-    const effectiveUser = user || getCachedUser();
-    if (!effectiveUser) {
-      requestLoginModal();
-      pushNotice({ variant: 'error', message: 'Please sign in to import a bank.' });
-      return;
-    }
-    // Use enhanced file picker for Android/WebView
-    if (isAndroid || isWebView) {
-      const compatibleInput = createCompatibleFileInput();
-
-      const handleChange = async (event: Event) => {
-        const target = event.target as HTMLInputElement;
-        const file = target.files?.[0];
-
-        if (file) {
-          await processFileImport(file);
-        } else {
-          pushNotice({ variant: 'error', message: 'No file selected. Please try again.' });
-        }
-
-        // Clean up
-        compatibleInput.removeEventListener('change', handleChange);
-        if (compatibleInput.parentNode) compatibleInput.remove();
-      };
-
-      compatibleInput.addEventListener('change', handleChange);
-
-      // Add timeout to detect silent failures
-      const timeoutId = setTimeout(() => {
-        pushNotice({
-          variant: 'error',
-          message: 'File picker did not respond. Please try selecting the file again or use Google Drive to import.'
-        });
-        compatibleInput.removeEventListener('change', handleChange);
-        if (compatibleInput.parentNode) compatibleInput.remove();
-      }, 60000);
-
-      compatibleInput.addEventListener('change', () => clearTimeout(timeoutId), { once: true });
-
-      try {
-        compatibleInput.click();
-      } catch (error) {
-        pushNotice({
-          variant: 'error',
-          message: 'Failed to open file picker. Please try again or use Google Drive to import.'
-        });
-        clearTimeout(timeoutId);
-        if (compatibleInput.parentNode) compatibleInput.remove();
-      }
-    } else {
-      // Standard file input for other platforms
-      fileInputRef.current?.click();
-    }
-  }, [isAndroid, isWebView, createCompatibleFileInput, pushNotice, user, requestLoginModal]);
-
-  React.useEffect(() => {
-    const handleGlobalImport = () => {
-      handleImportClick();
-    };
-    window.addEventListener('vdjv-import-bank', handleGlobalImport as EventListener);
-    return () => window.removeEventListener('vdjv-import-bank', handleGlobalImport as EventListener);
-  }, [handleImportClick]);
-
-  React.useEffect(() => {
-    const handleImportStage = (event: Event) => {
-      const detail = (event as CustomEvent<ImportStageDetail>).detail;
-      if (!detail?.message) return;
-      setImportStageMessage(detail.message);
-      if (typeof detail.progress === 'number') {
-        setImportProgress((prev) => Math.max(prev, Math.round(detail.progress)));
-      }
-    };
-
-    window.addEventListener('vdjv-import-stage', handleImportStage as EventListener);
-    return () => window.removeEventListener('vdjv-import-stage', handleImportStage as EventListener);
-  }, []);
-
-  const processFileImport = React.useCallback(async (file: File) => {
-    // Validate file
-    if (!file) {
-      pushNotice({ variant: 'error', message: 'No file selected.' });
-      return;
-    }
-
-    if (!file.name.endsWith('.bank')) {
-      pushNotice({ variant: 'error', message: 'Invalid file type. Please select a .bank file.' });
-      return;
-    }
-
-    if (file.size === 0) {
-      pushNotice({ variant: 'error', message: 'Selected file is empty.' });
-      return;
-    }
-
-    setShowImportProgress(true);
-    setImportStatus('loading');
-    setImportProgress(0);
-    setImportError('');
-    setImportStageMessage('Preparing import...');
-
-    // Reset ETA calculation
-    setImportStartTime(Date.now());
-    setImportEta(null);
-
-    try {
-      window.dispatchEvent(new Event('vdjv-import-start'));
-      await onImportBank(file, (progress) => {
-        setImportProgress(progress);
-      });
-      setImportStatus('success');
-      setImportStageMessage('Import complete.');
-      pushNotice({ variant: 'success', message: 'Bank imported successfully!' });
-      setPendingImportFile(null); // Clear pending file on success
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Import failed';
-      setImportStatus('error');
-      setImportError(errorMessage);
-      setImportStageMessage('Import failed.');
-
-      // Check if error is login-related
-      const needsLogin = errorMessage.toLowerCase().includes('sign in') ||
-        errorMessage.toLowerCase().includes('login required') ||
-        errorMessage.toLowerCase().includes('please sign in');
-
-      if (needsLogin) {
-        // Store file for auto-import after login
-        setPendingImportFile(file);
-      } else {
-        setPendingImportFile(null);
-      }
-
-      pushNotice({ variant: 'error', message: `Import failed: ${errorMessage}` });
-    } finally {
-      window.dispatchEvent(new Event('vdjv-import-end'));
-    }
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  }, [onImportBank, pushNotice]);
-
-  const handleFileSelect = React.useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      await processFileImport(file);
-    }
-  }, [processFileImport]);
-
-  // Auto-import pending file after login (moved here after processFileImport is defined)
-  React.useEffect(() => {
-    const currentUserId = user?.id || null;
-    const justLoggedIn = currentUserId && prevUserIdRef.current !== currentUserId;
-
-    if (justLoggedIn && pendingImportFile) {
-      prevUserIdRef.current = currentUserId;
-      // Close login modal
-      // Small delay to ensure login state is fully propagated
-      setTimeout(() => {
-        // Auto-import the pending file
-        processFileImport(pendingImportFile).finally(() => {
-          setPendingImportFile(null);
-        });
-      }, 100);
-    } else {
-      prevUserIdRef.current = currentUserId;
-    }
-  }, [user, pendingImportFile, processFileImport]);
-
-  // ETA Calculation Effect
-  React.useEffect(() => {
-    let interval: NodeJS.Timeout;
-
-    if (showImportProgress && importStatus === 'loading' && importProgress > 0 && importProgress < 100) {
-
-      const calculateEta = () => {
-        const now = Date.now();
-        const elapsedSeconds = (now - importStartTime) / 1000;
-
-        // Rate = percent per second
-        const rate = importProgress / elapsedSeconds;
-
-        if (rate > 0) {
-          const remainingPercent = 100 - importProgress;
-          let estimatedSeconds = remainingPercent / rate;
-
-          // "Smart Floor" Logic
-          if (estimatedSeconds < 3 && importProgress < 98) {
-            estimatedSeconds = 5;
-          }
-
-          setImportEta(estimatedSeconds);
-        }
-      };
-
-      // Run calculation immediately
-      calculateEta();
-      // Recalculate every 1 second
-      interval = setInterval(calculateEta, 1000);
-
-    } else if (importStatus !== 'loading') {
-      setImportEta(null);
-    }
-
-    return () => clearInterval(interval);
-  }, [importProgress, showImportProgress, importStatus, importStartTime]);
-
-  const getImportPhaseInfo = () => {
-    if (importStageMessage) {
-      return {
-        message: importStageMessage,
-        showWarning: importProgress < 20
-      };
-    }
-    if (importProgress < 20) {
-      return {
-        message: "Verifying your purchase...",
-        showWarning: true
-      };
-    }
-    return {
-      message: "Extracting and processing audio files and images...",
-      showWarning: false
-    };
-  };
-
-  const importPhase = getImportPhaseInfo();
-
   const handleExportBank = async (bankId: string) => {
     const startedAt = Date.now();
+    const exportBank = banks.find((candidate) => candidate.id === bankId);
     setShowExportProgress(true);
     setExportStatus('loading');
     setExportProgress(0);
     setExportError('');
+    setExportLogLines([]);
+    lastExportMilestoneRef.current = -1;
+    appendExportLog(`Export requested: ${exportBank?.name || 'Bank'}`);
+    appendExportLog('Preparing bank archive...');
 
     try {
       const exportMessage = await onExportBank(bankId, (progress) => {
         setExportProgress(progress);
+        const rounded = Math.max(0, Math.min(100, Math.round(progress)));
+        const milestone = rounded >= 100 ? 100 : Math.floor(rounded / 10) * 10;
+        if (milestone >= 0 && milestone !== lastExportMilestoneRef.current) {
+          lastExportMilestoneRef.current = milestone;
+          appendExportLog(milestone >= 100 ? 'Export payload complete.' : `Export progress: ${milestone}%`);
+        }
       });
       const elapsed = Date.now() - startedAt;
       if (elapsed < EXPORT_MIN_DIALOG_MS) {
         await new Promise((resolve) => window.setTimeout(resolve, EXPORT_MIN_DIALOG_MS - elapsed));
       }
       setExportStatus('success');
+      appendExportLog(exportMessage || 'Export complete.');
       // Show success notification with platform-specific message
       if (exportMessage) {
         pushNotice({ variant: 'success', message: exportMessage });
@@ -1033,7 +788,9 @@ export function SideMenu({
         await new Promise((resolve) => window.setTimeout(resolve, EXPORT_MIN_DIALOG_MS - elapsed));
       }
       setExportStatus('error');
-      setExportError(error instanceof Error ? error.message : 'Export failed');
+      const errorMessage = error instanceof Error ? error.message : 'Export failed';
+      setExportError(errorMessage);
+      appendExportLog(`Export failed: ${errorMessage}`);
     }
   };
 
@@ -1310,14 +1067,6 @@ export function SideMenu({
               </div>
             )}
 
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".bank,application/zip,application/x-zip-compressed,application/octet-stream,*/*"
-              onChange={handleFileSelect}
-              className="hidden"
-            />
-
             <div className="space-y-2">
               {isLoadingBanks && sortedBanks.length === 0 && bankListEntries.length === 0 ? (
                 <div className={`flex flex-col gap-2 p-8 items-center justify-center ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'
@@ -1332,7 +1081,6 @@ export function SideMenu({
                 const bankId = bank?.id || preview?.bankId || '';
                 const bankName = bank?.name || preview?.title || 'Bank Preview';
                 const bankColor = bank?.defaultColor || preview?.color || defaultBankColor;
-                const preparedSummary = !isPreview && bank ? getBankPreparedSummary(bank.id) : null;
                 const restoreStatus = !isPreview ? bank?.restoreStatus || null : null;
                 const snapshotTransfer = !isPreview && bank?.bankMetadata?.catalogItemId
                   ? snapshotTransfers[bank.bankMetadata.catalogItemId]
@@ -1536,27 +1284,6 @@ export function SideMenu({
                             <p className={bankMetaClass} style={resolvedBankTextStyle}>
                               {bank?.pads.length || 0} pad{bank?.pads.length !== 1 ? 's' : ''}
                             </p>
-                            {preparedSummary && (
-                              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                                preparedSummary.status === 'ready'
-                                  ? theme === 'dark'
-                                    ? 'bg-emerald-500/15 text-emerald-200'
-                                    : 'bg-emerald-100 text-emerald-700'
-                                  : preparedSummary.status === 'preparing'
-                                    ? theme === 'dark'
-                                      ? 'bg-cyan-500/15 text-cyan-200'
-                                      : 'bg-cyan-100 text-cyan-700'
-                                    : preparedSummary.status === 'stale'
-                                      ? theme === 'dark'
-                                        ? 'bg-amber-500/15 text-amber-200'
-                                        : 'bg-amber-100 text-amber-700'
-                                      : theme === 'dark'
-                                        ? 'bg-gray-500/15 text-gray-200'
-                                        : 'bg-gray-100 text-gray-700'
-                              }`}>
-                                {preparedSummary.label}
-                              </span>
-                            )}
                             {bankShortcutLabel && !hideShortcutLabels && (
                               <span
                                 className={`${bankShortcutChipClass} ml-auto font-semibold uppercase tracking-wide truncate text-right ${isHighThumbnailCard ? 'bg-black/45' : 'bg-black/20'}`}
@@ -2048,35 +1775,13 @@ export function SideMenu({
         type="export"
         theme={theme}
         errorMessage={exportError}
+        logLines={isAdmin ? exportLogLines : undefined}
         hideCloseButton
         useHistory={false}
         onRetry={() => {
           if (banks.length > 0) {
             handleExportBank(banks[0].id);
           }
-        }}
-      />
-
-      <ProgressDialog
-        open={showImportProgress}
-        onOpenChange={setShowImportProgress}
-        title="Importing Bank"
-        description=""
-        progress={importProgress}
-        status={importStatus}
-        type="import"
-        theme={theme}
-        errorMessage={importError}
-        statusMessage={importPhase.message}
-        etaSeconds={importEta}
-        showWarning={importPhase.showWarning}
-        useHistory={false}
-        onRetry={() => {
-          handleImportClick();
-        }}
-        onLogin={() => {
-          // File is already stored in pendingImportFile when error occurred
-          requestLoginModal();
         }}
       />
 

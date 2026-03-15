@@ -462,6 +462,7 @@ export class AudioPadRegistryRuntime {
       bankName,
       color: padData.color,
       audioUrl: padData.audioUrl,
+      sourceAudioUrl: typeof padData.sourceAudioUrl === 'string' ? padData.sourceAudioUrl : padData.audioUrl,
       volume: typeof padData.volume === 'number' ? padData.volume : 1,
       padGainLinear,
       startTimeMs: typeof padData.startTimeMs === 'number' ? padData.startTimeMs : 0,
@@ -477,7 +478,9 @@ export class AudioPadRegistryRuntime {
         ? (padData.savedHotcuesMs.slice(0, 4) as HotcueTuple)
         : [null, null, null, null],
       audioBytes: normalizeAudioBytesValue(padData?.audioBytes),
-      audioDurationMs: this.inferAudioDurationMsFromPadData(padData)
+      audioDurationMs: this.inferAudioDurationMsFromPadData(padData),
+      sourceAudioBytes: normalizeAudioBytesValue(padData?.sourceAudioBytes) ?? normalizeAudioBytesValue(padData?.audioBytes),
+      sourceAudioDurationMs: normalizeDurationMsValue(padData?.sourceAudioDurationMs) ?? this.inferAudioDurationMsFromPadData(padData),
     };
   }
 

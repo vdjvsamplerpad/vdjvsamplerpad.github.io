@@ -11,12 +11,27 @@ import { MidiMessage } from '@/lib/midi';
 import { BankEditAdminExportDialog } from './BankEditAdminExportDialog';
 import { BankEditUpdateStoreDialog } from './BankEditUpdateStoreDialog';
 import { BankEditCoreForm } from './BankEditCoreForm';
-import { bankColorOptions, formatBankEditDate } from './bankEdit.shared';
+import { bankColorOptions, extraBankColorOptions, formatBankEditDate, primaryBankColorOptions } from './bankEdit.shared';
 import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { validateManagedImageFile } from '@/lib/image-upload';
 import { deleteBlobFromDB, saveBlobToDB } from './hooks/useSamplerStore.idbStorage';
 import type { ExportAudioMode, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
 import type { BankPreparedSummary } from './hooks/preparedAudio';
+
+const MAX_PROGRESS_LOG_LINES = 80;
+
+const appendProgressLogLine = (
+  setLines: React.Dispatch<React.SetStateAction<string[]>>,
+  message: string,
+) => {
+  const nextMessage = message.trim();
+  if (!nextMessage) return;
+  setLines((prev) => {
+    if (prev[prev.length - 1] === nextMessage) return prev;
+    const next = [...prev, nextMessage];
+    return next.length > MAX_PROGRESS_LOG_LINES ? next.slice(-MAX_PROGRESS_LOG_LINES) : next;
+  });
+};
 
 interface BankEditDialogProps {
   bank: SamplerBank;
@@ -76,8 +91,6 @@ export function BankEditDialog({
   onUpdateStoreBank,
   onDuplicate,
   preparedSummary,
-  onPrepareForLive,
-  onCancelPrepareForLive,
   midiEnabled = false,
   blockedShortcutKeys,
   blockedMidiNotes,
@@ -108,6 +121,7 @@ export function BankEditDialog({
   const [adminExportProgress, setAdminExportProgress] = React.useState(0);
   const [adminExportStatus, setAdminExportStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
   const [adminExportError, setAdminExportError] = React.useState<string>('');
+  const [adminExportLogLines, setAdminExportLogLines] = React.useState<string[]>([]);
   const [storeUpdateTitle, setStoreUpdateTitle] = React.useState(bank.name);
   const [storeUpdateDescription, setStoreUpdateDescription] = React.useState(bank.bankMetadata?.description || '');
   const [storeUpdateSyncMetadata, setStoreUpdateSyncMetadata] = React.useState(true);
@@ -119,6 +133,7 @@ export function BankEditDialog({
   const [storeUpdateProgress, setStoreUpdateProgress] = React.useState(0);
   const [storeUpdateStatus, setStoreUpdateStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
   const [storeUpdateError, setStoreUpdateError] = React.useState('');
+  const [storeUpdateLogLines, setStoreUpdateLogLines] = React.useState<string[]>([]);
   const [adminThumbnailFile, setAdminThumbnailFile] = React.useState<File | null>(null);
   const [adminThumbnailPreviewUrl, setAdminThumbnailPreviewUrl] = React.useState<string | null>(null);
   const [adminThumbnailUploading, setAdminThumbnailUploading] = React.useState(false);
@@ -131,7 +146,8 @@ export function BankEditDialog({
   const [duplicateStatus, setDuplicateStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
   const [duplicateError, setDuplicateError] = React.useState('');
   const [showDiscardConfirm, setShowDiscardConfirm] = React.useState(false);
-  const [prepareBusy, setPrepareBusy] = React.useState(false);
+  const adminExportMilestoneRef = React.useRef(-1);
+  const storeUpdateMilestoneRef = React.useRef(-1);
 
   React.useEffect(() => {
     if (open) {
@@ -164,25 +180,16 @@ export function BankEditDialog({
       setStoreUpdateProgress(0);
       setStoreUpdateStatus('loading');
       setStoreUpdateError('');
+      setAdminExportLogLines([]);
+      setStoreUpdateLogLines([]);
       setShowDuplicateConfirm(false);
       setShowDuplicateProgress(false);
       setDuplicateProgress(0);
       setDuplicateStatus('loading');
       setDuplicateError('');
       setShowDiscardConfirm(false);
-      setPrepareBusy(false);
     }
   }, [open, bank.id]);
-
-  const handlePrepareForLive = React.useCallback(async () => {
-    if (!onPrepareForLive) return;
-    setPrepareBusy(true);
-    try {
-      await onPrepareForLive(bank.id);
-    } finally {
-      setPrepareBusy(false);
-    }
-  }, [bank.id, onPrepareForLive]);
 
   React.useEffect(() => {
     if (!adminThumbnailFile) {
@@ -461,6 +468,12 @@ export function BankEditDialog({
     setAdminExportStatus('loading');
     setAdminExportProgress(0);
     setAdminExportError('');
+    setAdminExportLogLines([]);
+    adminExportMilestoneRef.current = -1;
+    if (isAdmin) {
+      appendProgressLogLine(setAdminExportLogLines, `Admin export requested: ${bank.name}`);
+      appendProgressLogLine(setAdminExportLogLines, 'Preparing admin bank package...');
+    }
 
     try {
       const exportMessage = await onExportAdmin(
@@ -474,12 +487,29 @@ export function BankEditDialog({
         bank.bankMetadata?.thumbnailUrl || undefined,
         (progress) => {
           setAdminExportProgress(progress);
+          if (!isAdmin) return;
+          const rounded = Math.max(0, Math.min(100, Math.round(progress)));
+          const milestone = rounded >= 100 ? 100 : Math.floor(rounded / 10) * 10;
+          if (milestone >= 0 && milestone !== adminExportMilestoneRef.current) {
+            adminExportMilestoneRef.current = milestone;
+            appendProgressLogLine(
+              setAdminExportLogLines,
+              milestone >= 100 ? 'Admin export payload complete.' : `Admin export progress: ${milestone}%`,
+            );
+          }
         });
       setAdminExportStatus('success');
       setAdminExportError(exportMessage || '');
+      if (isAdmin) {
+        appendProgressLogLine(setAdminExportLogLines, exportMessage || 'Admin export complete.');
+      }
     } catch (error) {
       setAdminExportStatus('error');
-      setAdminExportError(error instanceof Error ? error.message : 'Export failed.');
+      const errorMessage = error instanceof Error ? error.message : 'Export failed.';
+      setAdminExportError(errorMessage);
+      if (isAdmin) {
+        appendProgressLogLine(setAdminExportLogLines, `Admin export failed: ${errorMessage}`);
+      }
     }
   };
 
@@ -498,6 +528,12 @@ export function BankEditDialog({
     setStoreUpdateStatus('loading');
     setStoreUpdateProgress(0);
     setStoreUpdateError('');
+    setStoreUpdateLogLines([]);
+    storeUpdateMilestoneRef.current = -1;
+    if (isAdmin) {
+      appendProgressLogLine(setStoreUpdateLogLines, `Store update requested: ${bank.name}`);
+      appendProgressLogLine(setStoreUpdateLogLines, 'Preparing store update payload...');
+    }
 
     try {
       const updateMessage = await onUpdateStoreBank({
@@ -514,6 +550,16 @@ export function BankEditDialog({
         thumbnailPath: bank.bankMetadata?.thumbnailUrl || undefined,
         onProgress: (progress) => {
           setStoreUpdateProgress(progress);
+          if (!isAdmin) return;
+          const rounded = Math.max(0, Math.min(100, Math.round(progress)));
+          const milestone = rounded >= 100 ? 100 : Math.floor(rounded / 10) * 10;
+          if (milestone >= 0 && milestone !== storeUpdateMilestoneRef.current) {
+            storeUpdateMilestoneRef.current = milestone;
+            appendProgressLogLine(
+              setStoreUpdateLogLines,
+              milestone >= 100 ? 'Store update payload complete.' : `Store update progress: ${milestone}%`,
+            );
+          }
         },
       });
       if (storeUpdateSyncMetadata) {
@@ -530,9 +576,19 @@ export function BankEditDialog({
       setStoreUpdateProgress(100);
       setStoreUpdateStatus(requiresAttention ? 'error' : 'success');
       setStoreUpdateError(updateMessage || '');
+      if (isAdmin) {
+        appendProgressLogLine(
+          setStoreUpdateLogLines,
+          updateMessage || (requiresAttention ? 'Store update needs attention.' : 'Store update complete.'),
+        );
+      }
     } catch (error) {
       setStoreUpdateStatus('error');
-      setStoreUpdateError(error instanceof Error ? error.message : 'Store bank update failed.');
+      const errorMessage = error instanceof Error ? error.message : 'Store bank update failed.';
+      setStoreUpdateError(errorMessage);
+      if (isAdmin) {
+        appendProgressLogLine(setStoreUpdateLogLines, `Store update failed: ${errorMessage}`);
+      }
     }
   };
 
@@ -713,30 +769,8 @@ export function BankEditDialog({
                   <div className="font-semibold uppercase tracking-wide">Prepared Playback</div>
                   <div className="opacity-80">
                     {preparedSummary.label}
-                    {preparedSummary.activePads > 0 ? ` · ${preparedSummary.readyPads}/${preparedSummary.activePads} ready` : ''}
+                    {preparedSummary.activePads > 0 ? ` · ${preparedSummary.readyPads}/${preparedSummary.activePads} eligible prepared` : ''}
                   </div>
-                </div>
-                <div className="ml-3 flex shrink-0 items-center gap-2">
-                  {preparedSummary.status === 'preparing' && onCancelPrepareForLive && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onCancelPrepareForLive(bank.id)}
-                    >
-                      Cancel
-                    </Button>
-                  )}
-                  {onPrepareForLive && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => void handlePrepareForLive()}
-                      disabled={prepareBusy || preparedSummary.activePads === 0}
-                    >
-                      {prepareBusy || preparedSummary.status === 'preparing' ? 'Preparing...' : 'Prepare for Live'}
-                    </Button>
-                  )}
                 </div>
               </div>
             )}
@@ -745,6 +779,8 @@ export function BankEditDialog({
               canDelete={canDeleteBank}
               theme={theme}
               colorOptions={bankColorOptions}
+              primaryColorOptions={primaryBankColorOptions}
+              extraColorOptions={extraBankColorOptions}
               defaultColor={defaultColor}
               setDefaultColor={setDefaultColor}
               name={name}
@@ -913,6 +949,7 @@ export function BankEditDialog({
         type="export"
         theme={theme}
         errorMessage={adminExportError}
+        logLines={isAdmin ? adminExportLogLines : undefined}
         onRetry={handleAdminExport}
       />
 
@@ -944,6 +981,7 @@ export function BankEditDialog({
         type="export"
         theme={theme}
         errorMessage={storeUpdateError}
+        logLines={isAdmin ? storeUpdateLogLines : undefined}
         onRetry={handleStoreUpdate}
       />
 

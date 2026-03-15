@@ -86,10 +86,22 @@ export function usePadWarmStatusBinding(
   subscribeGlobalPlaybackState: (listener: () => void) => () => void,
   padId: string
 ): PadWarmStatus {
-  const fallbackStateRef = React.useRef<PadWarmStatus>(manager.getPadWarmStatus(padId));
+  const normalizeWarmStatusSnapshot = React.useCallback((status: PadWarmStatus): PadWarmStatus => {
+    const normalizedRemainingMs = status.isQuarantined
+      ? Math.max(1_000, Math.ceil(status.quarantineRemainingMs / 1_000) * 1_000)
+      : 0;
+    return normalizedRemainingMs === status.quarantineRemainingMs
+      ? status
+      : {
+          ...status,
+          quarantineRemainingMs: normalizedRemainingMs,
+        };
+  }, []);
+
+  const fallbackStateRef = React.useRef<PadWarmStatus>(normalizeWarmStatusSnapshot(manager.getPadWarmStatus(padId)));
 
   const getSnapshot = React.useCallback((): PadWarmStatus => {
-    const next = manager.getPadWarmStatus(padId);
+    const next = normalizeWarmStatusSnapshot(manager.getPadWarmStatus(padId));
     const prev = fallbackStateRef.current;
     if (
       prev.stage === next.stage &&
@@ -104,7 +116,7 @@ export function usePadWarmStatusBinding(
     }
     fallbackStateRef.current = next;
     return next;
-  }, [manager, padId]);
+  }, [manager, normalizeWarmStatusSnapshot, padId]);
 
   return React.useSyncExternalStore(
     subscribeGlobalPlaybackState,

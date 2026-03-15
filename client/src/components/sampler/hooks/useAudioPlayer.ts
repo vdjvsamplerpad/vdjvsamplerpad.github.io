@@ -87,6 +87,17 @@ export function useAudioPlayer(
         triggerMode: pad.triggerMode,
         playbackMode: pad.playbackMode
       });
+      if (typeof window !== 'undefined') {
+        try {
+          window.dispatchEvent(new CustomEvent('vdjv-prepared-playback-pad-started', {
+            detail: {
+              bankId,
+              padId: pad.id,
+            },
+          }));
+        } catch {
+        }
+      }
     }
     prevIsPlayingRef.current = isPlaying;
   }, [bankId, isPlaying, pad.id, pad.playbackMode, pad.triggerMode, telemetry]);

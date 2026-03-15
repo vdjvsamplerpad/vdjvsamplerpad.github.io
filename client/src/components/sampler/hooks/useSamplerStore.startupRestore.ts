@@ -1,5 +1,5 @@
 import type { PadData, SamplerBank } from '../types/sampler';
-import { getElectronMemoryTuningProfile } from '@/lib/electron-performance';
+import { getSamplerRuntimeTuningProfile } from '@/lib/sampler-runtime-profile';
 import { applyBankContentPolicy } from './useSamplerStore.provenance';
 import { loadDefaultBankFromAssetsPipeline } from './useSamplerStore.defaultBankAssets';
 import { DEFAULT_BANK_SOURCE_ID, isDefaultBankIdentity } from './useSamplerStore.bankIdentity';
@@ -214,6 +214,33 @@ export const runRestoreAllFilesPipeline = async (
       const defaultBankAssetPadsById = defaultBankAssetSource
         ? new Map(defaultBankAssetSource.pads.map((pad) => [pad.id, pad] as const))
         : null;
+      const thumbnailStorageId = `bank-thumbnail-${bank.id}`;
+      let nextMetadata = defaultBankAssetSource?.bankMetadata
+        ? {
+            ...defaultBankAssetSource.bankMetadata,
+            ...bank.bankMetadata,
+            thumbnailUrl: bank.bankMetadata?.thumbnailUrl || defaultBankAssetSource.bankMetadata.thumbnailUrl,
+          }
+        : bank.bankMetadata;
+      if (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend) {
+        try {
+          const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
+          const restoredThumbnail = await restoreFileAccess(
+            thumbnailStorageId,
+            'image',
+            nextMetadata.thumbnailStorageKey,
+            nextMetadata.thumbnailBackend
+          );
+          nextMetadata = {
+            ...nextMetadata,
+            thumbnailUrl: restoredThumbnail.url || (/^https?:\/\//i.test(currentThumbnailUrl) ? currentThumbnailUrl : undefined),
+            thumbnailStorageKey: restoredThumbnail.storageKey || nextMetadata.thumbnailStorageKey,
+            thumbnailBackend: restoredThumbnail.backend || nextMetadata.thumbnailBackend,
+          };
+        } catch {
+          // Ignore thumbnail restore failures and keep any durable remote URL.
+        }
+      }
       const restoredPads: PadData[] = [];
       for (let i = 0; i < bank.pads.length; i += 1) {
         const restoredPad = await restorePadMedia(bank.pads[i]);
@@ -232,36 +259,6 @@ export const runRestoreAllFilesPipeline = async (
         }
         restoredPads.push(restoredPad);
         if ((i + 1) % 6 === 0) await yieldToMainThread();
-      }
-      const thumbnailStorageId = `bank-thumbnail-${bank.id}`;
-      let nextMetadata = defaultBankAssetSource?.bankMetadata
-        ? {
-            ...defaultBankAssetSource.bankMetadata,
-            ...bank.bankMetadata,
-            thumbnailUrl: bank.bankMetadata?.thumbnailUrl || defaultBankAssetSource.bankMetadata.thumbnailUrl,
-          }
-        : bank.bankMetadata;
-      if (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend) {
-        try {
-          const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
-          if (currentThumbnailUrl.startsWith('blob:')) {
-            return { ...bank, pads: restoredPads, bankMetadata: nextMetadata };
-          }
-          const restoredThumbnail = await restoreFileAccess(
-            thumbnailStorageId,
-            'image',
-            nextMetadata.thumbnailStorageKey,
-            nextMetadata.thumbnailBackend
-          );
-          nextMetadata = {
-            ...nextMetadata,
-            thumbnailUrl: restoredThumbnail.url || (/^https?:\/\//i.test(currentThumbnailUrl) ? currentThumbnailUrl : undefined),
-            thumbnailStorageKey: restoredThumbnail.storageKey || nextMetadata.thumbnailStorageKey,
-            thumbnailBackend: restoredThumbnail.backend || nextMetadata.thumbnailBackend,
-          };
-        } catch {
-          // Ignore thumbnail restore failures and keep any durable remote URL.
-        }
       }
       return { ...bank, pads: restoredPads, bankMetadata: nextMetadata };
     };
@@ -314,9 +311,8 @@ export const runRestoreAllFilesPipeline = async (
 
     restoredBanks.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
     const totalPads = restoredBanks.reduce((sum, bank) => sum + bank.pads.length, 0);
-    const eagerRestoreLimit = isNativeCapacitorPlatform()
-      ? maxNativeStartupRestorePads
-      : getElectronMemoryTuningProfile()?.startupRestorePadLimit ?? 1200;
+    const eagerRestoreLimit = getSamplerRuntimeTuningProfile().startupRestorePadLimit
+      || (isNativeCapacitorPlatform() ? maxNativeStartupRestorePads : 1200);
     const priorityBankId =
       (restoredState.currentBankId && restoredBanks.some((bank) => bank.id === restoredState.currentBankId))
         ? restoredState.currentBankId
@@ -324,6 +320,51 @@ export const runRestoreAllFilesPipeline = async (
     const orderedBanks = prioritizeBanksForMediaRestore(restoredBanks, priorityBankId);
 
     applyRestoredState(restoredBanks);
+
+    const quickThumbnailRestoreTargets = restoredBanks.filter((bank) =>
+      Boolean(bank.bankMetadata?.thumbnailStorageKey || bank.bankMetadata?.thumbnailBackend)
+    );
+    if (quickThumbnailRestoreTargets.length > 0) {
+      for (let index = 0; index < quickThumbnailRestoreTargets.length; index += 1) {
+        if (mediaRestoreRunIdRef.current !== restoreRunId) return;
+        const bank = quickThumbnailRestoreTargets[index];
+        const thumbnailStorageId = `bank-thumbnail-${bank.id}`;
+        const metadata = bank.bankMetadata;
+        if (!metadata) continue;
+        try {
+          const currentThumbnailUrl = typeof metadata.thumbnailUrl === 'string' ? metadata.thumbnailUrl.trim() : '';
+          const restoredThumbnail = await restoreFileAccess(
+            thumbnailStorageId,
+            'image',
+            metadata.thumbnailStorageKey,
+            metadata.thumbnailBackend
+          );
+          if (!restoredThumbnail.url && !/^https?:\/\//i.test(currentThumbnailUrl)) continue;
+          setBanks((prev) => {
+            const targetIndex = prev.findIndex((entry) => entry.id === bank.id);
+            if (targetIndex < 0) return prev;
+            const currentBank = prev[targetIndex];
+            const nextMetadata = {
+              ...currentBank.bankMetadata,
+              thumbnailUrl: restoredThumbnail.url || (/^https?:\/\//i.test(currentThumbnailUrl) ? currentThumbnailUrl : undefined),
+              thumbnailStorageKey: restoredThumbnail.storageKey || currentBank.bankMetadata?.thumbnailStorageKey,
+              thumbnailBackend: restoredThumbnail.backend || currentBank.bankMetadata?.thumbnailBackend,
+            };
+            if (nextMetadata.thumbnailUrl === currentBank.bankMetadata?.thumbnailUrl &&
+              nextMetadata.thumbnailStorageKey === currentBank.bankMetadata?.thumbnailStorageKey &&
+              nextMetadata.thumbnailBackend === currentBank.bankMetadata?.thumbnailBackend) {
+              return prev;
+            }
+            const next = [...prev];
+            next[targetIndex] = { ...currentBank, bankMetadata: nextMetadata };
+            return next;
+          });
+        } catch {
+          // Ignore thumbnail restore failures and keep any durable remote URL.
+        }
+        if ((index + 1) % 8 === 0) await yieldToMainThread();
+      }
+    }
 
     const limitedTargets = priorityBankId
       ? orderedBanks.filter((bank) => bank.id === priorityBankId).slice(0, 1)

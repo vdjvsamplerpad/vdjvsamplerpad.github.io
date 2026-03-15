@@ -3,6 +3,7 @@ import type { HotcueTuple, PadPlaybackMode, PadTriggerMode } from './audioPadNor
 export interface AudioPadRuntimeRegistrationData {
   name: string;
   audioUrl: string;
+  sourceAudioUrl?: string;
   color: string;
   volume: number;
   fadeInMs: number;
@@ -20,6 +21,8 @@ export interface AudioPadRuntimeRegistrationData {
   savedHotcuesMs?: HotcueTuple;
   audioBytes?: number;
   audioDurationMs?: number;
+  sourceAudioBytes?: number;
+  sourceAudioDurationMs?: number;
   imageUrl?: string;
   imageData?: string;
 }

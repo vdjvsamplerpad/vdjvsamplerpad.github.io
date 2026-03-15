@@ -15,6 +15,7 @@ import { ProgressDialog } from '@/components/ui/progress-dialog';
 import { StopMode } from '@/components/sampler/types/sampler';
 import type { GraphicsProfile } from '@/lib/performance-monitor';
 import { edgeFunctionUrl } from '@/lib/edge-api';
+import { useAuth } from '@/hooks/useAuth';
 
 const SYSTEM_COLOR_OPTIONS = [
   { name: 'Red', hex: '#ff0000' },
@@ -35,6 +36,20 @@ const SUPPORT_MESSENGER_URL_CACHE_KEY = 'vdjv-support-messenger-url';
 const DEFAULT_SUPPORT_MESSENGER_URL = (
   ((import.meta as any).env?.VITE_SUPPORT_MESSENGER_URL as string | undefined) || ''
 ).trim();
+const MAX_PROGRESS_LOG_LINES = 80;
+
+const appendProgressLogLine = (
+  setLines: React.Dispatch<React.SetStateAction<string[]>>,
+  message: string,
+) => {
+  const nextMessage = message.trim();
+  if (!nextMessage) return;
+  setLines((prev) => {
+    if (prev[prev.length - 1] === nextMessage) return prev;
+    const next = [...prev, nextMessage];
+    return next.length > MAX_PROGRESS_LOG_LINES ? next.slice(-MAX_PROGRESS_LOG_LINES) : next;
+  });
+};
 
 
 interface AboutDialogProps {
@@ -110,6 +125,17 @@ interface AboutDialogProps {
   onSignOut?: () => Promise<void> | void;
 }
 
+type ImportStageDetail = {
+  message?: string;
+  elapsedMs?: number;
+  progress?: number;
+  stageId?: string | null;
+};
+
+type BackupProgressOptions = {
+  stageDrivenProgress?: boolean;
+};
+
 export function AboutDialog({
   open,
   onOpenChange,
@@ -179,6 +205,8 @@ export function AboutDialog({
   authTransitionStatus = 'idle',
   onSignOut
 }: AboutDialogProps) {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const [midiLearnAction, setMidiLearnAction] = React.useState<
     | { type: 'system'; action: SystemAction }
     | { type: 'channel'; channelIndex: number; field?: keyof ChannelMapping }
@@ -209,6 +237,7 @@ export function AboutDialog({
   const [backupProgressTitle, setBackupProgressTitle] = React.useState('Preparing Backup');
   const [backupProgressDescription, setBackupProgressDescription] = React.useState('');
   const [backupProgressMessage, setBackupProgressMessage] = React.useState<string | undefined>(undefined);
+  const [backupLogLines, setBackupLogLines] = React.useState<string[]>([]);
   const [supportMessengerUrl, setSupportMessengerUrl] = React.useState<string>(() => {
     if (typeof window === 'undefined') return '';
     try {
@@ -218,6 +247,7 @@ export function AboutDialog({
     }
   });
   const backupProgressTimerRef = React.useRef<number | null>(null);
+  const backupProgressTimerCapRef = React.useRef(92);
   const backupBusy = backupProgressOpen && backupProgressStatus === 'loading';
   const importInputRef = React.useRef<HTMLInputElement>(null);
   const backupRestoreInputRef = React.useRef<HTMLInputElement>(null);
@@ -700,26 +730,37 @@ export function AboutDialog({
   );
 
   const beginBackupProgress = React.useCallback(
-    (type: 'export' | 'import', title: string, description: string) => {
+    (
+      type: 'export' | 'import',
+      title: string,
+      description: string,
+      options?: BackupProgressOptions,
+    ) => {
       if (backupProgressTimerRef.current !== null) {
         window.clearInterval(backupProgressTimerRef.current);
       }
+      backupProgressTimerCapRef.current = options?.stageDrivenProgress ? 24 : 92;
       setBackupProgressType(type);
       setBackupProgressTitle(title);
       setBackupProgressDescription(description);
       setBackupProgressStatus('loading');
       setBackupProgressMessage(undefined);
+      setBackupLogLines([]);
       setBackupProgress(8);
       setBackupProgressOpen(true);
+      if (isAdmin) {
+        appendProgressLogLine(setBackupLogLines, title);
+        appendProgressLogLine(setBackupLogLines, description);
+      }
       backupProgressTimerRef.current = window.setInterval(() => {
         setBackupProgress((prev) => {
-          if (prev >= 92) return prev;
+          if (prev >= backupProgressTimerCapRef.current) return prev;
           const step = prev < 40 ? 5 : prev < 70 ? 3 : 1;
-          return Math.min(92, prev + step);
+          return Math.min(backupProgressTimerCapRef.current, prev + step);
         });
       }, 350);
     },
-    []
+    [isAdmin]
   );
 
   const endBackupProgress = React.useCallback(
@@ -731,9 +772,28 @@ export function AboutDialog({
       setBackupProgressStatus(status);
       setBackupProgress(100);
       setBackupProgressMessage(message);
+      if (isAdmin) {
+        appendProgressLogLine(setBackupLogLines, message);
+      }
     },
-    []
+    [isAdmin]
   );
+
+  React.useEffect(() => {
+    if (!isAdmin) return;
+    const handleImportStage = (event: Event) => {
+      if (!backupProgressOpen || backupProgressType !== 'import') return;
+      const detail = (event as CustomEvent<ImportStageDetail>).detail;
+      if (!detail?.message) return;
+      appendProgressLogLine(setBackupLogLines, detail.message);
+      if (typeof detail.progress === 'number') {
+        setBackupProgress((prev) => Math.max(prev, Math.round(detail.progress)));
+      }
+    };
+
+    window.addEventListener('vdjv-import-stage', handleImportStage as EventListener);
+    return () => window.removeEventListener('vdjv-import-stage', handleImportStage as EventListener);
+  }, [backupProgressOpen, backupProgressType, isAdmin]);
 
   const requestExportBackup = React.useCallback(() => {
     if (backupBusy) return;
@@ -787,6 +847,15 @@ export function AboutDialog({
   const handleImportSharedBankClick = React.useCallback(() => {
     if (backupBusy) return;
     sharedBankImportInputRef.current?.click();
+  }, [backupBusy]);
+
+  React.useEffect(() => {
+    const handleOpenSharedBankImport = () => {
+      if (backupBusy) return;
+      sharedBankImportInputRef.current?.click();
+    };
+    window.addEventListener('vdjv-open-shared-bank-import', handleOpenSharedBankImport as EventListener);
+    return () => window.removeEventListener('vdjv-open-shared-bank-import', handleOpenSharedBankImport as EventListener);
   }, [backupBusy]);
 
   const handleRestoreBackup = React.useCallback(
@@ -868,7 +937,9 @@ export function AboutDialog({
       const file = event.target.files?.[0];
       event.target.value = '';
       if (!file) return;
-      beginBackupProgress('import', 'Importing Shared Bank', `Importing ${file.name}...`);
+      beginBackupProgress('import', 'Importing Shared Bank', `Importing ${file.name}...`, {
+        stageDrivenProgress: true,
+      });
       try {
         const message = await onImportSharedBank(file);
         setBackupNotice({ type: 'success', message });
@@ -1808,6 +1879,7 @@ export function AboutDialog({
         type={backupProgressType}
         theme={theme}
         errorMessage={backupProgressMessage}
+        logLines={isAdmin ? backupLogLines : undefined}
         hideCloseButton
       />
       <ConfirmationDialog
