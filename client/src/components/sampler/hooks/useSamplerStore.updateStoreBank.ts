@@ -4,6 +4,7 @@ import type { AdminCatalogUploadPublishResult } from './useSamplerStore.exportUp
 import type { ExportAudioMode, StoreBankAssetProtection } from './useSamplerStore.types';
 import { derivePassword } from '@/lib/bank-utils';
 import { ensureManagedStoreThumbnail } from './storeThumbnailUpload';
+import { stripPreparedAudioForExport } from './preparedAudio';
 
 type SamplerPad = SamplerBank['pads'][number];
 type MediaBackend = 'native' | 'idb';
@@ -270,7 +271,7 @@ export const runUpdateStoreBankPipeline = async (
     const audioHashToPath = new Map<string, string>();
     const imageHashToPath = new Map<string, string>();
     const exportPads = bankSnapshot.pads.map((pad) => ({
-      ...pad,
+      ...stripPreparedAudioForExport(pad),
       audioUrl: undefined as string | undefined,
       imageUrl: undefined as string | undefined,
     }));

@@ -48,6 +48,23 @@ import {
   trimAudio,
 } from './useSamplerStore.helpers';
 import {
+  PREPARED_HEAVY_RESUME_IDLE_MS,
+  buildPadPreparedSourceSignature,
+  hasMeaningfulPreparedTrim,
+  isPreparedAudioCurrent,
+  resolvePadPlaybackAudioUrl,
+  resolvePreparedAudioClassification,
+  resolvePreparedAudioKind,
+  shouldPreparePadAudio,
+  stripPreparedAudioPersistenceTransientFields,
+  summarizeBankPreparedAudioState,
+} from './preparedAudio';
+import {
+  deletePreparedAudioBlob,
+  restorePreparedAudioUrl,
+  savePreparedAudioBlob,
+} from './preparedAudioStorage';
+import {
   createSamplerMediaHelpers,
   type MediaBackend,
 } from './useSamplerStore.mediaRuntime';
@@ -83,6 +100,7 @@ import { runMergeImportedBankMissingMediaPipeline } from './useSamplerStore.medi
 import { useSamplerStoreBankLifecycle } from './useSamplerStore.bankLifecycle';
 import { useSamplerStoreSession } from './useSamplerStore.session';
 import { DEFAULT_SAMPLER_APP_CONFIG, type SamplerAppConfig } from '../samplerAppConfig';
+import { useGlobalPlaybackManagerApi } from './useGlobalPlaybackManager';
 import {
   runAddPadPipeline,
   runAddPadsPipeline,
@@ -191,6 +209,11 @@ const isNativeCapacitorPlatform = (): boolean => {
   return capacitor?.isNativePlatform?.() === true;
 };
 
+const isElectronDesktopRuntime = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  return Boolean(window.electronAPI?.getSystemMemoryInfo || window.electronAPI?.transcodeAudioToMp3);
+};
+
 const transcodeAudioToMP3ForExport = (input: {
   source: Blob;
   startTimeMs?: number;
@@ -243,6 +266,7 @@ const SESSION_ENFORCEMENT_EVENT_KEY = 'vdjv-session-enforcement-event';
 const HIDE_PROTECTED_BANKS_KEY = 'vdjv-hide-protected-banks';
 const HIDDEN_PROTECTED_BANKS_CACHE_KEY = 'vdjv-hidden-protected-banks-by-user';
 const DEFAULT_BANK_IMAGE_PREFS_KEY = 'vdjv-default-bank-image-prefs';
+const DECK_LOADED_BANKS_EVENT = 'vdjv-deck-loaded-banks-changed';
 
 // Shared password used when export is disabled.
 // This path works for signed-in and signed-out imports.
@@ -303,6 +327,7 @@ const {
 
 export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }): SamplerStore {
   const samplerConfig = options?.samplerConfig || DEFAULT_SAMPLER_APP_CONFIG;
+  const playbackManager = useGlobalPlaybackManagerApi();
   const {
     user,
     profile,
@@ -354,6 +379,17 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   const [isDefaultBankSyncing, setIsDefaultBankSyncing] = React.useState(false);
   const [hasCompletedInitialDefaultBankSync, setHasCompletedInitialDefaultBankSync] = React.useState(false);
   const [defaultBankSourceRevision, setDefaultBankSourceRevision] = React.useState(0);
+  const recentPreparedBankOrderRef = React.useRef<string[]>([]);
+  const deckLoadedPreparedBankIdsRef = React.useRef<Set<string>>(new Set());
+  const preparedQueueRunIdRef = React.useRef(0);
+  const preparedQueueActiveBankIdRef = React.useRef<string | null>(null);
+  const preparedExplicitBankIdsRef = React.useRef<Set<string>>(new Set());
+  const [preparedQueueNonce, setPreparedQueueNonce] = React.useState(0);
+  const [preparedPlaybackActive, setPreparedPlaybackActive] = React.useState(false);
+  const [preparedPlaybackIdleNonce, setPreparedPlaybackIdleNonce] = React.useState(0);
+  const preparedAutoQueueEnabled = React.useMemo(() => isElectronDesktopRuntime(), []);
+  const preparedLastPlaybackActivityRef = React.useRef<number>(0);
+  const preparedPlaybackIdleTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [exportUploadQueue, setExportUploadQueue] = React.useState<UserExportUploadJob[]>(() => readUserExportUploadQueue());
   const exportUploadQueueRef = React.useRef<UserExportUploadJob[]>(exportUploadQueue);
   const exportUploadProcessingRef = React.useRef(false);
@@ -447,6 +483,99 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     [resolveDefaultBankPreferenceOwnerId]
   );
 
+  const revokePreparedAudioUrl = React.useCallback((pad: Partial<PadData> | null | undefined) => {
+    if (pad?.preparedAudioUrl?.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(pad.preparedAudioUrl);
+      } catch {
+        // Ignore URL cleanup failures.
+      }
+    }
+  }, []);
+
+  const normalizePreparedPadState = React.useCallback((pad: PadData): PadData => {
+    const nextPad = { ...pad };
+    const currentSignature = buildPadPreparedSourceSignature(nextPad);
+    const hasPreparedAsset = Boolean(nextPad.preparedAudioStorageKey && nextPad.preparedAudioStorageKey.trim().length > 0);
+
+    if (!hasPreparedAsset) {
+      revokePreparedAudioUrl(nextPad);
+      nextPad.preparedAudioUrl = undefined;
+      if (
+        nextPad.preparedStatus &&
+        nextPad.preparedStatus !== 'none' &&
+        nextPad.preparedStatus !== 'queued' &&
+        nextPad.preparedStatus !== 'preparing'
+      ) {
+        nextPad.preparedStatus = 'none';
+      }
+      nextPad.preparedSourceSignature = undefined;
+      nextPad.preparedBytes = undefined;
+      nextPad.preparedAt = undefined;
+      nextPad.preparedDurationMs = undefined;
+      nextPad.preparedAudioKind = undefined;
+      nextPad.preparedAudioBackend = undefined;
+      return nextPad;
+    }
+
+    if (
+      typeof nextPad.preparedSourceSignature === 'string' &&
+      nextPad.preparedSourceSignature.length > 0 &&
+      nextPad.preparedSourceSignature !== currentSignature
+    ) {
+      revokePreparedAudioUrl(nextPad);
+      nextPad.preparedAudioUrl = undefined;
+      nextPad.preparedStatus = 'stale';
+    }
+
+    if (
+      nextPad.preparedStatus === 'ready' &&
+      (!nextPad.preparedSourceSignature || nextPad.preparedSourceSignature !== currentSignature)
+    ) {
+      nextPad.preparedStatus = 'stale';
+    }
+
+    return nextPad;
+  }, [revokePreparedAudioUrl]);
+
+  const rehydratePreparedAudioForPad = React.useCallback(async (pad: PadData): Promise<PadData> => {
+    const normalizedPad = normalizePreparedPadState(pad);
+    if (
+      !normalizedPad.preparedAudioStorageKey ||
+      normalizedPad.preparedStatus === 'queued' ||
+      normalizedPad.preparedStatus === 'preparing'
+    ) {
+      return normalizedPad;
+    }
+
+    if (normalizedPad.preparedAudioUrl && normalizedPad.preparedAudioUrl.trim().length > 0) {
+      return normalizedPad;
+    }
+
+    const restored = await restorePreparedAudioUrl(
+      normalizedPad.id,
+      normalizedPad.preparedAudioStorageKey,
+      normalizedPad.preparedAudioBackend,
+    );
+    if (!restored.url) {
+      if (normalizedPad.preparedStatus === 'ready') {
+        return {
+          ...normalizedPad,
+          preparedStatus: 'stale',
+          preparedAudioUrl: undefined,
+        };
+      }
+      return normalizedPad;
+    }
+
+    return {
+      ...normalizedPad,
+      preparedAudioUrl: restored.url,
+      preparedAudioStorageKey: restored.storageKey || normalizedPad.preparedAudioStorageKey,
+      preparedAudioBackend: restored.backend || normalizedPad.preparedAudioBackend,
+    };
+  }, [banks, normalizePreparedPadState]);
+
   const rehydratePadMediaFromStorage = React.useCallback(async (pad: PadData): Promise<PadData> => {
     const restoredPad: PadData = {
       ...pad,
@@ -488,8 +617,8 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         // Ignore image data fallback errors.
       }
     }
-    return restoredPad;
-  }, [restoreFileAccess, yieldToMainThread]);
+    return await rehydratePreparedAudioForPad(restoredPad);
+  }, [rehydratePreparedAudioForPad, restoreFileAccess, yieldToMainThread]);
 
   const rehydrateBankMediaFromStorage = React.useCallback(async (bank: SamplerBank): Promise<SamplerBank> => {
     const restoredPads: PadData[] = [];
@@ -501,13 +630,16 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     let nextMetadata = bank.bankMetadata;
     if (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend) {
       try {
+        const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
+        if (currentThumbnailUrl.startsWith('blob:')) {
+          return { ...bank, pads: restoredPads, bankMetadata: nextMetadata };
+        }
         const restoredThumbnail = await restoreFileAccess(
           thumbnailStorageId,
           'image',
           nextMetadata.thumbnailStorageKey,
           nextMetadata.thumbnailBackend
         );
-        const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
         nextMetadata = {
           ...nextMetadata,
           thumbnailUrl: restoredThumbnail.url || (/^https?:\/\//i.test(currentThumbnailUrl) ? currentThumbnailUrl : undefined),
@@ -534,6 +666,437 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   React.useEffect(() => {
     banksRef.current = banks;
   }, [banks]);
+
+  React.useEffect(() => {
+    const activeIds = [currentBankId, primaryBankId, secondaryBankId].filter(
+      (value): value is string => typeof value === 'string' && value.length > 0
+    );
+    if (activeIds.length === 0) return;
+    recentPreparedBankOrderRef.current = [
+      ...activeIds,
+      ...recentPreparedBankOrderRef.current.filter((id) => !activeIds.includes(id)),
+    ];
+  }, [currentBankId, primaryBankId, secondaryBankId]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleDeckLoadedBanksChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ bankIds?: unknown }>).detail;
+      const bankIds = Array.isArray(detail?.bankIds)
+        ? detail.bankIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
+        : [];
+      deckLoadedPreparedBankIdsRef.current = new Set(bankIds);
+      setPreparedQueueNonce((value) => value + 1);
+    };
+
+    window.addEventListener(DECK_LOADED_BANKS_EVENT, handleDeckLoadedBanksChanged as EventListener);
+    return () => {
+      window.removeEventListener(DECK_LOADED_BANKS_EVENT, handleDeckLoadedBanksChanged as EventListener);
+      deckLoadedPreparedBankIdsRef.current = new Set();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const syncPlaybackState = () => {
+      const hasActivePadPlayback = playbackManager.getAllPlayingPads().length > 0;
+      const hasActiveDeckPlayback = playbackManager.getDeckChannelStates().some((channel) => channel.isPlaying);
+      const nextActive = hasActivePadPlayback || hasActiveDeckPlayback;
+      const now = Date.now();
+
+      if (preparedPlaybackIdleTimerRef.current !== null) {
+        clearTimeout(preparedPlaybackIdleTimerRef.current);
+        preparedPlaybackIdleTimerRef.current = null;
+      }
+
+      if (nextActive) {
+        preparedLastPlaybackActivityRef.current = now;
+        setPreparedPlaybackActive(true);
+        return;
+      }
+
+      preparedLastPlaybackActivityRef.current = now;
+      setPreparedPlaybackActive(false);
+      preparedPlaybackIdleTimerRef.current = setTimeout(() => {
+        preparedPlaybackIdleTimerRef.current = null;
+        setPreparedPlaybackIdleNonce((value) => value + 1);
+      }, PREPARED_HEAVY_RESUME_IDLE_MS);
+    };
+
+    syncPlaybackState();
+    playbackManager.addStateChangeListener(syncPlaybackState);
+    return () => {
+      playbackManager.removeStateChangeListener(syncPlaybackState);
+      if (preparedPlaybackIdleTimerRef.current !== null) {
+        clearTimeout(preparedPlaybackIdleTimerRef.current);
+        preparedPlaybackIdleTimerRef.current = null;
+      }
+    };
+  }, [playbackManager]);
+
+  React.useEffect(() => {
+    if (preparedAutoQueueEnabled) return;
+    setBanks((prev) => {
+      let changed = false;
+      const next = prev.map((bank) => {
+        let bankChanged = false;
+        const nextPads = bank.pads.map((pad) => {
+          if (pad.preparedStatus !== 'queued' && pad.preparedStatus !== 'preparing') {
+            return pad;
+          }
+          bankChanged = true;
+          return {
+            ...pad,
+            preparedStatus: 'none' as const,
+          };
+        });
+        if (!bankChanged) return bank;
+        changed = true;
+        return {
+          ...bank,
+          pads: nextPads,
+        };
+      });
+      return changed ? next : prev;
+    });
+  }, [preparedAutoQueueEnabled]);
+
+  React.useEffect(() => {
+    setBanks((prev) => {
+      let changed = false;
+      const next = prev.map((bank) => {
+        let bankChanged = false;
+        const nextPads = bank.pads.map((pad) => {
+          const normalized = normalizePreparedPadState(pad);
+          const padChanged =
+            normalized.preparedStatus !== pad.preparedStatus ||
+            normalized.preparedSourceSignature !== pad.preparedSourceSignature ||
+            normalized.preparedAudioUrl !== pad.preparedAudioUrl ||
+            normalized.preparedAudioKind !== pad.preparedAudioKind ||
+            normalized.preparedBytes !== pad.preparedBytes ||
+            normalized.preparedAt !== pad.preparedAt ||
+            normalized.preparedDurationMs !== pad.preparedDurationMs;
+          if (padChanged) {
+            bankChanged = true;
+            return normalized;
+          }
+          return pad;
+        });
+        if (bankChanged) {
+          changed = true;
+          return {
+            ...bank,
+            pads: nextPads,
+          };
+        }
+        return bank;
+      });
+      return changed ? next : prev;
+    });
+  }, [normalizePreparedPadState]);
+
+  const updatePreparedPadState = React.useCallback((
+    bankId: string,
+    padId: string,
+    updater: (pad: PadData) => PadData
+  ) => {
+    setBanks((prev) => prev.map((bank) => {
+      if (bank.id !== bankId) return bank;
+      let changed = false;
+      const nextPads = bank.pads.map((pad) => {
+        if (pad.id !== padId) return pad;
+        const updated = normalizePreparedPadState(updater(pad));
+        const padChanged = updated !== pad &&
+          (
+            updated.preparedStatus !== pad.preparedStatus ||
+            updated.preparedAudioUrl !== pad.preparedAudioUrl ||
+            updated.preparedAudioStorageKey !== pad.preparedAudioStorageKey ||
+            updated.preparedAudioBackend !== pad.preparedAudioBackend ||
+            updated.preparedAudioKind !== pad.preparedAudioKind ||
+            updated.preparedSourceSignature !== pad.preparedSourceSignature ||
+            updated.preparedBytes !== pad.preparedBytes ||
+            updated.preparedAt !== pad.preparedAt ||
+            updated.preparedDurationMs !== pad.preparedDurationMs
+          );
+        if (!padChanged) return pad;
+        changed = true;
+        return updated;
+      });
+      return changed ? { ...bank, pads: nextPads } : bank;
+    }));
+  }, [normalizePreparedPadState]);
+
+  const preparePadForPlayback = React.useCallback(async (
+    bankId: string,
+    pad: PadData,
+    explicit: boolean,
+    runId?: number
+  ): Promise<void> => {
+    const normalizedPad = normalizePreparedPadState(pad);
+    if (!shouldPreparePadAudio(normalizedPad, explicit)) return;
+
+    const sourceSignature = buildPadPreparedSourceSignature(normalizedPad);
+    if (isPreparedAudioCurrent(normalizedPad)) {
+      const hydratedPrepared = await rehydratePreparedAudioForPad(normalizedPad);
+      if (
+        hydratedPrepared.preparedAudioUrl !== normalizedPad.preparedAudioUrl ||
+        hydratedPrepared.preparedStatus !== normalizedPad.preparedStatus
+      ) {
+        updatePreparedPadState(bankId, pad.id, () => hydratedPrepared);
+      }
+      return;
+    }
+
+    updatePreparedPadState(bankId, pad.id, (currentPad) => ({
+      ...currentPad,
+      preparedStatus: 'preparing',
+      preparedSourceSignature: sourceSignature,
+    }));
+
+    try {
+      const sourceBlob = await loadPadMediaBlobWithUrlFallback(normalizedPad, 'audio');
+      if (!sourceBlob) {
+        throw new Error('Prepared audio source could not be loaded.');
+      }
+
+      let preparedBlob = sourceBlob;
+      let preparedDurationMs = normalizedPad.audioDurationMs;
+      const preparedKind = resolvePreparedAudioKind(normalizedPad, explicit);
+      if (preparedKind === 'trimmed_lossless' && hasMeaningfulPreparedTrim(normalizedPad)) {
+        const trimResult = await trimAudio(
+          sourceBlob,
+          normalizedPad.startTimeMs,
+          normalizedPad.endTimeMs,
+          detectAudioFormat(sourceBlob)
+        );
+        preparedBlob = trimResult.blob;
+        preparedDurationMs = trimResult.newDurationMs;
+      }
+
+      const storedPrepared = await savePreparedAudioBlob(normalizedPad.id, preparedBlob);
+      const restoredPrepared = await restorePreparedAudioUrl(
+        normalizedPad.id,
+        storedPrepared.storageKey,
+        storedPrepared.backend
+      );
+      if (typeof runId === 'number' && preparedQueueRunIdRef.current !== runId) {
+        return;
+      }
+
+      setBanks((prev) => prev.map((bank) => {
+        if (bank.id !== bankId) return bank;
+        const padIndex = bank.pads.findIndex((entry) => entry.id === normalizedPad.id);
+        if (padIndex < 0) return bank;
+        const currentPad = bank.pads[padIndex];
+        if (buildPadPreparedSourceSignature(currentPad) !== sourceSignature) {
+          return bank;
+        }
+        revokePreparedAudioUrl(currentPad);
+        const nextPad = normalizePreparedPadState({
+          ...currentPad,
+          preparedAudioUrl: restoredPrepared.url || undefined,
+          preparedAudioStorageKey: storedPrepared.storageKey,
+          preparedAudioBackend: storedPrepared.backend,
+          preparedAudioKind: preparedKind,
+          preparedSourceSignature: sourceSignature,
+          preparedStatus: 'ready',
+          preparedBytes: preparedBlob.size,
+          preparedAt: Date.now(),
+          preparedDurationMs: typeof preparedDurationMs === 'number' && Number.isFinite(preparedDurationMs)
+            ? preparedDurationMs
+            : currentPad.audioDurationMs,
+        });
+        const nextPads = [...bank.pads];
+        nextPads[padIndex] = nextPad;
+        return {
+          ...bank,
+          pads: nextPads,
+        };
+      }));
+    } catch {
+      if (typeof runId === 'number' && preparedQueueRunIdRef.current !== runId) {
+        return;
+      }
+      updatePreparedPadState(bankId, pad.id, (currentPad) => ({
+        ...currentPad,
+        preparedStatus: 'error',
+        preparedAudioUrl: undefined,
+      }));
+    }
+  }, [
+    detectAudioFormat,
+    loadPadMediaBlobWithUrlFallback,
+    normalizePreparedPadState,
+    rehydratePreparedAudioForPad,
+    revokePreparedAudioUrl,
+    trimAudio,
+    updatePreparedPadState,
+  ]);
+
+  const getBankPreparedSummary = React.useCallback((bankId: string) => {
+    const bank = banksRef.current.find((entry) => entry.id === bankId);
+    return bank
+      ? summarizeBankPreparedAudioState(bank)
+      : { status: 'none' as const, label: 'Not prepared' as const, readyPads: 0, activePads: 0 };
+  }, []);
+
+  const cancelPrepareBankForLive = React.useCallback((bankId?: string) => {
+    if (!bankId) {
+      preparedExplicitBankIdsRef.current.clear();
+      preparedQueueRunIdRef.current += 1;
+      preparedQueueActiveBankIdRef.current = null;
+      setBanks((prev) => prev.map((bank) => ({
+        ...bank,
+        pads: bank.pads.map((pad) => (
+          pad.preparedStatus === 'queued' || pad.preparedStatus === 'preparing'
+            ? { ...pad, preparedStatus: 'none' }
+            : pad
+        )),
+      })));
+      setPreparedQueueNonce((value) => value + 1);
+      return;
+    }
+
+    preparedExplicitBankIdsRef.current.delete(bankId);
+    if (preparedQueueActiveBankIdRef.current === bankId) {
+      preparedQueueRunIdRef.current += 1;
+      preparedQueueActiveBankIdRef.current = null;
+    }
+    setBanks((prev) => prev.map((bank) => (
+      bank.id !== bankId
+        ? bank
+        : {
+            ...bank,
+            pads: bank.pads.map((pad) => (
+              pad.preparedStatus === 'queued' || pad.preparedStatus === 'preparing'
+                ? { ...pad, preparedStatus: 'none' }
+                : pad
+            )),
+          }
+    )));
+    setPreparedQueueNonce((value) => value + 1);
+  }, []);
+
+  const prepareBankForLive = React.useCallback(async (
+    bankId: string,
+    options?: { explicit?: boolean }
+  ): Promise<void> => {
+    const explicit = options?.explicit !== false;
+    preparedExplicitBankIdsRef.current.add(bankId);
+    setBanks((prev) => prev.map((bank) => (
+      bank.id !== bankId
+        ? bank
+        : {
+            ...bank,
+            pads: bank.pads.map((pad) => {
+              const normalizedPad = normalizePreparedPadState(pad);
+              if (!shouldPreparePadAudio(normalizedPad, explicit)) return normalizedPad;
+              if (isPreparedAudioCurrent(normalizedPad)) return normalizedPad;
+              return {
+                ...normalizedPad,
+                preparedStatus: normalizedPad.preparedStatus === 'preparing' ? 'preparing' : 'queued',
+                preparedSourceSignature: buildPadPreparedSourceSignature(normalizedPad),
+              };
+            }),
+          }
+    )));
+    setPreparedQueueNonce((value) => value + 1);
+  }, [normalizePreparedPadState]);
+
+  React.useEffect(() => {
+    if (!isBanksHydrated) return;
+    if (!startupRestoreCompleted) return;
+    if (!hasCompletedInitialDefaultBankSync || isDefaultBankSyncing) return;
+    if (preparedPlaybackActive) return;
+    if (Date.now() - preparedLastPlaybackActivityRef.current < PREPARED_HEAVY_RESUME_IDLE_MS) return;
+    if (!preparedAutoQueueEnabled && preparedExplicitBankIdsRef.current.size === 0) return;
+
+    const priorityBankIds: string[] = [];
+    const pushPriorityBankId = (value: string | null | undefined) => {
+      if (!value || priorityBankIds.includes(value)) return;
+      priorityBankIds.push(value);
+    };
+
+    Array.from(preparedExplicitBankIdsRef.current).forEach(pushPriorityBankId);
+    if (preparedAutoQueueEnabled) {
+      pushPriorityBankId(currentBankId);
+      pushPriorityBankId(primaryBankId);
+      pushPriorityBankId(secondaryBankId);
+      Array.from(deckLoadedPreparedBankIdsRef.current).forEach(pushPriorityBankId);
+      recentPreparedBankOrderRef.current.forEach(pushPriorityBankId);
+      banks.forEach((bank) => pushPriorityBankId(bank.id));
+    }
+
+    if (priorityBankIds.length === 0) return;
+
+    let cancelled = false;
+    const runId = preparedQueueRunIdRef.current + 1;
+    preparedQueueRunIdRef.current = runId;
+
+    const runPreparedQueue = async () => {
+      for (const bankId of priorityBankIds) {
+        if (cancelled || preparedQueueRunIdRef.current !== runId) return;
+        const bank = banksRef.current.find((entry) => entry.id === bankId);
+        if (!bank) continue;
+        const explicit = preparedExplicitBankIdsRef.current.has(bankId);
+        const candidates = bank.pads.filter((pad) => {
+          const normalizedPad = normalizePreparedPadState(pad);
+          if (!shouldPreparePadAudio(normalizedPad, explicit)) return false;
+          if (normalizedPad.preparedStatus === 'preparing') return false;
+          return !isPreparedAudioCurrent(normalizedPad);
+        });
+        if (candidates.length === 0) {
+          if (explicit) {
+            preparedExplicitBankIdsRef.current.delete(bankId);
+          }
+          continue;
+        }
+
+        preparedQueueActiveBankIdRef.current = bankId;
+        const prioritizedCandidates = [...candidates].sort((left, right) => {
+          const leftRank = resolvePreparedAudioClassification(left) === 'long_heavy' ? 0 : 1;
+          const rightRank = resolvePreparedAudioClassification(right) === 'long_heavy' ? 0 : 1;
+          return leftRank - rightRank;
+        });
+
+        for (const pad of prioritizedCandidates) {
+          if (cancelled || preparedQueueRunIdRef.current !== runId || preparedPlaybackActive) return;
+          await preparePadForPlayback(bankId, pad, explicit, runId);
+          await yieldToMainThread();
+        }
+
+        preparedQueueActiveBankIdRef.current = null;
+        if (explicit) {
+          preparedExplicitBankIdsRef.current.delete(bankId);
+          setPreparedQueueNonce((value) => value + 1);
+        }
+      }
+    };
+
+    void runPreparedQueue();
+    return () => {
+      cancelled = true;
+      if (preparedQueueRunIdRef.current === runId) {
+        preparedQueueActiveBankIdRef.current = null;
+      }
+    };
+  }, [
+    banks,
+    currentBankId,
+    hasCompletedInitialDefaultBankSync,
+    isBanksHydrated,
+    isDefaultBankSyncing,
+    preparePadForPlayback,
+    preparedPlaybackActive,
+    preparedPlaybackIdleNonce,
+    preparedQueueNonce,
+    preparedAutoQueueEnabled,
+    primaryBankId,
+    secondaryBankId,
+    startupRestoreCompleted,
+    yieldToMainThread,
+    normalizePreparedPadState,
+  ]);
 
   const {
     logExportActivity,
@@ -875,8 +1438,11 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         const dataToSave = {
           banks: banks.map(bank => ({
             ...bank,
-            pads: bank.pads.map(pad => ({
-              ...pad, audioUrl: undefined, imageUrl: undefined, imageData: undefined,
+            pads: bank.pads.map((pad) => ({
+              ...stripPreparedAudioPersistenceTransientFields(pad),
+              audioUrl: undefined,
+              imageUrl: undefined,
+              imageData: undefined,
             }))
           }))
         };
@@ -886,10 +1452,19 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
           const reducedData = {
             banks: banks.map(bank => ({
               ...bank, pads: bank.pads.map(pad => ({
+                ...stripPreparedAudioPersistenceTransientFields(pad),
                 id: pad.id,
                 name: pad.name,
                 audioStorageKey: pad.audioStorageKey,
                 audioBackend: pad.audioBackend,
+                preparedAudioStorageKey: pad.preparedAudioStorageKey,
+                preparedAudioBackend: pad.preparedAudioBackend,
+                preparedAudioKind: pad.preparedAudioKind,
+                preparedSourceSignature: pad.preparedSourceSignature,
+                preparedStatus: stripPreparedAudioPersistenceTransientFields(pad).preparedStatus,
+                preparedBytes: pad.preparedBytes,
+                preparedAt: pad.preparedAt,
+                preparedDurationMs: pad.preparedDurationMs,
                 imageStorageKey: pad.imageStorageKey,
                 imageBackend: pad.imageBackend,
                 hasImageAsset: pad.hasImageAsset,
@@ -1124,18 +1699,39 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   const updatePad = React.useCallback(async (bankId: string, id: string, updatedPad: PadData) => {
     const existingBank = banks.find((bank) => bank.id === bankId);
     const existingPad = existingBank?.pads.find((pad) => pad.id === id);
+    const nextPad = { ...updatedPad };
+    const sourceChanged = existingPad
+      ? buildPadPreparedSourceSignature(existingPad) !== buildPadPreparedSourceSignature(nextPad)
+      : false;
+    if (sourceChanged && existingPad) {
+      revokePreparedAudioUrl(existingPad);
+      try {
+        await deletePreparedAudioBlob(existingPad.id, existingPad.preparedAudioStorageKey, existingPad.preparedAudioBackend);
+      } catch {
+        // Ignore prepared cache cleanup failures for source updates.
+      }
+      nextPad.preparedAudioUrl = undefined;
+      nextPad.preparedAudioStorageKey = undefined;
+      nextPad.preparedAudioBackend = undefined;
+      nextPad.preparedAudioKind = undefined;
+      nextPad.preparedSourceSignature = undefined;
+      nextPad.preparedStatus = 'none';
+      nextPad.preparedBytes = undefined;
+      nextPad.preparedAt = undefined;
+      nextPad.preparedDurationMs = undefined;
+    }
     const currentImagePreference = getDefaultBankPadImagePreference(id);
     const hasVisibleImage = Boolean(existingPad?.imageUrl || existingPad?.imageData);
     const imageIsBlank =
-      (!updatedPad.imageUrl || updatedPad.imageUrl.trim().length === 0) &&
-      (!updatedPad.imageData || updatedPad.imageData.trim().length === 0);
+      (!nextPad.imageUrl || nextPad.imageUrl.trim().length === 0) &&
+      (!nextPad.imageData || nextPad.imageData.trim().length === 0);
     const requestedImageRemoval = hasVisibleImage && imageIsBlank;
 
     await runUpdatePadPipeline(
       {
         bankId,
         id,
-        updatedPad,
+        updatedPad: nextPad,
         banks,
       },
       {
@@ -1155,9 +1751,19 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     if (currentImagePreference === 'none') {
       writeDefaultBankPadImagePreferenceForOwner(id, null);
     }
-  }, [banks, getDefaultBankPadImagePreference, writeDefaultBankPadImagePreferenceForOwner]);
+  }, [banks, getDefaultBankPadImagePreference, revokePreparedAudioUrl, writeDefaultBankPadImagePreferenceForOwner]);
 
   const removePad = React.useCallback(async (bankId: string, id: string) => {
+    const existingBank = banks.find((bank) => bank.id === bankId);
+    const existingPad = existingBank?.pads.find((pad) => pad.id === id);
+    if (existingPad) {
+      revokePreparedAudioUrl(existingPad);
+      try {
+        await deletePreparedAudioBlob(existingPad.id, existingPad.preparedAudioStorageKey, existingPad.preparedAudioBackend);
+      } catch {
+        // Ignore prepared cache cleanup failures for removed pads.
+      }
+    }
     await runRemovePadPipeline(
       {
         bankId,
@@ -1169,7 +1775,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         setBanks,
       }
     );
-  }, [banks]);
+  }, [banks, revokePreparedAudioUrl]);
 
   const reorderPads = React.useCallback((bankId: string, fromIndex: number, toIndex: number) => {
     runReorderPadsPipeline(bankId, fromIndex, toIndex, setBanks);
@@ -1659,9 +2265,15 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         } catch {
 
         }
+        try {
+          await deletePreparedAudioBlob(pad.id, pad.preparedAudioStorageKey, pad.preparedAudioBackend);
+        } catch {
+          // Ignore prepared cache cleanup failures.
+        }
+        revokePreparedAudioUrl(pad);
       })
     );
-  }, []);
+  }, [revokePreparedAudioUrl]);
 
   const applySamplerMetadataSnapshot = React.useCallback(async (rawSnapshot: SamplerMetadataSnapshot) => {
     const snapshot = reviveSamplerMetadataSnapshot(rawSnapshot);
@@ -2101,7 +2713,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   return {
     banks, startupRestoreCompleted, primaryBankId, secondaryBankId, currentBankId, primaryBank, secondaryBank, currentBank, isDualMode,
     addPad, addPads, updatePad, removePad, createBank, setPrimaryBank, setSecondaryBank, setVisibleBanks, setCurrentBank, updateBank, deleteBank, duplicateBank, duplicatePad, importBank, exportBank, reorderPads, moveBankUp, moveBankDown, transferPad, exportAdminBank, updateStoreBank, publishDefaultBankRelease, canTransferFromBank,
-    exportAppBackup, restoreAppBackup, applySamplerMetadataSnapshot, relinkPadAudioFromFile, rehydratePadMedia, rehydrateMissingMediaInBank, prefetchOfficialBankMediaForOffline, recoverMissingMediaFromBanks,
+    exportAppBackup, restoreAppBackup, applySamplerMetadataSnapshot, relinkPadAudioFromFile, rehydratePadMedia, rehydrateMissingMediaInBank, prefetchOfficialBankMediaForOffline, getBankPreparedSummary, prepareBankForLive, cancelPrepareBankForLive, recoverMissingMediaFromBanks,
   };
 }
 

@@ -1,5 +1,6 @@
 import type { PadData, SamplerBank } from '../types/sampler';
 import { applyBankContentPolicy } from './useSamplerStore.provenance';
+import { stripPreparedAudioForExport } from './preparedAudio';
 
 type MediaBackend = 'native' | 'idb';
 type SetState<T> = (value: T | ((prev: T) => T)) => void;
@@ -171,7 +172,7 @@ export const runDuplicateBankPipeline = async (
       });
 
       duplicatePads.push({
-        ...sourcePad,
+        ...stripPreparedAudioForExport(sourcePad),
         id: newPadId,
         audioUrl,
         imageUrl,
@@ -310,7 +311,7 @@ export const runDuplicatePadPipeline = async (
       : -1;
 
     const duplicate: PadData = {
-      ...sourcePad,
+      ...stripPreparedAudioForExport(sourcePad),
       id: newPadId,
       name: duplicateName,
       audioUrl: audioUrl || sourcePad.audioUrl,

@@ -25,6 +25,7 @@ import { MidiMessage, useWebMidi } from '@/lib/midi';
 import { DEFAULT_SYSTEM_MAPPINGS, SystemAction, SystemMappings } from '@/lib/system-mappings';
 import type { MidiDeviceProfile } from '@/lib/midi/device-profiles';
 import { performanceMonitor, type PerformanceTier } from '@/lib/performance-monitor';
+import { getElectronMemoryTuningProfile } from '@/lib/electron-performance';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { getCachedUser, useAuth } from '@/hooks/useAuth';
 import { getAudioTelemetry } from '@/lib/audio-telemetry';
@@ -51,6 +52,11 @@ import {
   type SamplerSearchResult,
   type SamplerSearchScope,
 } from './samplerSearch';
+import {
+  resolvePadPlaybackAudioUrl,
+  resolvePadPlaybackBytes,
+  resolvePadPlaybackDurationMs,
+} from './hooks/preparedAudio';
 const PAD_SIZE_MIN = 2;
 const PAD_SIZE_MAX_PORTRAIT = 8;
 const PAD_SIZE_MAX_LANDSCAPE = 16;
@@ -110,9 +116,12 @@ const resolvePadWarmupPolicy = (): PadWarmupPolicy => {
   const isMobileUA = /Android|iPhone|iPad|iPod/i.test(ua);
   const isIOSUA = /iPhone|iPad|iPod/i.test(ua);
   const isNativeCapacitor = Boolean((window as any).Capacitor?.isNativePlatform?.());
+  const electronProfile = getElectronMemoryTuningProfile();
 
   let base: PadWarmupPolicy;
-  if (isNativeCapacitor) {
+  if (electronProfile) {
+    base = electronProfile.warmupPolicy;
+  } else if (isNativeCapacitor) {
     base = {
       maxPerBank: 6,
       maxTotal: 10,
@@ -178,8 +187,9 @@ const resolvePadWarmupPolicy = (): PadWarmupPolicy => {
 };
 
 const getPadDurationForWarmup = (pad: PadData): number | null => {
-  if (typeof pad.audioDurationMs === 'number' && Number.isFinite(pad.audioDurationMs) && pad.audioDurationMs > 0) {
-    return pad.audioDurationMs;
+  const playbackDurationMs = resolvePadPlaybackDurationMs(pad);
+  if (typeof playbackDurationMs === 'number' && Number.isFinite(playbackDurationMs) && playbackDurationMs > 0) {
+    return playbackDurationMs;
   }
   if (
     typeof pad.endTimeMs === 'number' &&
@@ -207,10 +217,11 @@ const isLikelyLocalAudioUrl = (url: string): boolean => {
 };
 
 const shouldWarmUnknownDurationPad = (pad: PadData): boolean => {
-  const audioUrl = typeof pad.audioUrl === 'string' ? pad.audioUrl.trim() : '';
+  const audioUrl = resolvePadPlaybackAudioUrl(pad);
   if (!audioUrl || !isLikelyLocalAudioUrl(audioUrl)) return false;
-  if (typeof pad.audioBytes === 'number' && Number.isFinite(pad.audioBytes) && pad.audioBytes > 0) {
-    return pad.audioBytes <= PAD_WARMUP_UNKNOWN_SAFE_MAX_BYTES;
+  const playbackBytes = resolvePadPlaybackBytes(pad);
+  if (typeof playbackBytes === 'number' && Number.isFinite(playbackBytes) && playbackBytes > 0) {
+    return playbackBytes <= PAD_WARMUP_UNKNOWN_SAFE_MAX_BYTES;
   }
   if (
     typeof pad.endTimeMs === 'number' &&
@@ -328,6 +339,9 @@ export function SamplerPadApp() {
     rehydratePadMedia,
     rehydrateMissingMediaInBank,
     prefetchOfficialBankMediaForOffline,
+    getBankPreparedSummary,
+    prepareBankForLive,
+    cancelPrepareBankForLive,
     recoverMissingMediaFromBanks
   } = useSamplerStore({ samplerConfig });
 
@@ -371,6 +385,13 @@ export function SamplerPadApp() {
   React.useEffect(() => {
     banksRef.current = banks;
   }, [banks]);
+
+  const buildPlaybackReadyPad = React.useCallback((pad: PadData): PadData => ({
+    ...pad,
+    audioUrl: resolvePadPlaybackAudioUrl(pad),
+    audioBytes: resolvePadPlaybackBytes(pad),
+    audioDurationMs: resolvePadPlaybackDurationMs(pad),
+  }), []);
 
   // Load settings from localStorage
   const [settings, setSettings] = React.useState<AppSettings>(() => {
@@ -595,7 +616,7 @@ export function SamplerPadApp() {
 
       const padParts = bank.pads
         .map((pad, index) => {
-          const audioUrl = typeof pad.audioUrl === 'string' ? pad.audioUrl.trim() : '';
+          const audioUrl = resolvePadPlaybackAudioUrl(pad);
           if (!audioUrl) return '';
           const durationMs = getPadDurationForWarmup(pad);
           const triggerMode = typeof pad.triggerMode === 'string' ? pad.triggerMode : 'toggle';
@@ -606,7 +627,7 @@ export function SamplerPadApp() {
             triggerMode,
             position,
             durationMs ?? 'na',
-            pad.audioBytes ?? 'na'
+            resolvePadPlaybackBytes(pad) ?? 'na'
           ].join('~');
         })
         .filter(Boolean)
@@ -1210,7 +1231,8 @@ export function SamplerPadApp() {
         const bank = banks.find((item) => item.id === entry.loadedPadRef?.bankId);
         const pad = bank?.pads.find((item) => item.id === entry.loadedPadRef?.padId);
         if (!bank || !pad) continue;
-        await playbackManager.registerPad(pad.id, pad, bank.id, bank.name);
+        const runtimePad = buildPlaybackReadyPad(pad);
+        await playbackManager.registerPad(runtimePad.id, runtimePad, bank.id, bank.name);
         const loaded = playbackManager.loadPadToChannel(entry.channelId, pad.id);
         if (!loaded) continue;
         if (Array.isArray(entry.hotcuesMs)) {
@@ -1241,7 +1263,7 @@ export function SamplerPadApp() {
     return () => {
       cancelled = true;
     };
-  }, [banks, playbackManager, settings.deckLayout]);
+  }, [banks, buildPlaybackReadyPad, playbackManager, settings.deckLayout]);
 
   const normalizeMidiValue = React.useCallback((value: number) => {
     // Scale full MIDI CC range (0-127) to 0-1.
@@ -1946,13 +1968,14 @@ export function SamplerPadApp() {
         }
       }
 
-      if (!next.pad.audioUrl) {
+      const runtimePad = buildPlaybackReadyPad(next.pad);
+      if (!runtimePad.audioUrl) {
         setError(`"${next.pad.name}" is still syncing. Try again in a moment or keep the bank selected until sync completes.`);
         setShowErrorDialog(true);
         return false;
       }
 
-      await playbackManager.registerPad(next.pad.id, next.pad, bankId, next.bankName);
+      await playbackManager.registerPad(runtimePad.id, runtimePad, bankId, next.bankName);
       const loaded = playbackManager.loadPadToChannel(channelId, next.pad.id);
       if (!loaded) {
         setError(`Failed to load "${next.pad.name}" into Channel ${channelId}.`);
@@ -1971,7 +1994,7 @@ export function SamplerPadApp() {
       setShowErrorDialog(true);
       return false;
     }
-  }, [playbackManager, rehydratePadMedia, shouldFocusPadsForChannelLoad, updateSetting]);
+  }, [buildPlaybackReadyPad, playbackManager, rehydratePadMedia, shouldFocusPadsForChannelLoad, updateSetting]);
 
   const handleSelectPadForChannelLoad = React.useCallback((pad: PadData, bankId: string, bankName: string) => {
     if (armedLoadChannelId === null) return;
@@ -2547,13 +2570,14 @@ export function SamplerPadApp() {
         return;
       }
 
+      const runtimePad = buildPlaybackReadyPad(pad);
       playbackManager
-        .registerPad(pad.id, pad, bankId, bankName)
+        .registerPad(runtimePad.id, runtimePad, bankId, bankName)
         .then(() => trigger())
         .catch((error) => {
         });
     },
-    [playbackManager]
+    [buildPlaybackReadyPad, playbackManager]
   );
 
   const activeHoldKeysRef = React.useRef<Map<string, string>>(new Map());
@@ -2597,7 +2621,7 @@ export function SamplerPadApp() {
     const knownPadAudioById = new Map<string, string>();
     banks.forEach((bank) => {
       bank.pads.forEach((pad) => {
-        const audioUrl = typeof pad.audioUrl === 'string' ? pad.audioUrl.trim() : '';
+        const audioUrl = resolvePadPlaybackAudioUrl(pad);
         if (!audioUrl) return;
         knownPadAudioById.set(pad.id, audioUrl);
       });
@@ -2641,7 +2665,7 @@ export function SamplerPadApp() {
 
       const candidates = [...bank.pads]
         .filter((pad) => {
-          const audioUrl = typeof pad.audioUrl === 'string' ? pad.audioUrl.trim() : '';
+          const audioUrl = resolvePadPlaybackAudioUrl(pad);
           if (!audioUrl) return false;
           if (!isOnline && isRemoteHttpAudioUrl(audioUrl)) return false;
           const durationMs = getPadDurationForWarmup(pad);
@@ -2652,8 +2676,8 @@ export function SamplerPadApp() {
           return warmedPadAudioRef.current.get(pad.id) !== audioUrl;
         })
         .sort((left, right) => {
-          const leftUrl = left.audioUrl.trim();
-          const rightUrl = right.audioUrl.trim();
+          const leftUrl = resolvePadPlaybackAudioUrl(left);
+          const rightUrl = resolvePadPlaybackAudioUrl(right);
           const leftLocalScore = isLikelyLocalAudioUrl(leftUrl) ? 0 : 1;
           const rightLocalScore = isLikelyLocalAudioUrl(rightUrl) ? 0 : 1;
           if (leftLocalScore !== rightLocalScore) return leftLocalScore - rightLocalScore;
@@ -2676,7 +2700,7 @@ export function SamplerPadApp() {
           bankId: bank.id,
           bankName: bank.name,
           pad,
-          audioUrl: pad.audioUrl.trim()
+          audioUrl: resolvePadPlaybackAudioUrl(pad)
         });
       }
       if (queue.length >= warmupPolicy.maxTotal) break;
@@ -2738,7 +2762,8 @@ export function SamplerPadApp() {
           audioBytes: item.pad.audioBytes
         });
         try {
-          const warmed = await playbackManager.preloadPad(item.pad.id, item.pad, item.bankId, item.bankName);
+          const runtimePad = buildPlaybackReadyPad(item.pad);
+          const warmed = await playbackManager.preloadPad(runtimePad.id, runtimePad, item.bankId, item.bankName);
           if (warmed && !cancelled && runId === warmupRunIdRef.current) {
             warmedPadAudioRef.current.set(item.pad.id, item.audioUrl);
           }
@@ -2787,7 +2812,7 @@ export function SamplerPadApp() {
         delayTimer = null;
       }
     };
-  }, [audioTelemetry, currentBankId, isDualMode, isOnline, playbackManager, primaryBankId, secondaryBankId, warmupPolicy, warmupSourceSignature]);
+  }, [audioTelemetry, buildPlaybackReadyPad, currentBankId, isDualMode, isOnline, playbackManager, primaryBankId, secondaryBankId, warmupPolicy, warmupSourceSignature]);
 
   const handleBankShortcut = React.useCallback((bankId: string) => {
     if (isDualMode) {
@@ -3812,6 +3837,9 @@ export function SamplerPadApp() {
     onRequestRecoverBankFiles: handleRecoverBankPrompt,
     onRetryBankMissingMedia: rehydrateMissingMediaInBank,
     onPrefetchOfficialBankMediaForOffline: prefetchOfficialBankMediaForOffline,
+    getBankPreparedSummary,
+    onPrepareBankForLive: prepareBankForLive,
+    onCancelPrepareBankForLive: cancelPrepareBankForLive,
     defaultBankColor: samplerConfig.bankDefaults.defaultBankColor,
   };
 

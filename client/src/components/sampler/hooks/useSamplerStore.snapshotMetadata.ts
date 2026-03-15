@@ -5,7 +5,20 @@ import { getPadContentOrigin, isOfficialBankSource, isOfficialPadContent } from 
 
 export type SnapshotPadRecord = Omit<
   PadData,
-  'audioUrl' | 'imageUrl' | 'imageData' | 'audioStorageKey' | 'imageStorageKey'
+  | 'audioUrl'
+  | 'imageUrl'
+  | 'imageData'
+  | 'audioStorageKey'
+  | 'imageStorageKey'
+  | 'preparedAudioUrl'
+  | 'preparedAudioStorageKey'
+  | 'preparedAudioBackend'
+  | 'preparedAudioKind'
+  | 'preparedSourceSignature'
+  | 'preparedStatus'
+  | 'preparedBytes'
+  | 'preparedAt'
+  | 'preparedDurationMs'
 > & {
   restoreAssetKind: NonNullable<PadData['restoreAssetKind']>;
   missingMediaExpected: boolean;
@@ -116,6 +129,15 @@ export const buildSamplerMetadataSnapshot = (input: {
         imageStorageKey: undefined,
         audioBackend: undefined,
         imageBackend: undefined,
+        preparedAudioUrl: undefined,
+        preparedAudioStorageKey: undefined,
+        preparedAudioBackend: undefined,
+        preparedAudioKind: undefined,
+        preparedSourceSignature: undefined,
+        preparedStatus: undefined,
+        preparedBytes: undefined,
+        preparedAt: undefined,
+        preparedDurationMs: undefined,
         restoreAssetKind,
         missingMediaExpected: isCustomMedia,
         missingImageExpected: isCustomMedia && expectsImage,

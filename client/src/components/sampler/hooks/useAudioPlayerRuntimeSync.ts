@@ -2,6 +2,11 @@ import * as React from 'react';
 import { cloneHotcuesTupleValue, normalizeKeyLockForRuntime, normalizeTempoPercentForRuntime } from './audioPadNormalization';
 import type { GlobalPlaybackManager } from './useGlobalPlaybackManager';
 import type { PadData } from '../types/sampler';
+import {
+  resolvePadPlaybackAudioUrl,
+  resolvePadPlaybackBytes,
+  resolvePadPlaybackDurationMs,
+} from './preparedAudio';
 
 export interface AudioPlayerRuntimeSettings {
   tempoPercent: number;
@@ -82,6 +87,13 @@ export const buildAudioPlayerNextPlaySettings = (
   savedHotcuesMs: cloneHotcuesTupleValue(updatedPad.savedHotcuesMs),
 });
 
+export const buildAudioPlayerRuntimePad = (pad: PadData): PadData => ({
+  ...pad,
+  audioUrl: resolvePadPlaybackAudioUrl(pad),
+  audioBytes: resolvePadPlaybackBytes(pad),
+  audioDurationMs: resolvePadPlaybackDurationMs(pad),
+});
+
 export function useAudioPlayerRuntimeSync({
   pad,
   bankId,
@@ -92,6 +104,7 @@ export function useAudioPlayerRuntimeSync({
   const registeredRef = React.useRef(false);
   const pendingSettingsRef = React.useRef<Record<string, unknown> | null>(null);
   const pendingMetadataRef = React.useRef<{ name: string; color: string; bankId: string; bankName: string } | null>(null);
+  const runtimePad = React.useMemo(() => buildAudioPlayerRuntimePad(pad), [pad]);
 
   const flushPendingRuntimeState = React.useCallback(() => {
     const pendingSettings = pendingSettingsRef.current;
@@ -108,13 +121,13 @@ export function useAudioPlayerRuntimeSync({
   }, [pad.id, playbackManager]);
 
   React.useEffect(() => {
-    if (!pad.audioUrl) return;
+    if (!runtimePad.audioUrl) return;
     let cancelled = false;
     registeredRef.current = false;
 
     const registerPad = async () => {
       try {
-        await playbackManager.registerPad(pad.id, pad, bankId, bankName);
+        await playbackManager.registerPad(runtimePad.id, runtimePad, bankId, bankName);
         if (cancelled) return;
         registeredRef.current = true;
         flushPendingRuntimeState();
@@ -127,7 +140,7 @@ export function useAudioPlayerRuntimeSync({
     return () => {
       cancelled = true;
     };
-  }, [flushPendingRuntimeState, pad.audioUrl, pad.id, playbackManager]);
+  }, [bankId, bankName, flushPendingRuntimeState, playbackManager, runtimePad]);
 
   React.useEffect(() => {
     const nextSettings = buildAudioPlayerPadSettings(pad, runtimeSettings);

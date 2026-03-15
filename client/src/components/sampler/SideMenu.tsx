@@ -20,6 +20,7 @@ import { useOnlineStoreDownloadTransfer } from './hooks/useOnlineStoreDownloadTr
 import { deriveSnapshotRestoreStatus } from './hooks/useSamplerStore.snapshotMetadata';
 import type { OnlineBankStoreImportMeta, StoreDownloadedArtifact, StoreItem, TransferState } from './onlineStore.types';
 import type { ExportAudioMode, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
+import type { BankPreparedSummary } from './hooks/preparedAudio';
 
 type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string; closing?: boolean };
 const MAX_ACTIVE_NOTICES = 2;
@@ -118,6 +119,9 @@ interface SideMenuProps {
     prefetched: number;
     failed: number;
   }>;
+  getBankPreparedSummary: (bankId: string) => BankPreparedSummary;
+  onPrepareBankForLive: (bankId: string, options?: { explicit?: boolean }) => Promise<void>;
+  onCancelPrepareBankForLive: (bankId?: string) => void;
   defaultBankColor?: string;
 }
 
@@ -158,6 +162,9 @@ export function SideMenu({
   onRequestRecoverBankFiles,
   onRetryBankMissingMedia,
   onPrefetchOfficialBankMediaForOffline,
+  getBankPreparedSummary,
+  onPrepareBankForLive,
+  onCancelPrepareBankForLive,
   defaultBankColor = '#3b82f6',
 }: SideMenuProps) {
   const logoSrc = `${import.meta.env.BASE_URL}assets/logo.png`;
@@ -1325,6 +1332,7 @@ export function SideMenu({
                 const bankId = bank?.id || preview?.bankId || '';
                 const bankName = bank?.name || preview?.title || 'Bank Preview';
                 const bankColor = bank?.defaultColor || preview?.color || defaultBankColor;
+                const preparedSummary = !isPreview && bank ? getBankPreparedSummary(bank.id) : null;
                 const restoreStatus = !isPreview ? bank?.restoreStatus || null : null;
                 const snapshotTransfer = !isPreview && bank?.bankMetadata?.catalogItemId
                   ? snapshotTransfers[bank.bankMetadata.catalogItemId]
@@ -1528,6 +1536,27 @@ export function SideMenu({
                             <p className={bankMetaClass} style={resolvedBankTextStyle}>
                               {bank?.pads.length || 0} pad{bank?.pads.length !== 1 ? 's' : ''}
                             </p>
+                            {preparedSummary && (
+                              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                preparedSummary.status === 'ready'
+                                  ? theme === 'dark'
+                                    ? 'bg-emerald-500/15 text-emerald-200'
+                                    : 'bg-emerald-100 text-emerald-700'
+                                  : preparedSummary.status === 'preparing'
+                                    ? theme === 'dark'
+                                      ? 'bg-cyan-500/15 text-cyan-200'
+                                      : 'bg-cyan-100 text-cyan-700'
+                                    : preparedSummary.status === 'stale'
+                                      ? theme === 'dark'
+                                        ? 'bg-amber-500/15 text-amber-200'
+                                        : 'bg-amber-100 text-amber-700'
+                                      : theme === 'dark'
+                                        ? 'bg-gray-500/15 text-gray-200'
+                                        : 'bg-gray-100 text-gray-700'
+                              }`}>
+                                {preparedSummary.label}
+                              </span>
+                            )}
                             {bankShortcutLabel && !hideShortcutLabels && (
                               <span
                                 className={`${bankShortcutChipClass} ml-auto font-semibold uppercase tracking-wide truncate text-right ${isHighThumbnailCard ? 'bg-black/45' : 'bg-black/20'}`}
@@ -1926,6 +1955,11 @@ export function SideMenu({
             } : undefined}
             onExportAdmin={onExportAdmin}
             onUpdateStoreBank={onUpdateStoreBank}
+            preparedSummary={getBankPreparedSummary(editingBank.id)}
+            onPrepareForLive={async (bankId) => {
+              await onPrepareBankForLive(bankId, { explicit: true });
+            }}
+            onCancelPrepareForLive={onCancelPrepareBankForLive}
             onAdminThumbnailChange={profile?.role === 'admin' ? async (thumbnail) => {
               const latestBank = banks.find((bank) => bank.id === editingBank.id);
               if (!latestBank) return;

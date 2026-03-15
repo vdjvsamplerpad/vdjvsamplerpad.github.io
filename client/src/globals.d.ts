@@ -22,6 +22,11 @@ interface Window {
       applyTrim?: boolean;
       bitrate?: number;
     }) => Promise<{ audioBytes: Uint8Array | ArrayBuffer }>;
+    getSystemMemoryInfo?: () => {
+      totalMemBytes: number;
+      freeMemBytes: number;
+      cpuCount: number;
+    };
     onFullscreenChange?: (callback: (isFullscreen: boolean) => void) => (() => void) | void;
   };
 }

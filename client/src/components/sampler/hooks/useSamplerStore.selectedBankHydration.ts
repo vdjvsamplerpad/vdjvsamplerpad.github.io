@@ -98,8 +98,9 @@ export const runSelectedBankHydrationPipeline = async (
     const hasPersistentThumbnail = Boolean(
       current.bankMetadata?.thumbnailStorageKey || current.bankMetadata?.thumbnailBackend
     );
+    const hasPersistentPreparedAudio = current.pads.some((pad) => Boolean(pad.preparedAudioStorageKey || pad.preparedAudioBackend));
     const missingBefore = current.pads.filter((pad) => padNeedsMediaHydration(pad)).length;
-    if (missingBefore <= 0 && !hasPersistentThumbnail) {
+    if (missingBefore <= 0 && !hasPersistentThumbnail && !hasPersistentPreparedAudio) {
       delete retryAttemptsRef.current[bankId];
       continue;
     }
@@ -122,7 +123,11 @@ export const runSelectedBankHydrationPipeline = async (
         restoredPad.audioStorageKey !== currentPad.audioStorageKey ||
         restoredPad.imageStorageKey !== currentPad.imageStorageKey ||
         restoredPad.audioBackend !== currentPad.audioBackend ||
-        restoredPad.imageBackend !== currentPad.imageBackend;
+        restoredPad.imageBackend !== currentPad.imageBackend ||
+        restoredPad.preparedAudioUrl !== currentPad.preparedAudioUrl ||
+        restoredPad.preparedAudioStorageKey !== currentPad.preparedAudioStorageKey ||
+        restoredPad.preparedAudioBackend !== currentPad.preparedAudioBackend ||
+        restoredPad.preparedStatus !== currentPad.preparedStatus;
 
       if (padChanged) {
         hydrated = replacePadInBank(hydrated, currentPad.id, restoredPad);

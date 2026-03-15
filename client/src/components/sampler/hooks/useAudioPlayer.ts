@@ -4,6 +4,7 @@ import { useGlobalPlaybackManagerApi, usePadPlaybackState, usePadWarmStatus } fr
 import { getAudioTelemetry } from '@/lib/audio-telemetry';
 import {
   buildAudioPlayerNextPlaySettings,
+  buildAudioPlayerRuntimePad,
   resolveAudioPlayerRuntimeSettings,
   useAudioPlayerRuntimeSync,
 } from './useAudioPlayerRuntimeSync';
@@ -56,6 +57,7 @@ export function useAudioPlayer(
     () => resolveAudioPlayerRuntimeSettings(pad, isIOS),
     [isIOS, pad]
   );
+  const runtimePad = React.useMemo(() => buildAudioPlayerRuntimePad(pad), [pad]);
   const { registeredRef, flushPendingRuntimeState } = useAudioPlayerRuntimeSync({
     pad,
     bankId,
@@ -183,12 +185,12 @@ export function useAudioPlayer(
       bankId,
       triggerMode: pad.triggerMode,
       playbackMode: pad.playbackMode,
-      hasAudioUrl: Boolean(pad.audioUrl),
+      hasAudioUrl: Boolean(runtimePad.audioUrl),
       alreadyRegistered: registeredRef.current,
       requestToken
     });
 
-    if (!pad.audioUrl) {
+    if (!runtimePad.audioUrl) {
       if (pad.triggerMode === 'hold') {
         invalidatePendingPlayback();
         resetHoldState();
@@ -203,7 +205,7 @@ export function useAudioPlayer(
 
     if (!registeredRef.current) {
       void playbackManager
-        .registerPad(pad.id, pad, bankId, bankName)
+        .registerPad(runtimePad.id, runtimePad, bankId, bankName)
         .then(() => {
           if (!canResolvePlayRequest(requestToken, holdSessionToken)) return;
           registeredRef.current = true;
@@ -234,19 +236,19 @@ export function useAudioPlayer(
     flushPendingRuntimeState,
     invalidatePendingPlayback,
     pad,
-    pad.audioUrl,
     pad.id,
     pad.playbackMode,
     pad.triggerMode,
     playbackManager,
     resetHoldState,
+    runtimePad,
     telemetry,
     triggerPlayback,
   ]);
 
   const forceWarmAudio = React.useCallback(() => {
-    if (!pad.audioUrl) return;
-    void playbackManager.forceWarmPad(pad.id, pad, bankId, bankName)
+    if (!runtimePad.audioUrl) return;
+    void playbackManager.forceWarmPad(runtimePad.id, runtimePad, bankId, bankName)
       .then((warmed) => {
         telemetry.log('pad_force_warm_result', {
           padId: pad.id,
@@ -262,7 +264,7 @@ export function useAudioPlayer(
           reason: 'force_warm_exception'
         }, 'error', true);
       });
-  }, [bankId, bankName, pad, playbackManager, telemetry]);
+  }, [bankId, bankName, pad.id, playbackManager, runtimePad, telemetry]);
 
   const stopPadWithMode = React.useCallback((mode: 'instant' | 'fadeout' | 'brake' | 'backspin' | 'filter') => {
     if (mode !== 'instant' && !registeredRef.current) return;

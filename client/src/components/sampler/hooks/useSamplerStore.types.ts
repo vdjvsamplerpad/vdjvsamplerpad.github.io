@@ -2,6 +2,7 @@ import { PadData, SamplerBank } from '../types/sampler';
 import type { ImportBankOptions } from './useSamplerStore.importBank';
 import type { ExportAudioMode } from './useSamplerStore.helpers';
 import type { SamplerMetadataSnapshot } from './useSamplerStore.snapshotMetadata';
+import type { BankPreparedSummary } from './preparedAudio';
 export type { ExportAudioMode } from './useSamplerStore.helpers';
 
 export type ExportActivityPhase =
@@ -132,6 +133,9 @@ export interface SamplerStore {
     prefetched: number;
     failed: number;
   }>;
+  getBankPreparedSummary: (bankId: string) => BankPreparedSummary;
+  prepareBankForLive: (bankId: string, options?: { explicit?: boolean }) => Promise<void>;
+  cancelPrepareBankForLive: (bankId?: string) => void;
   recoverMissingMediaFromBanks: (
     files: File[],
     options?: { addAsNewWhenNoTarget?: boolean }

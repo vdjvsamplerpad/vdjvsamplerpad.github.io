@@ -6,6 +6,7 @@
  * Consolidates iOS buffer decode / cache / memory eviction logic.
  */
 
+import { getElectronMemoryTuningProfile } from '../electron-performance';
 import {
     ANDROID_MAX_BUFFER_MEMORY,
     CAPACITOR_NATIVE_MAX_BUFFER_MEMORY,
@@ -633,7 +634,7 @@ export class BufferBackend implements IAudioBackend {
         if (IS_IOS) return IOS_MAX_BUFFER_MEMORY;
         if (IS_ANDROID) return ANDROID_MAX_BUFFER_MEMORY;
         if (IS_CAPACITOR_NATIVE) return CAPACITOR_NATIVE_MAX_BUFFER_MEMORY;
-        if (IS_ELECTRON) return DESKTOP_MAX_BUFFER_MEMORY;
+        if (IS_ELECTRON) return getElectronMemoryTuningProfile()?.bufferCacheLimitBytes ?? DESKTOP_MAX_BUFFER_MEMORY;
 
         const deviceMemory =
             typeof navigator !== 'undefined' &&

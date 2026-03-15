@@ -4,6 +4,15 @@ export interface PadData {
   audioUrl: string;
   audioStorageKey?: string; // Persistent media key for native storage recovery
   audioBackend?: 'native' | 'idb'; // Storage backend hint for hybrid persistence
+  preparedAudioUrl?: string; // Runtime-only local prepared playback URL
+  preparedAudioStorageKey?: string; // Local prepared playback asset key
+  preparedAudioBackend?: 'native' | 'idb' | 'opfs'; // Prepared playback cache backend
+  preparedAudioKind?: 'source_alias' | 'trimmed_lossless' | 'trimmed_mp3'; // Prepared playback asset kind
+  preparedSourceSignature?: string; // Signature used to invalidate stale prepared audio
+  preparedStatus?: 'none' | 'queued' | 'preparing' | 'ready' | 'stale' | 'error'; // Prepared audio readiness
+  preparedBytes?: number; // Prepared asset size in bytes
+  preparedAt?: number; // Timestamp when prepared audio was last generated
+  preparedDurationMs?: number; // Prepared asset duration in ms
   imageUrl?: string; // For pad image display
   imageStorageKey?: string; // Persistent image key for native storage recovery
   imageBackend?: 'native' | 'idb'; // Storage backend hint for hybrid persistence

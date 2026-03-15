@@ -1,4 +1,5 @@
 import type { PadData, SamplerBank } from '../types/sampler';
+import { getElectronMemoryTuningProfile } from '@/lib/electron-performance';
 import { applyBankContentPolicy } from './useSamplerStore.provenance';
 import { loadDefaultBankFromAssetsPipeline } from './useSamplerStore.defaultBankAssets';
 import { DEFAULT_BANK_SOURCE_ID, isDefaultBankIdentity } from './useSamplerStore.bankIdentity';
@@ -242,13 +243,16 @@ export const runRestoreAllFilesPipeline = async (
         : bank.bankMetadata;
       if (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend) {
         try {
+          const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
+          if (currentThumbnailUrl.startsWith('blob:')) {
+            return { ...bank, pads: restoredPads, bankMetadata: nextMetadata };
+          }
           const restoredThumbnail = await restoreFileAccess(
             thumbnailStorageId,
             'image',
             nextMetadata.thumbnailStorageKey,
             nextMetadata.thumbnailBackend
           );
-          const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
           nextMetadata = {
             ...nextMetadata,
             thumbnailUrl: restoredThumbnail.url || (/^https?:\/\//i.test(currentThumbnailUrl) ? currentThumbnailUrl : undefined),
@@ -276,6 +280,7 @@ export const runRestoreAllFilesPipeline = async (
         pads: (bank.pads || []).map((pad: any, padIndex: number) => ({
           ...pad,
           audioUrl: null,
+          preparedAudioUrl: undefined,
           imageUrl: null,
           audioBackend: (pad.audioBackend as MediaBackend | undefined) || (pad.audioStorageKey ? 'native' : undefined),
           imageBackend: (pad.imageBackend as MediaBackend | undefined) || (pad.imageStorageKey ? 'native' : undefined),
@@ -309,7 +314,9 @@ export const runRestoreAllFilesPipeline = async (
 
     restoredBanks.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
     const totalPads = restoredBanks.reduce((sum, bank) => sum + bank.pads.length, 0);
-    const eagerRestoreLimit = isNativeCapacitorPlatform() ? maxNativeStartupRestorePads : 1200;
+    const eagerRestoreLimit = isNativeCapacitorPlatform()
+      ? maxNativeStartupRestorePads
+      : getElectronMemoryTuningProfile()?.startupRestorePadLimit ?? 1200;
     const priorityBankId =
       (restoredState.currentBankId && restoredBanks.some((bank) => bank.id === restoredState.currentBankId))
         ? restoredState.currentBankId

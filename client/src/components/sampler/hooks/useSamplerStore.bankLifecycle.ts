@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { getElectronMemoryTuningProfile } from '@/lib/electron-performance';
 import { type PadData, type SamplerBank } from '../types/sampler';
 import { loadDefaultBankFromAssetsPipeline } from './useSamplerStore.defaultBankAssets';
 import { runDefaultBankSyncPipeline } from './useSamplerStore.defaultBankSync';
@@ -37,8 +38,7 @@ const isBlobUrl = (value: string | null | undefined): value is string =>
   typeof value === 'string' && value.startsWith('blob:');
 
 const bankHasBlobMedia = (bank: SamplerBank): boolean => {
-  if (isBlobUrl(bank.bankMetadata?.thumbnailUrl)) return true;
-  return (bank.pads || []).some((pad) => isBlobUrl(pad.audioUrl) || isBlobUrl(pad.imageUrl));
+  return (bank.pads || []).some((pad) => isBlobUrl(pad.audioUrl) || isBlobUrl(pad.imageUrl) || isBlobUrl(pad.preparedAudioUrl));
 };
 
 const dehydrateBankMedia = (bank: SamplerBank): SamplerBank => {
@@ -51,6 +51,11 @@ const dehydrateBankMedia = (bank: SamplerBank): SamplerBank => {
       nextPad = { ...nextPad, audioUrl: null };
       changed = true;
     }
+    if (isBlobUrl(pad.preparedAudioUrl)) {
+      try { URL.revokeObjectURL(pad.preparedAudioUrl); } catch {}
+      nextPad = { ...nextPad, preparedAudioUrl: undefined };
+      changed = true;
+    }
     if (isBlobUrl(pad.imageUrl)) {
       try { URL.revokeObjectURL(pad.imageUrl); } catch {}
       nextPad = { ...nextPad, imageUrl: null };
@@ -59,21 +64,10 @@ const dehydrateBankMedia = (bank: SamplerBank): SamplerBank => {
     return nextPad;
   });
 
-  let nextMetadata = bank.bankMetadata;
-  if (isBlobUrl(bank.bankMetadata?.thumbnailUrl)) {
-    try { URL.revokeObjectURL(bank.bankMetadata.thumbnailUrl); } catch {}
-    nextMetadata = {
-      ...bank.bankMetadata,
-      thumbnailUrl: undefined,
-    };
-    changed = true;
-  }
-
   if (!changed) return bank;
   return {
     ...bank,
     pads: nextPads,
-    bankMetadata: nextMetadata,
   };
 };
 
@@ -327,7 +321,7 @@ export function useSamplerStoreBankLifecycle({
       Boolean((window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
     const backgroundHydrationPadLimit = isNativeCapacitor
       ? MAX_NATIVE_BACKGROUND_HYDRATION_PADS
-      : MAX_DESKTOP_BACKGROUND_HYDRATION_PADS;
+      : getElectronMemoryTuningProfile()?.backgroundHydrationPadLimit ?? MAX_DESKTOP_BACKGROUND_HYDRATION_PADS;
     if (totalPads > backgroundHydrationPadLimit) return;
 
     const hasMissingMedia = banks.some((bank) =>
@@ -411,6 +405,8 @@ export function useSamplerStoreBankLifecycle({
     if (banks.length < MIN_BANKS_FOR_MEDIA_DEHYDRATION) return;
     if (hasActiveDeckPlaybackRef.current) return;
 
+    const dehydrateIdleMs = getElectronMemoryTuningProfile()?.dehydrateIdleMs ?? BANK_MEDIA_DEHYDRATE_IDLE_MS;
+
     if (bankMediaDehydrateTimerRef.current !== null) {
       clearTimeout(bankMediaDehydrateTimerRef.current);
     }
@@ -446,7 +442,7 @@ export function useSamplerStoreBankLifecycle({
         return changed ? next : prev;
       });
       bankMediaDehydrateTimerRef.current = null;
-    }, BANK_MEDIA_DEHYDRATE_IDLE_MS);
+    }, dehydrateIdleMs);
 
     return () => {
       if (bankMediaDehydrateTimerRef.current !== null) {

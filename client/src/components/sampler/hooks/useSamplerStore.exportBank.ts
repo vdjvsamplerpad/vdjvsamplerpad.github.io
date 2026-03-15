@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import type { SamplerBank } from '../types/sampler';
 import { getExportRestrictionReason } from './useSamplerStore.provenance';
+import { stripPreparedAudioForExport } from './preparedAudio';
 
 type SamplerPad = SamplerBank['pads'][number];
 
@@ -216,7 +217,7 @@ export const runExportBankPipeline = async (
     const imageHashToPath = new Map<string, string>();
 
     const exportPads = bank.pads.map((pad) => ({
-      ...pad,
+      ...stripPreparedAudioForExport(pad),
       audioUrl: undefined as string | undefined,
       imageUrl: undefined as string | undefined,
     }));

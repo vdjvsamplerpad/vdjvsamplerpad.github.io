@@ -16,6 +16,7 @@ import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { validateManagedImageFile } from '@/lib/image-upload';
 import { deleteBlobFromDB, saveBlobToDB } from './hooks/useSamplerStore.idbStorage';
 import type { ExportAudioMode, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
+import type { BankPreparedSummary } from './hooks/preparedAudio';
 
 interface BankEditDialogProps {
   bank: SamplerBank;
@@ -48,6 +49,9 @@ interface BankEditDialogProps {
   ) => Promise<string>;
   onUpdateStoreBank?: (input: UpdateStoreBankInput) => Promise<string>;
   onDuplicate?: (onProgress?: (progress: number) => void) => Promise<void> | void;
+  preparedSummary?: BankPreparedSummary;
+  onPrepareForLive?: (bankId: string) => Promise<void>;
+  onCancelPrepareForLive?: (bankId?: string) => void;
   midiEnabled?: boolean;
   blockedShortcutKeys?: Set<string>;
   blockedMidiNotes?: Set<number>;
@@ -71,6 +75,9 @@ export function BankEditDialog({
   onExportAdmin,
   onUpdateStoreBank,
   onDuplicate,
+  preparedSummary,
+  onPrepareForLive,
+  onCancelPrepareForLive,
   midiEnabled = false,
   blockedShortcutKeys,
   blockedMidiNotes,
@@ -124,6 +131,7 @@ export function BankEditDialog({
   const [duplicateStatus, setDuplicateStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
   const [duplicateError, setDuplicateError] = React.useState('');
   const [showDiscardConfirm, setShowDiscardConfirm] = React.useState(false);
+  const [prepareBusy, setPrepareBusy] = React.useState(false);
 
   React.useEffect(() => {
     if (open) {
@@ -162,8 +170,19 @@ export function BankEditDialog({
       setDuplicateStatus('loading');
       setDuplicateError('');
       setShowDiscardConfirm(false);
+      setPrepareBusy(false);
     }
   }, [open, bank.id]);
+
+  const handlePrepareForLive = React.useCallback(async () => {
+    if (!onPrepareForLive) return;
+    setPrepareBusy(true);
+    try {
+      await onPrepareForLive(bank.id);
+    } finally {
+      setPrepareBusy(false);
+    }
+  }, [bank.id, onPrepareForLive]);
 
   React.useEffect(() => {
     if (!adminThumbnailFile) {
@@ -686,6 +705,41 @@ export function BankEditDialog({
             <DialogTitle>Edit Bank</DialogTitle>
           </DialogHeader>
           <div className="overflow-y-auto pr-1">
+            {preparedSummary && (
+              <div className={`mb-3 flex items-center justify-between rounded-lg border px-3 py-2 text-xs ${
+                theme === 'dark' ? 'border-gray-700 bg-gray-900/50 text-gray-200' : 'border-gray-200 bg-gray-50 text-gray-700'
+              }`}>
+                <div className="min-w-0">
+                  <div className="font-semibold uppercase tracking-wide">Prepared Playback</div>
+                  <div className="opacity-80">
+                    {preparedSummary.label}
+                    {preparedSummary.activePads > 0 ? ` · ${preparedSummary.readyPads}/${preparedSummary.activePads} ready` : ''}
+                  </div>
+                </div>
+                <div className="ml-3 flex shrink-0 items-center gap-2">
+                  {preparedSummary.status === 'preparing' && onCancelPrepareForLive && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onCancelPrepareForLive(bank.id)}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                  {onPrepareForLive && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void handlePrepareForLive()}
+                      disabled={prepareBusy || preparedSummary.activePads === 0}
+                    >
+                      {prepareBusy || preparedSummary.status === 'preparing' ? 'Preparing...' : 'Prepare for Live'}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
             <BankEditCoreForm
               bank={bank}
               canDelete={canDeleteBank}

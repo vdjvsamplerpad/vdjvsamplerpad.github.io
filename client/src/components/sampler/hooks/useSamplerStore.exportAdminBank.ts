@@ -3,6 +3,7 @@ import type { BankMetadata, SamplerBank } from '../types/sampler';
 import type { AdminCatalogUploadPublishResult } from './useSamplerStore.exportUpload';
 import type { ExportAudioMode } from './useSamplerStore.types';
 import { ensureManagedStoreThumbnail } from './storeThumbnailUpload';
+import { stripPreparedAudioForExport } from './preparedAudio';
 
 type SamplerPad = SamplerBank['pads'][number];
 
@@ -245,7 +246,7 @@ export const runExportAdminBankPipeline = async (
     const imageHashToPath = new Map<string, string>();
 
     const exportPads = bank.pads.map((pad) => ({
-      ...pad,
+      ...stripPreparedAudioForExport(pad),
       audioUrl: undefined as string | undefined,
       imageUrl: undefined as string | undefined,
     }));
