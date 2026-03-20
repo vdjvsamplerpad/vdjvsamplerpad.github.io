@@ -4,6 +4,7 @@ import {
     StoreDownloadDebugEntry,
     StoreDownloadDebugLevel,
 } from '@/components/sampler/onlineStore.types';
+import { buildSupportLogText, buildSanitizedSupportSection, copySupportLogText, exportSupportLogText } from '@/lib/supportDiagnostics';
 
 type UseOnlineStoreDebugLogArgs = {
     open: boolean;
@@ -52,6 +53,13 @@ export function useOnlineStoreDebugLog({
         }).join('\n');
     }, [downloadDebugEntries]);
 
+    const downloadSupportLogText = React.useMemo(() => buildSupportLogText({
+        title: 'Bank Store Download Failure',
+        extraSections: downloadDebugEntries.length > 0
+            ? [buildSanitizedSupportSection('Store Download Debug Log', downloadDebugEntries)]
+            : [],
+    }), [downloadDebugEntries]);
+
     const copyDownloadDebugLog = React.useCallback(async () => {
         if (!enabled) return;
         try {
@@ -77,6 +85,16 @@ export function useOnlineStoreDebugLog({
         }
     }, [downloadDebugText, enabled, showToast]);
 
+    const copyDownloadSupportLog = React.useCallback(async () => {
+        if (!enabled) return;
+        try {
+            await copySupportLogText(downloadSupportLogText);
+            showToast('Support log copied.', 'success');
+        } catch {
+            showToast('Failed to copy support log.', 'error');
+        }
+    }, [downloadSupportLogText, enabled, showToast]);
+
     const exportDownloadDebugLog = React.useCallback(() => {
         if (!enabled) return;
         try {
@@ -95,6 +113,16 @@ export function useOnlineStoreDebugLog({
             showToast('Failed to export store debug log.', 'error');
         }
     }, [downloadDebugText, enabled, showToast]);
+
+    const exportDownloadSupportLog = React.useCallback(() => {
+        if (!enabled) return;
+        try {
+            exportSupportLogText(downloadSupportLogText, 'store-download-support');
+            showToast('Support log exported.', 'success');
+        } catch {
+            showToast('Failed to export support log.', 'error');
+        }
+    }, [downloadSupportLogText, enabled, showToast]);
 
     const clearDownloadDebugLog = React.useCallback(() => {
         if (!enabled) return;
@@ -165,9 +193,12 @@ export function useOnlineStoreDebugLog({
     return {
         downloadDebugEntries,
         downloadDebugText,
+        downloadSupportLogText,
         pushDownloadDebugLog,
         copyDownloadDebugLog,
+        copyDownloadSupportLog,
         exportDownloadDebugLog,
+        exportDownloadSupportLog,
         clearDownloadDebugLog,
     };
 }

@@ -6,7 +6,7 @@ import { OnlineStoreDebugPanel } from '@/components/sampler/OnlineStoreDebugPane
 import { OnlineStoreCartBar } from '@/components/sampler/OnlineStoreCartBar';
 import { OnlineStorePurchasePane } from '@/components/sampler/OnlineStorePurchasePane';
 import { OnlineStoreRejectedOverlay } from '@/components/sampler/OnlineStoreRejectedOverlay';
-import { Loader2, Download, ShoppingCart, LockIcon, ExternalLink, Check, X, ChevronLeft, ChevronRight, ChevronDown, Search, Plus, AlertCircle, RotateCcw, Timer } from 'lucide-react';
+import { Loader2, Download, ShoppingCart, LockIcon, ExternalLink, Check, X, ChevronLeft, ChevronRight, ChevronDown, Search, Plus, AlertCircle, RotateCcw, Timer, Copy } from 'lucide-react';
 import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { Input } from '@/components/ui/input';
 import { useOnlineStoreDebugLog } from '@/components/sampler/hooks/useOnlineStoreDebugLog';
@@ -92,6 +92,22 @@ const parseStoredCartItemIds = (raw: string | null): Set<string> => {
     }
 };
 
+const parseStoredCartItems = (raw: string | null): Record<string, StoreItem> => {
+    if (!raw) return {};
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+        const next: Record<string, StoreItem> = {};
+        Object.entries(parsed).forEach(([key, value]) => {
+            if (!key || !value || typeof value !== 'object' || Array.isArray(value)) return;
+            next[key] = value as StoreItem;
+        });
+        return next;
+    } catch {
+        return {};
+    }
+};
+
 export function OnlineBankStoreDialog({
     open,
     onOpenChange,
@@ -132,6 +148,7 @@ export function OnlineBankStoreDialog({
 
     // Cart state
     const [cartItemIds, setCartItemIds] = React.useState<Set<string>>(new Set());
+    const [cartItemRegistry, setCartItemRegistry] = React.useState<Record<string, StoreItem>>({});
     const [checkoutMode, setCheckoutMode] = React.useState(false);
     const [rejectedOverlay, setRejectedOverlay] = React.useState<{ item: StoreItem } | null>(null);
     const [cartViewOpen, setCartViewOpen] = React.useState(true);
@@ -170,14 +187,17 @@ export function OnlineBankStoreDialog({
     const {
         downloadDebugEntries,
         downloadDebugText,
+        downloadSupportLogText,
         pushDownloadDebugLog,
         copyDownloadDebugLog,
+        copyDownloadSupportLog,
         exportDownloadDebugLog,
+        exportDownloadSupportLog,
         clearDownloadDebugLog,
     } = useOnlineStoreDebugLog({
         open,
         effectiveUserId,
-        enabled: isAdmin,
+        enabled: Boolean(effectiveUserId),
         showToast,
     });
 
@@ -202,6 +222,7 @@ export function OnlineBankStoreDialog({
     const userKey = effectiveUserId || 'anon';
     const cacheKey = `vdjv-store-snapshot-v1:${userKey}`;
     const cartStorageKey = effectiveUserId ? `vdjv-store-cart-v1:${effectiveUserId}` : null;
+    const cartItemsStorageKey = effectiveUserId ? `vdjv-store-cart-items-v1:${effectiveUserId}` : null;
 
     React.useEffect(() => {
         const handleOnline = () => {
@@ -413,10 +434,12 @@ export function OnlineBankStoreDialog({
         if (typeof window === 'undefined') return;
         if (!cartStorageKey) {
             setCartItemIds(new Set());
+            setCartItemRegistry({});
             return;
         }
         setCartItemIds(parseStoredCartItemIds(window.localStorage.getItem(cartStorageKey)));
-    }, [cartStorageKey]);
+        setCartItemRegistry(parseStoredCartItems(window.localStorage.getItem(cartItemsStorageKey)));
+    }, [cartItemsStorageKey, cartStorageKey]);
 
     React.useEffect(() => {
         if (typeof window === 'undefined' || !cartStorageKey) return;
@@ -428,27 +451,66 @@ export function OnlineBankStoreDialog({
     }, [cartItemIds, cartStorageKey]);
 
     React.useEffect(() => {
-        if (items.length === 0 || cartItemIds.size === 0) return;
-        const validBuyableIds = new Set(
-            items
-                .filter((item) => item.status === 'buy')
-                .map((item) => item.id),
-        );
-        let changed = false;
-        const next = new Set<string>();
+        if (typeof window === 'undefined' || !cartItemsStorageKey) return;
+        if (cartItemIds.size === 0) {
+            window.localStorage.removeItem(cartItemsStorageKey);
+            return;
+        }
+        const nextRegistry: Record<string, StoreItem> = {};
         cartItemIds.forEach((id) => {
-            if (validBuyableIds.has(id)) {
-                next.add(id);
-                return;
-            }
-            changed = true;
+            const item = cartItemRegistry[id];
+            if (item) nextRegistry[id] = item;
         });
-        if (changed) setCartItemIds(next);
+        if (Object.keys(nextRegistry).length === 0) {
+            window.localStorage.removeItem(cartItemsStorageKey);
+            return;
+        }
+        window.localStorage.setItem(cartItemsStorageKey, JSON.stringify(nextRegistry));
+    }, [cartItemIds, cartItemRegistry, cartItemsStorageKey]);
+
+    React.useEffect(() => {
+        if (cartItemIds.size === 0) {
+            setCartItemRegistry((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+            return;
+        }
+        const pageItemsById = new Map(items.map((item) => [item.id, item]));
+        setCartItemRegistry((prev) => {
+            let changed = false;
+            const next: Record<string, StoreItem> = {};
+            cartItemIds.forEach((id) => {
+                const liveItem = pageItemsById.get(id);
+                const source = liveItem || prev[id];
+                if (!source) {
+                    changed = true;
+                    return;
+                }
+                next[id] = source;
+                if (prev[id] !== source) changed = true;
+            });
+            if (!changed && Object.keys(prev).length === Object.keys(next).length) {
+                return prev;
+            }
+            return next;
+        });
+    }, [cartItemIds, items]);
+
+    React.useEffect(() => {
+        if (items.length === 0 || cartItemIds.size === 0) return;
+        const invalidIds = items
+            .filter((item) => cartItemIds.has(item.id) && item.status !== 'buy')
+            .map((item) => item.id);
+        if (invalidIds.length === 0) return;
+        setCartItemIds((prev) => {
+            const next = new Set(prev);
+            invalidIds.forEach((id) => next.delete(id));
+            return next;
+        });
     }, [items, cartItemIds]);
 
     React.useEffect(() => {
         if (!effectiveUserId) {
             setCartItemIds(new Set());
+            setCartItemRegistry({});
             setCheckoutMode(false);
         }
     }, [effectiveUserId]);
@@ -467,6 +529,7 @@ export function OnlineBankStoreDialog({
         selectedItem,
         checkoutMode,
         items,
+        cartItems: Array.from(cartItemIds).map((id) => cartItemRegistry[id]).filter(Boolean),
         cartItemIds,
         formChannel,
         formName,
@@ -509,7 +572,10 @@ export function OnlineBankStoreDialog({
         setSelectedItem(retriableItem);
     };
 
-    const cartItems = React.useMemo(() => items.filter(i => cartItemIds.has(i.id)), [items, cartItemIds]);
+    const cartItems = React.useMemo(
+        () => Array.from(cartItemIds).map((id) => cartItemRegistry[id]).filter((item): item is StoreItem => Boolean(item)),
+        [cartItemIds, cartItemRegistry],
+    );
     const cartTotal = cartItems.reduce((sum, i) => sum + (i.price_php ?? 0), 0);
     const importedOrDownloadedBankIds = React.useMemo(() => {
         return new Set<string>(Array.from(importedBankIds || []));
@@ -953,15 +1019,45 @@ export function OnlineBankStoreDialog({
                                                                         <RotateCcw className="w-3.5 h-3.5 mr-1" />{hasUpdateAvailable ? 'Update' : 'Redownload'}
                                                                     </Button>
                                                                 ) : transfers[item.id]?.phase === 'error' ? (
-                                                                    <Button
-                                                                        size="sm"
-                                                                        onClick={() => handleDownload(item)}
-                                                                        disabled={!isOnline}
-                                                                        className="h-8 px-3 text-xs font-medium rounded-full bg-red-500/90 hover:bg-red-500 text-white border-0 disabled:opacity-50 shadow-lg"
-                                                                        title={transfers[item.id].error}
-                                                                    >
-                                                                        <RotateCcw className="w-3.5 h-3.5 mr-1" />Try Again
-                                                                    </Button>
+                                                                    <div className="flex flex-wrap justify-end gap-2">
+                                                                        <Button
+                                                                            size="sm"
+                                                                            onClick={() => handleDownload(item)}
+                                                                            disabled={!isOnline}
+                                                                            className="h-8 px-3 text-xs font-medium rounded-full bg-red-500/90 hover:bg-red-500 text-white border-0 disabled:opacity-50 shadow-lg"
+                                                                            title={transfers[item.id].error}
+                                                                        >
+                                                                            <RotateCcw className="w-3.5 h-3.5 mr-1" />Try Again
+                                                                        </Button>
+                                                                        {!isAdmin && downloadSupportLogText.trim() && (
+                                                                            <>
+                                                                                <Button
+                                                                                    size="sm"
+                                                                                    variant="outline"
+                                                                                    onClick={() => void copyDownloadSupportLog()}
+                                                                                    className={`h-8 px-3 text-xs rounded-full font-medium backdrop-blur-sm ${
+                                                                                        isDark
+                                                                                            ? 'border-white/15 text-gray-200 hover:bg-white/10'
+                                                                                            : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                                                                                    }`}
+                                                                                >
+                                                                                    <Copy className="w-3.5 h-3.5 mr-1" />Copy Log
+                                                                                </Button>
+                                                                                <Button
+                                                                                    size="sm"
+                                                                                    variant="outline"
+                                                                                    onClick={exportDownloadSupportLog}
+                                                                                    className={`h-8 px-3 text-xs rounded-full font-medium backdrop-blur-sm ${
+                                                                                        isDark
+                                                                                            ? 'border-white/15 text-gray-200 hover:bg-white/10'
+                                                                                            : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                                                                                    }`}
+                                                                                >
+                                                                                    <Download className="w-3.5 h-3.5 mr-1" />Export Log
+                                                                                </Button>
+                                                                            </>
+                                                                        )}
+                                                                    </div>
                                                                 ) : transfers[item.id]?.phase === 'downloading' ? (
                                                                     <Button
                                                                         size="sm"

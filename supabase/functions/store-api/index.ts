@@ -743,9 +743,18 @@ const validateReceiptOcrFile = (file: File): ReceiptOcrFailureCode | null => {
   return null;
 };
 
-const extractReceiptFieldsViaOcr = async (input: {
+const shouldRetryReceiptOcr = (errorCode: ReceiptOcrFailureCode | null): boolean =>
+  errorCode === "OCR_TIMEOUT"
+  || errorCode === "OCR_HTTP_FAILED"
+  || errorCode === "OCR_PROVIDER_PROCESSING_ERROR"
+  || errorCode === "OCR_EMPTY_TEXT";
+
+const runOcrSpaceAttempt = async (input: {
   file: File;
-  context: ReceiptOcrContext;
+  fileName: string;
+  timeoutMs: number;
+  detectOrientation: boolean;
+  engine: "1" | "2";
 }): Promise<ReceiptOcrAttempt> => {
   const startedAt = Date.now();
   const ocrApiKey = String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim();
@@ -753,23 +762,16 @@ const extractReceiptFieldsViaOcr = async (input: {
     return { detected: null, errorCode: "OCR_UNAVAILABLE", provider: null, elapsedMs: Date.now() - startedAt };
   }
 
-  const file = input.file;
-  const fileName = asString(file.name, 240) || "receipt.jpg";
-  const validationError = validateReceiptOcrFile(file);
-  if (validationError) {
-    return { detected: null, errorCode: validationError, provider: null, elapsedMs: Date.now() - startedAt };
-  }
-
   const providerPayload = new FormData();
-  providerPayload.append("file", file, fileName);
+  providerPayload.append("file", input.file, input.fileName);
   providerPayload.append("language", "eng");
   providerPayload.append("isOverlayRequired", "false");
-  providerPayload.append("detectOrientation", "true");
+  providerPayload.append("detectOrientation", input.detectOrientation ? "true" : "false");
   providerPayload.append("scale", "true");
-  providerPayload.append("OCREngine", "2");
+  providerPayload.append("OCREngine", input.engine);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, RECEIPT_OCR_TIMEOUT_MS));
+  const timeout = setTimeout(() => controller.abort(), Math.max(1000, input.timeoutMs));
   try {
     const response = await fetch(OCR_SPACE_API_URL, {
       method: "POST",
@@ -821,6 +823,64 @@ const extractReceiptFieldsViaOcr = async (input: {
   } finally {
     clearTimeout(timeout);
   }
+};
+
+const extractReceiptFieldsViaOcr = async (input: {
+  file: File;
+  context: ReceiptOcrContext;
+}): Promise<ReceiptOcrAttempt> => {
+  const startedAt = Date.now();
+  const ocrApiKey = String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim();
+  if (!ocrApiKey) {
+    return { detected: null, errorCode: "OCR_UNAVAILABLE", provider: null, elapsedMs: Date.now() - startedAt };
+  }
+
+  const file = input.file;
+  const fileName = asString(file.name, 240) || "receipt.jpg";
+  const validationError = validateReceiptOcrFile(file);
+  if (validationError) {
+    return { detected: null, errorCode: validationError, provider: null, elapsedMs: Date.now() - startedAt };
+  }
+
+  const primaryTimeoutMs = Math.max(1000, RECEIPT_OCR_TIMEOUT_MS);
+  const fallbackTimeoutMs = Math.max(primaryTimeoutMs + 6000, Math.round(primaryTimeoutMs * 1.5));
+  const attempts = [
+    { engine: "2" as const, detectOrientation: true, timeoutMs: primaryTimeoutMs },
+    { engine: "1" as const, detectOrientation: false, timeoutMs: fallbackTimeoutMs },
+  ];
+
+  let lastAttempt: ReceiptOcrAttempt | null = null;
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = await runOcrSpaceAttempt({
+      file,
+      fileName,
+      timeoutMs: attempts[index].timeoutMs,
+      detectOrientation: attempts[index].detectOrientation,
+      engine: attempts[index].engine,
+    });
+    if (attempt.detected) {
+      const elapsedMs = Date.now() - startedAt;
+      return {
+        ...attempt,
+        detected: {
+          ...attempt.detected,
+          elapsedMs,
+        },
+        elapsedMs,
+      };
+    }
+    lastAttempt = attempt;
+    if (index >= attempts.length - 1 || !shouldRetryReceiptOcr(attempt.errorCode)) {
+      break;
+    }
+  }
+
+  return {
+    detected: null,
+    errorCode: lastAttempt?.errorCode || "OCR_FAILED",
+    provider: lastAttempt?.provider || OCR_SPACE_PROVIDER,
+    elapsedMs: Date.now() - startedAt,
+  };
 };
 
 const extractReceiptFieldsFromStoragePath = async (
@@ -2119,8 +2179,9 @@ const createReceiptOcr = async (req: Request) => {
 
 const createAccountRegistrationSubmit = async (req: Request, body: any) => {
   const admin = createServiceClient();
-  const displayName = asString(body?.displayName, 120);
   const email = normalizeEmail(body?.email);
+  const emailDisplayName = email ? email.split("@")[0]?.replace(/[._-]+/g, " ").trim() : "";
+  const displayName = asString(body?.displayName, 120) || emailDisplayName || "User";
   const password = String(body?.password || "");
   const confirmPassword = String(body?.confirmPassword || "");
   const paymentChannel = asString(body?.paymentChannel, 40);
@@ -2129,7 +2190,6 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
   const notes = asString(body?.notes, 1000);
   const proofPath = asString(body?.proofPath, 600);
 
-  if (!displayName) return badRequest("displayName is required");
   if (!email) return badRequest("A valid email is required");
   if (password.length < ACCOUNT_REG_MIN_PASSWORD_LENGTH) {
     return fail(400, "WEAK_PASSWORD", { min_length: ACCOUNT_REG_MIN_PASSWORD_LENGTH });
@@ -2326,13 +2386,15 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
     } else if (!ocrMetadata.recipientNumber) {
       automationResult = "missing_recipient_number";
     } else {
-      const reserved = await reservePaymentReference({
+      const reserved = await tryReservePaymentReference({
         admin,
         sourceReference: ocrMetadata.referenceNo,
         sourceTable: "account_registration_requests",
         sourceRequestId: String(data.id),
       });
-      if (!reserved.reserved) {
+      if (reserved.errorMessage) {
+        automationResult = "approval_error";
+      } else if (!reserved.reserved) {
         automationResult = "duplicate_reference";
       } else if (!isWithinAutoApprovalWindow(automationSettings.account)) {
         automationResult = "outside_window";
@@ -2589,6 +2651,23 @@ const reservePaymentReference = async (input: {
     };
   }
   throw new Error(error.message);
+};
+
+const tryReservePaymentReference = async (input: Parameters<typeof reservePaymentReference>[0]): Promise<{
+  reserved: boolean;
+  normalizedReference: string | null;
+  errorMessage: string | null;
+}> => {
+  try {
+    const result = await reservePaymentReference(input);
+    return { ...result, errorMessage: null };
+  } catch (error) {
+    return {
+      reserved: false,
+      normalizedReference: normalizePaymentReferenceRegistryKey(input.sourceReference),
+      errorMessage: error instanceof Error ? error.message : String(error),
+    };
+  }
 };
 
 const buildAccountApprovalLoginHint = (assisted: boolean): string =>
@@ -3344,13 +3423,15 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
     } else if (!ocrMetadata.recipientNumber) {
       automationResult = "missing_recipient_number";
     } else {
-      const reserved = await reservePaymentReference({
+      const reserved = await tryReservePaymentReference({
         admin,
         sourceReference: ocrMetadata.referenceNo,
         sourceTable: "bank_purchase_requests",
         sourceRequestId: String(insertedRows[0]?.id || ""),
       });
-      if (!reserved.reserved) {
+      if (reserved.errorMessage) {
+        automationResult = "approval_error";
+      } else if (!reserved.reserved) {
         automationResult = "duplicate_reference";
       } else if (!isWithinAutoApprovalWindow(automationSettings.store)) {
         automationResult = "outside_window";

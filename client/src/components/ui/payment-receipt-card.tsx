@@ -338,20 +338,22 @@ export function PaymentReceiptCard({
           }`}
         >
           {lineItems.map((item, index) => (
-            <div key={`${item.label}-${index}`} className="flex items-start justify-between gap-3">
-              <div>
+            <div key={`${item.label}-${index}`} className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+              <div className="min-w-0 sm:max-w-[48%]">
                 <div className={`text-xs uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{item.label}</div>
                 {item.hint ? <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{item.hint}</div> : null}
               </div>
-              <div className="text-right font-medium break-all">
+              <div className="min-w-0 text-left font-medium sm:flex-1 sm:text-right">
                 {item.copyValue ? (
                   <CopyableValue
                     value={item.copyValue}
                     label={item.label}
+                    wrap
+                    className="max-w-full sm:ml-auto sm:justify-end"
                     valueClassName="text-inherit font-medium"
                     buttonClassName="vdjv-receipt-export-hidden h-5 w-5"
                   />
-                ) : item.value}
+                ) : <span className="break-all">{item.value}</span>}
               </div>
             </div>
           ))}

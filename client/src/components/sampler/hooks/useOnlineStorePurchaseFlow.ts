@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { edgeFunctionUrl } from '@/lib/edge-api';
-import { runReceiptOcr } from '@/lib/receipt-ocr';
+import { optimizeReceiptProofFile, runReceiptOcr } from '@/lib/receipt-ocr';
 import {
     PaymentChannel,
     PurchaseReceiptState,
@@ -17,6 +17,7 @@ type UseOnlineStorePurchaseFlowArgs = {
     selectedItem: StoreItem | null;
     checkoutMode: boolean;
     items: StoreItem[];
+    cartItems: StoreItem[];
     cartItemIds: Set<string>;
     formChannel: PaymentChannel;
     formName: string;
@@ -45,6 +46,7 @@ export function useOnlineStorePurchaseFlow({
     selectedItem,
     checkoutMode,
     items,
+    cartItems,
     cartItemIds,
     formChannel,
     formName,
@@ -88,10 +90,10 @@ export function useOnlineStorePurchaseFlow({
             e.target.value = '';
             return;
         }
-        setFormProofFile(file);
         setFormRef('');
         setFormName('');
         if (formChannel !== 'image_proof') {
+            setFormProofFile(file);
             invalidateProofOcr();
             return;
         }
@@ -100,8 +102,11 @@ export function useOnlineStorePurchaseFlow({
         proofOcrSeqRef.current = seq;
         setProofOcrLoading(true);
         void (async () => {
+            const preparedFile = await optimizeReceiptProofFile(file).catch(() => file);
+            if (proofOcrSeqRef.current !== seq) return;
+            setFormProofFile(preparedFile);
             const result = await runReceiptOcr({
-                file,
+                file: preparedFile,
                 context: 'bank_store',
                 email: String(effectiveUser?.email || ''),
                 subject: selectedItem?.bank?.title || 'bank_store',
@@ -130,6 +135,7 @@ export function useOnlineStorePurchaseFlow({
     const handlePurchaseSubmit = React.useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
         if (!effectiveUser) return;
+        if (checkoutMode && cartItemIds.size === 0) return;
 
         if (formChannel === 'image_proof' && !formProofFile) {
             showToast('Please upload proof of payment to continue.', 'error');
@@ -145,8 +151,8 @@ export function useOnlineStorePurchaseFlow({
 
         const purchaseItems: Array<{ bankId: string; catalogItemId: string }> = [];
         if (checkoutMode) {
-            items.filter(i => cartItemIds.has(i.id) && i.status === 'buy').forEach(i => {
-                purchaseItems.push({ bankId: i.bank_id, catalogItemId: i.id });
+            cartItems.filter((item) => item.status === 'buy').forEach((item) => {
+                purchaseItems.push({ bankId: item.bank_id, catalogItemId: item.id });
             });
         } else if (selectedItem) {
             purchaseItems.push({ bankId: selectedItem.bank_id, catalogItemId: selectedItem.id });
@@ -203,7 +209,9 @@ export function useOnlineStorePurchaseFlow({
             const isApproved = submitStatus === 'approved';
             const count = purchaseItems.length;
             const totalPaid = purchaseItems.reduce((sum, item) => {
-                const storeItem = items.find((row) => row.id === item.catalogItemId);
+                const storeItem = checkoutMode
+                    ? cartItems.find((row) => row.id === item.catalogItemId)
+                    : items.find((row) => row.id === item.catalogItemId);
                 const amount = storeItem?.price_php;
                 return sum + (typeof amount === 'number' && Number.isFinite(amount) ? amount : 0);
             }, 0);
@@ -254,6 +262,7 @@ export function useOnlineStorePurchaseFlow({
         formProofFile,
         formRef,
         formatPhp,
+        cartItems,
         items,
         loadData,
         selectedItem,

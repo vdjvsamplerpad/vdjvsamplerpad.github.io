@@ -1294,8 +1294,10 @@ export function BankEditDialog({
         type="export"
         theme={theme}
         errorMessage={adminExportError}
-        logLines={isAdmin ? adminExportLogLines : undefined}
-        debugOperations={isAdmin ? ['admin_bank_export'] : undefined}
+        logLines={adminExportLogLines}
+        debugOperations={['admin_bank_export']}
+        showLogPanel={isAdmin}
+        supportLogFilePrefix="admin-bank-export-error"
         onRetry={handleAdminExport}
       />
 
@@ -1327,8 +1329,10 @@ export function BankEditDialog({
         type="export"
         theme={theme}
         errorMessage={storeUpdateError}
-        logLines={isAdmin ? storeUpdateLogLines : undefined}
-        debugOperations={isAdmin ? ['admin_bank_export'] : undefined}
+        logLines={storeUpdateLogLines}
+        debugOperations={['admin_bank_export']}
+        showLogPanel={isAdmin}
+        supportLogFilePrefix="store-bank-update-error"
         onRetry={handleStoreUpdate}
       />
 

@@ -2151,12 +2151,14 @@ export function AboutDialog({
         type={backupProgressType}
         theme={theme}
         errorMessage={backupProgressMessage}
-        logLines={isAdmin ? backupLogLines : undefined}
-        debugOperations={isAdmin
-          ? (backupProgressType === 'import'
+        logLines={backupLogLines}
+        debugOperations={
+          backupProgressType === 'import'
             ? ['bank_import', 'app_backup_restore']
-            : ['app_backup_export'])
-          : undefined}
+            : ['app_backup_export']
+        }
+        showLogPanel={isAdmin}
+        supportLogFilePrefix={backupProgressType === 'import' ? 'backup-restore-error' : 'backup-export-error'}
         hideCloseButton
       />
       <ConfirmationDialog

@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { Download, Upload, CheckCircle, AlertCircle, Clock, ShieldCheck, Check, Copy } from 'lucide-react';
-import { copyTextToClipboard } from '@/components/ui/copyable-value';
+import { buildSupportLogText, copySupportLogText, exportSupportLogText } from '@/lib/supportDiagnostics';
 
 interface ProgressDialogProps {
   open: boolean;
@@ -21,47 +21,12 @@ interface ProgressDialogProps {
   statusMessage?: string;
   logLines?: string[];
   debugOperations?: string[];
+  showLogPanel?: boolean;
+  supportLogFilePrefix?: string;
   showWarning?: boolean;
   hideCloseButton?: boolean;
   useHistory?: boolean;
 }
-
-type OperationDebugEntryLike = {
-  operation?: string;
-  iso?: string;
-  level?: string;
-  phase?: string;
-  operationId?: string;
-  details?: Record<string, unknown>;
-};
-
-const buildOperationTimelineText = (operations?: string[]): string => {
-  if (typeof window === 'undefined') return '';
-  const debugWindow = window as Window & typeof globalThis & {
-    __vdjvOperationTimeline?: OperationDebugEntryLike[];
-  };
-  const allEntries = Array.isArray(debugWindow.__vdjvOperationTimeline)
-    ? debugWindow.__vdjvOperationTimeline
-    : [];
-  const normalizedOperations = Array.isArray(operations)
-    ? operations.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-    : [];
-  const relevantEntries = normalizedOperations.length > 0
-    ? allEntries.filter((entry) => normalizedOperations.includes(String(entry.operation || '')))
-    : allEntries;
-  if (relevantEntries.length === 0) return '';
-  return relevantEntries
-    .map((entry) => {
-      const iso = typeof entry.iso === 'string' ? entry.iso : new Date().toISOString();
-      const level = typeof entry.level === 'string' ? entry.level.toUpperCase() : 'INFO';
-      const operation = typeof entry.operation === 'string' ? entry.operation : 'unknown_operation';
-      const phase = typeof entry.phase === 'string' ? entry.phase : 'event';
-      const operationId = typeof entry.operationId === 'string' ? entry.operationId : 'unknown';
-      const details = entry.details ? ` ${JSON.stringify(entry.details)}` : '';
-      return `${iso} [${level}] ${operation}/${phase}#${operationId}${details}`;
-    })
-    .join('\n');
-};
 
 export function ProgressDialog({
   open,
@@ -79,11 +44,14 @@ export function ProgressDialog({
   statusMessage,
   logLines,
   debugOperations,
+  showLogPanel = true,
+  supportLogFilePrefix,
   showWarning,
   hideCloseButton = false,
   useHistory = true
 }: ProgressDialogProps) {
   const [copiedLogs, setCopiedLogs] = React.useState(false);
+  const [exportedLogs, setExportedLogs] = React.useState(false);
 
   React.useEffect(() => {
     if (!copiedLogs) return;
@@ -91,23 +59,38 @@ export function ProgressDialog({
     return () => window.clearTimeout(timer);
   }, [copiedLogs]);
 
+  React.useEffect(() => {
+    if (!exportedLogs) return;
+    const timer = window.setTimeout(() => setExportedLogs(false), 1400);
+    return () => window.clearTimeout(timer);
+  }, [exportedLogs]);
+
   const handleDialogOpenChange = (nextOpen: boolean) => {
     // Keep dialog visible while processing to prevent accidental close on backdrop click.
     if (!nextOpen && status === 'loading') return;
     onOpenChange(nextOpen);
   };
 
+  const supportLogText = React.useMemo(() => buildSupportLogText({
+    title,
+    errorMessage,
+    logLines,
+    debugOperations,
+  }), [debugOperations, errorMessage, logLines, title]);
+
+  const hasSupportLog = React.useMemo(() => Boolean(supportLogText.trim()), [supportLogText]);
+
   const handleCopyLogs = React.useCallback(async () => {
-    const visibleLogText = Array.isArray(logLines) && logLines.length > 0 ? logLines.join('\n') : '';
-    const debugTimelineText = buildOperationTimelineText(debugOperations);
-    const parts = [
-      visibleLogText ? `Activity Log\n${visibleLogText}` : '',
-      debugTimelineText ? `Operation Timeline\n${debugTimelineText}` : '',
-    ].filter(Boolean);
-    if (parts.length === 0) return;
-    await copyTextToClipboard(parts.join('\n\n'));
+    if (!hasSupportLog) return;
+    await copySupportLogText(supportLogText);
     setCopiedLogs(true);
-  }, [debugOperations, logLines]);
+  }, [hasSupportLog, supportLogText]);
+
+  const handleExportLogs = React.useCallback(() => {
+    if (!hasSupportLog) return;
+    exportSupportLogText(supportLogText, supportLogFilePrefix || 'vdjv-operation-log');
+    setExportedLogs(true);
+  }, [hasSupportLog, supportLogFilePrefix, supportLogText]);
   
   // Check if error message indicates login is required
   const needsLogin = errorMessage && (
@@ -246,7 +229,7 @@ export function ProgressDialog({
             </div>
           )}
 
-          {Array.isArray(logLines) && logLines.length > 0 && (
+          {showLogPanel && Array.isArray(logLines) && logLines.length > 0 && (
             <div className={`rounded border p-2 ${
               theme === 'dark'
                 ? 'bg-gray-900/40 border-gray-700'
@@ -288,10 +271,34 @@ export function ProgressDialog({
           )}
 
           {status === 'error' && (
-            <div className={`p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800`}>
+            <div className={`space-y-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800`}>
               <p className="text-sm text-red-800 dark:text-red-200">
                 {errorMessage || 'Could not complete this action for the bank. Please try again.'}
               </p>
+              {hasSupportLog && (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1.5 px-3 text-[11px]"
+                    onClick={() => void handleCopyLogs()}
+                  >
+                    {copiedLogs ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copiedLogs ? 'Copied Log' : 'Copy Error Log'}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1.5 px-3 text-[11px]"
+                    onClick={handleExportLogs}
+                  >
+                    {exportedLogs ? <Check className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
+                    {exportedLogs ? 'Exported Log' : 'Export Error Log'}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 

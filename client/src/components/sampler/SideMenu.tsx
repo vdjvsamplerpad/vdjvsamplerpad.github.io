@@ -1980,8 +1980,10 @@ export function SideMenu({
         type="export"
         theme={theme}
         errorMessage={exportError}
-        logLines={isAdmin ? exportLogLines : undefined}
-        debugOperations={isAdmin ? ['bank_export'] : undefined}
+        logLines={exportLogLines}
+        debugOperations={['bank_export']}
+        showLogPanel={isAdmin}
+        supportLogFilePrefix="bank-export-error"
         hideCloseButton
         useHistory={false}
         onRetry={() => {

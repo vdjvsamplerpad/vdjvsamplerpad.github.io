@@ -2,6 +2,7 @@ import * as React from 'react';
 import { ArrowRight, Download, ExternalLink, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CopyableValue } from '@/components/ui/copyable-value';
+import { LoadingSpinner } from '@/components/ui/loading';
 import {
     PaymentChannel,
     PaymentConfig,
@@ -61,6 +62,10 @@ export function OnlineStorePurchasePane({
     setFormNotes,
     onCancel,
 }: OnlineStorePurchasePaneProps) {
+    const submitOverlayMessage = checkoutMode
+        ? 'Submitting your bank purchase request...'
+        : 'Submitting your request...';
+
     const renderPrice = (item: StoreItem) => {
         if (!item.is_paid) return <span>Free</span>;
         if (item.price_php === null) return <span>Price to be announced</span>;
@@ -98,7 +103,7 @@ export function OnlineStorePurchasePane({
     };
 
     return (
-        <div className="max-w-xl mx-auto space-y-8">
+        <div className="relative max-w-xl mx-auto space-y-8">
             {checkoutMode && cartItems.length > 0 && (
                 <div className={`p-4 rounded-xl border ${isDark ? 'bg-gray-800/50 border-gray-700' : 'bg-white border-gray-200'} shadow-sm`}>
                     <h3 className={`font-semibold text-sm mb-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>Cart Items ({cartItems.length})</h3>
@@ -137,15 +142,16 @@ export function OnlineStorePurchasePane({
                 </div>
 
                 {(paymentConfig?.gcash_number || paymentConfig?.maya_number) && (
-                    <div className="mt-4 grid grid-cols-2 gap-4">
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {paymentConfig.gcash_number && (
                             <div className={`p-3 rounded-lg border flex flex-col gap-1 items-center justify-center text-center ${isDark ? 'bg-blue-900/20 border-blue-500/30' : 'bg-blue-50 border-blue-100'}`}>
                                 <span className="text-xs font-bold text-blue-500 uppercase tracking-wider">GCash</span>
                                 <CopyableValue
                                     value={paymentConfig.gcash_number}
                                     label="GCash number"
-                                    className="max-w-full"
-                                    valueClassName={`font-mono text-lg font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}
+                                    wrap
+                                    className="max-w-full justify-center"
+                                    valueClassName={`font-mono text-lg font-medium break-all whitespace-normal text-center ${isDark ? 'text-white' : 'text-gray-900'}`}
                                     buttonClassName={isDark ? 'text-blue-200 hover:bg-blue-400/15' : 'text-blue-700 hover:bg-blue-100'}
                                 />
                             </div>
@@ -156,8 +162,9 @@ export function OnlineStorePurchasePane({
                                 <CopyableValue
                                     value={paymentConfig.maya_number}
                                     label="Maya number"
-                                    className="max-w-full"
-                                    valueClassName={`font-mono text-lg font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}
+                                    wrap
+                                    className="max-w-full justify-center"
+                                    valueClassName={`font-mono text-lg font-medium break-all whitespace-normal text-center ${isDark ? 'text-white' : 'text-gray-900'}`}
                                     buttonClassName={isDark ? 'text-green-200 hover:bg-green-400/15' : 'text-green-700 hover:bg-green-100'}
                                 />
                             </div>
@@ -311,11 +318,24 @@ export function OnlineStorePurchasePane({
                         disabled={submitLoading}
                         className={`flex-1 ${isDark ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
                     >
-                        {submitLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ArrowRight className="w-4 h-4 mr-2" />}
+                        <ArrowRight className="w-4 h-4 mr-2" />
                         Submit Purchase Request
                     </Button>
                 </div>
             </form>
+            {submitLoading && (
+                <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-gray-950/72' : 'bg-white/72'}`}>
+                    <div className={`mx-4 w-full max-w-sm rounded-2xl border px-6 py-7 text-center shadow-2xl ${isDark ? 'border-white/10 bg-gray-900/95 text-white' : 'border-gray-200 bg-white/95 text-gray-900'}`}>
+                        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-indigo-500/10">
+                            <LoadingSpinner size="lg" className="h-10 w-10 border-4 border-indigo-200/40 border-t-indigo-500" />
+                        </div>
+                        <div className="mt-4 text-base font-semibold">{submitOverlayMessage}</div>
+                        <div className={`mt-2 text-sm leading-relaxed ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                            Please wait while we save your request, run payment checks, and prepare your receipt.
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

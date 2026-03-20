@@ -19,6 +19,89 @@ export interface ReceiptOcrResult {
   errorCode?: string
 }
 
+const RECEIPT_PROOF_MAX_LONG_EDGE = 1800
+const RECEIPT_PROOF_MAX_OUTPUT_BYTES = 2 * 1024 * 1024
+const RECEIPT_PROOF_QUALITY_STEPS = [0.92, 0.86, 0.8]
+
+const renameWithExtension = (fileName: string, nextExtension: string): string => {
+  const normalized = String(fileName || 'receipt').trim() || 'receipt'
+  const base = normalized.replace(/\.[^.]+$/, '')
+  return `${base}.${nextExtension}`
+}
+
+const canvasToBlob = (canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob | null> =>
+  new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), type, quality)
+  })
+
+const loadImageElement = (file: File): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl)
+      resolve(image)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error('IMAGE_DECODE_FAILED'))
+    }
+    image.src = objectUrl
+  })
+
+export const optimizeReceiptProofFile = async (file: File): Promise<File> => {
+  if (typeof document === 'undefined') return file
+  if (!file || !String(file.type || '').toLowerCase().startsWith('image/')) return file
+
+  let source: HTMLImageElement
+  try {
+    source = await loadImageElement(file)
+  } catch {
+    return file
+  }
+
+  const sourceWidth = Math.max(1, source.naturalWidth || source.width || 1)
+  const sourceHeight = Math.max(1, source.naturalHeight || source.height || 1)
+  const longEdge = Math.max(sourceWidth, sourceHeight)
+  const aspectRatio = longEdge / Math.max(1, Math.min(sourceWidth, sourceHeight))
+  const needsResize = longEdge > RECEIPT_PROOF_MAX_LONG_EDGE
+  const needsCompression = file.size > RECEIPT_PROOF_MAX_OUTPUT_BYTES
+  const isTallScreenshot = sourceHeight > sourceWidth && aspectRatio >= 1.75 && (file.size > 1024 * 1024 || longEdge > 1400)
+  if (!needsResize && !needsCompression && !isTallScreenshot) return file
+
+  const scale = Math.min(1, RECEIPT_PROOF_MAX_LONG_EDGE / longEdge)
+  const width = Math.max(1, Math.round(sourceWidth * scale))
+  const height = Math.max(1, Math.round(sourceHeight * scale))
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d', { alpha: false })
+  if (!context) return file
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, width, height)
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
+  context.drawImage(source, 0, 0, width, height)
+
+  let bestBlob: Blob | null = null
+  for (const quality of RECEIPT_PROOF_QUALITY_STEPS) {
+    const candidate = await canvasToBlob(canvas, 'image/jpeg', quality)
+    if (!candidate) continue
+    bestBlob = candidate
+    if (candidate.size <= RECEIPT_PROOF_MAX_OUTPUT_BYTES) break
+  }
+  if (!bestBlob) return file
+
+  const shouldReplace = needsResize || isTallScreenshot || bestBlob.size + 32 * 1024 < file.size
+  if (!shouldReplace) return file
+
+  return new File([bestBlob], renameWithExtension(file.name, 'jpg'), {
+    type: 'image/jpeg',
+    lastModified: Date.now(),
+  })
+}
+
 export const runReceiptOcr = async (input: {
   file: File
   context: ReceiptOcrContext
@@ -26,7 +109,8 @@ export const runReceiptOcr = async (input: {
   subject?: string | null
   fallbackToServer?: boolean
 }): Promise<ReceiptOcrResult> => {
-  const clientResult = await runClientReceiptOcr(input.file)
+  const preparedFile = await optimizeReceiptProofFile(input.file).catch(() => input.file)
+  const clientResult = await runClientReceiptOcr(preparedFile)
   if (clientResult.detected.referenceNo) {
     return {
       ...clientResult,
@@ -41,7 +125,10 @@ export const runReceiptOcr = async (input: {
     }
   }
 
-  const serverResult = await runServerReceiptOcr(input)
+  const serverResult = await runServerReceiptOcr({
+    ...input,
+    file: preparedFile,
+  })
   if (serverResult.ok || !clientResult.detected.rawText) return serverResult
   return {
     ...clientResult,

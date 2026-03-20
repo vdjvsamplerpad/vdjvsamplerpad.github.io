@@ -11,6 +11,7 @@ type CopyableValueProps = {
   valueClassName?: string;
   buttonClassName?: string;
   onCopied?: () => void;
+  wrap?: boolean;
 };
 
 export async function copyTextToClipboard(value: string) {
@@ -40,6 +41,7 @@ export function CopyableValue({
   valueClassName,
   buttonClassName,
   onCopied,
+  wrap = false,
 }: CopyableValueProps) {
   const [copied, setCopied] = React.useState(false);
 
@@ -57,9 +59,9 @@ export function CopyableValue({
   }, [onCopied, value]);
 
   return (
-    <span className={cn('inline-flex max-w-full items-center gap-1.5 align-middle', className)}>
+    <span className={cn('inline-flex max-w-full gap-1.5 align-middle', wrap ? 'items-start' : 'items-center', className)}>
       <span
-        className={cn('vdjv-selectable min-w-0 truncate', valueClassName)}
+        className={cn('vdjv-selectable min-w-0', wrap ? 'break-all whitespace-normal leading-tight' : 'truncate', valueClassName)}
         data-allow-double-tap="true"
         title={value}
       >
@@ -69,7 +71,7 @@ export function CopyableValue({
         type="button"
         variant="ghost"
         size="icon"
-        className={cn('h-6 w-6 shrink-0 rounded-full opacity-75 hover:opacity-100', buttonClassName)}
+        className={cn('h-6 w-6 shrink-0 rounded-full opacity-75 hover:opacity-100', wrap ? 'self-start' : null, buttonClassName)}
         onClick={() => void handleCopy()}
         title={copied ? `Copied ${label}` : `Copy ${label}`}
         aria-label={copied ? `Copied ${label}` : `Copy ${label}`}

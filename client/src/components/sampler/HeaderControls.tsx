@@ -1,6 +1,8 @@
 ﻿import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2 } from 'lucide-react';
 import type { SamplerBank, StopMode } from './types/sampler';
 import { createPortal } from 'react-dom';
@@ -115,6 +117,19 @@ interface HeaderControlsProps {
 }
 
 const LOGIN_GREETING_STORAGE_PREFIX = 'vdjv-login-greeting';
+const DISPLAY_NAME_PROMPT_SNOOZE_PREFIX = 'vdjv-display-name-prompt-snooze';
+const DISPLAY_NAME_PROMPT_SNOOZE_MS = 24 * 60 * 60 * 1000;
+
+const getFallbackDisplayName = (email?: string | null): string => {
+  const localPart = String(email || '').split('@')[0]?.replace(/[._-]+/g, ' ').trim();
+  return localPart || 'User';
+};
+
+const shouldPromptForDisplayName = (displayName: string | null | undefined, email?: string | null): boolean => {
+  const normalized = String(displayName || '').trim();
+  if (!normalized) return true;
+  return normalized.localeCompare(getFallbackDisplayName(email), undefined, { sensitivity: 'accent' }) === 0;
+};
 
 // Slide-down notification UI used by the header.
 type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string; closing?: boolean }
@@ -324,7 +339,7 @@ export function HeaderControls({
 }: HeaderControlsProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const { user, profile, loading, authTransition } = useAuthState();
-  const { signOut } = useAuthActions();
+  const { signOut, updateDisplayName } = useAuthActions();
   const isAdmin = profile?.role === 'admin';
   const [adminDialogOpen, setAdminDialogOpen] = React.useState(false);
   const [AdminAccessDialog, setAdminAccessDialog] = React.useState<React.ComponentType<any> | null>(null);
@@ -333,6 +348,9 @@ export function HeaderControls({
   const [showPadColorPaintDialog, setShowPadColorPaintDialog] = React.useState(false);
   const [showAllPadColors, setShowAllPadColors] = React.useState(false);
   const [pendingPadColor, setPendingPadColor] = React.useState<string>(adminPadColorPaintColor || PRIMARY_PAD_COLORS[0]?.value || '#f59e0b');
+  const [showDisplayNamePrompt, setShowDisplayNamePrompt] = React.useState(false);
+  const [displayNamePromptValue, setDisplayNamePromptValue] = React.useState('');
+  const [savingDisplayNamePrompt, setSavingDisplayNamePrompt] = React.useState(false);
   const appVersion = (import.meta as any).env?.VITE_APP_VERSION || 'unknown';
   const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.onFullscreenChange);
   const { state: appUpdateState, checkForUpdates, installUpdate } = useAppUpdate();
@@ -486,6 +504,66 @@ export function HeaderControls({
 
     prevUserIdRef.current = currentUserId;
   }, [user, profile, pushNotice]);
+
+  React.useEffect(() => {
+    if (!user?.id || !profile || loading || showLoginModal || isAdmin) return;
+    if (!shouldPromptForDisplayName(profile.display_name, user.email)) {
+      setShowDisplayNamePrompt(false);
+      return;
+    }
+
+    try {
+      const snoozedUntil = Number(localStorage.getItem(`${DISPLAY_NAME_PROMPT_SNOOZE_PREFIX}:${user.id}`) || 0);
+      if (Number.isFinite(snoozedUntil) && snoozedUntil > Date.now()) {
+        return;
+      }
+    } catch {
+    }
+
+    setDisplayNamePromptValue('');
+    setShowDisplayNamePrompt(true);
+  }, [isAdmin, loading, profile, showLoginModal, user]);
+
+  const dismissDisplayNamePrompt = React.useCallback((snooze: boolean) => {
+    if (user?.id && snooze) {
+      try {
+        localStorage.setItem(`${DISPLAY_NAME_PROMPT_SNOOZE_PREFIX}:${user.id}`, String(Date.now() + DISPLAY_NAME_PROMPT_SNOOZE_MS));
+      } catch {
+      }
+    }
+    setShowDisplayNamePrompt(false);
+  }, [user?.id]);
+
+  const handleSaveDisplayNamePrompt = React.useCallback(async () => {
+    const normalized = displayNamePromptValue.trim();
+    if (normalized.length < 2) {
+      pushNotice({ variant: 'error', message: 'Display name must be at least 2 characters.' });
+      return;
+    }
+    if (normalized.length > 50) {
+      pushNotice({ variant: 'error', message: 'Display name must be 50 characters or less.' });
+      return;
+    }
+
+    setSavingDisplayNamePrompt(true);
+    try {
+      const result = await updateDisplayName(normalized);
+      if (result.error) {
+        pushNotice({ variant: 'error', message: result.error.message || 'Display name could not be updated.' });
+        return;
+      }
+      if (user?.id) {
+        try {
+          localStorage.removeItem(`${DISPLAY_NAME_PROMPT_SNOOZE_PREFIX}:${user.id}`);
+        } catch {
+        }
+      }
+      setShowDisplayNamePrompt(false);
+      pushNotice({ variant: 'success', message: `Saved. We will call you ${normalized}.` });
+    } finally {
+      setSavingDisplayNamePrompt(false);
+    }
+  }, [displayNamePromptValue, pushNotice, updateDisplayName, user?.id]);
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -1069,6 +1147,61 @@ export function HeaderControls({
           />
         </React.Suspense>
       )}
+
+      <Dialog
+        open={showDisplayNamePrompt}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !savingDisplayNamePrompt) {
+            dismissDisplayNamePrompt(true);
+          }
+        }}
+      >
+        <DialogContent className={theme === 'dark' ? 'bg-gray-800 border-gray-600 sm:max-w-md' : 'bg-white border-gray-300 sm:max-w-md'}>
+          <DialogHeader>
+            <DialogTitle className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>
+              What should we call you?
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className={`text-sm leading-relaxed ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+              Set your display name or DJ name. This will be shown in your account and around the app.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="display-name-prompt" className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>
+                Display Name / DJ Name
+              </Label>
+              <Input
+                id="display-name-prompt"
+                value={displayNamePromptValue}
+                onChange={(event) => setDisplayNamePromptValue(event.target.value)}
+                placeholder={getFallbackDisplayName(user?.email)}
+                maxLength={50}
+                autoFocus
+                disabled={savingDisplayNamePrompt}
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="flex-1"
+                onClick={() => dismissDisplayNamePrompt(true)}
+                disabled={savingDisplayNamePrompt}
+              >
+                Later
+              </Button>
+              <Button
+                type="button"
+                className="flex-1"
+                onClick={() => void handleSaveDisplayNamePrompt()}
+                disabled={savingDisplayNamePrompt}
+              >
+                {savingDisplayNamePrompt ? 'Saving...' : 'Save Name'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

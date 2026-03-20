@@ -19,7 +19,26 @@ const OFFLINE_SIGNOUT_PENDING_KEY = 'vdjv-offline-signout-pending';
 const SESSION_CONFLICT_REASON_KEY = 'vdjv-session-conflict-reason';
 const SESSION_ENFORCEMENT_EVENT_KEY = 'vdjv-session-enforcement-event';
 const HIDE_PROTECTED_BANKS_KEY = 'vdjv-hide-protected-banks';
+const PASSWORD_RECOVERY_MODE_KEY = 'vdjv-password-recovery-mode';
 const PROFILE_SELECT = 'id, role, display_name, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap';
+
+export const isPasswordRecoveryMode = (): boolean => {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.sessionStorage.getItem(PASSWORD_RECOVERY_MODE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export const setPasswordRecoveryMode = (enabled: boolean): void => {
+  if (typeof window === 'undefined') return
+  try {
+    if (enabled) window.sessionStorage.setItem(PASSWORD_RECOVERY_MODE_KEY, '1')
+    else window.sessionStorage.removeItem(PASSWORD_RECOVERY_MODE_KEY)
+  } catch {
+  }
+}
 
 export interface Profile {
   id: string
@@ -113,6 +132,7 @@ interface AuthActions {
   requestPasswordReset: (email: string) => Promise<{ error?: AuthError | null }>
   verifyPasswordResetCode: (email: string, code: string) => Promise<{ error?: AuthError | null }>
   updatePassword: (newPassword: string) => Promise<{ error?: AuthError | null }>
+  updateDisplayName: (displayName: string) => Promise<{ error?: AuthError | null; profile?: Profile | null }>
   clearSessionConflictReason: () => void
 }
 
@@ -412,6 +432,25 @@ function useAuthValue(): AuthProviderValue {
         return
       }
       if (session?.user) {
+        if (isPasswordRecoveryMode()) {
+          cacheUserData(null, null)
+          setHideProtectedBanksLock(true)
+          clearUserBankCache()
+          cacheRefreshedForUserIdRef.current = null
+          setState((s) => ({
+            ...s,
+            user: null,
+            profile: null,
+            loading: false,
+            authTransition: {
+              status: 'idle',
+              email: null,
+            },
+            offlineTrustedSession: false,
+            lastSessionValidationAt: null,
+          }))
+          return
+        }
         const { data: authData, error: authError } = await supabase.auth.getUser()
         const transientAuthError = isTransientNetworkError(authError)
         const fallbackCachedUser = getCachedUser() || session.user
@@ -602,6 +641,7 @@ function useAuthValue(): AuthProviderValue {
   React.useEffect(() => {
     if (!state.user || state.banned) return
     if (state.profile?.role === 'admin') return
+    if (isPasswordRecoveryMode()) return
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setState((s) => ({
         ...s,
@@ -702,6 +742,7 @@ function useAuthValue(): AuthProviderValue {
   React.useEffect(() => {
     if (!state.user || state.banned) return
     if (state.profile?.role === 'admin') return
+    if (isPasswordRecoveryMode()) return
     const onOnline = () => {
       void checkSessionValidity({
         userId: state.user!.id,
@@ -789,6 +830,7 @@ function useAuthValue(): AuthProviderValue {
       }
     }
     setSessionConflictReason(null)
+    setPasswordRecoveryMode(false)
     sessionConflictLockedRef.current = false
     setAuthTransition('signing_in', email)
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
@@ -812,6 +854,7 @@ function useAuthValue(): AuthProviderValue {
       return { error: null }
     }
     const activeUser = state.user || getCachedUser()
+    setPasswordRecoveryMode(false)
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setPendingOfflineSignout(true)
       setHideProtectedBanksLock(true)
@@ -905,6 +948,48 @@ function useAuthValue(): AuthProviderValue {
     return { error }
   }, [])
 
+  const updateDisplayName = React.useCallback(async (displayName: string) => {
+    const activeUser = state.user
+    if (!activeUser) {
+      return { error: { message: 'You need to sign in first.' } as AuthError, profile: null }
+    }
+
+    const normalizedDisplayName = displayName.trim()
+    if (normalizedDisplayName.length < 2) {
+      return { error: { message: 'Display name must be at least 2 characters.' } as AuthError, profile: null }
+    }
+    if (normalizedDisplayName.length > 50) {
+      return { error: { message: 'Display name must be 50 characters or less.' } as AuthError, profile: null }
+    }
+
+    const nextRole = state.profile?.role || 'user'
+    const { data, error } = await supabase
+      .from('profiles')
+      .upsert({ id: activeUser.id, display_name: normalizedDisplayName, role: nextRole }, { onConflict: 'id' })
+      .select(PROFILE_SELECT)
+      .single()
+
+    if (error || !data) {
+      return { error: (error || { message: 'Profile could not be updated.' }) as AuthError, profile: null }
+    }
+
+    const nextProfile = data as Profile
+    cacheUserData(activeUser, nextProfile)
+    setState((s) => ({
+      ...s,
+      profile: nextProfile,
+    }))
+
+    await supabase.auth.updateUser({
+      data: {
+        ...(activeUser.user_metadata || {}),
+        display_name: normalizedDisplayName,
+      },
+    }).catch(() => {})
+
+    return { error: null, profile: nextProfile }
+  }, [state.profile?.role, state.user])
+
   const clearSessionConflictReason = React.useCallback(() => {
     setSessionConflictReason(null)
   }, [setSessionConflictReason])
@@ -915,12 +1000,14 @@ function useAuthValue(): AuthProviderValue {
     requestPasswordReset,
     verifyPasswordResetCode,
     updatePassword,
+    updateDisplayName,
     clearSessionConflictReason,
   }), [
     clearSessionConflictReason,
     requestPasswordReset,
     signIn,
     signOut,
+    updateDisplayName,
     updatePassword,
     verifyPasswordResetCode,
   ])

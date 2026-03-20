@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const dotenv = require('dotenv');
 
@@ -22,6 +23,26 @@ function computeVersionCode(version) {
   const minor = Number(match[2] || 0);
   const patch = Number(match[3] || 0);
   return Math.max(1, major * 10000 + minor * 100 + patch);
+}
+
+function sanitizeArtifactSegment(value) {
+  return String(value || 'artifact')
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'artifact';
+}
+
+function renameBuiltArtifact(sourcePath, nextFileName) {
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(`Expected build artifact not found: ${sourcePath}`);
+  }
+  const targetPath = path.join(path.dirname(sourcePath), nextFileName);
+  if (fs.existsSync(targetPath)) {
+    fs.unlinkSync(targetPath);
+  }
+  fs.renameSync(sourcePath, targetPath);
+  return targetPath;
 }
 
 function run(command, args, cwd, env) {
@@ -87,7 +108,12 @@ async function main() {
   const outputPath = mode === 'apk'
     ? path.join(androidRoot, 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk')
     : path.join(androidRoot, 'app', 'build', 'outputs', 'bundle', 'release', 'app-release.aab');
-  console.log(`OUTPUT=${outputPath}`);
+  const versionName = sanitizeArtifactSegment(env.ANDROID_RELEASE_VERSION_NAME || packageJson.version);
+  const artifactFileName = mode === 'apk'
+    ? `VDJV-Sampler-Pad-${versionName}.apk`
+    : `VDJV-Sampler-Pad-${versionName}.aab`;
+  const finalOutputPath = renameBuiltArtifact(outputPath, artifactFileName);
+  console.log(`OUTPUT=${finalOutputPath}`);
 }
 
 main().catch((error) => {

@@ -1,13 +1,15 @@
 import * as React from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { CopyableValue } from '@/components/ui/copyable-value'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { LoadingSpinner } from '@/components/ui/loading'
 import { PaymentReceiptCard } from '@/components/ui/payment-receipt-card'
-import { useAuthActions, useAuthState } from '@/hooks/useAuth'
+import { isPasswordRecoveryMode, setPasswordRecoveryMode, useAuthActions, useAuthState } from '@/hooks/useAuth'
 import { ensureActivityRuntime, logActivityEvent } from '@/lib/activityLogger'
 import { edgeFunctionUrl } from '@/lib/edge-api'
-import { runReceiptOcr } from '@/lib/receipt-ocr'
+import { optimizeReceiptProofFile, runReceiptOcr } from '@/lib/receipt-ocr'
 import { supabase } from '@/lib/supabase'
 import { ArrowRight, Download, Eye, EyeOff, ExternalLink, Loader2, X } from 'lucide-react'
 
@@ -40,6 +42,12 @@ type BuyReceiptState = {
   message: string
   status?: 'success' | 'pending'
   statusLabel?: string
+}
+
+type SignInPendingState = {
+  email: string
+  checkedAt: string
+  message: string
 }
 
 const ACCOUNT_PROOF_MAX_BYTES = 10 * 1024 * 1024
@@ -106,6 +114,13 @@ function normalizeAuthErrorMessage(msg: string): string {
     m.includes('otp') && m.includes('expired')
   ) {
     return 'Reset code is invalid or expired. Request a new code and try again.'
+  }
+  if (
+    m.includes('same password') ||
+    m.includes('different from the old password') ||
+    m.includes('new password should be different')
+  ) {
+    return 'New password must be different from your current password. Enter a different password and try again.'
   }
   if (m.includes('please wait') && m.includes('minute')) return msg
   if (m.includes('unable to verify email')) return 'Unable to verify email. Please try again.'
@@ -178,7 +193,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [failedSignInAttempts, setFailedSignInAttempts] = React.useState(0)
   const [email, setEmail] = React.useState('')
   const [password, setPassword] = React.useState('')
-  const [displayName, setDisplayName] = React.useState('')
   const [confirmPassword, setConfirmPassword] = React.useState('')
   const [mode, setMode] = React.useState<Mode>('signin')
   const [loading, setLoading] = React.useState(false)
@@ -202,10 +216,12 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [proofPreviewUrl, setProofPreviewUrl] = React.useState<string | null>(null)
   const [proofOcrLoading, setProofOcrLoading] = React.useState(false)
   const [buyReceipt, setBuyReceipt] = React.useState<BuyReceiptState | null>(null)
+  const [signInPendingState, setSignInPendingState] = React.useState<SignInPendingState | null>(null)
   const [expandedQrUrl, setExpandedQrUrl] = React.useState<string | null>(null)
   const [resetCode, setResetCode] = React.useState('')
   const [resetCodeFailures, setResetCodeFailures] = React.useState(0)
   const [resetCodeBlockedSeconds, setResetCodeBlockedSeconds] = React.useState(0)
+  const [resetCodeVerified, setResetCodeVerified] = React.useState(false)
   const proofOcrSeqRef = React.useRef(0)
 
   const {
@@ -227,6 +243,8 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const isDark = theme === 'dark'
   const isSignInSyncing = authTransition.status === 'signing_in'
   const isSignInBusy = loading || awaitingSignInSync || isSignInSyncing
+  const isLoginSubmitting = mode === 'signin' && isSignInBusy
+  const isBuySubmitting = mode === 'buy' && buyStep === 'payment' && loading
 
   const logLoginAttempt = React.useCallback((input: {
     status: 'success' | 'failed'
@@ -285,6 +303,10 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
 
   React.useEffect(() => {
     if (!open) {
+      if (isPasswordRecoveryMode()) {
+        void supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+      }
+      setPasswordRecoveryMode(false)
       setLoading(false)
       setAwaitingSignInSync(false)
       setSignInError(null)
@@ -292,7 +314,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setFailedSignInAttempts(0)
       setEmail('')
       setPassword('')
-      setDisplayName('')
       setConfirmPassword('')
       setMode('signin')
       setResetCooldown(0)
@@ -310,9 +331,11 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setProofPreviewUrl(null)
       setProofOcrLoading(false)
       setBuyReceipt(null)
+      setSignInPendingState(null)
       setExpandedQrUrl(null)
       setResetCodeFailures(0)
       setResetCodeBlockedSeconds(0)
+      setResetCodeVerified(false)
       if (banned) setAllowLoginWhileBanned(false)
     }
   }, [open, banned])
@@ -393,10 +416,14 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
 
   React.useEffect(() => {
     if (!sessionConflictReason) return
+    if (mode === 'reset' || isPasswordRecoveryMode()) {
+      clearSessionConflictReason()
+      return
+    }
     if (!open) onOpenChange(true)
     pushNotice?.({ variant: 'error', message: sessionConflictReason })
     clearSessionConflictReason()
-  }, [sessionConflictReason, onOpenChange, open, pushNotice, clearSessionConflictReason])
+  }, [sessionConflictReason, onOpenChange, open, pushNotice, clearSessionConflictReason, mode])
 
   React.useEffect(() => {
     if (!banned) setAllowLoginWhileBanned(false)
@@ -450,10 +477,10 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         event.target.value = ''
         return
       }
-      setProofFile(nextFile)
       setReferenceNo('')
       setPayerName('')
       if (paymentChannel !== 'image_proof') {
+        setProofFile(nextFile)
         proofOcrSeqRef.current += 1
         setProofOcrLoading(false)
         return
@@ -463,11 +490,14 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       proofOcrSeqRef.current = seq
       setProofOcrLoading(true)
       void (async () => {
+        const preparedFile = await optimizeReceiptProofFile(nextFile).catch(() => nextFile)
+        if (proofOcrSeqRef.current !== seq) return
+        setProofFile(preparedFile)
         const result = await runReceiptOcr({
-          file: nextFile,
+          file: preparedFile,
           context: 'account_registration',
           email: email.trim().toLowerCase() || null,
-          subject: displayName.trim() || null,
+          subject: email.trim().toLowerCase() || null,
           // Avoid immediate server OCR call; submit flow only escalates to backend OCR when automation is enabled.
           fallbackToServer: false,
         })
@@ -478,18 +508,13 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         setProofOcrLoading(false)
       })()
     },
-    [displayName, email, paymentChannel, pushNotice],
+    [email, paymentChannel, pushNotice],
   )
 
   const handleBuyNext = React.useCallback(
     (event: React.FormEvent) => {
       event.preventDefault()
-      const normalizedDisplayName = displayName.trim()
       const normalizedEmail = email.trim().toLowerCase()
-      if (!normalizedDisplayName) {
-        pushNotice?.({ variant: 'error', message: 'Display name is required.' })
-        return
-      }
       if (!isValidEmail(normalizedEmail)) {
         pushNotice?.({ variant: 'error', message: 'Enter a valid email address.' })
         return
@@ -504,11 +529,11 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       }
       setBuyStep('payment')
     },
-    [confirmPassword, displayName, email, password, pushNotice],
+    [confirmPassword, email, password, pushNotice],
   )
 
   React.useEffect(() => {
-    if (!open || mode !== 'buy') return
+    if (!open || (mode !== 'buy' && mode !== 'signin')) return
     let active = true
     setPaymentConfigLoading(true)
     fetch(edgeFunctionUrl('store-api', 'payment-config'))
@@ -549,6 +574,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     }
 
     setSignInError(null)
+    setSignInPendingState(null)
     setLoading(true)
     let waitForAuthSync = false
     try {
@@ -562,10 +588,11 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
             const status = String(hint.data.status)
             if (status === 'pending') {
               setSignInError(null)
-              pushNotice?.({
-                variant: 'info',
-                message:
-                  'Your registration is still under review. Please wait up to 24 hours and check your email.',
+              setPassword('')
+              setSignInPendingState({
+                email: normalizedEmail,
+                checkedAt: new Date().toISOString(),
+                message: 'Your registration is still under review. Please wait up to 24 hours and check your email for approval updates.',
               })
             } else if (status === 'rejected') {
               setSignInError(null)
@@ -648,6 +675,8 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         }
       } else {
         pushNotice?.({ variant: 'success', message: 'If the email is registered, a reset code was sent. Check your email and enter the code here.' })
+        setPasswordRecoveryMode(false)
+        setResetCodeVerified(false)
         setMode('reset')
         setResetCooldown(5)
       }
@@ -657,6 +686,16 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setLoading(false)
     }
   }
+
+  const discardRecoverySession = React.useCallback(async () => {
+    setPasswordRecoveryMode(false)
+    setResetCodeVerified(false)
+    clearSessionConflictReason()
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+    } catch {
+    }
+  }, [clearSessionConflictReason])
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -686,26 +725,37 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
 
     setLoading(true)
     try {
-      const { error: verifyError } = await verifyPasswordResetCode(normalizedEmail, normalizedResetCode)
-      if (verifyError) {
-        const currentAttemptState = readResetVerifyAttemptState(normalizedEmail)
-        const nextFailures = currentAttemptState.failures + 1
-        const blockedUntil = nextFailures >= RESET_CODE_MAX_ATTEMPTS ? Date.now() + RESET_CODE_LOCKOUT_MS : null
-        writeResetVerifyAttemptState(normalizedEmail, { failures: nextFailures, blockedUntil })
-        setResetCodeFailures(nextFailures)
-        setResetCodeBlockedSeconds(blockedUntil ? Math.ceil((blockedUntil - Date.now()) / 1000) : 0)
-        pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(verifyError.message) })
-        return
+      if (!resetCodeVerified) {
+        setPasswordRecoveryMode(true)
+        const { error: verifyError } = await verifyPasswordResetCode(normalizedEmail, normalizedResetCode)
+        if (verifyError) {
+          setPasswordRecoveryMode(false)
+          const currentAttemptState = readResetVerifyAttemptState(normalizedEmail)
+          const nextFailures = currentAttemptState.failures + 1
+          const blockedUntil = nextFailures >= RESET_CODE_MAX_ATTEMPTS ? Date.now() + RESET_CODE_LOCKOUT_MS : null
+          writeResetVerifyAttemptState(normalizedEmail, { failures: nextFailures, blockedUntil })
+          setResetCodeFailures(nextFailures)
+          setResetCodeBlockedSeconds(blockedUntil ? Math.ceil((blockedUntil - Date.now()) / 1000) : 0)
+          pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(verifyError.message) })
+          return
+        }
+        setResetCodeVerified(true)
       }
       writeResetVerifyAttemptState(normalizedEmail, { failures: 0, blockedUntil: null })
       setResetCodeFailures(0)
       setResetCodeBlockedSeconds(0)
       const { error } = await updatePassword(password)
       if (error) {
-        pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(error.message) })
+        const normalizedError = normalizeAuthErrorMessage(error.message)
+        pushNotice?.({
+          variant: 'error',
+          message: `${normalizedError} You can try again with a different password without requesting a new reset code.`,
+        })
       } else {
+        await discardRecoverySession()
+        setMode('signin')
         onOpenChange(false)
-        pushNotice?.({ variant: 'success', message: 'Password updated.' })
+        pushNotice?.({ variant: 'success', message: 'Password updated. Please sign in with your new password.' })
       }
     } catch {
       pushNotice?.({ variant: 'error', message: 'We could not complete that right now. Please try again.' })
@@ -736,26 +786,30 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         return
       }
       pushNotice?.({ variant: 'success', message: 'If the email is registered, a new reset code was sent.' })
+      await discardRecoverySession()
+      setResetCodeVerified(false)
       setResetCooldown(5)
     } catch {
       pushNotice?.({ variant: 'error', message: 'We could not complete that right now. Please try again.' })
     } finally {
       setLoading(false)
     }
-  }, [email, pushNotice, requestPasswordReset, resetCooldown])
+  }, [discardRecoverySession, email, pushNotice, requestPasswordReset, resetCooldown])
 
   const handleDialogOpenChange = React.useCallback((nextOpen: boolean) => {
     if (!nextOpen && isSignInBusy) {
       return
     }
+    if (!nextOpen && (mode === 'reset' || resetCodeVerified || isPasswordRecoveryMode())) {
+      void discardRecoverySession()
+    }
     if (!nextOpen && banned) setAllowLoginWhileBanned(false)
     onOpenChange(nextOpen)
-  }, [banned, isSignInBusy, onOpenChange])
+  }, [banned, discardRecoverySession, isSignInBusy, mode, onOpenChange, resetCodeVerified])
 
   const handleBuySubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    const normalizedDisplayName = displayName.trim()
     const normalizedEmail = email.trim().toLowerCase()
     const normalizedPassword = password
     const normalizedConfirmPassword = confirmPassword
@@ -763,10 +817,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     const normalizedReferenceNo = referenceNo.trim()
     const normalizedNotes = notes.trim()
 
-    if (!normalizedDisplayName) {
-      pushNotice?.({ variant: 'error', message: 'Display name is required.' })
-      return
-    }
     if (!isValidEmail(normalizedEmail)) {
       pushNotice?.({ variant: 'error', message: 'Enter a valid email address.' })
       return
@@ -837,7 +887,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       }
 
       const submitRes = await postPublicStoreApi('account-registration/submit', {
-        displayName: normalizedDisplayName,
         email: normalizedEmail,
         password: normalizedPassword,
         confirmPassword: normalizedConfirmPassword,
@@ -989,7 +1038,9 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         {mode === 'reset' && (
           <form onSubmit={handleResetPassword} className="space-y-4">
             <div className={`rounded-lg border p-3 text-sm ${isDark ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-100' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`}>
-              Enter the reset code from your email, then choose a new password.
+              {resetCodeVerified
+                ? 'Reset code verified. You can now keep trying a different new password without requesting another code.'
+                : 'Enter the reset code from your email, then choose a new password.'}
             </div>
             {resetCodeBlockedSeconds > 0 && (
               <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -1012,7 +1063,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="Enter your email"
                 required
-                disabled={loading}
+                disabled={loading || resetCodeVerified}
                 autoComplete="email"
               />
             </div>
@@ -1027,7 +1078,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 onChange={(e) => setResetCode(e.target.value.replace(/\s+/g, ''))}
                 placeholder="Enter the code from your email"
                 required
-                disabled={loading}
+                disabled={loading || resetCodeVerified}
                 autoComplete="one-time-code"
                 inputMode="text"
               />
@@ -1106,6 +1157,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 variant="outline"
                 className="w-full"
                 onClick={() => {
+                  void discardRecoverySession()
                   setMode('signin')
                 }}
                 disabled={loading}
@@ -1160,110 +1212,152 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         )}
 
         {mode === 'signin' && (
-          <form
-            id="signin-form"
-            data-testid="signin-form"
-            onSubmit={handleSignIn}
-            className="space-y-4"
-          >
-            <div className="space-y-2">
-              <Label htmlFor="signinEmail" className={colorText}>
-                Email
-              </Label>
-              <Input
-                id="signinEmail"
-                type="email"
-                value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value)
-                  if (signInError) setSignInError(null)
-                }}
-                placeholder="Enter your email"
-                required
-                disabled={loading}
-                autoComplete="email"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="signinPassword" className={colorText}>
-                Password
-              </Label>
-              <div className="relative">
+          signInPendingState ? (
+            <PaymentReceiptCard
+              theme={theme}
+              title="Registration Pending"
+              status="pending"
+              statusLabel="Pending Approval"
+              subtitle={signInPendingState.message}
+              amountLabel="Current Status"
+              amountValue="Waiting for Review"
+              lineItems={[
+                { label: 'Email', value: signInPendingState.email },
+                { label: 'Checked', value: new Date(signInPendingState.checkedAt).toLocaleString() },
+                { label: 'Next Step', value: 'Wait for approval email, then sign in again.' },
+              ]}
+              receiptFileName={`registration-pending-${new Date(signInPendingState.checkedAt).toISOString().replace(/[:.]/g, '-')}.png`}
+              primaryAction={{
+                label: 'Back to Login',
+                onClick: () => setSignInPendingState(null),
+              }}
+              secondaryAction={paymentConfig?.messenger_url
+                ? {
+                    label: 'Message us on Facebook',
+                    onClick: () => window.open(paymentConfig.messenger_url, '_blank', 'noopener,noreferrer'),
+                  }
+                : undefined}
+            />
+          ) : (
+            <form
+              id="signin-form"
+              data-testid="signin-form"
+              onSubmit={handleSignIn}
+              className="relative space-y-4"
+            >
+              <div className="space-y-2">
+                <Label htmlFor="signinEmail" className={colorText}>
+                  Email
+                </Label>
                 <Input
-                  id="signinPassword"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
+                  id="signinEmail"
+                  type="email"
+                  value={email}
                   onChange={(e) => {
-                    setPassword(e.target.value)
+                    setEmail(e.target.value)
                     if (signInError) setSignInError(null)
                   }}
-                  placeholder="Enter your password"
+                  placeholder="Enter your email"
                   required
-                  disabled={isSignInBusy || signInCooldownSeconds > 0}
-                  minLength={6}
-                  autoComplete="current-password"
-                  className="pr-10"
+                  disabled={loading}
+                  autoComplete="email"
                 />
-                <button
-                  type="button"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-800"
-                  onClick={() => setShowPassword((v) => !v)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
               </div>
-              {signInError ? (
-                <div className={`text-sm ${theme === 'dark' ? 'text-rose-300' : 'text-rose-600'}`} aria-live="polite">
-                  {signInError}
+
+              <div className="space-y-2">
+                <Label htmlFor="signinPassword" className={colorText}>
+                  Password
+                </Label>
+                <div className="relative">
+                  <Input
+                    id="signinPassword"
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value)
+                      if (signInError) setSignInError(null)
+                    }}
+                    placeholder="Enter your password"
+                    required
+                    disabled={isSignInBusy || signInCooldownSeconds > 0}
+                    minLength={6}
+                    autoComplete="current-password"
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-800"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
-              ) : null}
-            </div>
+                {signInError ? (
+                  <div className={`text-sm ${theme === 'dark' ? 'text-rose-300' : 'text-rose-600'}`} aria-live="polite">
+                    {signInError}
+                  </div>
+                ) : null}
+              </div>
 
-            <div className="flex items-center justify-between gap-2">
-              <Button
-                type="button"
-                variant="link"
-                className="px-0 text-sm"
-                onClick={() => setMode('forgot')}
-                disabled={isSignInBusy}
-              >
-                Forgot password?
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="text-xs"
-                onClick={() => {
-                  setMode('buy')
-                  setSignInError(null)
-                  setBuyStep('account')
-                  setPassword('')
-                  setConfirmPassword('')
-                  setPayerName('')
-                  setReferenceNo('')
-                  setNotes('')
-                  setProofFile(null)
-                  setBuyReceipt(null)
-                }}
-                disabled={isSignInBusy}
-              >
-                Buy VDJV Account
-              </Button>
-            </div>
+              <div className="flex items-center justify-between gap-2">
+                <Button
+                  type="button"
+                  variant="link"
+                  className="px-0 text-sm"
+                  onClick={() => setMode('forgot')}
+                  disabled={isSignInBusy}
+                >
+                  Forgot password?
+                </Button>
+                <Button
+                  type="button"
+                  className={`text-xs ${isDark ? 'bg-emerald-500 text-white hover:bg-emerald-400' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
+                  onClick={() => {
+                    setMode('buy')
+                    setSignInError(null)
+                    setSignInPendingState(null)
+                    setBuyStep('account')
+                    setPassword('')
+                    setConfirmPassword('')
+                    setPayerName('')
+                    setReferenceNo('')
+                    setNotes('')
+                    setProofFile(null)
+                    setBuyReceipt(null)
+                  }}
+                  disabled={isSignInBusy}
+                >
+                  Create Account
+                </Button>
+              </div>
 
-            <Button
-              id="signin-submit"
-              data-testid="signin-submit"
-              name="signin-submit"
-              type="submit"
-              className="w-full"
-              disabled={isSignInBusy || signInCooldownSeconds > 0 || !email || !password}
-            >
-              {isSignInBusy ? 'Signing in...' : signInCooldownSeconds > 0 ? `Try again in ${signInCooldownSeconds}s` : 'Log In'}
-            </Button>
-          </form>
+              <Button
+                id="signin-submit"
+                data-testid="signin-submit"
+                name="signin-submit"
+                type="submit"
+                className="w-full"
+                disabled={isSignInBusy || signInCooldownSeconds > 0 || !email || !password}
+              >
+                {isSignInBusy ? 'Signing in...' : signInCooldownSeconds > 0 ? `Try again in ${signInCooldownSeconds}s` : 'Log In'}
+              </Button>
+
+              {isLoginSubmitting && (
+                <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-gray-950/72' : 'bg-white/72'}`}>
+                  <div className={`mx-4 w-full max-w-sm rounded-2xl border px-6 py-7 text-center shadow-2xl ${isDark ? 'border-white/10 bg-gray-900/95 text-white' : 'border-gray-200 bg-white/95 text-gray-900'}`}>
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-indigo-500/10">
+                      <LoadingSpinner size="lg" className="h-10 w-10 border-4 border-indigo-200/40 border-t-indigo-500" />
+                    </div>
+                    <div className="mt-4 text-base font-semibold">Signing you in...</div>
+                    <div className={`mt-2 text-sm leading-relaxed ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                      Please wait while we check your account and sync your access.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </form>
+          )
         )}
 
         {mode === 'buy' && (
@@ -1305,35 +1399,34 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                   <div className={`rounded-lg border px-3 py-2 text-xs font-medium ${buyStep === 'account' ? (isDark ? 'border-indigo-500 bg-indigo-500/15 text-indigo-200' : 'border-indigo-300 bg-indigo-50 text-indigo-700') : (isDark ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-500')}`}>1. Account Setup</div>
                   <div className={`rounded-lg border px-3 py-2 text-xs font-medium ${buyStep === 'payment' ? (isDark ? 'border-emerald-500 bg-emerald-500/15 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700') : (isDark ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-500')}`}>2. Payment Proof</div>
                 </div>
-                <form onSubmit={buyStep === 'account' ? handleBuyNext : handleBuySubmit} className="space-y-3">
+                <form onSubmit={buyStep === 'account' ? handleBuyNext : handleBuySubmit} className="relative space-y-3">
                   {buyStep === 'account' && (
                     <>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="space-y-1.5">
-                          <Label htmlFor="buyDisplayName" className={colorText}>Display Name</Label>
-                          <Input
-                            id="buyDisplayName"
-                            value={displayName}
-                            onChange={(e) => setDisplayName(e.target.value)}
-                            placeholder="Enter display name"
-                            required
-                            disabled={loading}
-                            autoComplete="name"
-                          />
+                      {paymentConfig?.messenger_url && (
+                        <div className={`rounded-xl border px-4 py-3 text-sm ${isDark ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-100' : 'border-cyan-200 bg-cyan-50 text-cyan-800'}`}>
+                          <button
+                            type="button"
+                            onClick={() => window.open(paymentConfig.messenger_url, '_blank', 'noopener,noreferrer')}
+                            className={`font-semibold underline underline-offset-4 ${isDark ? 'text-white' : 'text-cyan-900'}`}
+                          >
+                            Message us on Facebook
+                          </button>
+                          {' '}for help.
                         </div>
-                        <div className="space-y-1.5">
-                          <Label htmlFor="buyEmail" className={colorText}>Email</Label>
-                          <Input
-                            id="buyEmail"
-                            type="email"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            placeholder="Enter your email"
-                            required
-                            disabled={loading}
-                            autoComplete="email"
-                          />
-                        </div>
+                      )}
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="buyEmail" className={colorText}>Email</Label>
+                        <Input
+                          id="buyEmail"
+                          type="email"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          placeholder="Enter your email"
+                          required
+                          disabled={loading}
+                          autoComplete="email"
+                        />
                       </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1411,17 +1504,31 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                           {paymentConfig?.instructions || 'Please follow the instructions below before submitting registration.'}
                         </div>
                         {(paymentConfig?.gcash_number || paymentConfig?.maya_number) && (
-                          <div className="mt-3 grid grid-cols-2 gap-3">
+                          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                             {paymentConfig?.gcash_number && (
                               <div className={`p-2.5 rounded-lg border flex flex-col gap-1 items-center justify-center text-center ${isDark ? 'bg-blue-900/20 border-blue-500/30' : 'bg-blue-50 border-blue-100'}`}>
                                 <span className="text-[11px] font-bold text-blue-500 uppercase tracking-wider">GCash</span>
-                                <span className={`font-mono text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>{paymentConfig.gcash_number}</span>
+                                <CopyableValue
+                                  value={paymentConfig.gcash_number}
+                                  label="GCash number"
+                                  wrap
+                                  className="max-w-full justify-center"
+                                  valueClassName={`font-mono text-sm font-medium break-all whitespace-normal text-center ${isDark ? 'text-white' : 'text-gray-900'}`}
+                                  buttonClassName={isDark ? 'text-blue-200 hover:bg-blue-400/15' : 'text-blue-700 hover:bg-blue-100'}
+                                />
                               </div>
                             )}
                             {paymentConfig?.maya_number && (
                               <div className={`p-2.5 rounded-lg border flex flex-col gap-1 items-center justify-center text-center ${isDark ? 'bg-green-900/20 border-green-500/30' : 'bg-green-50 border-green-100'}`}>
                                 <span className="text-[11px] font-bold text-green-500 uppercase tracking-wider">Maya</span>
-                                <span className={`font-mono text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>{paymentConfig.maya_number}</span>
+                                <CopyableValue
+                                  value={paymentConfig.maya_number}
+                                  label="Maya number"
+                                  wrap
+                                  className="max-w-full justify-center"
+                                  valueClassName={`font-mono text-sm font-medium break-all whitespace-normal text-center ${isDark ? 'text-white' : 'text-gray-900'}`}
+                                  buttonClassName={isDark ? 'text-green-200 hover:bg-green-400/15' : 'text-green-700 hover:bg-green-100'}
+                                />
                               </div>
                             )}
                           </div>
@@ -1581,13 +1688,26 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                       disabled={loading}
                     >
                       {buyStep === 'payment'
-                        ? (loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ArrowRight className="w-4 h-4 mr-2" />)
+                        ? <ArrowRight className="w-4 h-4 mr-2" />
                         : <ArrowRight className="w-4 h-4 mr-2" />}
                       {buyStep === 'payment'
-                        ? (loading ? 'Submitting...' : 'Submit Registration')
+                        ? 'Submit Registration'
                         : 'Next: Payment'}
                     </Button>
                   </div>
+                  {isBuySubmitting && (
+                    <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-gray-950/72' : 'bg-white/72'}`}>
+                      <div className={`mx-4 w-full max-w-sm rounded-2xl border px-6 py-7 text-center shadow-2xl ${isDark ? 'border-white/10 bg-gray-900/95 text-white' : 'border-gray-200 bg-white/95 text-gray-900'}`}>
+                        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-indigo-500/10">
+                          <LoadingSpinner size="lg" className="h-10 w-10 border-4 border-indigo-200/40 border-t-indigo-500" />
+                        </div>
+                        <div className="mt-4 text-base font-semibold">Submitting your account request...</div>
+                        <div className={`mt-2 text-sm leading-relaxed ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                          Please wait while we save your request, run payment checks, and prepare your receipt.
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </form>
               </>
             )}
@@ -1625,4 +1745,3 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     </Dialog>
   )
 }
-
