@@ -194,7 +194,12 @@ export const runImportBankPipeline = async (
     });
     let zipStageCompletedAt = importStartedAt;
     let parseStageCompletedAt = importStartedAt;
-    const reportImportStage = (message: string, progress?: number, stageId?: string) => {
+    const reportImportStage = (
+      message: string,
+      progress?: number,
+      stageId?: string,
+      debugDetails?: Record<string, unknown>
+    ) => {
       emitImportStage(message, importStartedAt, progress, stageId);
       if (typeof progress === 'number') onProgress?.(progress);
       if (typeof progress === 'number') {
@@ -208,6 +213,7 @@ export const runImportBankPipeline = async (
           0,
           (typeof performance !== 'undefined' ? performance.now() : Date.now()) - importStartedAt
         ),
+        ...debugDetails,
       });
     };
     const lastDerivedKeyStorageKey = effectiveUser ? `vdjv-last-import-derived-key-${effectiveUser.id}` : null;
@@ -569,12 +575,19 @@ export const runImportBankPipeline = async (
         ? metadata.entitlementToken.trim()
         : '';
       const signedEntitlementToken = entitlementTokenFromOption || entitlementTokenFromMetadata;
+      let entitlementVerificationReason: string | null = null;
       const requiresSignedEntitlement = Boolean(
         isAdminBank &&
         metadataBankId &&
         (metadata?.catalogItemId || options?.preferredDerivedKey)
       );
       if (requiresSignedEntitlement && !signedEntitlementToken) {
+        reportImportStage('Missing entitlement token. Import blocked.', 24, 'entitlement-token-missing', {
+          reason: 'missing_token',
+          tokenSource: entitlementTokenFromOption ? 'option' : (entitlementTokenFromMetadata ? 'metadata' : 'none'),
+          hasCatalogItemId: Boolean(metadata?.catalogItemId),
+          hasPreferredDerivedKey: Boolean(options?.preferredDerivedKey),
+        });
         throw new Error('This bank requires a signed entitlement token. Please re-download it from Store.');
       }
       if (signedEntitlementToken && userForAccess?.id && metadataBankId) {
@@ -599,13 +612,23 @@ export const runImportBankPipeline = async (
           };
           reportImportStage('Entitlement token verified.', 24, 'entitlement-token-verified');
         } else {
-          reportImportStage('Entitlement token invalid. Import blocked.', 24, 'entitlement-token-invalid');
+          entitlementVerificationReason = entitlementVerification.reason;
+          reportImportStage('Entitlement token invalid. Import blocked.', 24, 'entitlement-token-invalid', {
+            reason: entitlementVerification.reason,
+            tokenSource: entitlementTokenFromOption ? 'option' : (entitlementTokenFromMetadata ? 'metadata' : 'unknown'),
+            hasCatalogItemId: Boolean(metadata?.catalogItemId),
+            expectedCatalogItemId: metadata?.catalogItemId || null,
+          });
         }
       }
 
       if (isAdminBank && !userForAccess) throw new Error('Login required');
       if (requiresSignedEntitlement && !hasVerifiedEntitlementToken) {
-        throw new Error('Entitlement verification failed. Please re-download the bank from Store.');
+        throw new Error(
+          entitlementVerificationReason
+            ? `Entitlement verification failed (${entitlementVerificationReason}). Please re-download the bank from Store.`
+            : 'Entitlement verification failed. Please re-download the bank from Store.'
+        );
       }
 
       const importedIsTrustedBank = Boolean(
