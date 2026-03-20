@@ -132,13 +132,27 @@ export function useOnlineStoreDebugLog({
                 elapsedMs: typeof detail.elapsedMs === 'number' ? detail.elapsedMs : null,
             });
         };
+        const handleOperationDebug = (event: Event) => {
+            const detail = (event as CustomEvent<Record<string, unknown>>).detail || {};
+            const operation = typeof detail.operation === 'string' ? detail.operation : null;
+            if (!operation || !String(operation).startsWith('bankstore') && operation !== 'bank_import') return;
+            const phase = typeof detail.phase === 'string' ? detail.phase : null;
+            pushDownloadDebugLog(phase === 'error' ? 'error' : 'info', 'operation_debug', {
+                operation,
+                phase,
+                operationId: typeof detail.operationId === 'string' ? detail.operationId : null,
+                details: detail.details && typeof detail.details === 'object' ? detail.details : null,
+            });
+        };
         window.addEventListener('vdjv-import-start', handleImportStart as EventListener);
         window.addEventListener('vdjv-import-end', handleImportEnd as EventListener);
         window.addEventListener('vdjv-import-stage', handleImportStage as EventListener);
+        window.addEventListener('vdjv-operation-debug', handleOperationDebug as EventListener);
         return () => {
             window.removeEventListener('vdjv-import-start', handleImportStart as EventListener);
             window.removeEventListener('vdjv-import-end', handleImportEnd as EventListener);
             window.removeEventListener('vdjv-import-stage', handleImportStage as EventListener);
+            window.removeEventListener('vdjv-operation-debug', handleOperationDebug as EventListener);
         };
     }, [enabled, open, pushDownloadDebugLog]);
 

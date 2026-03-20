@@ -211,7 +211,7 @@ export function OnlineStorePurchasePane({
                         className={`w-full rounded-md border p-2.5 outline-none focus:ring-2 focus:ring-indigo-500/50 transition-shadow ${isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
                         required
                     >
-                        <option value="image_proof">Upload Receipt / Image Proof</option>
+                        <option value="image_proof">Upload Official Receipt (Fast Approval)</option>
                         <option value="gcash_manual">GCash Manual</option>
                         <option value="maya_manual">Maya Manual</option>
                     </select>

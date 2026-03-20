@@ -1,10 +1,7 @@
 ﻿import JSZip, { type JSZipObject } from 'jszip';
 import type { BankMetadata, PadData, SamplerBank } from '../types/sampler';
 import {
-  decryptZip,
-  extractBankMetadata,
   getDerivedKey,
-  isZipPasswordMatch,
   parseBankIdFromFileName,
   refreshAccessibleBanksCache,
   resolveAdminBankMetadata,
@@ -13,7 +10,6 @@ import { verifySignedAdminExportToken } from '@/lib/admin-export-token';
 import { verifySignedEntitlementToken } from '@/lib/entitlement-token';
 import { checkAdmission, extractMetadataFromBlob } from '@/lib/audio-engine/AudioAdmission';
 import {
-  assertSafeBankImportArchive,
   getBankDuplicateSignature,
   hasVdjvEncryptionMagic,
   hasWebCryptoSubtle,
@@ -21,7 +17,28 @@ import {
   isFileAccessDeniedError,
   normalizeArchiveAssetPath,
 } from './useSamplerStore.importUtils';
+import { createRecoverableDuplicateImportError } from './useSamplerStore.importErrors';
 import { applyBankContentPolicy } from './useSamplerStore.provenance';
+import { runNativeAndroidImportPipeline } from './useSamplerStore.importBank.android';
+import {
+  isNativeAndroidSharedImportSource,
+  isNativeAndroidStoreImportSource,
+  isNativeElectronStoreImportSource,
+  type ImportBankSource,
+} from './nativeBankImport.types';
+import {
+  addOperationStage,
+  createAdHocOperationDiagnostics,
+  failOperationDiagnostics,
+  finishOperationDiagnostics,
+  startOperationHeartbeat,
+} from './useSamplerStore.operationDiagnostics';
+import { createImportArchiveWorkerClient } from './useSamplerStore.importWorkerClient';
+import type {
+  ImportWorkerAssetPayload,
+  ImportWorkerPadChunkDescriptor,
+  ImportWorkerPadChunkItem,
+} from './useSamplerStore.importWorkerShared';
 const NATIVE_IMPORT_CONCURRENCY = 1;
 const NATIVE_ANDROID_IMPORT_CONCURRENCY = 2;
 const WEB_IMPORT_CONCURRENCY = 4;
@@ -36,6 +53,25 @@ interface BatchFileItem {
   blob: Blob;
   type: 'audio' | 'image';
 }
+
+const resolveArchiveAssetPath = (value: unknown): string | null => {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+  const normalizedPath = normalizeArchiveAssetPath(value.replace(/^\.?\//, '').trim());
+  if (
+    !normalizedPath ||
+    normalizedPath.startsWith('blob:') ||
+    normalizedPath.startsWith('data:') ||
+    /^https?:\/\//i.test(normalizedPath)
+  ) {
+    return null;
+  }
+  return normalizedPath;
+};
+
+const toBlobFromWorkerAsset = (asset: ImportWorkerAssetPayload | null | undefined): Blob | null => {
+  if (!asset || !(asset.buffer instanceof ArrayBuffer) || asset.buffer.byteLength <= 0) return null;
+  return new Blob([asset.buffer], { type: asset.type || 'application/octet-stream' });
+};
 export interface ImportBankOptions {
   allowDuplicateImport?: boolean;
   skipActivityLog?: boolean;
@@ -70,6 +106,7 @@ export interface ImportBankPipelineDeps {
   generateId: () => string;
   isNativeCapacitorPlatform: () => boolean;
   isNativeAndroid: () => boolean;
+  supportsNativeMediaStorage: () => boolean;
   storeFile: (
     id: string,
     file: File,
@@ -87,11 +124,32 @@ export interface ImportBankPipelineDeps {
   logImportActivity: (payload: ImportActivityPayload) => void;
 }
 export const runImportBankPipeline = async (
-  file: File,
+  source: ImportBankSource,
   onProgress: ((progress: number) => void) | undefined,
   options: ImportBankOptions | undefined,
   deps: ImportBankPipelineDeps
 ): Promise<SamplerBank | null> => {
+    if (
+      deps.isNativeCapacitorPlatform() &&
+      deps.isNativeAndroid() &&
+      (isNativeAndroidStoreImportSource(source) || isNativeAndroidSharedImportSource(source))
+    ) {
+      return runNativeAndroidImportPipeline(source, onProgress, options, deps);
+    }
+    if (
+      isNativeElectronStoreImportSource(source) ||
+      (source instanceof File &&
+        deps.supportsNativeMediaStorage() &&
+        typeof window !== 'undefined' &&
+        typeof (source as File & { path?: string }).path === 'string' &&
+        typeof window.electronAPI?.importArchiveJob === 'function')
+    ) {
+      return runNativeAndroidImportPipeline(source, onProgress, options, deps);
+    }
+    if (!(source instanceof File)) {
+      throw new Error('Unsupported import source.');
+    }
+    const file = source;
     const {
       user,
       getCachedUser,
@@ -106,6 +164,7 @@ export const runImportBankPipeline = async (
       generateId,
       isNativeCapacitorPlatform,
       isNativeAndroid,
+      supportsNativeMediaStorage,
       storeFile,
       saveBatchBlobsToDB,
       yieldToMainThread,
@@ -121,11 +180,35 @@ export const runImportBankPipeline = async (
     let importPadNames: string[] = [];
     let includePadList = false;
     const importStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const operationDiagnostics = createAdHocOperationDiagnostics('bank_import', effectiveUser?.id || null);
+    let lastReportedProgress = 0;
+    let lastReportedStageId: string | null = null;
+    const stopHeartbeat = startOperationHeartbeat(operationDiagnostics, {
+      getDetails: () => ({
+        bankName: importBankName,
+        fileName: file?.name || 'unknown.bank',
+        fileBytes: file?.size || 0,
+        progress: lastReportedProgress,
+        stageId: lastReportedStageId,
+      }),
+    });
     let zipStageCompletedAt = importStartedAt;
     let parseStageCompletedAt = importStartedAt;
     const reportImportStage = (message: string, progress?: number, stageId?: string) => {
       emitImportStage(message, importStartedAt, progress, stageId);
       if (typeof progress === 'number') onProgress?.(progress);
+      if (typeof progress === 'number') {
+        lastReportedProgress = progress;
+      }
+      lastReportedStageId = stageId || null;
+      addOperationStage(operationDiagnostics, stageId || 'stage', {
+        message,
+        progress,
+        elapsedMs: Math.max(
+          0,
+          (typeof performance !== 'undefined' ? performance.now() : Date.now()) - importStartedAt
+        ),
+      });
     };
     const lastDerivedKeyStorageKey = effectiveUser ? `vdjv-last-import-derived-key-${effectiveUser.id}` : null;
     const setLastDerivedKey = (derivedKey: string): void => {
@@ -136,6 +219,7 @@ export const runImportBankPipeline = async (
         // Ignore local storage failures.
       }
     };
+    const workerClient = createImportArchiveWorkerClient();
     try {
       reportImportStage('Checking bank file...', 5, 'validate-file');
 
@@ -173,15 +257,6 @@ export const runImportBankPipeline = async (
         }
       };
 
-      const loadZipFromBlob = async (blob: Blob, label: string): Promise<JSZip> => {
-        try {
-          return await withTimeout(new JSZip().loadAsync(blob), adaptiveTimeoutMs, label);
-        } catch (err) {
-          const buffer = await blob.arrayBuffer();
-          return await withTimeout(new JSZip().loadAsync(buffer), adaptiveTimeoutMs, label);
-        }
-      };
-
       const baseTimeoutMs = 60_000;
       const per100MbMs = 60_000;
       const maxTimeoutMs = 10 * 60_000;
@@ -189,211 +264,134 @@ export const runImportBankPipeline = async (
       const adaptiveTimeoutMs = Math.min(maxTimeoutMs, baseTimeoutMs + (sizeIn100Mb * per100MbMs));
       const looksLikePlainZip = await hasZipMagicHeader(file);
       const looksLikeVdjvEncryptedEnvelope = !looksLikePlainZip && await hasVdjvEncryptionMagic(file);
+      if (looksLikeVdjvEncryptedEnvelope && !hasWebCryptoSubtle()) {
+        throw new Error('Encrypted bank import requires a secure context (HTTPS or localhost).');
+      }
 
       reportImportStage('Reading bank archive...', 10, 'zip-open');
 
-      let contents: JSZip;
-
-      try {
-        // Fast-path unencrypted banks only if file starts with ZIP magic bytes.
-        if (!looksLikePlainZip) {
-          throw new Error('This file is not a valid bank file.');
-        }
-        contents = await loadZipFromBlob(file, 'Zip load');
-        reportImportStage('Archive loaded (not encrypted).', 20, 'zip-opened');
-      } catch (error) {
-        if (isFileAccessDeniedError(error)) {
-          throw new Error(IMPORT_FILE_ACCESS_DENIED_MESSAGE);
-        }
-        if (looksLikeVdjvEncryptedEnvelope && !hasWebCryptoSubtle()) {
-          throw new Error('Encrypted bank import requires a secure context (HTTPS or localhost).');
-        }
-        if (!looksLikePlainZip) {
-        }
-        reportImportStage('Encrypted bank detected. Starting decryption...', 12, 'decrypt-start');
-
-        let decrypted = false;
-        let lastError: Error | null = null;
-        const preferredDerivedKey = typeof options?.preferredDerivedKey === 'string'
-          ? options.preferredDerivedKey.trim()
-          : '';
-
-        // First, try shared password (for banks with "Allow Export" disabled)
-        // This works for all users (logged in or not) and doesn't require Supabase
-        try {
-          reportImportStage('Trying shared decryption key...', 13, 'decrypt-shared-check');
-          const headerMatch = await withTimeout(
-            isZipPasswordMatch(file, SHARED_EXPORT_DISABLED_PASSWORD),
-            Math.min(adaptiveTimeoutMs, 10_000),
-            'Header check'
-          );
-          if (headerMatch) {
-            reportImportStage('Decrypting with shared key...', 15, 'decrypt-shared');
-            const decryptedBlob = await withTimeout(
-              decryptZip(file, SHARED_EXPORT_DISABLED_PASSWORD),
-              adaptiveTimeoutMs,
-              'Decrypt'
-            );
-            contents = await loadZipFromBlob(decryptedBlob, 'Zip load');
-            decrypted = true;
-            reportImportStage('Decryption succeeded with shared key.', 20, 'decrypt-shared-success');
-          } else {
-            throw new Error('The password for this protected bank is incorrect.');
-          }
-        } catch (e) {
-          if (isFileAccessDeniedError(e)) {
-            throw new Error(IMPORT_FILE_ACCESS_DENIED_MESSAGE);
-          }
-          lastError = e instanceof Error ? e : new Error(String(e));
-          reportImportStage('Shared key failed. Trying account keys...', 14, 'decrypt-shared-failed');
-        }
-
-        // If provided by secure store endpoint, prefer this key before cache/database scans.
-        if (!decrypted && preferredDerivedKey) {
-          try {
-            reportImportStage('Trying secure store key...', 15, 'decrypt-store-key-check');
-            const headerMatch = await withTimeout(
-              isZipPasswordMatch(file, preferredDerivedKey),
-              Math.min(adaptiveTimeoutMs, 10_000),
-              'Header check'
-            );
-            if (!headerMatch) {
-              throw new Error('Secure store key mismatch.');
-            }
-            reportImportStage('Decrypting with secure store key...', 17, 'decrypt-store-key');
-            const decryptedBlob = await withTimeout(
-              decryptZip(file, preferredDerivedKey),
-              adaptiveTimeoutMs,
-              'Decrypt'
-            );
-            contents = await loadZipFromBlob(decryptedBlob, 'Zip load');
-            decrypted = true;
-            setLastDerivedKey(preferredDerivedKey);
-            reportImportStage('Decryption succeeded with secure store key.', 20, 'decrypt-store-key-success');
-          } catch (e) {
-            if (isFileAccessDeniedError(e)) {
-              throw new Error(IMPORT_FILE_ACCESS_DENIED_MESSAGE);
-            }
-            lastError = e instanceof Error ? e : new Error(String(e));
-            reportImportStage('Secure store key failed. Trying account keys...', 14, 'decrypt-store-key-failed');
-          }
-        }
-
-        // Strict key path only: shared key -> secure store derived key -> exact bank-id lookup.
-        if (!decrypted) {
-          if (!effectiveUser) {
-            throw new Error('Login required to import encrypted banks. Please sign in and try again.');
-          }
-
-          const triedDerivedKeys = new Set<string>();
-          const attemptDerivedKey = async (
-            derivedKey: string | null | undefined,
-            decryptingMessage: string,
-            progress: number,
-            stageId: string
-          ): Promise<boolean> => {
-            const normalized = typeof derivedKey === 'string' ? derivedKey.trim() : '';
-            if (!normalized || triedDerivedKeys.has(normalized)) return false;
-            triedDerivedKeys.add(normalized);
-            const headerMatch = await withTimeout(
-              isZipPasswordMatch(file, normalized),
-              Math.min(adaptiveTimeoutMs, 10_000),
-              'Header check'
-            );
-            if (!headerMatch) return false;
-            reportImportStage(decryptingMessage, progress, stageId);
-            const decryptedBlob = await withTimeout(decryptZip(file, normalized), adaptiveTimeoutMs, 'Decrypt');
-            contents = await loadZipFromBlob(decryptedBlob, 'Zip load');
-            decrypted = true;
-            setLastDerivedKey(normalized);
-            reportImportStage('Decryption succeeded.', 20, `${stageId}-success`);
-            return true;
-          };
-
-          const preferredBankId = typeof options?.preferredBankId === 'string'
-            ? options.preferredBankId.trim()
-            : '';
-          const hintedId = parseBankIdFromFileName(file.name);
-          const candidateBankIds = Array.from(
-            new Set([preferredBankId, hintedId || ''].filter((id) => typeof id === 'string' && id.trim().length > 0))
-          );
-
-          if (candidateBankIds.length > 0) {
-            reportImportStage(`Trying ${candidateBankIds.length} bank key hint(s)...`, 16, 'decrypt-bank-id-hints');
-            for (let index = 0; index < candidateBankIds.length && !decrypted; index += 1) {
-              const bankId = candidateBankIds[index];
-              try {
-                reportImportStage(
-                  `Resolving bank key (${index + 1}/${candidateBankIds.length})...`,
-                  17,
-                  'decrypt-bank-id-resolve'
-                );
-                const derivedKey = await getDerivedKey(bankId, effectiveUser.id);
-                const matched = await attemptDerivedKey(
-                  derivedKey,
-                  'Decrypting with account key...',
-                  19,
-                  'decrypt-bank-id'
-                );
-                if (matched) {
-                  reportImportStage('Decryption succeeded with account key.', 20, 'decrypt-bank-id-success');
-                  break;
-                }
-              } catch (e) {
-                if (isFileAccessDeniedError(e)) {
-                  throw new Error(IMPORT_FILE_ACCESS_DENIED_MESSAGE);
-                }
-                lastError = e instanceof Error ? e : new Error(String(e));
-              }
-            }
-          }
-
-          if (!decrypted) {
+      let bankData: any;
+      let bankJsonText = '';
+      let metadata: BankMetadata | null = null;
+      const preferredDerivedKey = typeof options?.preferredDerivedKey === 'string'
+        ? options.preferredDerivedKey.trim()
+        : '';
+      const preferredBankId = typeof options?.preferredBankId === 'string'
+        ? options.preferredBankId.trim()
+        : '';
+      const hintedId = parseBankIdFromFileName(file.name);
+      const candidateBankIds = Array.from(
+        new Set([preferredBankId, hintedId || ''].filter((id) => typeof id === 'string' && id.trim().length > 0))
+      );
+      const buildCandidateKeys = async (allowRefresh: boolean): Promise<string[]> => {
+        const keys: string[] = [SHARED_EXPORT_DISABLED_PASSWORD];
+        if (preferredDerivedKey) keys.push(preferredDerivedKey);
+        if (effectiveUser && candidateBankIds.length > 0) {
+          if (allowRefresh) {
             reportImportStage('Refreshing granted bank keys...', 17, 'decrypt-access-refresh');
             await refreshAccessibleBanksCache(effectiveUser.id).catch(() => {});
           }
+          reportImportStage(`Resolving ${candidateBankIds.length} bank key hint(s)...`, 16, 'decrypt-bank-id-hints');
+          for (let index = 0; index < candidateBankIds.length; index += 1) {
+            const bankId = candidateBankIds[index];
+            reportImportStage(
+              `Resolving bank key (${index + 1}/${candidateBankIds.length})...`,
+              17,
+              'decrypt-bank-id-resolve'
+            );
+            const derivedKey = await getDerivedKey(bankId, effectiveUser.id);
+            if (derivedKey) keys.push(derivedKey);
+          }
         }
+        return Array.from(new Set(keys.map((key) => key.trim()).filter((key) => key.length > 0)));
+      };
 
-        if (!decrypted) {
-          if (lastError && isFileAccessDeniedError(lastError)) {
+      try {
+        let openResult: Awaited<ReturnType<typeof workerClient.open>> | null = null;
+        const openArchiveWithKeys = async (allowRefresh: boolean) => {
+          const candidateKeys = await buildCandidateKeys(allowRefresh);
+          if (looksLikeVdjvEncryptedEnvelope) {
+            reportImportStage('Encrypted bank detected. Opening archive...', 12, 'decrypt-start');
+          }
+          return withTimeout(
+            workerClient.open(file, candidateKeys, adaptiveTimeoutMs),
+            adaptiveTimeoutMs,
+            'Archive import worker'
+          );
+        };
+
+        try {
+          openResult = await openArchiveWithKeys(false);
+        } catch (openError) {
+          if (isFileAccessDeniedError(openError)) {
             throw new Error(IMPORT_FILE_ACCESS_DENIED_MESSAGE);
           }
-          const errorMsg = lastError?.message || 'Unknown decryption error';
-          throw new Error(`Cannot decrypt bank file. ${errorMsg}. Please ensure you have access to this bank.`);
+          if (
+            looksLikeVdjvEncryptedEnvelope &&
+            effectiveUser &&
+            candidateBankIds.length > 0
+          ) {
+            openResult = await openArchiveWithKeys(true);
+          } else if (looksLikeVdjvEncryptedEnvelope && !effectiveUser && !preferredDerivedKey) {
+            throw new Error('Login required to import encrypted banks. Please sign in and try again.');
+          } else {
+            throw openError;
+          }
         }
-      }
-      assertSafeBankImportArchive(contents);
-      zipStageCompletedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
-      reportImportStage('Reading bank metadata...', 20, 'metadata-start');
+        if (!openResult) {
+          throw new Error('This file is not a valid bank file.');
+        }
 
-      // Validate bank.json exists
-      const bankJsonFile = contents.file('bank.json');
-      if (!bankJsonFile) {
-        throw new Error('Invalid bank file: bank.json not found. This may not be a valid bank file.');
-      }
+        if (openResult.usedKey && openResult.usedKey !== SHARED_EXPORT_DISABLED_PASSWORD) {
+          setLastDerivedKey(openResult.usedKey);
+        }
 
-      // Parse bank data with error handling
-      let bankData: any;
-      let bankJsonText = '';
-      try {
-        bankJsonText = await withTimeout(
-          bankJsonFile.async('string'),
-          adaptiveTimeoutMs,
-          'Bank JSON load'
+        reportImportStage(
+          looksLikeVdjvEncryptedEnvelope ? 'Encrypted archive opened.' : 'Archive loaded (not encrypted).',
+          20,
+          'zip-opened'
         );
+        zipStageCompletedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        reportImportStage('Reading bank metadata...', 20, 'metadata-start');
+        bankJsonText = openResult.bankJsonText;
         reportImportStage('Parsing bank content...', 23, 'bank-json-parse');
-        bankData = JSON.parse(bankJsonText);
+        bankData = openResult.bankData;
+        metadata = openResult.metadata
+          ? {
+              password: openResult.metadata.password ?? false,
+              transferable: openResult.metadata.transferable ?? true,
+              exportable: openResult.metadata.exportable,
+              adminExportToken: openResult.metadata.adminExportToken,
+              adminExportTokenKid: openResult.metadata.adminExportTokenKid,
+              adminExportTokenIssuedAt: openResult.metadata.adminExportTokenIssuedAt,
+              adminExportTokenExpiresAt: openResult.metadata.adminExportTokenExpiresAt,
+              adminExportTokenBankSha256: openResult.metadata.adminExportTokenBankSha256,
+              bankId: openResult.metadata.bankId,
+              entitlementToken: openResult.metadata.entitlementToken,
+              entitlementTokenKid: openResult.metadata.entitlementTokenKid,
+              entitlementTokenIssuedAt: openResult.metadata.entitlementTokenIssuedAt,
+              entitlementTokenExpiresAt: openResult.metadata.entitlementTokenExpiresAt,
+              entitlementTokenVerified: openResult.metadata.entitlementTokenVerified,
+              catalogItemId: openResult.metadata.catalogItemId,
+              catalogSha256: openResult.metadata.catalogSha256,
+              title: openResult.metadata.title,
+              description: openResult.metadata.description,
+              color: openResult.metadata.color,
+              thumbnailUrl: openResult.metadata.thumbnailUrl,
+              thumbnailAssetPath: openResult.metadata.thumbnailAssetPath,
+              hideThumbnailPreview: openResult.metadata.hideThumbnailPreview,
+            }
+          : null;
 
         if (!bankData || typeof bankData !== 'object') {
           throw new Error('Invalid bank file data. This file may be damaged or unsupported.');
         }
-
         if (!bankData.name || !Array.isArray(bankData.pads)) {
           throw new Error('Invalid bank file format: Missing required fields');
         }
-        importBankName = bankData.name;
-        importPadNames = bankData.pads.map((pad: any) => pad?.name || 'Untitled Pad');
+        importBankName = String(bankData.name);
+        importPadNames = (bankData.pads as any[]).map((pad: any) => pad?.name || 'Untitled Pad');
         parseStageCompletedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
       } catch (error) {
         if (error instanceof SyntaxError) {
@@ -408,35 +406,10 @@ export const runImportBankPipeline = async (
           ? bankData.id.trim()
           : undefined;
       const importSignature = getBankDuplicateSignature(bankData);
-
-      let metadata: BankMetadata | null = await extractBankMetadata(contents);
-      if (metadata) {
-        metadata = {
-          password: metadata.password ?? false,
-          transferable: metadata.transferable ?? true,
-          exportable: metadata.exportable,
-          adminExportToken: metadata.adminExportToken,
-          adminExportTokenKid: metadata.adminExportTokenKid,
-          adminExportTokenIssuedAt: metadata.adminExportTokenIssuedAt,
-          adminExportTokenExpiresAt: metadata.adminExportTokenExpiresAt,
-          adminExportTokenBankSha256: metadata.adminExportTokenBankSha256,
-          bankId: metadata.bankId,
-          entitlementToken: metadata.entitlementToken,
-          entitlementTokenKid: metadata.entitlementTokenKid,
-          entitlementTokenIssuedAt: metadata.entitlementTokenIssuedAt,
-          entitlementTokenExpiresAt: metadata.entitlementTokenExpiresAt,
-          entitlementTokenVerified: metadata.entitlementTokenVerified,
-          catalogItemId: metadata.catalogItemId,
-          catalogSha256: metadata.catalogSha256,
-          title: metadata.title,
-          description: metadata.description,
-          color: metadata.color,
-          thumbnailUrl: metadata.thumbnailUrl,
-          thumbnailAssetPath: metadata.thumbnailAssetPath,
-          hideThumbnailPreview: metadata.hideThumbnailPreview,
-        };
-      }
       const metadataBankId = metadata?.bankId || parseBankIdFromFileName(file.name) || undefined;
+      const replaceExistingBankId = typeof options?.replaceExistingBankId === 'string'
+        ? options.replaceExistingBankId.trim()
+        : '';
       if (metadataBankId && !metadata?.bankId) {
         metadata = {
           password: metadata?.password ?? false,
@@ -476,7 +449,8 @@ export const runImportBankPipeline = async (
       addDuplicateToken(importSignature);
 
       if (!options?.allowDuplicateImport && duplicateTokens.size > 0) {
-        const isDuplicate = banks.some((bank) => {
+        const duplicateBank = banksRef.current.find((bank) => {
+          if (replaceExistingBankId && bank.id === replaceExistingBankId) return false;
           const bankSignature = getBankDuplicateSignature(bank);
           return [bank.id, bank.sourceBankId, bank.bankMetadata?.bankId, bankSignature]
             .some((token) => {
@@ -485,7 +459,10 @@ export const runImportBankPipeline = async (
             });
         });
 
-        if (isDuplicate) {
+        if (duplicateBank) {
+          if (duplicateBank.restoreStatus && duplicateBank.restoreStatus !== 'ready') {
+            throw createRecoverableDuplicateImportError(duplicateBank, importBankName);
+          }
           throw new Error('This bank is already imported.');
         }
       }
@@ -537,21 +514,13 @@ export const runImportBankPipeline = async (
         resolvedBankColor = metadata.color;
       }
 
-      const loadEmbeddedThumbnailBlob = async (assetPath: string | null | undefined): Promise<Blob | null> => {
-        const normalizedPath = typeof assetPath === 'string' ? normalizeArchiveAssetPath(assetPath) : '';
-        if (!normalizedPath) return null;
-        const thumbnailFile = contents.file(normalizedPath);
-        if (!thumbnailFile) return null;
-        try {
-          const thumbnailBlob = await thumbnailFile.async('blob');
-          if (!(thumbnailBlob instanceof Blob) || thumbnailBlob.size <= 0) return null;
-          return thumbnailBlob;
-        } catch {
-          return null;
-        }
-      };
-
-      const embeddedThumbnailBlob = await loadEmbeddedThumbnailBlob(metadata?.thumbnailAssetPath);
+      const embeddedThumbnailBlob = toBlobFromWorkerAsset(
+        await withTimeout(
+          workerClient.extractThumbnail(metadata?.thumbnailAssetPath || null),
+          adaptiveTimeoutMs,
+          'Thumbnail extract'
+        )
+      );
       if (embeddedThumbnailBlob) {
         metadata = {
           ...(metadata || {
@@ -650,9 +619,6 @@ export const runImportBankPipeline = async (
         metadata?.catalogItemId ? 'official_store' : (importedIsTrustedBank ? 'official_admin' : 'user');
       const importedIsOwnedCounted = !importedIsTrustedBank;
       const currentBanks = banksRef.current;
-      const replaceExistingBankId = typeof options?.replaceExistingBankId === 'string'
-        ? options.replaceExistingBankId.trim()
-        : '';
       const replaceExistingBank = replaceExistingBankId
         ? currentBanks.find((bank) => bank.id === replaceExistingBankId) || null
         : null;
@@ -753,8 +719,8 @@ export const runImportBankPipeline = async (
 
       const newPads: PadData[] = [];
       const totalPads = bankData.pads.length;
-      const nativeMode = isNativeCapacitorPlatform();
-      const aggressiveAndroidImport = nativeMode && isNativeAndroid();
+      const nativeMode = supportsNativeMediaStorage();
+      const aggressiveAndroidImport = isNativeCapacitorPlatform() && isNativeAndroid();
       const concurrentPadCount = nativeMode
         ? (aggressiveAndroidImport ? NATIVE_ANDROID_IMPORT_CONCURRENCY : NATIVE_IMPORT_CONCURRENCY)
         : WEB_IMPORT_CONCURRENCY;
@@ -781,29 +747,13 @@ export const runImportBankPipeline = async (
         }
       };
 
-      const processPad = async (padData: any, globalPadIndex: number): Promise<PadData | null> => {
+      const processPad = async (
+        padData: any,
+        globalPadIndex: number,
+        extractedAssets: ImportWorkerPadChunkItem | null
+      ): Promise<PadData | null> => {
         try {
           const newPadId = generateId();
-          const resolveArchiveMediaFile = (
-            kind: 'audio' | 'image'
-          ): JSZipObject | null => {
-            const fromPadPath = kind === 'audio' ? padData.audioUrl : padData.imageUrl;
-            if (typeof fromPadPath === 'string' && fromPadPath.trim().length > 0) {
-              const normalizedPath = fromPadPath.replace(/^\.?\//, '').trim();
-              if (
-                normalizedPath.length > 0 &&
-                !normalizedPath.startsWith('blob:') &&
-                !normalizedPath.startsWith('data:') &&
-                !/^https?:\/\//i.test(normalizedPath)
-              ) {
-                const resolved = contents.file(normalizedPath);
-                if (resolved) return resolved;
-              }
-            }
-            return null;
-          };
-          const audioFile = resolveArchiveMediaFile('audio');
-          const imageFile = resolveArchiveMediaFile('image');
           let audioUrl: string | null = null;
           let imageUrl: string | null = null;
           let audioStorageKey: string | undefined;
@@ -814,76 +764,71 @@ export const runImportBankPipeline = async (
           let audioBytes: number | undefined;
           let audioDurationMs: number | undefined;
 
-          if (audioFile) {
+          const audioBlob = toBlobFromWorkerAsset(extractedAssets?.audio);
+          if (audioBlob) {
             try {
-              const audioBlob = await withTimeout(
-                audioFile.async('blob'),
-                adaptiveTimeoutMs,
-                'Audio load'
-              );
-
-              if (!audioBlob || audioBlob.size === 0) {
-              } else {
-                const inferredDurationMs =
-                  typeof padData.endTimeMs === 'number' && Number.isFinite(padData.endTimeMs) && padData.endTimeMs > 0
-                    ? Math.round(padData.endTimeMs)
-                    : 0;
-                const admissionMetadata = aggressiveAndroidImport
-                  ? { audioBytes: audioBlob.size, audioDurationMs: inferredDurationMs }
-                  : await extractMetadataFromBlob(audioBlob);
-                const admission = checkAdmission(admissionMetadata);
-                if (!admission.allowed) {
-                  importDiagnostics.rejectedPads += 1;
-                  return null;
-                }
-                audioBytes = admissionMetadata.audioBytes;
-                audioDurationMs = admissionMetadata.audioDurationMs > 0 ? admissionMetadata.audioDurationMs : undefined;
-
-                if (nativeMode) {
-                  const storedAudio = await storeFile(
-                    newPadId,
-                    new File([audioBlob], `${newPadId}.audio`, { type: audioBlob.type || 'application/octet-stream' }),
-                    'audio'
+              const inferredDurationMs =
+                typeof padData.audioDurationMs === 'number' && Number.isFinite(padData.audioDurationMs) && padData.audioDurationMs > 0
+                  ? Math.round(padData.audioDurationMs)
+                  : (
+                    typeof padData.endTimeMs === 'number' && Number.isFinite(padData.endTimeMs) && padData.endTimeMs > 0
+                      ? Math.round(padData.endTimeMs)
+                      : 0
                   );
-                  audioStorageKey = storedAudio.storageKey;
-                  audioBackend = storedAudio.backend;
-                } else {
-                  pendingBatchFilesToStore.push({ id: newPadId, blob: audioBlob, type: 'audio' });
-                  pendingBatchBytes += audioBlob.size;
-                }
-                audioUrl = await createFastIOSBlobURL(audioBlob);
-                importDiagnostics.audioBytes += audioBlob.size;
+              const trustedAudioBytes =
+                typeof padData.audioBytes === 'number' && Number.isFinite(padData.audioBytes) && padData.audioBytes > 0
+                  ? Math.round(padData.audioBytes)
+                  : audioBlob.size;
+              const canTrustArchiveAdmission =
+                aggressiveAndroidImport ||
+                (trustedAudioBytes > 0 && inferredDurationMs > 0);
+              const admissionMetadata = canTrustArchiveAdmission
+                ? { audioBytes: trustedAudioBytes, audioDurationMs: inferredDurationMs }
+                : await extractMetadataFromBlob(audioBlob);
+              const admission = checkAdmission(admissionMetadata);
+              if (!admission.allowed) {
+                importDiagnostics.rejectedPads += 1;
+                return null;
               }
+              audioBytes = admissionMetadata.audioBytes;
+              audioDurationMs = admissionMetadata.audioDurationMs > 0 ? admissionMetadata.audioDurationMs : undefined;
+
+              if (nativeMode) {
+                const storedAudio = await storeFile(
+                  newPadId,
+                  new File([audioBlob], `${newPadId}.audio`, { type: audioBlob.type || 'application/octet-stream' }),
+                  'audio'
+                );
+                audioStorageKey = storedAudio.storageKey;
+                audioBackend = storedAudio.backend;
+              } else {
+                pendingBatchFilesToStore.push({ id: newPadId, blob: audioBlob, type: 'audio' });
+                pendingBatchBytes += audioBlob.size;
+              }
+              audioUrl = await createFastIOSBlobURL(audioBlob);
+              importDiagnostics.audioBytes += audioBlob.size;
             } catch {
             }
           }
 
-          if (imageFile) {
+          const imageBlob = toBlobFromWorkerAsset(extractedAssets?.image);
+          if (imageBlob) {
             try {
-              const imageBlob = await withTimeout(
-                imageFile.async('blob'),
-                adaptiveTimeoutMs,
-                'Image load'
-              );
-
-              if (!imageBlob || imageBlob.size === 0) {
+              hasImageAsset = true;
+              if (nativeMode) {
+                const storedImage = await storeFile(
+                  newPadId,
+                  new File([imageBlob], `${newPadId}.image`, { type: imageBlob.type || 'application/octet-stream' }),
+                  'image'
+                );
+                imageStorageKey = storedImage.storageKey;
+                imageBackend = storedImage.backend;
               } else {
-                hasImageAsset = true;
-                if (nativeMode) {
-                  const storedImage = await storeFile(
-                    newPadId,
-                    new File([imageBlob], `${newPadId}.image`, { type: imageBlob.type || 'application/octet-stream' }),
-                    'image'
-                  );
-                  imageStorageKey = storedImage.storageKey;
-                  imageBackend = storedImage.backend;
-                } else {
-                  pendingBatchFilesToStore.push({ id: newPadId, blob: imageBlob, type: 'image' });
-                  pendingBatchBytes += imageBlob.size;
-                }
-                imageUrl = await createFastIOSBlobURL(imageBlob);
-                importDiagnostics.imageBytes += imageBlob.size;
+                pendingBatchFilesToStore.push({ id: newPadId, blob: imageBlob, type: 'image' });
+                pendingBatchBytes += imageBlob.size;
               }
+              imageUrl = await createFastIOSBlobURL(imageBlob);
+              importDiagnostics.imageBytes += imageBlob.size;
             } catch {
             }
           }
@@ -946,8 +891,24 @@ export const runImportBankPipeline = async (
       const padImportStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
       for (let i = 0; i < totalPads; i += concurrentPadCount) {
         const chunk = bankData.pads.slice(i, i + concurrentPadCount);
+        const workerChunkDescriptors: ImportWorkerPadChunkDescriptor[] = chunk.map((padData: any, localIndex: number) => ({
+          index: i + localIndex,
+          audioPath: resolveArchiveAssetPath(padData.audioUrl),
+          imagePath: resolveArchiveAssetPath(padData.imageUrl),
+        }));
+        const extractedChunkItems = await withTimeout(
+          workerClient.extractPadChunk(workerChunkDescriptors),
+          adaptiveTimeoutMs,
+          'Pad chunk extract'
+        );
+        const extractedByIndex = new Map<number, ImportWorkerPadChunkItem>();
+        extractedChunkItems.forEach((item) => {
+          extractedByIndex.set(item.index, item);
+        });
         const chunkResults = await Promise.allSettled(
-          chunk.map((padData: any, localIndex: number) => processPad(padData, i + localIndex))
+          chunk.map((padData: any, localIndex: number) =>
+            processPad(padData, i + localIndex, extractedByIndex.get(i + localIndex) || null)
+          )
         );
 
         for (let localIndex = 0; localIndex < chunkResults.length; localIndex += 1) {
@@ -1063,6 +1024,24 @@ export const runImportBankPipeline = async (
       const padStageMs = Math.max(0, padImportCompletedAt - padImportStartedAt);
       const totalImportMs = Math.max(0, importCompletedAt - importStartedAt);
       const padThroughput = padStageMs > 0 ? ((totalPads / padStageMs) * 1000) : 0;
+      operationDiagnostics.metrics.fileBytes = file.size;
+      operationDiagnostics.metrics.totalPads = totalPads;
+      operationDiagnostics.metrics.importedPads = newPads.length;
+      operationDiagnostics.metrics.rejectedPads = importDiagnostics.rejectedPads;
+      operationDiagnostics.metrics.audioBytes = importDiagnostics.audioBytes;
+      operationDiagnostics.metrics.imageBytes = importDiagnostics.imageBytes;
+      operationDiagnostics.metrics.zipStageMs = Math.round(zipStageMs);
+      operationDiagnostics.metrics.parseStageMs = Math.round(parseStageMs);
+      operationDiagnostics.metrics.padStageMs = Math.round(padStageMs);
+      operationDiagnostics.metrics.totalImportMs = Math.round(totalImportMs);
+      operationDiagnostics.metrics.padThroughputPerSec = Math.round(padThroughput * 100) / 100;
+      finishOperationDiagnostics(operationDiagnostics, {
+        bankName: importBankName,
+        fileName: file.name,
+        importedPads: newPads.length,
+        rejectedPads: importDiagnostics.rejectedPads,
+        totalImportMs: Math.round(totalImportMs),
+      });
       if (!options?.skipActivityLog) {
         logImportActivity({
           status: 'success',
@@ -1077,6 +1056,12 @@ export const runImportBankPipeline = async (
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : 'Unknown import error';
       reportImportStage(`Import failed: ${errorMessage}`, undefined, 'failed');
+      failOperationDiagnostics(operationDiagnostics, e, {
+        bankName: importBankName,
+        fileName: file?.name || 'unknown.bank',
+        progress: lastReportedProgress,
+        stageId: lastReportedStageId,
+      });
       if (!options?.skipActivityLog) {
         logImportActivity({
           status: 'failed',
@@ -1103,5 +1088,8 @@ export const runImportBankPipeline = async (
       }
 
       throw new Error(`Import failed: ${errorMessage}`);
+    } finally {
+      await workerClient.dispose().catch(() => {});
+      stopHeartbeat();
     }
 };

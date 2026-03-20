@@ -15,7 +15,10 @@ import { ProgressDialog } from '@/components/ui/progress-dialog';
 import { StopMode } from '@/components/sampler/types/sampler';
 import type { GraphicsProfile } from '@/lib/performance-monitor';
 import { edgeFunctionUrl } from '@/lib/edge-api';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuthState } from '@/hooks/useAuth';
+import { isNativeBankImportAvailable, pickNativeSharedBankFile } from '@/lib/native-bank-import';
+import type { ImportBankSource } from '@/components/sampler/hooks/nativeBankImport.types';
+import { HelpTooltip } from '@/components/ui/help-tooltip';
 
 const SYSTEM_COLOR_OPTIONS = [
   { name: 'Red', hex: '#ff0000' },
@@ -51,12 +54,97 @@ const appendProgressLogLine = (
   });
 };
 
+const renderHelpContent = (text: string) => (
+  <p className="text-[11px] leading-relaxed">{text}</p>
+);
+
+const summarizeAppUpdateError = (
+  error: string | null | undefined,
+  platform: 'web' | 'electron' | 'android'
+): string | null => {
+  const normalized = String(error || '').trim();
+  if (!normalized) return null;
+  const lower = normalized.toLowerCase();
+
+  if (
+    lower.includes('unable to find latest version on github') ||
+    (lower.includes('/releases/latest') && lower.includes('404'))
+  ) {
+    return 'No published release was found for this build yet.';
+  }
+
+  if (
+    lower.includes('no update feed is configured') ||
+    lower.includes('cannot find channel') ||
+    lower.includes('provider') && lower.includes('github') && lower.includes('404')
+  ) {
+    return 'Update source is not configured correctly for this build.';
+  }
+
+  if (
+    lower.includes('internet disconnected') ||
+    lower.includes('err_internet_disconnected') ||
+    lower.includes('enotfound') ||
+    lower.includes('econnrefused') ||
+    lower.includes('etimedout') ||
+    lower.includes('net::err_') ||
+    lower.includes('network request failed')
+  ) {
+    return 'Could not reach the update server. Check your internet connection and try again.';
+  }
+
+  if (platform === 'android' && lower.includes('play')) {
+    return 'Play in-app update is unavailable on this install.';
+  }
+
+  return 'Could not check for updates right now.';
+};
+
+const FieldLabel = ({
+  label,
+  help,
+  className = 'text-xs font-medium',
+}: {
+  label: string;
+  help?: string;
+  className?: string;
+}) => (
+  <div className="flex items-center gap-1.5">
+    <Label className={className}>{label}</Label>
+    {help ? <HelpTooltip content={renderHelpContent(help)} label={`${label} help`} /> : null}
+  </div>
+);
+
+const SectionLabel = ({
+  label,
+  help,
+}: {
+  label: string;
+  help?: string;
+}) => (
+  <div className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-gray-500">
+    <span>{label}</span>
+    {help ? <HelpTooltip content={renderHelpContent(help)} label={`${label} help`} /> : null}
+  </div>
+);
+
 
 interface AboutDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   displayName: string;
   version: string;
+  appUpdatePlatform?: 'web' | 'electron' | 'android';
+  appUpdateEnabled?: boolean;
+  appUpdateStatus?: string;
+  appUpdateMessage?: string;
+  appUpdateTargetVersion?: string | null;
+  appUpdateCanCheck?: boolean;
+  appUpdateCanInstall?: boolean;
+  appUpdateBusy?: boolean;
+  appUpdateError?: string | null;
+  onCheckForAppUpdates?: () => Promise<void>;
+  onInstallAppUpdate?: () => Promise<void>;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   midiSupported: boolean;
@@ -100,7 +188,7 @@ interface AboutDialogProps {
   onSelectMidiDeviceProfile: (id: string | null) => void;
   onExportMappings: () => Promise<string>;
   onImportMappings: (file: File) => Promise<string>;
-  onImportSharedBank: (file: File) => Promise<string>;
+  onImportSharedBank: (source: ImportBankSource) => Promise<string>;
   onExportAppBackup: (options?: { riskMode?: boolean }) => Promise<string>;
   onRestoreAppBackup: (file: File, companionFiles?: File[]) => Promise<string>;
   onRetryMissingMediaInCurrentBank: () => Promise<string>;
@@ -141,6 +229,17 @@ export function AboutDialog({
   onOpenChange,
   displayName,
   version,
+  appUpdatePlatform = 'web',
+  appUpdateEnabled = false,
+  appUpdateStatus = 'disabled',
+  appUpdateMessage = 'Automatic app updates are unavailable in this build.',
+  appUpdateTargetVersion,
+  appUpdateCanCheck = false,
+  appUpdateCanInstall = false,
+  appUpdateBusy = false,
+  appUpdateError = null,
+  onCheckForAppUpdates,
+  onInstallAppUpdate,
   theme,
   onToggleTheme,
   midiSupported,
@@ -205,14 +304,46 @@ export function AboutDialog({
   authTransitionStatus = 'idle',
   onSignOut
 }: AboutDialogProps) {
-  const { profile } = useAuth();
+  const { profile } = useAuthState();
   const isAdmin = profile?.role === 'admin';
+  const [appUpdateActionError, setAppUpdateActionError] = React.useState<string | null>(null);
+  const [appUpdateActionBusy, setAppUpdateActionBusy] = React.useState(false);
   const [midiLearnAction, setMidiLearnAction] = React.useState<
     | { type: 'system'; action: SystemAction }
     | { type: 'channel'; channelIndex: number; field?: keyof ChannelMapping }
     | { type: 'masterVolume' }
     | null
   >(null);
+  const showAppUpdateSection = appUpdatePlatform !== 'web';
+  const effectiveAppUpdateBusy = appUpdateBusy || appUpdateActionBusy;
+  const rawAppUpdateError = appUpdateActionError || appUpdateError;
+  const summarizedAppUpdateError = summarizeAppUpdateError(rawAppUpdateError, appUpdatePlatform);
+
+  const handleCheckForAppUpdates = React.useCallback(async () => {
+    if (!onCheckForAppUpdates || effectiveAppUpdateBusy) return;
+    setAppUpdateActionError(null);
+    setAppUpdateActionBusy(true);
+    try {
+      await onCheckForAppUpdates();
+    } catch (error) {
+      setAppUpdateActionError(error instanceof Error ? error.message : 'Update check failed.');
+    } finally {
+      setAppUpdateActionBusy(false);
+    }
+  }, [effectiveAppUpdateBusy, onCheckForAppUpdates]);
+
+  const handleInstallAppUpdate = React.useCallback(async () => {
+    if (!onInstallAppUpdate || effectiveAppUpdateBusy) return;
+    setAppUpdateActionError(null);
+    setAppUpdateActionBusy(true);
+    try {
+      await onInstallAppUpdate();
+    } catch (error) {
+      setAppUpdateActionError(error instanceof Error ? error.message : 'Update install failed.');
+    } finally {
+      setAppUpdateActionBusy(false);
+    }
+  }, [effectiveAppUpdateBusy, onInstallAppUpdate]);
   const [activePanel, setActivePanel] = React.useState<'general' | 'system' | 'channels' | 'backup'>('general');
   const [systemMappingError, setSystemMappingError] = React.useState<string | null>(null);
   const [channelMappingError, setChannelMappingError] = React.useState<string | null>(null);
@@ -795,6 +926,40 @@ export function AboutDialog({
     return () => window.removeEventListener('vdjv-import-stage', handleImportStage as EventListener);
   }, [backupProgressOpen, backupProgressType, isAdmin]);
 
+  React.useEffect(() => {
+    if (!isAdmin || !backupProgressOpen || backupProgressStatus !== 'loading') return;
+    const handleOperationDebug = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail || {};
+      const operation = typeof detail.operation === 'string' ? detail.operation : '';
+      const phase = typeof detail.phase === 'string' ? detail.phase : '';
+      if (!operation) return;
+      if (backupProgressType === 'import' && operation !== 'bank_import' && operation !== 'app_backup_restore') return;
+      if (backupProgressType === 'export' && operation !== 'bank_export' && operation !== 'admin_bank_export' && operation !== 'app_backup_export') return;
+      const opDetails = detail.details && typeof detail.details === 'object'
+        ? detail.details as Record<string, unknown>
+        : {};
+      if (phase === 'heartbeat') {
+        const progressText = typeof opDetails.progress === 'number' ? ` progress=${Math.round(opDetails.progress)}%` : '';
+        const lastStageText = typeof opDetails.lastStage === 'string' && opDetails.lastStage
+          ? ` lastStage=${opDetails.lastStage}`
+          : '';
+        const sinceLastActivityText = typeof opDetails.sinceLastActivityMs === 'number'
+          ? ` idle=${Math.round(opDetails.sinceLastActivityMs)}ms`
+          : '';
+        appendProgressLogLine(
+          setBackupLogLines,
+          `Heartbeat ${operation}${progressText}${lastStageText}${sinceLastActivityText}`
+        );
+        return;
+      }
+      if (phase === 'error' && typeof opDetails.message === 'string') {
+        appendProgressLogLine(setBackupLogLines, `${operation} error: ${opDetails.message}`);
+      }
+    };
+    window.addEventListener('vdjv-operation-debug', handleOperationDebug as EventListener);
+    return () => window.removeEventListener('vdjv-operation-debug', handleOperationDebug as EventListener);
+  }, [backupProgressOpen, backupProgressStatus, backupProgressType, isAdmin]);
+
   const requestExportBackup = React.useCallback(() => {
     if (backupBusy) return;
     setShowBackupExportConfirm(true);
@@ -802,7 +967,7 @@ export function AboutDialog({
 
   const confirmExportBackup = React.useCallback(async () => {
     setShowBackupExportConfirm(false);
-    beginBackupProgress('export', 'Exporting Full Backup', 'Creating encrypted app backup...');
+    beginBackupProgress('export', 'Exporting Account Backup', 'Creating encrypted account backup...');
     try {
       const message = await onExportAppBackup();
       setBackupNotice({ type: 'success', message });
@@ -844,19 +1009,42 @@ export function AboutDialog({
     backupRestoreInputRef.current?.click();
   }, [backupBusy]);
 
-  const handleImportSharedBankClick = React.useCallback(() => {
+  const handleImportSharedBankClick = React.useCallback(async () => {
     if (backupBusy) return;
+    if (isNativeBankImportAvailable()) {
+      try {
+        const picked = await pickNativeSharedBankFile();
+        if (!picked?.uri) return;
+        const label = picked.displayName || 'shared bank';
+        beginBackupProgress('import', 'Importing Shared Bank', `Importing ${label}...`, {
+          stageDrivenProgress: true,
+        });
+        const message = await onImportSharedBank({
+          kind: 'android-shared-uri',
+          uri: picked.uri,
+          displayName: picked.displayName || undefined,
+          size: picked.size ?? null,
+        });
+        setBackupNotice({ type: 'success', message });
+        endBackupProgress('success', message);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Shared bank import failed.';
+        setBackupNotice({ type: 'error', message });
+        endBackupProgress('error', message);
+      }
+      return;
+    }
     sharedBankImportInputRef.current?.click();
-  }, [backupBusy]);
+  }, [backupBusy, beginBackupProgress, endBackupProgress, onImportSharedBank]);
 
   React.useEffect(() => {
     const handleOpenSharedBankImport = () => {
       if (backupBusy) return;
-      sharedBankImportInputRef.current?.click();
+      void handleImportSharedBankClick();
     };
     window.addEventListener('vdjv-open-shared-bank-import', handleOpenSharedBankImport as EventListener);
     return () => window.removeEventListener('vdjv-open-shared-bank-import', handleOpenSharedBankImport as EventListener);
-  }, [backupBusy]);
+  }, [backupBusy, handleImportSharedBankClick]);
 
   const handleRestoreBackup = React.useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -955,7 +1143,7 @@ export function AboutDialog({
 
   const handleRetryMissingCurrentBank = React.useCallback(async () => {
     if (backupBusy) return;
-    beginBackupProgress('import', 'Retrying Missing Media', 'Checking and restoring missing media in the active bank...');
+    beginBackupProgress('import', 'Repairing Missing Media', 'Checking and restoring missing media in the active bank...');
     try {
       const message = await onRetryMissingMediaInCurrentBank();
       setBackupNotice({ type: 'success', message });
@@ -1052,11 +1240,13 @@ export function AboutDialog({
           {activePanel === 'general' && (
             <>
               <div className="rounded-lg border p-3 space-y-3 bg-gray-50/60 dark:bg-gray-900/30">
-                <div className="text-xs uppercase tracking-wide text-gray-500">General Settings</div>
+                <SectionLabel
+                  label="General Settings"
+                 
+                />
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-0.5">
-                    <Label className="text-xs font-medium">Theme</Label>
-                    <p className="text-[10px] text-gray-500">Enable = Light, Disable = Dark.</p>
+                    <FieldLabel label="Theme"/>
                   </div>
                   <Switch
                     checked={theme === 'light'}
@@ -1068,8 +1258,7 @@ export function AboutDialog({
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-0.5">
-                    <Label className="text-xs font-medium">Side Panel Behavior</Label>
-                    <p className="text-[10px] text-gray-500">Enable = Reflow, Disable = Overlay.</p>
+                    <FieldLabel label="Side Panel Behavior" help="Enable means Reflow so the content layout shifts to make room. Disable means Overlay so the panel floats above the content." />
                   </div>
                   <Switch
                     checked={sidePanelMode === 'reflow'}
@@ -1077,8 +1266,7 @@ export function AboutDialog({
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs font-medium">Graphics</Label>
-                  <p className="text-[10px] text-gray-500">Auto chooses device tier. Lowest is the most aggressive low-lag mode. High restores full motion.</p>
+                  <FieldLabel label="Graphics" help="Auto chooses a graphics tier for the current device. Lowest is the most aggressive low-lag mode, while High restores the full visual effects." />
                   <Select value={graphicsProfile} onValueChange={(value) => onGraphicsProfileChange(value as GraphicsProfile)}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
@@ -1097,8 +1285,7 @@ export function AboutDialog({
                   <div className="flex flex-col gap-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-medium">Pad size</Label>
-                        <p className="text-[10px] text-gray-500">Portrait supports up to 8 columns. Landscape supports up to 16.</p>
+                        <FieldLabel label="Pad size" />
                       </div>
                       <div className="flex items-center gap-2">
                         <Button
@@ -1129,8 +1316,7 @@ export function AboutDialog({
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs font-medium">Stop Mode</Label>
-                  <p className="text-[10px] text-gray-500">Choose how pads stop playback when toggled off.</p>
+                  <FieldLabel label="Stop Mode" help="Chooses how pads stop when you turn them off or trigger a compatible stop action, such as instant cut, fade out, brake, backspin, or filter sweep." />
                   <Select value={stopMode} onValueChange={(value) => onStopModeChange(value as StopMode)}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
@@ -1145,8 +1331,7 @@ export function AboutDialog({
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs font-medium">Default Trigger Mode</Label>
-                  <p className="text-[10px] text-gray-500">Applied only to newly loaded audio pads.</p>
+                  <FieldLabel label="Default Trigger Mode" help="This applies only to newly loaded audio pads. Existing pads keep their current trigger mode until you edit them." />
                   <Select value={defaultTriggerMode} onValueChange={(value) => onDefaultTriggerModeChange(value as 'toggle' | 'hold' | 'stutter' | 'unmute')}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
@@ -1162,31 +1347,31 @@ export function AboutDialog({
               </div>
 
               <div className="rounded-lg border p-3 space-y-3 bg-gray-50/60 dark:bg-gray-900/30">
-                <div className="text-xs uppercase tracking-wide text-gray-500">Input & Mapping</div>
+                <SectionLabel
+                  label="Input & Mapping"
+                  help="Settings for MIDI input, keyboard mapping, shortcut visibility, and automatic assignment behavior."
+                />
                 {!midiSupported && (
                   <p className="text-xs text-red-500">Web MIDI not supported in this browser.</p>
                 )}
                 {midiSupported && (
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-0.5">
-                      <Label className="text-xs font-medium">Enable MIDI Input</Label>
-                      <p className="text-[10px] text-gray-500">Turn on MIDI controller input and mapping support.</p>
+                      <FieldLabel label="Enable MIDI Input" />
                     </div>
                     <Switch checked={midiEnabled} onCheckedChange={onToggleMidiEnabled} disabled={!midiSupported} />
                   </div>
                 )}
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-0.5">
-                    <Label className="text-xs font-medium">Enable Keyboard Mapping</Label>
-                    <p className="text-[10px] text-gray-500">Turn on keyboard-triggered bank, pad, and system mappings.</p>
+                    <FieldLabel label="Enable Keyboard Mapping"  />
                   </div>
                   <Switch checked={keyboardMappingEnabled} onCheckedChange={onToggleKeyboardMappingEnabled} />
                 </div>
                 {keyboardMappingEnabled && (
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-0.5">
-                      <Label className="text-xs font-medium">Hide Keyboard Shortcut</Label>
-                      <p className="text-[10px] text-gray-500">Hide key labels on pad buttons for a cleaner look.</p>
+                      <FieldLabel label="Hide Keyboard Shortcut" />
                     </div>
                     <Switch checked={hideShortcutLabels} onCheckedChange={onToggleHideShortcutLabels} />
                   </div>
@@ -1198,8 +1383,7 @@ export function AboutDialog({
                 )}
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-0.5">
-                    <Label className="text-xs font-medium">Auto Pad & Bank Mapping</Label>
-                    <p className="text-[10px] text-gray-500">Fill missing default keyboard mappings on new, imported, or duplicated content without overwriting existing assignments.</p>
+                    <FieldLabel label="Auto Pad & Bank Mapping" help="Fills missing default keyboard mappings on new, imported, or duplicated content without overwriting assignments that already exist." />
                   </div>
                   <Switch checked={autoPadBankMapping} onCheckedChange={onToggleAutoPadBankMapping} />
                 </div>
@@ -1213,7 +1397,7 @@ export function AboutDialog({
                     </div>
                     {midiError && <p className="text-xs text-red-500">{midiError}</p>}
                     <div className="space-y-1">
-                      <Label className="text-xs">MIDI Input</Label>
+                      <FieldLabel label="MIDI Input" help="Choose which MIDI input device this app listens to." className="text-xs" />
                       <Select
                         value={midiSelectedInputId || ''}
                         onValueChange={(value) => onSelectMidiInput(value || null)}
@@ -1236,7 +1420,7 @@ export function AboutDialog({
                       </Select>
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs">Device Profile</Label>
+                      <FieldLabel label="Device Profile" help="Selects an output profile for devices that support MIDI feedback such as pad lights. Auto-detect tries to choose the best match." className="text-xs" />
                       <Select
                         value={midiDeviceProfileId || '__auto__'}
                         onValueChange={(value) => onSelectMidiDeviceProfile(value === '__auto__' ? null : value)}
@@ -1269,6 +1453,54 @@ export function AboutDialog({
                   <div className="font-medium">{version}</div>
                 </div>
               </div>
+
+              {showAppUpdateSection ? (
+                <div className="rounded-lg border p-3 bg-gray-50/60 dark:bg-gray-900/30 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs uppercase tracking-wide text-gray-500">App Update</div>
+                    {appUpdateTargetVersion ? (
+                      <div className="text-[10px] text-gray-500">
+                        Target {appUpdateTargetVersion}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="text-xs text-gray-600 dark:text-gray-300">
+                    {appUpdateMessage}
+                  </div>
+                  {!appUpdateEnabled && appUpdatePlatform === 'android' ? (
+                    <div className="text-[10px] text-gray-500">
+                      Play in-app updates only work for builds installed through Google Play.
+                    </div>
+                  ) : null}
+                  {summarizedAppUpdateError ? (
+                    <div className="text-xs text-red-500" title={rawAppUpdateError || undefined}>
+                      {summarizedAppUpdateError}
+                    </div>
+                  ) : null}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCheckForAppUpdates}
+                      disabled={!onCheckForAppUpdates || !appUpdateCanCheck || effectiveAppUpdateBusy}
+                    >
+                      {appUpdateStatus === 'checking' || effectiveAppUpdateBusy ? 'Checking...' : 'Check for Updates'}
+                    </Button>
+                    {appUpdateCanInstall ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleInstallAppUpdate}
+                        disabled={!onInstallAppUpdate || effectiveAppUpdateBusy}
+                      >
+                        {appUpdatePlatform === 'electron' ? 'Restart to Install' : 'Restart to Update'}
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
 
               <div className="rounded-lg border border-blue-300 bg-blue-50/60 dark:border-blue-700 dark:bg-blue-900/20 p-3 space-y-2">
                 <div className="text-xs uppercase tracking-wide text-blue-600 dark:text-blue-300">Support</div>
@@ -1307,7 +1539,10 @@ export function AboutDialog({
           {isAuthenticated && activePanel === 'system' && (
             <div className="rounded-lg border p-3 space-y-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-xs uppercase tracking-wide text-gray-500">System Mapping</div>
+                <SectionLabel
+                  label="System Mapping"
+                  help="Keyboard, MIDI, and optional color mappings for global app actions such as stop all, open mixer, edit mode, navigation, upload, import, and MIDI shift."
+                />
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[10px]" onClick={onResetAllSystemMappings}>
                     Reset All
@@ -1422,10 +1657,26 @@ export function AboutDialog({
               </div>
 
               <div className={`hidden sm:grid gap-2 text-xs font-medium text-gray-500 grid-cols-1 ${systemGridCols}`}>
-                <div>Function</div>
-                <div>Keyboard</div>
-                {showColorColumn && <div>Color</div>}
-                {showMidiColumn && <div>MIDI</div>}
+                <div className="flex items-center gap-1.5">
+                  <span>Function</span>
+                  <HelpTooltip content={renderHelpContent('The system action being mapped.')} label="Function column help" />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span>Keyboard</span>
+                  <HelpTooltip content={renderHelpContent('Click the field and press the key combination you want to assign.')} label="Keyboard column help" />
+                </div>
+                {showColorColumn && (
+                  <div className="flex items-center gap-1.5">
+                    <span>Color</span>
+                    <HelpTooltip content={renderHelpContent('Optional color used for supported system indicators and hardware feedback.')} label="Color column help" />
+                  </div>
+                )}
+                {showMidiColumn && (
+                  <div className="flex items-center gap-1.5">
+                    <span>MIDI</span>
+                    <HelpTooltip content={renderHelpContent('Assign a MIDI note or CC, depending on the action. Use Learn to capture the next controller message.')} label="MIDI column help" />
+                  </div>
+                )}
               </div>
               {systemActions.map((action) => {
                 const mapping = systemMappings[action] as SystemMappings[SystemAction] & { color?: string };
@@ -1522,10 +1773,16 @@ export function AboutDialog({
           {isAuthenticated && activePanel === 'channels' && (
             <div className="rounded-lg border p-3 space-y-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-xs uppercase tracking-wide text-gray-500">Channel Mapping</div>
+                <SectionLabel
+                  label="Channel Mapping"
+                  help="Configure channel deck shortcuts and MIDI actions for stop, volume, transport, load controls, and hotcues."
+                />
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <div className="flex items-center gap-2 rounded-md border px-2 py-1">
-                    <Label className="text-[10px] uppercase tracking-wide text-gray-500">Deck Channels</Label>
+                    <div className="flex items-center gap-1.5">
+                      <Label className="text-[10px] uppercase tracking-wide text-gray-500">Deck Channels</Label>
+                      <HelpTooltip content={renderHelpContent('Sets how many channel decks are available for loading and playback control.')} label="Deck Channels help" />
+                    </div>
                     <Select
                       value={String(activeChannelCount)}
                       onValueChange={(value) => onChangeChannelCount(Number(value))}
@@ -1614,7 +1871,10 @@ export function AboutDialog({
 
                   return (
                     <div key={`channel-card-${index}`} className="rounded-lg border p-3 space-y-3 bg-gray-50/30 dark:bg-gray-900/10">
-                      <div className="text-xs font-semibold text-gray-800 dark:text-gray-100 border-b pb-2">CH {index + 1}</div>
+                      <div className="flex items-center gap-1.5 border-b pb-2 text-xs font-semibold text-gray-800 dark:text-gray-100">
+                        <span>CH {index + 1}</span>
+                        <HelpTooltip content={renderHelpContent(`Channel ${index + 1} shortcut and MIDI mappings.`)} label={`Channel ${index + 1} help`} />
+                      </div>
 
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         {renderField('Volume Up', 'keyUp')}
@@ -1630,7 +1890,10 @@ export function AboutDialog({
                       </div>
 
                       <div className="space-y-2">
-                        <div className="text-[10px] font-semibold text-gray-500 uppercase">Trigger Hotcues</div>
+                        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-gray-500">
+                          <span>Trigger Hotcues</span>
+                          <HelpTooltip content={renderHelpContent('Triggers the saved hotcue positions on the loaded channel deck.')} label="Trigger Hotcues help" />
+                        </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                           {renderField('Hotcue 1', 'keyHotcue1', 'midiHotcue1')}
                           {renderField('Hotcue 2', 'keyHotcue2', 'midiHotcue2')}
@@ -1640,7 +1903,10 @@ export function AboutDialog({
                       </div>
 
                       <div className="space-y-2">
-                        <div className="text-[10px] font-semibold text-gray-500 uppercase">Set/Clear Hotcues</div>
+                        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-gray-500">
+                          <span>Set/Clear Hotcues</span>
+                          <HelpTooltip content={renderHelpContent('Stores or clears hotcue positions on the loaded channel deck.')} label="Set or Clear Hotcues help" />
+                        </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                           {renderField('Set/Clear 1', 'keySetHotcue1', 'midiSetHotcue1')}
                           {renderField('Set/Clear 2', 'keySetHotcue2', 'midiSetHotcue2')}
@@ -1653,7 +1919,10 @@ export function AboutDialog({
                 })}
 
                 <div className="rounded-lg border p-3 space-y-3 bg-gray-50/50 dark:bg-gray-900/20">
-                  <div className="text-xs font-semibold text-gray-800 dark:text-gray-100 border-b pb-2">Master Controls</div>
+                  <div className="flex items-center gap-1.5 border-b pb-2 text-xs font-semibold text-gray-800 dark:text-gray-100">
+                    <span>Master Controls</span>
+                    <HelpTooltip content={renderHelpContent('Global keyboard and MIDI mappings for master volume up, volume down, mute, and master volume CC control.')} label="Master Controls help" />
+                  </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div className="space-y-1">
                       <Label className="text-[10px] uppercase tracking-wide text-gray-500">Volume Up</Label>
@@ -1791,7 +2060,10 @@ export function AboutDialog({
                 </div>
               </div>
               <div className="rounded-lg border p-3 space-y-2">
-                <div className="text-xs uppercase tracking-wide text-gray-500">Mapping Backup</div>
+                <SectionLabel
+                  label="Mapping Backup"
+                  help="Export or import only the app mapping setup, without doing a full backup of banks, media, and app state."
+                />
                 {mappingNotice && (
                   <div className={`text-xs ${mappingNotice.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
                     {mappingNotice.message}
@@ -1815,10 +2087,10 @@ export function AboutDialog({
               </div>
 
               <div className="rounded-lg border p-3 space-y-2">
-                <div className="text-xs uppercase tracking-wide text-gray-500">App Backup</div>
-                <p className="text-xs text-gray-500">
-                  Encrypted account-bound full backup with banks, media, arrangement, settings, and mappings. Large exports may generate one manifest plus multiple part files.
-                </p>
+                <SectionLabel
+                  label="Backup & Repair"
+                  help="Create or restore the encrypted account backup for the signed-in account, including banks, media, arrangement, settings, and mappings. Use the repair actions when a bank list restores but media is still missing on this device."
+                />
                 {backupNotice && (
                   <div className={`text-xs ${backupNotice.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
                     {backupNotice.message}
@@ -1829,16 +2101,16 @@ export function AboutDialog({
                     Import Shared Bank
                   </Button>
                   <Button type="button" variant="outline" size="sm" onClick={requestExportBackup} disabled={backupBusy}>
-                    Export Full Backup
+                    Export Account Backup
                   </Button>
                   <Button type="button" variant="outline" size="sm" onClick={handleRestoreBackupClick} disabled={backupBusy}>
-                    Restore from Backup
+                    Restore Account Backup
                   </Button>
                   <Button type="button" variant="outline" size="sm" onClick={handleRetryMissingCurrentBank} disabled={backupBusy}>
-                    Retry Missing (Current Bank)
+                    Repair Missing (Current Bank)
                   </Button>
                   <Button type="button" variant="outline" size="sm" onClick={handleRecoverClick} disabled={backupBusy}>
-                    Recover Missing (.bank)
+                    Repair from .bank Files
                   </Button>
                 </div>
                 <input
@@ -1880,14 +2152,19 @@ export function AboutDialog({
         theme={theme}
         errorMessage={backupProgressMessage}
         logLines={isAdmin ? backupLogLines : undefined}
+        debugOperations={isAdmin
+          ? (backupProgressType === 'import'
+            ? ['bank_import', 'app_backup_restore']
+            : ['app_backup_export'])
+          : undefined}
         hideCloseButton
       />
       <ConfirmationDialog
         open={showBackupExportConfirm}
         onOpenChange={setShowBackupExportConfirm}
-        title="Export Full Backup"
-        description="Export encrypted full backup now? This can take time on large libraries."
-        confirmText="Export Backup"
+        title="Export Account Backup"
+        description="Export the encrypted account backup now? This can take time on large libraries."
+        confirmText="Export Account Backup"
         onConfirm={confirmExportBackup}
         theme={theme}
       />
@@ -1906,11 +2183,11 @@ export function AboutDialog({
       <ConfirmationDialog
         open={showBackupRestoreConfirm}
         onOpenChange={setShowBackupRestoreConfirm}
-        title="Restore Backup"
+        title="Restore Account Backup"
         description={pendingRestoreSelection
           ? `Restore from "${pendingRestoreSelection.manifestFile.name}"${pendingRestoreSelection.companionFiles.length ? ` with ${pendingRestoreSelection.companionFiles.length} companion file(s)` : ''}? Current local data will be replaced.`
           : 'Restore selected backup now?'}
-        confirmText="Restore Backup"
+        confirmText="Restore Account Backup"
         variant="destructive"
         onConfirm={confirmRestoreBackup}
         theme={theme}
@@ -1918,11 +2195,11 @@ export function AboutDialog({
       <Dialog open={showRecoverModeDialog} onOpenChange={setShowRecoverModeDialog}>
         <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Recover Missing Media</DialogTitle>
+            <DialogTitle>Repair from .bank Files</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 text-sm">
             <p className="text-gray-600 dark:text-gray-300">
-              Choose how recovery should handle `.bank` files that do not match an existing target bank.
+              Choose how `.bank` repair should handle files that do not match an existing target bank.
             </p>
             <div className="grid gap-2">
               <Button type="button" onClick={() => handleRecoverModeSelect(false)}>

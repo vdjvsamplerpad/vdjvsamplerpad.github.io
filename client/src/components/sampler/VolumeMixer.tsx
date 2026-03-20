@@ -30,6 +30,7 @@ interface VolumeMixerProps {
   onMasterVolumeChange: (volume: number) => void;
   onPadVolumeChange: (padId: string, volume: number) => void;
   onStopPad: (padId: string) => void;
+  onNavigateToPad: (padId: string, bankId: string) => void;
   onChannelVolumeChange: (channelId: number, volume: number) => void;
   onStopChannel: (channelId: number) => void;
   onPlayChannel: (channelId: number) => void;
@@ -94,22 +95,41 @@ const getWaveformRuntimeLoad = (): {
   constrained: boolean;
   pointScale: number;
   decodeBudgetCap: number;
+  peakCount: number;
 } => {
   if (typeof navigator === 'undefined' || typeof window === 'undefined') {
-    return { constrained: false, pointScale: 1, decodeBudgetCap: 4 };
+    return { constrained: false, pointScale: 1, decodeBudgetCap: 4, peakCount: 2000 };
   }
   const nav = navigator as Navigator & { deviceMemory?: number };
   const ua = nav.userAgent || '';
   const isMobile = /Android|iPhone|iPad|iPod/i.test(ua);
+  const isAndroid = /Android/i.test(ua);
   const isNativeCapacitor = Boolean((window as any).Capacitor?.isNativePlatform?.());
   const memory = typeof nav.deviceMemory === 'number' && Number.isFinite(nav.deviceMemory)
     ? nav.deviceMemory
     : null;
   const constrained = isNativeCapacitor || isMobile || (memory !== null && memory <= 4);
+  if (isNativeCapacitor && isAndroid) {
+    return {
+      constrained: true,
+      pointScale: 0.56,
+      decodeBudgetCap: 1,
+      peakCount: 960
+    };
+  }
+  if (isNativeCapacitor) {
+    return {
+      constrained: true,
+      pointScale: 0.64,
+      decodeBudgetCap: 1,
+      peakCount: 1152
+    };
+  }
   return {
     constrained,
     pointScale: constrained ? 0.72 : 1,
-    decodeBudgetCap: constrained ? 2 : 4
+    decodeBudgetCap: constrained ? 2 : 4,
+    peakCount: constrained ? 1400 : 2000
   };
 };
 
@@ -254,6 +274,7 @@ export function VolumeMixer({
   onMasterVolumeChange,
   onPadVolumeChange,
   onStopPad,
+  onNavigateToPad,
   onChannelVolumeChange,
   onStopChannel,
   onPlayChannel,
@@ -273,10 +294,14 @@ export function VolumeMixer({
   graphicsTier = 'low'
 }: VolumeMixerProps) {
   const isMobile = windowWidth < 768;
+  const displayedLegacyPlayingPads = React.useMemo(
+    () => legacyPlayingPads.filter((pad) => Math.max(0, pad.endMs ?? 0) > 3000),
+    [legacyPlayingPads]
+  );
   const isLowestGraphics = graphicsTier === 'lowest';
   const [isElectronFullscreen, setIsElectronFullscreen] = React.useState(false);
   const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.toggleFullscreen);
-  const isWaveformAnalysisEnabled = !isLowestGraphics;
+  const isWaveformAnalysisEnabled = open && !isLowestGraphics;
   const waveformRuntimeLoad = React.useMemo(() => getWaveformRuntimeLoad(), []);
   const waveformPointBudget = React.useMemo(() => {
     if (isLowestGraphics) return { collapsed: 0, expanded: 0 };
@@ -700,7 +725,7 @@ export function VolumeMixer({
         cacheKey: truncateLogValue(target.cacheKey),
         audioUrl: truncateLogValue(audioUrl)
       });
-      void loadWaveformPeaks(audioUrl, target.cacheKey)
+      void loadWaveformPeaks(audioUrl, target.cacheKey, waveformRuntimeLoad.peakCount)
         .then((waveform) => {
           if (!isMountedRef.current) return;
           const elapsedMs = Date.now() - startedAt;
@@ -772,7 +797,7 @@ export function VolumeMixer({
           });
         });
     });
-  }, [clearWaveformWatch, setWaveformLoading, waveformTargets]);
+  }, [clearWaveformWatch, setWaveformLoading, waveformRuntimeLoad.peakCount, waveformTargets]);
 
   const waveformProfiles = React.useMemo(() => {
     const map = new Map<number, number[]>();
@@ -1073,13 +1098,15 @@ export function VolumeMixer({
     if (hotcueActiveKeyRef.current === key) {
       clearHotcueHold();
     }
+    if (event.pointerType === 'mouse') {
+      hotcueLastPointerTypeRef.current.set(key, 'mouse');
+      return;
+    }
     const suppressUntil = hotcueActionSuppressUntilRef.current.get(key);
     if (typeof suppressUntil === 'number' && performance.now() < suppressUntil) {
       return;
     }
-    const suppressMs = event.pointerType === 'mouse'
-      ? HOTCUE_CLICK_SUPPRESS_MOUSE_MS
-      : HOTCUE_CLICK_SUPPRESS_TOUCH_MS;
+    const suppressMs = HOTCUE_CLICK_SUPPRESS_TOUCH_MS;
     const pointerTs = hotcuePointerHandledAtRef.current.get(key);
     if (typeof pointerTs === 'number' && performance.now() - pointerTs < suppressMs) {
       return;
@@ -1526,10 +1553,10 @@ export function VolumeMixer({
             <Waves className="h-4 w-4" /> Current Playing Sampler
           </Label>
           <div className="space-y-2">
-            {legacyPlayingPads.length === 0 && (
+            {displayedLegacyPlayingPads.length === 0 && (
               <div className="text-xs text-gray-500 dark:text-gray-400">No pad-grid playback running.</div>
             )}
-            {legacyPlayingPads.map((pad) => {
+            {displayedLegacyPlayingPads.map((pad) => {
               const liveTiming = resolveDisplayedPlayingPadTiming(
                 pad,
                 playingSamplerClock.nowMs,
@@ -1537,13 +1564,33 @@ export function VolumeMixer({
               );
               const duration = Math.max(1, liveTiming.durationMs);
               const progress = clamp(liveTiming.progressMs, 0, duration);
+              const bankAndArtistLabel = pad.padArtist
+                ? `${pad.bankName} • ${pad.padArtist}`
+                : pad.bankName;
               return (
                 <div key={pad.padId} className={`rounded-md border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-white'}`}>
                   <div className="flex items-center gap-2">
                     <div className="min-w-0 flex flex-1 items-baseline gap-1.5 overflow-hidden">
-                      <div className="min-w-0 truncate text-xs font-medium">{pad.padName}</div>
-                      <div className="min-w-0 truncate text-[10px] text-gray-500 dark:text-gray-400">
-                        {pad.bankName}
+                      <button
+                        type="button"
+                        className={`min-w-0 truncate text-left text-xs font-medium underline-offset-2 ${
+                          theme === 'dark'
+                            ? 'text-gray-100 hover:text-cyan-200 hover:underline'
+                            : 'text-gray-900 hover:text-cyan-700 hover:underline'
+                        }`}
+                        onClick={() => onNavigateToPad(pad.padId, pad.bankId)}
+                        title={`Open "${pad.padName}" in ${bankAndArtistLabel}`}
+                      >
+                        {pad.padName}
+                      </button>
+                      <div className="min-w-0 truncate text-[10px]" title={bankAndArtistLabel}>
+                        <span className="text-gray-500 dark:text-gray-400">{pad.bankName}</span>
+                        {pad.padArtist ? (
+                          <>
+                            <span className="text-gray-400 dark:text-gray-500"> • </span>
+                            <span className={theme === 'dark' ? 'text-cyan-300' : 'text-cyan-700'}>{pad.padArtist}</span>
+                          </>
+                        ) : null}
                       </div>
                     </div>
                     <Button

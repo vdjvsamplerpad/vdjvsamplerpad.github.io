@@ -1,6 +1,7 @@
 import { SamplerBank } from '../types/sampler';
 
 export const DEFAULT_BANK_SOURCE_ID = 'vdjv-default-bank-source';
+const LEGACY_DEFAULT_BANK_NAME = 'Default Bank';
 
 export const normalizeIdentityToken = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
@@ -8,8 +9,26 @@ export const normalizeIdentityToken = (value: unknown): string | null => {
   return normalized.length > 0 ? normalized : null;
 };
 
+export const isExplicitDefaultBankIdentity = (bank: Pick<SamplerBank, 'sourceBankId' | 'bankMetadata'>): boolean =>
+  bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || Boolean(bank.bankMetadata?.defaultBankSource);
+
 export const isDefaultBankIdentity = (bank: Pick<SamplerBank, 'name' | 'sourceBankId'>): boolean =>
-  bank.name === 'Default Bank' || bank.sourceBankId === DEFAULT_BANK_SOURCE_ID;
+  bank.name === LEGACY_DEFAULT_BANK_NAME || bank.sourceBankId === DEFAULT_BANK_SOURCE_ID;
+
+export const isCanonicalDefaultBankIdentity = (
+  bank: Pick<SamplerBank, 'name' | 'sourceBankId' | 'bankMetadata'>,
+  allBanks?: Array<Pick<SamplerBank, 'name' | 'sourceBankId' | 'bankMetadata'>> | null
+): boolean => {
+  if (isExplicitDefaultBankIdentity(bank)) return true;
+  if (!allBanks || allBanks.length === 0) return isDefaultBankIdentity(bank);
+  const hasCanonicalDefault = allBanks.some((candidate) => isExplicitDefaultBankIdentity(candidate));
+  if (hasCanonicalDefault) return false;
+  if (bank.sourceBankId && bank.sourceBankId !== DEFAULT_BANK_SOURCE_ID) return false;
+  if (bank.bankMetadata?.catalogItemId || bank.bankMetadata?.bankId || bank.bankMetadata?.trustedAdminExport) {
+    return false;
+  }
+  return bank.name === LEGACY_DEFAULT_BANK_NAME;
+};
 
 export const isTrustedStoreBankForQuota = (bank: SamplerBank): boolean =>
   Boolean(
@@ -20,7 +39,7 @@ export const isTrustedStoreBankForQuota = (bank: SamplerBank): boolean =>
   );
 
 export const isOwnedCountedBankForQuota = (bank: SamplerBank): boolean => {
-  if (isDefaultBankIdentity(bank)) return false;
+  if (isExplicitDefaultBankIdentity(bank)) return false;
   return !isTrustedStoreBankForQuota(bank);
 };
 
@@ -29,7 +48,7 @@ export const countOwnedCountedBanks = (banks: SamplerBank[]): number =>
 
 export const pruneBanksForGuestLock = (banks: SamplerBank[]): SamplerBank[] => {
   if (!Array.isArray(banks) || banks.length === 0) return [];
-  const defaultCandidates = banks.filter((bank) => isDefaultBankIdentity(bank));
+  const defaultCandidates = banks.filter((bank) => isCanonicalDefaultBankIdentity(bank, banks));
   if (defaultCandidates.length === 0) return [];
 
   const preferredDefault =
@@ -41,7 +60,7 @@ export const pruneBanksForGuestLock = (banks: SamplerBank[]): SamplerBank[] => {
 
 const getBankIdentityToken = (bank: SamplerBank): string | null => {
   if (bank.isLocalDuplicate) return null;
-  if (isDefaultBankIdentity(bank)) return `default:${DEFAULT_BANK_SOURCE_ID}`;
+  if (isExplicitDefaultBankIdentity(bank)) return `default:${DEFAULT_BANK_SOURCE_ID}`;
 
   const sourceId = normalizeIdentityToken(bank.sourceBankId);
   if (sourceId) return `source:${sourceId}`;
@@ -89,4 +108,3 @@ export const dedupeBanksByIdentity = (inputBanks: SamplerBank[]) => {
     removedIdToKeptId,
   };
 };
-

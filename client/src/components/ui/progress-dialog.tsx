@@ -20,10 +20,48 @@ interface ProgressDialogProps {
   etaSeconds?: number | null;
   statusMessage?: string;
   logLines?: string[];
+  debugOperations?: string[];
   showWarning?: boolean;
   hideCloseButton?: boolean;
   useHistory?: boolean;
 }
+
+type OperationDebugEntryLike = {
+  operation?: string;
+  iso?: string;
+  level?: string;
+  phase?: string;
+  operationId?: string;
+  details?: Record<string, unknown>;
+};
+
+const buildOperationTimelineText = (operations?: string[]): string => {
+  if (typeof window === 'undefined') return '';
+  const debugWindow = window as Window & typeof globalThis & {
+    __vdjvOperationTimeline?: OperationDebugEntryLike[];
+  };
+  const allEntries = Array.isArray(debugWindow.__vdjvOperationTimeline)
+    ? debugWindow.__vdjvOperationTimeline
+    : [];
+  const normalizedOperations = Array.isArray(operations)
+    ? operations.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  const relevantEntries = normalizedOperations.length > 0
+    ? allEntries.filter((entry) => normalizedOperations.includes(String(entry.operation || '')))
+    : allEntries;
+  if (relevantEntries.length === 0) return '';
+  return relevantEntries
+    .map((entry) => {
+      const iso = typeof entry.iso === 'string' ? entry.iso : new Date().toISOString();
+      const level = typeof entry.level === 'string' ? entry.level.toUpperCase() : 'INFO';
+      const operation = typeof entry.operation === 'string' ? entry.operation : 'unknown_operation';
+      const phase = typeof entry.phase === 'string' ? entry.phase : 'event';
+      const operationId = typeof entry.operationId === 'string' ? entry.operationId : 'unknown';
+      const details = entry.details ? ` ${JSON.stringify(entry.details)}` : '';
+      return `${iso} [${level}] ${operation}/${phase}#${operationId}${details}`;
+    })
+    .join('\n');
+};
 
 export function ProgressDialog({
   open,
@@ -40,6 +78,7 @@ export function ProgressDialog({
   etaSeconds,
   statusMessage,
   logLines,
+  debugOperations,
   showWarning,
   hideCloseButton = false,
   useHistory = true
@@ -59,10 +98,16 @@ export function ProgressDialog({
   };
 
   const handleCopyLogs = React.useCallback(async () => {
-    if (!Array.isArray(logLines) || logLines.length === 0) return;
-    await copyTextToClipboard(logLines.join('\n'));
+    const visibleLogText = Array.isArray(logLines) && logLines.length > 0 ? logLines.join('\n') : '';
+    const debugTimelineText = buildOperationTimelineText(debugOperations);
+    const parts = [
+      visibleLogText ? `Activity Log\n${visibleLogText}` : '',
+      debugTimelineText ? `Operation Timeline\n${debugTimelineText}` : '',
+    ].filter(Boolean);
+    if (parts.length === 0) return;
+    await copyTextToClipboard(parts.join('\n\n'));
     setCopiedLogs(true);
-  }, [logLines]);
+  }, [debugOperations, logLines]);
   
   // Check if error message indicates login is required
   const needsLogin = errorMessage && (

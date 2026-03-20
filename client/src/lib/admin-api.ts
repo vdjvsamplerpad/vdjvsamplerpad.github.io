@@ -201,6 +201,22 @@ export interface DefaultBankRelease {
   deactivatedBy: string | null;
 }
 
+export interface AdminStoreCatalogItem {
+  id: string;
+  bank_id: string;
+  status: 'published' | 'draft';
+  asset_protection?: 'encrypted' | 'public' | null;
+  thumbnail_path?: string | null;
+  sha256?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  bank: {
+    title: string;
+    description: string;
+    color: string;
+  };
+}
+
 export type LandingVersionKey = 'V1' | 'V2' | 'V3';
 export type LandingPlatformKey = 'android' | 'ios' | 'windows' | 'macos';
 
@@ -541,5 +557,12 @@ export const adminApi = {
 
   async saveSamplerAppConfig(input: SamplerAppConfig) {
     return callStoreApi<{ config: SamplerAppConfig }>('POST', 'admin/store/sampler-config', input);
+  },
+
+  async listStoreCatalog() {
+    return callStoreApi<{
+      items: AdminStoreCatalogItem[];
+      banners: Array<Record<string, unknown>>;
+    }>('GET', 'admin/store/catalog');
   },
 };

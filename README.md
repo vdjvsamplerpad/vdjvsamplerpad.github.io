@@ -180,15 +180,6 @@ Reference files:
 - [.env.example](.env.example)
 - [supabase/functions/.env.example](supabase/functions/.env.example)
 
-Android release signing is read from:
-
-- `ANDROID_RELEASE_KEYSTORE_PATH`
-- `ANDROID_RELEASE_KEYSTORE_PASSWORD`
-- `ANDROID_RELEASE_KEY_ALIAS`
-- `ANDROID_RELEASE_KEY_PASSWORD`
-
-Keep signing material outside the repository.
-
 ## 🍚 Buy Me Lugaw
 
 If the app helps you and you want to support development, you can send a small tip here.

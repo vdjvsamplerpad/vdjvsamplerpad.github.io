@@ -1,9 +1,11 @@
 import * as React from 'react';
-import { Copy, Crown, Download, Loader2, Trash2, Upload } from 'lucide-react';
+import { Copy, Crown, Download, Link2, Loader2, Trash2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { HelpTooltip } from '@/components/ui/help-tooltip';
 import { SamplerBank } from './types/sampler';
 import { canAdminExportBankForSession } from './hooks/useSamplerStore.provenance';
 
@@ -30,6 +32,9 @@ interface BankEditCoreFormProps {
   setDefaultColor: (value: string) => void;
   name: string;
   setName: (value: string) => void;
+  orderedBanks: SamplerBank[];
+  selectedBankPosition: string;
+  setSelectedBankPosition: (value: string) => void;
   isAdmin: boolean;
   activeAdminThumbnailUrl: string | null;
   adminThumbnailUploading: boolean;
@@ -57,9 +62,13 @@ interface BankEditCoreFormProps {
   shortcutAssignments: ShortcutAssignment[];
   formatDate: (date: Date) => string;
   showDatabaseDescription: boolean;
+  canLinkExistingStoreBank?: boolean;
+  storeLinkNotice?: string | null;
+  storeLinkError?: string | null;
   onSave: () => void;
   onShowDuplicateConfirm: () => void;
   onShowAdminExport: () => void;
+  onShowStoreLink?: () => void;
   onShowStoreUpdate: () => void;
   onExport: () => void;
   onDelete: () => void;
@@ -79,6 +88,9 @@ export function BankEditCoreForm({
   setDefaultColor,
   name,
   setName,
+  orderedBanks,
+  selectedBankPosition,
+  setSelectedBankPosition,
   isAdmin,
   activeAdminThumbnailUrl,
   adminThumbnailUploading,
@@ -106,9 +118,13 @@ export function BankEditCoreForm({
   shortcutAssignments,
   formatDate,
   showDatabaseDescription,
+  canLinkExistingStoreBank = false,
+  storeLinkNotice,
+  storeLinkError,
   onSave,
   onShowDuplicateConfirm,
   onShowAdminExport,
+  onShowStoreLink,
   onShowStoreUpdate,
   onExport,
   onDelete,
@@ -118,6 +134,7 @@ export function BankEditCoreForm({
 }: BankEditCoreFormProps) {
   const canUseAdminExport = isAdmin && Boolean(onExportAdmin) && canAdminExportBankForSession(bank);
   const canUseStoreUpdate = isAdmin && Boolean(onUpdateStoreBank) && Boolean(bank.bankMetadata?.catalogItemId);
+  const canUseStoreLink = isAdmin && Boolean(onShowStoreLink) && canLinkExistingStoreBank && !bank.bankMetadata?.catalogItemId;
   const canShowExportButton = canUseAdminExport || bank.exportable !== false;
   const [showAllColors, setShowAllColors] = React.useState(false);
   const visibleColorOptions = showAllColors
@@ -130,7 +147,9 @@ export function BankEditCoreForm({
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <Label htmlFor="name">Bank Name</Label>
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="name">Bank Name</Label>
+          </div>
           <Input
             id="name"
             value={name}
@@ -155,7 +174,28 @@ export function BankEditCoreForm({
         </div>
 
         <div className="space-y-2">
-          <Label>Bank Color</Label>
+          <div className="flex items-center gap-1.5">
+            <Label>Bank Position</Label>
+            <HelpTooltip content="Directly move this bank to another slot in the bank list without repeated move up or down actions." label="Bank position help" />
+          </div>
+          <Select value={selectedBankPosition} onValueChange={setSelectedBankPosition}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choose position" />
+            </SelectTrigger>
+            <SelectContent className="max-h-72">
+              {orderedBanks.map((entry, index) => (
+                <SelectItem key={entry.id} value={String(index)}>
+                  {index + 1}. {entry.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-2 sm:col-span-2">
+          <div className="flex items-center gap-1.5">
+            <Label>Bank Color</Label>
+          </div>
           <div className="flex gap-1 flex-wrap">
             {visibleColorOptions.map((colorOption) => (
               <button
@@ -187,7 +227,9 @@ export function BankEditCoreForm({
 
       {isAdmin && (
         <div className="space-y-2">
-          <Label htmlFor="bankThumbnail">Bank Thumbnail (Admin)</Label>
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="bankThumbnail">Bank Thumbnail (Admin)</Label>
+          </div>
           <div className="flex items-center gap-4">
             {activeAdminThumbnailUrl ? (
               <img src={activeAdminThumbnailUrl} alt="Bank thumbnail" className="w-16 h-16 rounded-md object-cover border" />
@@ -233,7 +275,10 @@ export function BankEditCoreForm({
 
       {isAdminOrStoreBank && (
         <div className="flex items-center justify-between gap-2">
-          <Label className="text-xs font-medium">Hide Thumbnail In Bank List</Label>
+          <div className="flex items-center gap-1.5">
+            <Label className="text-xs font-medium">Hide Thumbnail In Bank List</Label>
+            <HelpTooltip content="Shows color-only preview in the bank list while keeping the stored thumbnail for export or store use." label="Hide thumbnail help" />
+          </div>
           <Switch
             checked={hideThumbnailPreview}
             onCheckedChange={setHideThumbnailPreview}
@@ -243,7 +288,10 @@ export function BankEditCoreForm({
 
       <div className={`grid gap-3 ${midiEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
         <div className="space-y-2">
-          <Label htmlFor="bankShortcutKey">Bank Shortcut Key</Label>
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="bankShortcutKey">Bank Shortcut Key</Label>
+            <HelpTooltip content={`Assign a keyboard shortcut to switch to this bank. Reserved keys stay blocked: ${reservedKeysText}.`} label="Bank shortcut help" />
+          </div>
           <Input
             id="bankShortcutKey"
             value={shortcutKey}
@@ -254,16 +302,14 @@ export function BankEditCoreForm({
           {shortcutError && (
             <p className="text-xs text-red-500">{shortcutError}</p>
           )}
-          {!shortcutError && (
-            <p className="text-xs text-gray-500">
-              Reserved keys: {reservedKeysText}
-            </p>
-          )}
         </div>
 
         {midiEnabled && (
           <div className="space-y-2">
-            <Label>MIDI Assignment</Label>
+            <div className="flex items-center gap-1.5">
+              <Label>MIDI Assignment</Label>
+              <HelpTooltip content="Use Learn MIDI to capture the next incoming Note or CC message for fast bank selection." label="Bank MIDI help" />
+            </div>
             <div className="text-xs text-gray-500">
               Note: {midiNote ?? '-'} | CC: {midiCC ?? '-'}
             </div>
@@ -293,7 +339,10 @@ export function BankEditCoreForm({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <Label>Pad Shortcuts (Keyboard/MIDI)</Label>
+          <div className="flex items-center gap-1.5">
+            <Label>Pad Shortcuts (Keyboard/MIDI)</Label>
+            <HelpTooltip content="Quick overview of pad-level assignments inside this bank. Use the clear actions to wipe bank-local shortcuts in one step." label="Pad shortcut list help" />
+          </div>
           <div className="flex items-center gap-2">
             {onClearPadShortcuts && (
               <Button type="button" variant="outline" size="sm" onClick={onClearPadShortcuts}>
@@ -378,7 +427,18 @@ export function BankEditCoreForm({
           >
             <Upload className="w-4 h-4" />
           </Button>
-        ) : canShowExportButton && (
+        ) : null}
+        {canUseStoreLink ? (
+          <Button
+            onClick={onShowStoreLink}
+            variant="outline"
+            className="px-3"
+            title="Link Existing Store Bank"
+          >
+            <Link2 className="w-4 h-4" />
+          </Button>
+        ) : null}
+        {canShowExportButton && (
           <Button
             onClick={() => {
               if (canUseAdminExport) {
@@ -400,6 +460,12 @@ export function BankEditCoreForm({
           </Button>
         )}
       </div>
+      {storeLinkNotice ? (
+        <p className="text-xs text-emerald-600 dark:text-emerald-400">{storeLinkNotice}</p>
+      ) : null}
+      {storeLinkError ? (
+        <p className="text-xs text-red-500">{storeLinkError}</p>
+      ) : null}
     </div>
   );
 }

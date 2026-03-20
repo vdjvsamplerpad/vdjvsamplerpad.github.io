@@ -2,6 +2,7 @@ import type { HotcueTuple, PadPlaybackMode, PadTriggerMode } from './audioPadNor
 
 export interface AudioPadRuntimeRegistrationData {
   name: string;
+  artist?: string;
   audioUrl: string;
   sourceAudioUrl?: string;
   color: string;
@@ -13,6 +14,8 @@ export interface AudioPadRuntimeRegistrationData {
   pitch: number;
   triggerMode: PadTriggerMode;
   playbackMode: PadPlaybackMode;
+  padGroup?: number | null;
+  padGroupUniversal?: boolean;
   gainDb?: number;
   gain?: number;
   tempoPercent?: number;

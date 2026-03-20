@@ -237,6 +237,7 @@ export const installDefaultBankReleaseArchive = async (
     pads.push({
       id: padId,
       name: typeof sourcePad.name === 'string' && sourcePad.name.trim() ? sourcePad.name.trim() : 'Untitled Pad',
+      artist: typeof sourcePad.artist === 'string' && sourcePad.artist.trim() ? sourcePad.artist.trim() : undefined,
       audioUrl: '',
       imageUrl: '',
       audioStorageKey,
@@ -252,6 +253,8 @@ export const installDefaultBankReleaseArchive = async (
       color: typeof sourcePad.color === 'string' && sourcePad.color.trim() ? sourcePad.color : defaultColor,
       triggerMode: toTriggerMode(sourcePad.triggerMode),
       playbackMode: toPlaybackMode(sourcePad.playbackMode),
+      padGroup: typeof sourcePad.padGroup === 'number' && Number.isFinite(sourcePad.padGroup) && sourcePad.padGroup > 0 ? Math.trunc(sourcePad.padGroup) : undefined,
+      padGroupUniversal: sourcePad.padGroupUniversal === true,
       volume: Math.max(0, Math.min(1, toNumber(sourcePad.volume, 1))),
       gainDb: typeof sourcePad.gainDb === 'number' ? sourcePad.gainDb : 0,
       gain: typeof sourcePad.gain === 'number' ? sourcePad.gain : 1,

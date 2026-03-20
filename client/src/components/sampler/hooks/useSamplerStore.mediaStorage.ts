@@ -25,6 +25,7 @@ export interface MediaStorageDeps {
     backend?: MediaBackend
   ) => NativeMediaStorageTargets;
   nativeMediaRuntime: {
+    canUseNativeMediaStorage: () => boolean;
     getNativeMediaPlaybackUrl: (storageKey: string) => Promise<string | null>;
     writeNativeMediaBlob: (
       padId: string,
@@ -34,9 +35,28 @@ export interface MediaStorageDeps {
     ) => Promise<string | null>;
     readNativeMediaBlob: (storageKey: string, type: NativeMediaKind) => Promise<Blob | null>;
     readNativeMediaSize: (storageKey?: string | null) => Promise<number>;
+    resolveNativeMediaSourcePath: (storageKey?: string | null) => Promise<string | null>;
     deleteNativeMediaBlob: (storageKey?: string | null) => Promise<void>;
   };
 }
+
+const buildFallbackNativeStorageKeys = (
+  padId: string,
+  type: NativeMediaKind,
+  storageKey?: string,
+): string[] => {
+  const candidates = new Set<string>();
+  const trimmedStorageKey = typeof storageKey === 'string' ? storageKey.trim() : '';
+  if (trimmedStorageKey && trimmedStorageKey.includes('/')) {
+    candidates.add(trimmedStorageKey);
+  }
+  const extensions =
+    type === 'audio'
+      ? ['mp3', 'wav', 'ogg', 'aac', 'm4a', 'flac', 'bin']
+      : ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bin'];
+  extensions.forEach((ext) => candidates.add(`${type}/${padId}.${ext}`));
+  return Array.from(candidates);
+};
 
 export const restoreFileAccessPipeline = async (
   input: {
@@ -49,7 +69,6 @@ export const restoreFileAccessPipeline = async (
 ): Promise<{ url: string | null; storageKey?: string; backend: MediaBackend }> => {
   const { padId, type, storageKey, backend } = input;
   const {
-    isNativeCapacitorPlatform,
     supportsFileSystemAccess,
     getFileHandle,
     getBlobFromDB,
@@ -58,8 +77,12 @@ export const restoreFileAccessPipeline = async (
   } = deps;
   const targets = resolveMediaStorageTargets(padId, type, storageKey, backend);
 
-  if (isNativeCapacitorPlatform()) {
-    for (const nativeKey of targets.nativeKeys) {
+  if (nativeMediaRuntime.canUseNativeMediaStorage()) {
+    const nativeKeys = [
+      ...targets.nativeKeys,
+      ...buildFallbackNativeStorageKeys(padId, type, storageKey).filter((key) => !targets.nativeKeys.includes(key)),
+    ];
+    for (const nativeKey of nativeKeys) {
       const playbackUrl = await nativeMediaRuntime.getNativeMediaPlaybackUrl(nativeKey);
       if (playbackUrl) {
         return { url: playbackUrl, storageKey: nativeKey, backend: 'native' };
@@ -70,6 +93,32 @@ export const restoreFileAccessPipeline = async (
       }
     }
   }
+
+  const maybeMigrateBlobToNative = async (blob: Blob): Promise<{ url: string | null; storageKey?: string; backend: MediaBackend } | null> => {
+    if (!nativeMediaRuntime.canUseNativeMediaStorage()) return null;
+    const nativeStorageKey = await nativeMediaRuntime.writeNativeMediaBlob(padId, blob, type);
+    if (!nativeStorageKey) return null;
+    const playbackUrl = await nativeMediaRuntime.getNativeMediaPlaybackUrl(nativeStorageKey);
+    return {
+      url: playbackUrl || URL.createObjectURL(blob),
+      storageKey: nativeStorageKey,
+      backend: 'native',
+    };
+  };
+
+  const tryStoredDbBlob = async (): Promise<{ url: string | null; storageKey?: string; backend: MediaBackend } | null> => {
+    try {
+      for (const dbId of targets.dbIds) {
+        const blob = await getBlobFromDB(dbId);
+        if (blob) {
+          return (await maybeMigrateBlobToNative(blob)) || { url: URL.createObjectURL(blob), storageKey: dbId, backend: 'idb' };
+        }
+      }
+    } catch {
+      // Continue to next fallback.
+    }
+    return null;
+  };
 
   if (supportsFileSystemAccess()) {
     try {
@@ -86,27 +135,11 @@ export const restoreFileAccessPipeline = async (
     }
   }
 
-  try {
-    for (const dbId of targets.dbIds) {
-      const blob = await getBlobFromDB(dbId);
-      if (blob) {
-        return { url: URL.createObjectURL(blob), storageKey: dbId, backend: 'idb' };
-      }
-    }
-  } catch {
-    // Continue to native fallback probe.
-  }
+  const storedDbBlob = await tryStoredDbBlob();
+  if (storedDbBlob) return storedDbBlob;
 
-  if (isNativeCapacitorPlatform() && (!storageKey || backend === 'native')) {
-    const candidateKeys: string[] = [];
-    if (storageKey) {
-      candidateKeys.push(storageKey);
-    }
-    const extensions =
-      type === 'audio'
-        ? ['mp3', 'wav', 'ogg', 'aac', 'm4a', 'bin']
-        : ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bin'];
-    extensions.forEach((ext) => candidateKeys.push(`${type}/${padId}.${ext}`));
+  if (nativeMediaRuntime.canUseNativeMediaStorage()) {
+    const candidateKeys = buildFallbackNativeStorageKeys(padId, type, storageKey);
     for (const candidate of candidateKeys) {
       const playbackUrl = await nativeMediaRuntime.getNativeMediaPlaybackUrl(candidate);
       if (playbackUrl) {
@@ -132,11 +165,11 @@ export const storeFilePipeline = async (
   deps: MediaStorageDeps
 ): Promise<{ storageKey?: string; backend: MediaBackend }> => {
   const { padId, file, type, options } = input;
-  const { isNativeCapacitorPlatform, nativeMediaRuntime, saveBlobToDB } = deps;
+  const { nativeMediaRuntime, saveBlobToDB } = deps;
   const keyPrefix = type === 'image' ? 'image' : 'audio';
   const storageId = options?.storageId || `${keyPrefix}_${padId}`;
 
-  if (isNativeCapacitorPlatform()) {
+  if (nativeMediaRuntime.canUseNativeMediaStorage()) {
     const nativeKey = await nativeMediaRuntime.writeNativeMediaBlob(padId, file, type, options?.nativeStorageKeyHint);
     if (nativeKey) return { storageKey: nativeKey, backend: 'native' };
   }
@@ -164,6 +197,13 @@ export const loadPadMediaBlobPipeline = async (
   for (const nativeKey of targets.nativeKeys) {
     const nativeBlob = await nativeMediaRuntime.readNativeMediaBlob(nativeKey, type);
     if (nativeBlob) return nativeBlob;
+  }
+
+  if (nativeMediaRuntime.canUseNativeMediaStorage()) {
+    for (const nativeKey of buildFallbackNativeStorageKeys(pad.id, type, storageKey)) {
+      const nativeBlob = await nativeMediaRuntime.readNativeMediaBlob(nativeKey, type);
+      if (nativeBlob) return nativeBlob;
+    }
   }
 
   if (supportsFileSystemAccess()) {
@@ -221,6 +261,12 @@ export const estimatePadMediaBytesPipeline = async (
   deps: MediaStorageDeps
 ): Promise<number> => {
   const { pad, type } = input;
+  if (type === 'audio' && Number.isFinite(pad.audioBytes) && (pad.audioBytes || 0) > 0) {
+    return Math.max(0, Number(pad.audioBytes));
+  }
+  if (type === 'audio' && Number.isFinite(pad.sourceAudioBytes) && (pad.sourceAudioBytes || 0) > 0) {
+    return Math.max(0, Number(pad.sourceAudioBytes));
+  }
   const {
     supportsFileSystemAccess,
     getFileHandle,
@@ -235,6 +281,13 @@ export const estimatePadMediaBytesPipeline = async (
   for (const nativeKey of targets.nativeKeys) {
     const nativeSize = await nativeMediaRuntime.readNativeMediaSize(nativeKey);
     if (nativeSize > 0) return nativeSize;
+  }
+
+  if (nativeMediaRuntime.canUseNativeMediaStorage()) {
+    for (const nativeKey of buildFallbackNativeStorageKeys(pad.id, type, storageKey)) {
+      const nativeSize = await nativeMediaRuntime.readNativeMediaSize(nativeKey);
+      if (nativeSize > 0) return nativeSize;
+    }
   }
 
   if (supportsFileSystemAccess()) {
@@ -355,9 +408,67 @@ export const estimateBankMediaBytesPipeline = async (
   estimatePadMediaBytes: (pad: PadData, type: NativeMediaKind) => Promise<number>
 ): Promise<number> => {
   let total = 0;
-  for (const pad of bank.pads) {
-    total += await estimatePadMediaBytes(pad, 'audio');
-    total += await estimatePadMediaBytes(pad, 'image');
+  const concurrency = 6;
+  for (let index = 0; index < bank.pads.length; index += concurrency) {
+    const chunk = bank.pads.slice(index, index + concurrency);
+    const chunkTotals = await Promise.all(
+      chunk.map(async (pad) => {
+        const [audioBytes, imageBytes] = await Promise.all([
+          estimatePadMediaBytes(pad, 'audio'),
+          estimatePadMediaBytes(pad, 'image'),
+        ]);
+        return audioBytes + imageBytes;
+      })
+    );
+    total += chunkTotals.reduce((sum, value) => sum + value, 0);
   }
   return total;
+};
+
+export const resolvePadMediaSourcePathPipeline = async (
+  input: { pad: PadData; type: NativeMediaKind },
+  deps: MediaStorageDeps
+): Promise<string | null> => {
+  const { pad, type } = input;
+  const {
+    getBlobFromDB,
+    resolveMediaStorageTargets,
+    nativeMediaRuntime,
+  } = deps;
+  if (!nativeMediaRuntime.canUseNativeMediaStorage()) return null;
+
+  const storageKey = type === 'audio' ? pad.audioStorageKey : pad.imageStorageKey;
+  const backend = type === 'audio' ? pad.audioBackend : pad.imageBackend;
+  const targets = resolveMediaStorageTargets(pad.id, type, storageKey, backend);
+  const candidateKeys = [
+    ...targets.nativeKeys,
+    ...buildFallbackNativeStorageKeys(pad.id, type, storageKey).filter((key) => !targets.nativeKeys.includes(key)),
+  ];
+
+  for (const nativeKey of candidateKeys) {
+    const nativePath = await nativeMediaRuntime.resolveNativeMediaSourcePath(nativeKey);
+    if (nativePath) return nativePath;
+  }
+
+  for (const dbId of targets.dbIds) {
+    const blob = await getBlobFromDB(dbId).catch(() => null);
+    if (!blob) continue;
+    const nativeKey = await nativeMediaRuntime.writeNativeMediaBlob(pad.id, blob, type);
+    if (!nativeKey) continue;
+    const nativePath = await nativeMediaRuntime.resolveNativeMediaSourcePath(nativeKey);
+    if (nativePath) return nativePath;
+  }
+
+  const mediaUrl = type === 'audio' ? pad.audioUrl : pad.imageUrl;
+  if (!mediaUrl) return null;
+  try {
+    const response = await fetch(mediaUrl);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    const nativeKey = await nativeMediaRuntime.writeNativeMediaBlob(pad.id, blob, type);
+    if (!nativeKey) return null;
+    return await nativeMediaRuntime.resolveNativeMediaSourcePath(nativeKey);
+  } catch {
+    return null;
+  }
 };

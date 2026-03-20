@@ -506,6 +506,7 @@ export const sendDiscordAccountRegistrationEvent = async (input: {
 }) => {
   await sendDiscordNotification({
     webhook: input.webhook || DISCORD_WEBHOOK_ACCOUNT || null,
+    preferExplicitWebhook: true,
     severity: input.severity,
     title: input.title,
     description: input.description || "Account registration event recorded.",
@@ -551,6 +552,7 @@ export const sendDiscordStoreRequestEvent = async (input: {
 }) => {
   await sendDiscordNotification({
     webhook: input.webhook || DISCORD_WEBHOOK_STORE || null,
+    preferExplicitWebhook: true,
     severity: input.severity,
     title: input.title,
     description: input.description || "Store request event recorded.",
@@ -595,6 +597,7 @@ export const sendDiscordOcrFailureEvent = async (input: {
       : null;
   await sendDiscordNotification({
     webhook: input.webhook || domainWebhook || null,
+    preferExplicitWebhook: true,
     severity: input.severity || "warning",
     title: "OCR Receipt Failure",
     description: "Receipt OCR did not complete successfully.",

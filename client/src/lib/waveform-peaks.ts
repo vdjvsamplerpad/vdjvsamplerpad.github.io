@@ -5,8 +5,25 @@ export interface WaveformPeaksData {
 
 const DEFAULT_PEAK_COUNT = 2000;
 const waveformDataCache = new Map<string, WaveformPeaksData>();
+const waveformCacheAccessTime = new Map<string, number>();
 const waveformDataInFlight = new Map<string, Promise<WaveformPeaksData>>();
 const waveformQueue: Array<() => void> = [];
+
+const getWaveformCacheEntryCap = (): number => {
+  if (typeof navigator === 'undefined' || typeof window === 'undefined') return 72;
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const ua = nav.userAgent || '';
+  const isNativeCapacitor = Boolean((window as any).Capacitor?.isNativePlatform?.());
+  const isMobile = /iPad|iPhone|iPod|Android/i.test(ua);
+  const isElectron = /Electron/i.test(ua);
+  const memory = typeof nav.deviceMemory === 'number' && Number.isFinite(nav.deviceMemory)
+    ? Number(nav.deviceMemory)
+    : null;
+  if (isNativeCapacitor) return 18;
+  if (isMobile || (memory !== null && memory <= 4)) return 24;
+  if (isElectron) return 72;
+  return 56;
+};
 
 const getWaveformDecodeConcurrency = (): number => {
   if (typeof navigator === 'undefined') return 2;
@@ -27,7 +44,31 @@ const formatWaveformKey = (cacheKey: string): string => {
   return `${cacheKey.slice(0, 48)}...${cacheKey.slice(-32)}`;
 };
 
+const buildWaveformDecodeCacheKey = (cacheKey: string, peakCount: number): string => (
+  `${cacheKey}::peaks:${peakCount}`
+);
+
 const logWaveform = (_message: string, _details?: Record<string, unknown>) => {};
+
+const touchWaveformCacheEntry = (cacheKey: string): void => {
+  waveformCacheAccessTime.set(cacheKey, Date.now());
+};
+
+const trimWaveformCache = (maxEntries: number = getWaveformCacheEntryCap()): void => {
+  if (maxEntries <= 0) {
+    waveformDataCache.clear();
+    waveformCacheAccessTime.clear();
+    return;
+  }
+  if (waveformDataCache.size <= maxEntries) return;
+  const evictionOrder = Array.from(waveformCacheAccessTime.entries())
+    .sort((left, right) => left[1] - right[1]);
+  while (waveformDataCache.size > maxEntries && evictionOrder.length > 0) {
+    const [cacheKey] = evictionOrder.shift()!;
+    waveformDataCache.delete(cacheKey);
+    waveformCacheAccessTime.delete(cacheKey);
+  }
+};
 
 const runNextWaveformTask = () => {
   if (waveformRunningCount >= WAVEFORM_MAX_CONCURRENCY) return;
@@ -149,14 +190,16 @@ export const loadWaveformPeaks = async (
   cacheKey: string = audioUrl,
   peakCount: number = DEFAULT_PEAK_COUNT
 ): Promise<WaveformPeaksData> => {
-  const logKey = formatWaveformKey(cacheKey);
-  const existing = waveformDataCache.get(cacheKey);
+  const decodeCacheKey = buildWaveformDecodeCacheKey(cacheKey, peakCount);
+  const logKey = formatWaveformKey(decodeCacheKey);
+  const existing = waveformDataCache.get(decodeCacheKey);
   if (existing) {
+    touchWaveformCacheEntry(decodeCacheKey);
     logWaveform('Cache hit', { key: logKey, points: existing.peaks.length });
     return existing;
   }
 
-  const pending = waveformDataInFlight.get(cacheKey);
+  const pending = waveformDataInFlight.get(decodeCacheKey);
   if (pending) {
     logWaveform('Join in-flight decode', { key: logKey });
     return pending;
@@ -170,13 +213,15 @@ export const loadWaveformPeaks = async (
   });
   const task = runWaveformTaskBounded(() => decodeWaveformPeaks(audioUrl, peakCount, logKey))
     .then((data) => {
-      waveformDataCache.set(cacheKey, data);
-      waveformDataInFlight.delete(cacheKey);
+      waveformDataCache.set(decodeCacheKey, data);
+      touchWaveformCacheEntry(decodeCacheKey);
+      trimWaveformCache();
+      waveformDataInFlight.delete(decodeCacheKey);
       logWaveform('Cached decode result', { key: logKey, points: data.peaks.length });
       return data;
     })
     .catch((error) => {
-      waveformDataInFlight.delete(cacheKey);
+      waveformDataInFlight.delete(decodeCacheKey);
       logWaveform('Decode task failed', {
         key: logKey,
         error: error instanceof Error ? error.message : String(error)
@@ -184,7 +229,7 @@ export const loadWaveformPeaks = async (
       throw error;
     });
 
-  waveformDataInFlight.set(cacheKey, task);
+  waveformDataInFlight.set(decodeCacheKey, task);
   return task;
 };
 
@@ -204,4 +249,8 @@ export const resampleWaveformPeaks = (peaks: number[], points: number): number[]
     sampled.push(max);
   }
   return sampled;
+};
+
+export const trimWaveformPeaksCache = (maxEntries?: number): void => {
+  trimWaveformCache(maxEntries);
 };

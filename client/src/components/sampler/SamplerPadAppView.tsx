@@ -4,7 +4,7 @@ import { HeaderControls } from './HeaderControls';
 import { Button } from '@/components/ui/button';
 import type { PerformanceTier } from '@/lib/performance-monitor';
 import type { PadData, SamplerBank, StopMode } from './types/sampler';
-import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
+import { isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import type { RemoteSnapshotPromptState } from './hooks/useSamplerStore.snapshotMetadata';
 import type { SideMenu as SideMenuType } from './SideMenu';
 import type { VolumeMixer as VolumeMixerType } from './VolumeMixer';
@@ -98,6 +98,9 @@ interface SamplerPadAppViewProps {
   highlightedPadTarget: { bankId: string; padId: string } | null;
   graphicsTier: PerformanceTier;
   editRequest: { padId: string; token: number } | null;
+  closeEditRequest: { padId: string; token: number } | null;
+  onRequestEditPad: (padId: string) => void;
+  onPadEditDialogOpenChange: (padId: string, open: boolean) => void;
   blockedShortcutKeys: Set<string>;
   blockedMidiNotes: Set<number>;
   blockedMidiCCs: Set<number>;
@@ -230,6 +233,9 @@ export function SamplerPadAppView({
   highlightedPadTarget,
   graphicsTier,
   editRequest,
+  closeEditRequest,
+  onRequestEditPad,
+  onPadEditDialogOpenChange,
   blockedShortcutKeys,
   blockedMidiNotes,
   blockedMidiCCs,
@@ -405,6 +411,9 @@ export function SamplerPadAppView({
                     onAdminPadColorPaint={onAdminPadColorPaint}
                     graphicsTier={graphicsTier}
                     editRequest={editRequest}
+                    closeEditRequest={closeEditRequest}
+                    onRequestEditPad={onRequestEditPad}
+                    onPadEditDialogOpenChange={onPadEditDialogOpenChange}
                     blockedShortcutKeys={blockedShortcutKeys}
                     blockedMidiNotes={blockedMidiNotes}
                     blockedMidiCCs={blockedMidiCCs}
@@ -413,7 +422,7 @@ export function SamplerPadAppView({
                     highlightedPadId={highlightedPadTarget?.bankId === (primaryBankId || '') ? highlightedPadTarget.padId : null}
                     requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
                       displayPrimary &&
-                      (displayPrimary.sourceBankId === defaultBankSourceId || isDefaultBankIdentity(displayPrimary))
+                      (displayPrimary.sourceBankId === defaultBankSourceId || isExplicitDefaultBankIdentity(displayPrimary))
                     )}
                     onRequireLogin={onRequireLogin}
                   />
@@ -462,6 +471,9 @@ export function SamplerPadAppView({
                       onAdminPadColorPaint={onAdminPadColorPaint}
                       graphicsTier={graphicsTier}
                       editRequest={editRequest}
+                      closeEditRequest={closeEditRequest}
+                      onRequestEditPad={onRequestEditPad}
+                      onPadEditDialogOpenChange={onPadEditDialogOpenChange}
                       blockedShortcutKeys={blockedShortcutKeys}
                       blockedMidiNotes={blockedMidiNotes}
                       blockedMidiCCs={blockedMidiCCs}
@@ -470,7 +482,7 @@ export function SamplerPadAppView({
                       highlightedPadId={highlightedPadTarget?.bankId === (secondaryBankId || '') ? highlightedPadTarget.padId : null}
                       requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
                         displaySecondary &&
-                        (displaySecondary.sourceBankId === defaultBankSourceId || isDefaultBankIdentity(displaySecondary))
+                        (displaySecondary.sourceBankId === defaultBankSourceId || isExplicitDefaultBankIdentity(displaySecondary))
                       )}
                       onRequireLogin={onRequireLogin}
                     />
@@ -524,6 +536,9 @@ export function SamplerPadAppView({
                     onAdminPadColorPaint={onAdminPadColorPaint}
                     graphicsTier={graphicsTier}
                     editRequest={editRequest}
+                    closeEditRequest={closeEditRequest}
+                    onRequestEditPad={onRequestEditPad}
+                    onPadEditDialogOpenChange={onPadEditDialogOpenChange}
                     blockedShortcutKeys={blockedShortcutKeys}
                     blockedMidiNotes={blockedMidiNotes}
                     blockedMidiCCs={blockedMidiCCs}
@@ -532,7 +547,7 @@ export function SamplerPadAppView({
                     highlightedPadId={highlightedPadTarget?.bankId === (currentBankId || '') ? highlightedPadTarget.padId : null}
                     requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
                       singleBank &&
-                      (singleBank.sourceBankId === defaultBankSourceId || isDefaultBankIdentity(singleBank))
+                      (singleBank.sourceBankId === defaultBankSourceId || isExplicitDefaultBankIdentity(singleBank))
                     )}
                     onRequireLogin={onRequireLogin}
                   />

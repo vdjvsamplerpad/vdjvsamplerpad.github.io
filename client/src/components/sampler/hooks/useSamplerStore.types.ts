@@ -3,6 +3,7 @@ import type { ImportBankOptions } from './useSamplerStore.importBank';
 import type { ExportAudioMode } from './useSamplerStore.helpers';
 import type { SamplerMetadataSnapshot } from './useSamplerStore.snapshotMetadata';
 import type { BankPreparedSummary } from './preparedAudio';
+import type { ImportBankSource } from './nativeBankImport.types';
 export type { ExportAudioMode } from './useSamplerStore.helpers';
 
 export type ExportActivityPhase =
@@ -36,6 +37,26 @@ export type UpdateStoreBankInput = {
   exportMode: ExportAudioMode;
   thumbnailPath?: string;
   onProgress?: (progress: number) => void;
+};
+
+export type LinkExistingStoreBankCandidate = {
+  catalogItemId: string;
+  bankId: string;
+  title: string;
+  description: string;
+  color?: string | null;
+  thumbnailUrl?: string | null;
+  catalogSha256?: string | null;
+  assetProtection: StoreBankAssetProtection;
+  status: 'published' | 'draft';
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type AdminStoreUploadQueueSummary = {
+  pendingCount: number;
+  nextRetryAt: number | null;
+  oldestCreatedAt: string | null;
 };
 
 export interface SamplerStore {
@@ -76,7 +97,7 @@ export interface SamplerStore {
   duplicateBank: (bankId: string, onProgress?: (progress: number) => void) => Promise<SamplerBank>;
   duplicatePad: (bankId: string, padId: string) => Promise<PadData>;
   importBank: (
-    file: File,
+    source: ImportBankSource,
     onProgress?: (progress: number) => void,
     options?: ImportBankOptions
   ) => Promise<SamplerBank | null>;
@@ -84,6 +105,7 @@ export interface SamplerStore {
   reorderPads: (bankId: string, fromIndex: number, toIndex: number) => void;
   moveBankUp: (id: string) => void;
   moveBankDown: (id: string) => void;
+  moveBankToPosition: (id: string, targetIndex: number) => void;
   transferPad: (padId: string, sourceBankId: string, targetBankId: string) => void;
   exportAdminBank: (
     id: string,
@@ -97,6 +119,10 @@ export interface SamplerStore {
     onProgress?: (progress: number) => void
   ) => Promise<string>;
   updateStoreBank: (input: UpdateStoreBankInput) => Promise<string>;
+  adminExportUploadQueueSummary: AdminStoreUploadQueueSummary;
+  retryPendingAdminExportUploads: () => Promise<string>;
+  listLinkableStoreBanks: () => Promise<LinkExistingStoreBankCandidate[]>;
+  linkExistingStoreBank: (runtimeBankId: string, candidate: LinkExistingStoreBankCandidate) => Promise<string>;
   publishDefaultBankRelease: (
     bankId: string,
     options?: { releaseNotes?: string; minAppVersion?: string }
@@ -140,4 +166,9 @@ export interface SamplerStore {
     files: File[],
     options?: { addAsNewWhenNoTarget?: boolean }
   ) => Promise<string>;
+  resolveStoreRecoveryCatalogItem: (bank: SamplerBank) => Promise<{
+    catalogItemId: string;
+    bankId: string;
+    sha256?: string | null;
+  } | null>;
 }

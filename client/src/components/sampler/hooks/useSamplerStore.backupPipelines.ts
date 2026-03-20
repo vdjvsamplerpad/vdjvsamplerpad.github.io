@@ -6,14 +6,16 @@ import {
   getSnapshotBankRestoreKind,
   getSnapshotPadRestoreKind,
 } from './useSamplerStore.snapshotMetadata';
+import {
+  failOperationDiagnostics,
+  finishOperationDiagnostics,
+  startOperationHeartbeat,
+  type OperationDiagnostics,
+} from './useSamplerStore.operationDiagnostics';
 
 type MediaBackend = 'native' | 'idb';
 
-type OperationDiagnosticsLike = {
-  operationId: string;
-  stages: Array<{ stage: string }>;
-  metrics: Record<string, number>;
-};
+type OperationDiagnosticsLike = OperationDiagnostics;
 
 type BackupPartManifestEntryLike = {
   index: number;
@@ -199,7 +201,14 @@ export const runBackupExportPipeline = async (
     throw new Error('Please sign in before creating a backup.');
   }
 
+  const riskMode = options?.riskMode === true;
   const diagnostics = createOperationDiagnostics('app_backup_export', effectiveUser.id);
+  const stopHeartbeat = startOperationHeartbeat(diagnostics, {
+    getDetails: () => ({
+      bankCount: banks.length,
+      riskMode,
+    }),
+  });
   addOperationStage(diagnostics, 'start', { bankCount: banks.length });
   logExportActivity({
     status: 'success',
@@ -213,8 +222,6 @@ export const runBackupExportPipeline = async (
       bankCount: banks.length,
     },
   });
-  const riskMode = options?.riskMode === true;
-
   try {
     await ensureExportPermission();
 
@@ -380,6 +387,10 @@ export const runBackupExportPipeline = async (
         throw new Error(saveResult.message || 'Failed to save backup file.');
       }
       addOperationStage(diagnostics, 'saved', { path: saveResult.savedPath || backupFileName, mode: 'single-file' });
+      finishOperationDiagnostics(diagnostics, {
+        bankCount: banks.length,
+        mode: 'single-file',
+      });
       logExportActivity({
         status: 'success',
         phase: 'backup_export',
@@ -440,6 +451,11 @@ export const runBackupExportPipeline = async (
       mode: 'manifest+parts',
       partCount: splitParts.length,
     });
+    finishOperationDiagnostics(diagnostics, {
+      bankCount: banks.length,
+      mode: 'manifest+parts',
+      partCount: splitParts.length,
+    });
     logExportActivity({
       status: 'success',
       phase: 'backup_export',
@@ -456,6 +472,10 @@ export const runBackupExportPipeline = async (
     });
     return `Backup exported in ${splitParts.length} parts. Restore using "${manifestName}" with all "${backupPartExt}" files.`;
   } catch (error) {
+    failOperationDiagnostics(diagnostics, error, {
+      bankCount: banks.length,
+      riskMode,
+    });
     const errorMessage = error instanceof Error ? error.message : String(error);
     const lastStage = diagnostics.stages[diagnostics.stages.length - 1]?.stage || 'unknown';
     logExportActivity({
@@ -472,6 +492,8 @@ export const runBackupExportPipeline = async (
     });
     const logPath = await writeOperationDiagnosticsLog(diagnostics, error);
     throw new Error(logPath ? `${errorMessage} (Diagnostics log: ${logPath})` : errorMessage);
+  } finally {
+    stopHeartbeat();
   }
 };
 
@@ -514,6 +536,12 @@ export const runBackupRestorePipeline = async (
   }
 
   const diagnostics = createOperationDiagnostics('app_backup_restore', effectiveUser.id);
+  const stopHeartbeat = startOperationHeartbeat(diagnostics, {
+    getDetails: () => ({
+      inputBytes: file.size,
+      companionFiles: companionFiles.length,
+    }),
+  });
   addOperationStage(diagnostics, 'start', {
     inputBytes: file.size,
     bankCount: previousBanksSnapshot.length,
@@ -835,6 +863,11 @@ export const runBackupRestorePipeline = async (
     }
 
     addOperationStage(diagnostics, 'complete', { restoredBanks: restoredBanks.length });
+    finishOperationDiagnostics(diagnostics, {
+      restoredBanks: restoredBanks.length,
+      restoredPads: restoredPadCount,
+      restoredMediaBytes,
+    });
     logExportActivity({
       status: 'success',
       phase: 'backup_restore',
@@ -862,6 +895,10 @@ export const runBackupRestorePipeline = async (
       ? new Error(backupFileAccessDeniedMessage)
       : error;
     const errorMessage = normalizedError instanceof Error ? normalizedError.message : String(normalizedError);
+    failOperationDiagnostics(diagnostics, normalizedError, {
+      inputBytes: file.size,
+      companionFiles: companionFiles.length,
+    });
     const lastStage = diagnostics.stages[diagnostics.stages.length - 1]?.stage || 'unknown';
     logExportActivity({
       status: 'failed',
@@ -877,5 +914,7 @@ export const runBackupRestorePipeline = async (
     });
     const logPath = await writeOperationDiagnosticsLog(diagnostics, error);
     throw new Error(logPath ? `${errorMessage} (Diagnostics log: ${logPath})` : errorMessage);
+  } finally {
+    stopHeartbeat();
   }
 };

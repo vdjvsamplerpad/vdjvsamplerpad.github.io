@@ -182,7 +182,7 @@ export const runAddPadsPipeline = async (
       type: 'audio' | 'image'
     ) => Promise<{ storageKey?: string; backend: MediaBackend }>;
     isOwnedCountedBankForQuota: (bank: SamplerBank) => boolean;
-    isNativeCapacitorPlatform: () => boolean;
+    supportsNativeMediaStorage: () => boolean;
     saveBatchBlobsToDB: (items: Array<{ id: string; blob: Blob; type: 'audio' | 'image' }>) => Promise<void>;
   }
 ): Promise<void> => {
@@ -204,7 +204,7 @@ export const runAddPadsPipeline = async (
     generateId,
     storeFile,
     isOwnedCountedBankForQuota,
-    isNativeCapacitorPlatform,
+    supportsNativeMediaStorage,
     saveBatchBlobsToDB,
   } = deps;
 
@@ -238,7 +238,7 @@ export const runAddPadsPipeline = async (
     const audioUrl = URL.createObjectURL(file);
     let audioStorageKey: string | undefined;
     let audioBackend: MediaBackend = 'idb';
-    if (isNativeCapacitorPlatform()) {
+    if (supportsNativeMediaStorage()) {
       const storedAudio = await storeFile(padId, file, 'audio');
       audioStorageKey = storedAudio.storageKey;
       audioBackend = storedAudio.backend;
@@ -276,7 +276,7 @@ export const runAddPadsPipeline = async (
     });
   }
 
-  if (!isNativeCapacitorPlatform() && batchItems.length > 0) {
+  if (!supportsNativeMediaStorage() && batchItems.length > 0) {
     await saveBatchBlobsToDB(batchItems);
   }
   if (newPads.length > 0) {
@@ -552,6 +552,25 @@ export const runMoveBankDownPipeline = (id: string, setBanks: SetState<SamplerBa
     const idx = ordered.findIndex((bank) => bank.id === id);
     if (idx === -1 || idx >= ordered.length - 1) return prev;
     [ordered[idx], ordered[idx + 1]] = [ordered[idx + 1], ordered[idx]];
+    return ordered.map((bank, index) => ({ ...bank, sortOrder: index }));
+  });
+};
+
+export const runMoveBankToPositionPipeline = (
+  id: string,
+  targetIndex: number,
+  setBanks: SetState<SamplerBank[]>
+): void => {
+  setBanks((prev) => {
+    const ordered = [...prev]
+      .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
+      .map((bank, index) => ({ ...bank, sortOrder: index }));
+    const currentIndex = ordered.findIndex((bank) => bank.id === id);
+    if (currentIndex === -1) return prev;
+    const clampedTarget = Math.max(0, Math.min(ordered.length - 1, Math.floor(targetIndex)));
+    if (clampedTarget === currentIndex) return prev;
+    const [movingBank] = ordered.splice(currentIndex, 1);
+    ordered.splice(clampedTarget, 0, movingBank);
     return ordered.map((bank, index) => ({ ...bank, sortOrder: index }));
   });
 };

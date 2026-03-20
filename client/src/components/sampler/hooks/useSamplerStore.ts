@@ -7,6 +7,7 @@ import {
   addBankMetadata,
 } from '@/lib/bank-utils';
 import { getCachedUser } from '@/hooks/useAuth';
+import { adminApi } from '@/lib/admin-api';
 import { ensureActivityRuntime, logActivityEvent } from '@/lib/activityLogger';
 import { checkAdmission, extractMetadataFromFile } from '@/lib/audio-engine/AudioAdmission';
 import {
@@ -14,6 +15,8 @@ import {
   isFileAccessDeniedError,
 } from './useSamplerStore.importUtils';
 import type { ImportBankOptions } from './useSamplerStore.importBank';
+import type { ImportBankSource } from './nativeBankImport.types';
+import { isElectronImportBridgeAvailable } from '@/lib/native-bank-import';
 import {
   coerceUploadHeaders,
   invokeUserExportApi,
@@ -107,6 +110,7 @@ import {
   runCreateBankPipeline,
   runDeleteBankPipeline,
   runMoveBankDownPipeline,
+  runMoveBankToPositionPipeline,
   runMoveBankUpPipeline,
   runRemovePadPipeline,
   runReorderPadsPipeline,
@@ -130,11 +134,12 @@ import {
   countOwnedCountedBanks,
   dedupeBanksByIdentity,
   DEFAULT_BANK_SOURCE_ID,
-  isDefaultBankIdentity,
+  isExplicitDefaultBankIdentity,
   isOwnedCountedBankForQuota,
   normalizeIdentityToken,
   pruneBanksForGuestLock,
 } from './useSamplerStore.bankIdentity';
+import type { AdminStoreUploadQueueSummary, LinkExistingStoreBankCandidate } from './useSamplerStore.types';
 import {
   readLastOpenBankIdFromCache,
   writeLastOpenBankIdToCache,
@@ -183,6 +188,11 @@ import {
 import {
   saveBatchBlobsToDB,
 } from './useSamplerStore.idbStorage';
+import type {
+  ElectronExportArchiveJobInput,
+  ElectronExportArchiveJobResult,
+  ElectronExportArchiveJobResponse,
+} from './electronArchiveJob';
 import {
   applyResolvedOfficialPadMedia,
   buildSamplerMetadataSnapshot,
@@ -210,19 +220,271 @@ const isNativeCapacitorPlatform = (): boolean => {
   return capacitor?.isNativePlatform?.() === true;
 };
 
+const isElectronRendererRuntime = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  return Boolean(
+    /Electron/i.test(window.navigator.userAgent || '') ||
+    (window as Window & { process?: { versions?: { electron?: string } } }).process?.versions?.electron
+  );
+};
+
+const hasElectronMp3TranscodeBridge = (): boolean =>
+  typeof window !== 'undefined' && typeof window.electronAPI?.transcodeAudioToMp3 === 'function';
+
+const hasElectronZipArchiveBridge = (): boolean =>
+  typeof window !== 'undefined' && typeof window.electronAPI?.createZipArchive === 'function';
+
+const hasElectronZipArchiveSaveBridge = (): boolean =>
+  typeof window !== 'undefined' &&
+  (typeof window.electronAPI?.createAndSaveZipArchive === 'function' ||
+    typeof window.electronAPI?.createZipArchive === 'function');
+
+const hasElectronZipEntryStagingBridge = (): boolean =>
+  typeof window !== 'undefined' && typeof window.electronAPI?.stageExportEntry === 'function';
+
+const hasElectronExportArchiveJobBridge = (): boolean =>
+  typeof window !== 'undefined' && typeof window.electronAPI?.exportArchiveJob === 'function';
+
+const hasElectronNativeMediaBridge = (): boolean =>
+  typeof window !== 'undefined' &&
+  typeof window.electronAPI?.resolveNativeMedia === 'function' &&
+  typeof window.electronAPI?.writeNativeMedia === 'function' &&
+  typeof window.electronAPI?.readNativeMedia === 'function' &&
+  typeof window.electronAPI?.deleteNativeMedia === 'function';
+
+const hasElectronImportProgressBridge = (): boolean =>
+  typeof window !== 'undefined' &&
+  typeof window.electronAPI?.onImportArchiveProgress === 'function';
+
+const supportsNativeMediaStorage = (): boolean =>
+  isNativeCapacitorPlatform() || hasElectronNativeMediaBridge();
+
+const describeElectronApiSurface = (): string => {
+  if (typeof window === 'undefined') return 'window-unavailable';
+  const electronAPI = window.electronAPI;
+  if (!electronAPI || typeof electronAPI !== 'object') return String(electronAPI);
+  const surface = Object.keys(electronAPI)
+    .sort()
+    .map((key) => `${key}:${typeof (electronAPI as Record<string, unknown>)[key]}`);
+  return surface.length > 0 ? surface.join(', ') : 'no-keys';
+};
+
+const describeElectronBinaryPayload = (value: unknown): string => {
+  if (value instanceof Uint8Array) return `Uint8Array(${value.byteLength})`;
+  if (value instanceof ArrayBuffer) return `ArrayBuffer(${value.byteLength})`;
+  if (Array.isArray(value)) return `number[](${value.length})`;
+  if (value && typeof value === 'object' && Array.isArray((value as { data?: number[] }).data)) {
+    return `{ data: number[](${(value as { data: number[] }).data.length}) }`;
+  }
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>);
+    return `{ ${keys.length > 0 ? keys.join(', ') : 'no-keys'} }`;
+  }
+  return String(value);
+};
+
+const normalizeElectronBinaryPayload = (value: unknown): Uint8Array | null => {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  if (value && typeof value === 'object' && Array.isArray((value as { data?: number[] }).data)) {
+    return Uint8Array.from((value as { data: number[] }).data);
+  }
+  return null;
+};
+
+const getElectronBridgeDiagnostics = (): Record<string, unknown> | null => {
+  if (!isElectronRendererRuntime()) return null;
+  return {
+    electronApiSurface: describeElectronApiSurface(),
+    hasMp3Bridge: hasElectronMp3TranscodeBridge(),
+    hasZipBridge: hasElectronZipArchiveBridge(),
+    hasZipSaveBridge: hasElectronZipArchiveSaveBridge(),
+    hasZipEntryStagingBridge: hasElectronZipEntryStagingBridge(),
+    hasImportBridge: isElectronImportBridgeAvailable(),
+    hasImportProgressBridge: hasElectronImportProgressBridge(),
+  };
+};
+
 const transcodeAudioToMP3ForExport = (input: {
   source: Blob;
   startTimeMs?: number;
   endTimeMs?: number;
   applyTrim?: boolean;
   bitrate?: number;
-}) =>
-  transcodeAudioToMP3(input.source, {
+}) => {
+  const electronMp3Transcoder = hasElectronMp3TranscodeBridge()
+    ? window.electronAPI?.transcodeAudioToMp3
+    : undefined;
+  if (electronMp3Transcoder) {
+    return (async () => {
+      const sourceBytes = new Uint8Array(await input.source.arrayBuffer());
+      const response = await electronMp3Transcoder({
+        audioBytes: sourceBytes,
+        mimeType: input.source.type,
+        startTimeMs: input.startTimeMs,
+        endTimeMs: input.endTimeMs,
+        applyTrim: input.applyTrim,
+        bitrate: input.bitrate,
+      });
+      const output = response?.audioBytes;
+      const normalizedBytes = normalizeElectronBinaryPayload(output);
+      if (!normalizedBytes || normalizedBytes.byteLength <= 0) {
+        throw new Error(
+          `Electron MP3 export returned no audio data (bridge payload: ${describeElectronBinaryPayload(output)}).`
+        );
+      }
+      const durationMs =
+        input.applyTrim === true &&
+        Number.isFinite(input.startTimeMs) &&
+        Number.isFinite(input.endTimeMs) &&
+        (input.endTimeMs || 0) > (input.startTimeMs || 0)
+          ? Math.max(0, (input.endTimeMs || 0) - (input.startTimeMs || 0))
+          : 0;
+      return {
+        blob: new Blob([normalizedBytes], { type: 'audio/mpeg' }),
+        newDurationMs: durationMs,
+        appliedTrim: Boolean(input.applyTrim),
+      };
+    })();
+  }
+
+  if (isElectronRendererRuntime()) {
+    return Promise.reject(
+      new Error(
+        `Electron MP3 export bridge is unavailable in this build (electronAPI: ${describeElectronApiSurface()}).`
+      )
+    );
+  }
+
+  return transcodeAudioToMP3(input.source, {
     startTimeMs: input.startTimeMs,
     endTimeMs: input.endTimeMs,
     applyTrim: input.applyTrim,
     bitrate: input.bitrate,
   });
+};
+
+const createElectronZipArchiveForExport = async (input: {
+  entries: Array<{
+    path: string;
+    data?: Uint8Array;
+    sourcePath?: string;
+    cleanupSourcePath?: boolean;
+  }>;
+  compression?: 'STORE' | 'DEFLATE';
+  compressionLevel?: number;
+}): Promise<Uint8Array | null> => {
+  const archiveBuilder = hasElectronZipArchiveBridge()
+    ? window.electronAPI?.createZipArchive
+    : undefined;
+  if (!archiveBuilder) return null;
+  const response = await archiveBuilder(input);
+  const output = response?.archiveBytes;
+  const normalizedBytes = normalizeElectronBinaryPayload(output);
+  if (!normalizedBytes) {
+    throw new Error(
+      `Electron archive bridge returned an unsupported payload (archiveBytes: ${describeElectronBinaryPayload(output)}).`
+    );
+  }
+  return normalizedBytes;
+};
+
+const createAndSaveElectronZipArchiveForExport = async (input: {
+  entries: Array<{
+    path: string;
+    data?: Uint8Array;
+    sourcePath?: string;
+    cleanupSourcePath?: boolean;
+  }>;
+  fileName: string;
+  compression?: 'STORE' | 'DEFLATE';
+  compressionLevel?: number;
+}): Promise<{ savedPath?: string; archiveBytes: number; message?: string } | null> => {
+  const archiveBuilder = hasElectronZipArchiveSaveBridge()
+    ? (window.electronAPI?.createAndSaveZipArchive || window.electronAPI?.createZipArchive)
+    : undefined;
+  if (!archiveBuilder) return null;
+  const response = (await archiveBuilder({
+    ...input,
+    relativeFolder: EXPORT_FOLDER_NAME,
+  })) as {
+    savedPath?: string;
+    archiveBytes?: number;
+    message?: string;
+  };
+  const archiveBytes =
+    typeof response?.archiveBytes === 'number'
+      ? response.archiveBytes
+      : Number(response?.archiveBytes);
+  if (!Number.isFinite(archiveBytes) || archiveBytes <= 0) {
+    throw new Error(
+      `Electron archive save bridge returned an unsupported payload (archiveBytes: ${describeElectronBinaryPayload(response)}).`
+    );
+  }
+  return {
+    savedPath: typeof response?.savedPath === 'string' ? response.savedPath : undefined,
+    archiveBytes,
+    message: typeof response?.message === 'string' ? response.message : undefined,
+  };
+};
+
+const stageElectronZipEntryForExport = async (input: {
+  archivePath: string;
+  blob: Blob;
+  fileName?: string;
+}): Promise<{ sourcePath: string; bytes: number } | null> => {
+  const stager = hasElectronZipEntryStagingBridge()
+    ? window.electronAPI?.stageExportEntry
+    : undefined;
+  if (!stager) return null;
+  const response = await stager({
+    archivePath: input.archivePath,
+    data: new Uint8Array(await input.blob.arrayBuffer()),
+    fileName: input.fileName,
+  });
+  const sourcePath = typeof response?.sourcePath === 'string' ? response.sourcePath.trim() : '';
+  const bytes = typeof response?.bytes === 'number' ? response.bytes : Number(response?.bytes);
+  if (!sourcePath || !Number.isFinite(bytes) || bytes <= 0) {
+    throw new Error(
+      `Electron export staging bridge returned an unsupported payload (${describeElectronBinaryPayload(response)}).`
+    );
+  }
+  return { sourcePath, bytes };
+};
+
+const cleanupStagedElectronZipEntriesForExport = async (paths: string[]): Promise<void> => {
+  const cleaner =
+    typeof window !== 'undefined' ? window.electronAPI?.cleanupStagedExportEntries : undefined;
+  if (!cleaner || !Array.isArray(paths) || paths.length === 0) return;
+  const uniquePaths = Array.from(new Set(paths.filter((value) => typeof value === 'string' && value.trim().length > 0)));
+  if (uniquePaths.length === 0) return;
+  await cleaner({ paths: uniquePaths });
+};
+
+const runElectronExportArchiveJobForExport = async (
+  input: ElectronExportArchiveJobInput
+): Promise<ElectronExportArchiveJobResult | null> => {
+  const jobRunner = hasElectronExportArchiveJobBridge() ? window.electronAPI?.exportArchiveJob : undefined;
+  if (!jobRunner) return null;
+  const response = (await jobRunner(input)) as ElectronExportArchiveJobResponse | undefined;
+  const archiveBytes =
+    typeof response?.archiveBytes === 'number'
+      ? response.archiveBytes
+      : Number(response?.archiveBytes);
+  if (!Number.isFinite(archiveBytes) || archiveBytes <= 0) {
+    throw new Error(
+      `Electron export job returned an unsupported payload (archiveBytes: ${describeElectronBinaryPayload(response)}).`
+    );
+  }
+  const archiveData = normalizeElectronBinaryPayload(response?.archiveData);
+  return {
+    savedPath: typeof response?.savedPath === 'string' ? response.savedPath : undefined,
+    archiveBytes,
+    archiveData: archiveData || undefined,
+    message: typeof response?.message === 'string' ? response.message : undefined,
+  };
+};
 
 const withPreparedPadJobTimeout = async <T>(promise: Promise<T>, timeoutMs = 20_000): Promise<T> => {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -281,8 +543,6 @@ const emitPreparedPlaybackDiag = (
   }
   if (level === 'error') {
     console.error('[PreparedPlaybackDebug]', entry);
-  } else {
-    console.info('[PreparedPlaybackDebug]', entry);
   }
 };
 
@@ -369,6 +629,7 @@ const {
   collectMediaReferenceSet,
   deletePadMediaArtifactsExcept,
   estimateBankMediaBytes,
+  resolvePadMediaSourcePath,
 } = createSamplerMediaHelpers({
   isNativeCapacitorPlatform,
   nativeMediaRoot: NATIVE_MEDIA_ROOT,
@@ -652,6 +913,15 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     };
   }, [banks, normalizePreparedPadState]);
 
+  const padNeedsPreparedAudioHydration = React.useCallback((pad: PadData): boolean => {
+    const normalizedPad = normalizePreparedPadState(pad);
+    if (!normalizedPad.preparedAudioStorageKey) return false;
+    if (normalizedPad.preparedStatus === 'queued' || normalizedPad.preparedStatus === 'preparing') {
+      return false;
+    }
+    return !(typeof normalizedPad.preparedAudioUrl === 'string' && normalizedPad.preparedAudioUrl.trim().length > 0);
+  }, [normalizePreparedPadState]);
+
   const rehydratePadMediaFromStorage = React.useCallback(async (pad: PadData): Promise<PadData> => {
     const restoredPad: PadData = {
       ...pad,
@@ -660,7 +930,10 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         : [null, null, null, null],
     };
 
-    if (pad.audioStorageKey || pad.audioBackend) {
+    const hasAudioUrl = typeof pad.audioUrl === 'string' && pad.audioUrl.trim().length > 0;
+    const hasImageUrl = typeof pad.imageUrl === 'string' && pad.imageUrl.trim().length > 0;
+
+    if (!hasAudioUrl && (pad.audioStorageKey || pad.audioBackend)) {
       const restoredAudio = await restoreFileAccess(
         pad.id,
         'audio',
@@ -672,7 +945,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       restoredPad.audioBackend = restoredAudio.backend;
     }
 
-    if (pad.imageStorageKey || pad.imageBackend) {
+    if (!hasImageUrl && (pad.imageStorageKey || pad.imageBackend)) {
       const restoredImage = await restoreFileAccess(
         pad.id,
         'image',
@@ -684,7 +957,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       restoredPad.imageBackend = restoredImage.backend;
       if (restoredImage.url) restoredPad.hasImageAsset = true;
     }
-    if (!restoredPad.imageUrl && pad.imageData) {
+    if (!restoredPad.imageUrl && !hasImageUrl && pad.imageData) {
       try {
         restoredPad.imageUrl = URL.createObjectURL(base64ToBlob(pad.imageData));
         restoredPad.imageBackend = 'idb';
@@ -693,13 +966,17 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         // Ignore image data fallback errors.
       }
     }
+    if (!padNeedsPreparedAudioHydration(restoredPad)) {
+      return restoredPad;
+    }
     return await rehydratePreparedAudioForPad(restoredPad);
-  }, [rehydratePreparedAudioForPad, restoreFileAccess, yieldToMainThread]);
+  }, [padNeedsPreparedAudioHydration, rehydratePreparedAudioForPad, restoreFileAccess, yieldToMainThread]);
 
   const rehydrateBankMediaFromStorage = React.useCallback(async (bank: SamplerBank): Promise<SamplerBank> => {
     const thumbnailStorageId = `bank-thumbnail-${bank.id}`;
     let nextMetadata = bank.bankMetadata;
-    if (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend) {
+    const hasThumbnailUrl = typeof nextMetadata?.thumbnailUrl === 'string' && nextMetadata.thumbnailUrl.trim().length > 0;
+    if (!hasThumbnailUrl && (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend)) {
       try {
         const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
         const restoredThumbnail = await restoreFileAccess(
@@ -720,11 +997,15 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     }
     const restoredPads: PadData[] = [];
     for (let i = 0; i < bank.pads.length; i += 1) {
-      restoredPads.push(await rehydratePadMediaFromStorage(bank.pads[i]));
+      const currentPad = bank.pads[i];
+      const needsPadHydration =
+        padNeedsMediaHydration(currentPad) ||
+        padNeedsPreparedAudioHydration(currentPad);
+      restoredPads.push(needsPadHydration ? await rehydratePadMediaFromStorage(currentPad) : currentPad);
       if ((i + 1) % 6 === 0) await yieldToMainThread();
     }
     return { ...bank, pads: restoredPads, bankMetadata: nextMetadata };
-  }, [rehydratePadMediaFromStorage, restoreFileAccess, yieldToMainThread]);
+  }, [padNeedsMediaHydration, padNeedsPreparedAudioHydration, rehydratePadMediaFromStorage, restoreFileAccess, yieldToMainThread]);
 
   React.useEffect(() => {
     ensureActivityRuntime();
@@ -759,7 +1040,13 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       const bankIds = Array.isArray(detail?.bankIds)
         ? detail.bankIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
         : [];
-      deckLoadedPreparedBankIdsRef.current = new Set(bankIds);
+      const nextIds = new Set(bankIds);
+      const previousIds = deckLoadedPreparedBankIdsRef.current;
+      const changed =
+        previousIds.size !== nextIds.size ||
+        Array.from(nextIds).some((bankId) => !previousIds.has(bankId));
+      if (!changed) return;
+      deckLoadedPreparedBankIdsRef.current = nextIds;
       setPreparedQueueNonce((value) => value + 1);
     };
 
@@ -906,6 +1193,10 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     runId?: number
   ): Promise<void> => {
     const normalizedPad = normalizePreparedPadState(pad);
+    const isDefaultBank = banksRef.current.some(
+      (bank) => bank.id === bankId && isExplicitDefaultBankIdentity(bank)
+    );
+    if (isDefaultBank) return;
     if (!shouldPreparePadAudio(normalizedPad, explicit)) return;
 
     const sourceSignature = buildPadPreparedSourceSignature(normalizedPad);
@@ -1135,11 +1426,12 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     setBanks((prev) => prev.map((bank) => (
       bank.id !== bankId
         ? bank
-        : {
-            ...bank,
-            pads: bank.pads.map((pad) => {
-              const normalizedPad = normalizePreparedPadState(pad);
-              if (!shouldPreparePadAudio(normalizedPad, effectiveExplicit)) {
+      : {
+          ...bank,
+          pads: bank.pads.map((pad) => {
+            const normalizedPad = normalizePreparedPadState(pad);
+            if (isExplicitDefaultBankIdentity(bank)) return normalizedPad;
+            if (!shouldPreparePadAudio(normalizedPad, effectiveExplicit)) {
                 return normalizedPad.preparedStatus === 'queued' || normalizedPad.preparedStatus === 'preparing'
                   ? { ...normalizedPad, preparedStatus: 'none' as const }
                   : normalizedPad;
@@ -1162,6 +1454,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     const pad = bank?.pads.find((entry) => entry.id === padId);
     if (!bank || !pad) return;
     const normalizedPad = normalizePreparedPadState(pad);
+    if (isExplicitDefaultBankIdentity(bank)) return;
     if (!shouldPreparePadAudio(normalizedPad, false)) return;
     if (
       normalizedPad.preparedStatus === 'queued' ||
@@ -1262,6 +1555,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
           const explicit = requestedExplicit && preparedAutoQueueEnabled;
           const candidates = bank.pads.filter((pad) => {
             const normalizedPad = normalizePreparedPadState(pad);
+            if (isExplicitDefaultBankIdentity(bank)) return false;
             if (requestedExplicit) {
               const isQueuedRequest =
                 normalizedPad.preparedStatus === 'queued' || normalizedPad.preparedStatus === 'preparing';
@@ -1355,6 +1649,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     logExportActivity,
     processUserExportUploadQueue,
     enqueueUserExportUpload,
+    processAdminExportUploadQueue,
     enqueueAdminExportUpload,
   } = useSamplerStoreUploadQueueRuntime({
     profileRole: profile?.role,
@@ -1415,6 +1710,39 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     });
   }, [user]);
 
+  const adminExportUploadQueueSummary = React.useMemo<AdminStoreUploadQueueSummary>(() => {
+    const nextRetryAt = adminExportUploadQueue
+      .map((job) => Number(job.nextRetryAt || 0))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((left, right) => left - right)[0] || null;
+    const oldestCreatedAt = [...adminExportUploadQueue]
+      .map((job) => job.createdAt)
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .sort((left, right) => new Date(left).getTime() - new Date(right).getTime())[0] || null;
+    return {
+      pendingCount: adminExportUploadQueue.length,
+      nextRetryAt,
+      oldestCreatedAt,
+    };
+  }, [adminExportUploadQueue]);
+
+  const retryPendingAdminExportUploads = React.useCallback(async (): Promise<string> => {
+    if (profile?.role !== 'admin') {
+      throw new Error('Only admins can retry Store uploads.');
+    }
+    const pendingCount = adminExportUploadQueueRef.current.length;
+    if (pendingCount <= 0) {
+      return 'No pending Store uploads.';
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return 'Pending Store uploads are waiting for an internet connection.';
+    }
+    await processAdminExportUploadQueue();
+    return pendingCount === 1
+      ? 'Retry requested for 1 pending Store upload.'
+      : `Retry requested for ${pendingCount} pending Store uploads.`;
+  }, [processAdminExportUploadQueue, profile?.role]);
+
   const hideProtectedBanks = React.useCallback(() => {
     runHideProtectedBanksPipeline(
       {
@@ -1459,17 +1787,17 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     const cachedDefaultBank = readDefaultBankOwnerCache(DEFAULT_BANK_OWNER_CACHE_KEY, ownerId);
     const previousDefaultIds = new Set(
       banksRef.current
-        .filter((bank) => isDefaultBankIdentity(bank) && !bank.isLocalDuplicate)
+        .filter((bank) => isExplicitDefaultBankIdentity(bank) && !bank.isLocalDuplicate)
         .map((bank) => bank.id)
     );
     const withoutDefaultBanks = banksRef.current.filter(
-      (bank) => !isDefaultBankIdentity(bank) || bank.isLocalDuplicate
+      (bank) => !isExplicitDefaultBankIdentity(bank) || bank.isLocalDuplicate
     );
     const deduped = dedupeBanksByIdentity(
       cachedDefaultBank ? [...withoutDefaultBanks, cachedDefaultBank] : withoutDefaultBanks
     );
     const nextDefaultBankId =
-      deduped.banks.find((bank) => isDefaultBankIdentity(bank))?.id || cachedDefaultBank?.id || null;
+      deduped.banks.find((bank) => isExplicitDefaultBankIdentity(bank))?.id || cachedDefaultBank?.id || null;
 
     banksRef.current = deduped.banks;
     setBanks(deduped.banks);
@@ -1613,7 +1941,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       const targetName = samplerConfig.bankDefaults.defaultBankName;
       const targetColor = samplerConfig.bankDefaults.defaultBankColor;
       const next = prev.map((bank) => {
-        if (!isDefaultBankIdentity(bank) || bank.isLocalDuplicate) return bank;
+        if (!isExplicitDefaultBankIdentity(bank) || bank.isLocalDuplicate) return bank;
         const needsSourceBankId = !bank.sourceBankId;
         const nextName = targetName;
         const nextColor = bank.pads.length === 0
@@ -1709,6 +2037,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
                 ...stripPreparedAudioPersistenceTransientFields(pad),
                 id: pad.id,
                 name: pad.name,
+                artist: pad.artist,
                 audioStorageKey: pad.audioStorageKey,
                 audioBackend: pad.audioBackend,
                 preparedAudioStorageKey: pad.preparedAudioStorageKey,
@@ -1728,6 +2057,8 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
                 midiCC: pad.midiCC,
                 triggerMode: pad.triggerMode,
                 playbackMode: pad.playbackMode,
+                padGroup: pad.padGroup,
+                padGroupUniversal: pad.padGroupUniversal,
                 volume: pad.volume,
                 gainDb: typeof pad.gainDb === 'number' ? pad.gainDb : 0,
                 gain: pad.gain ?? 1.0,
@@ -1772,8 +2103,8 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     }
 
     const defaultBank =
-      banks.find((bank) => isDefaultBankIdentity(bank) && !bank.isLocalDuplicate && Array.isArray(bank.pads) && bank.pads.length > 0) ||
-      banks.find((bank) => isDefaultBankIdentity(bank) && !bank.isLocalDuplicate) ||
+      banks.find((bank) => isExplicitDefaultBankIdentity(bank) && !bank.isLocalDuplicate && Array.isArray(bank.pads) && bank.pads.length > 0) ||
+      banks.find((bank) => isExplicitDefaultBankIdentity(bank) && !bank.isLocalDuplicate) ||
       null;
 
     writeDefaultBankOwnerCache(DEFAULT_BANK_OWNER_CACHE_KEY, ownerId, defaultBank);
@@ -1944,7 +2275,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         generateId,
         storeFile,
         isOwnedCountedBankForQuota,
-        isNativeCapacitorPlatform,
+        supportsNativeMediaStorage,
         saveBatchBlobsToDB,
       }
     );
@@ -1997,7 +2328,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         setBanks,
       }
     );
-    if (!existingBank || !isDefaultBankIdentity(existingBank)) return;
+    if (!existingBank || !isExplicitDefaultBankIdentity(existingBank)) return;
     if (requestedImageRemoval || (currentImagePreference === 'none' && imageIsBlank)) {
       writeDefaultBankPadImagePreferenceForOwner(id, 'none');
       return;
@@ -2062,6 +2393,10 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
 
   const moveBankDown = React.useCallback((id: string) => {
     runMoveBankDownPipeline(id, setBanks);
+  }, []);
+
+  const moveBankToPosition = React.useCallback((id: string, targetIndex: number) => {
+    runMoveBankToPositionPipeline(id, targetIndex, setBanks);
   }, []);
 
   const transferPad = React.useCallback((padId: string, sourceBankId: string, targetBankId: string) => {
@@ -2215,10 +2550,20 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         ensureStorageHeadroom,
         padHasExpectedImageAsset,
         loadPadMediaBlob,
+        resolvePadMediaSourcePath,
         shouldAttemptTrim,
         trimAudio,
         detectAudioFormat,
         sha256HexFromBlob,
+        sha256HexFromText,
+        getElectronBridgeDiagnostics,
+        createElectronZipArchive: hasElectronZipArchiveBridge() ? createElectronZipArchiveForExport : undefined,
+        createAndSaveElectronZipArchive: hasElectronZipArchiveSaveBridge() ? createAndSaveElectronZipArchiveForExport : undefined,
+        stageElectronZipEntry: hasElectronZipEntryStagingBridge() ? stageElectronZipEntryForExport : undefined,
+        cleanupStagedElectronZipEntries: cleanupStagedElectronZipEntriesForExport,
+        canUseElectronZipArchive: hasElectronZipArchiveBridge(),
+        runElectronExportArchiveJob: hasElectronExportArchiveJobBridge() ? runElectronExportArchiveJobForExport : undefined,
+        canUseElectronExportArchiveJob: hasElectronExportArchiveJobBridge() && hasElectronZipEntryStagingBridge(),
         yieldToMainThread,
         saveExportFile,
         enqueueUserExportUpload,
@@ -2230,12 +2575,12 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
 
   // Import bank.
   const importBank = React.useCallback(async (
-    file: File,
+    source: ImportBankSource,
     onProgress?: (progress: number) => void,
     options?: ImportBankOptions
   ) => {
     const { runImportBankPipeline } = await import('./useSamplerStore.importBank');
-    return runImportBankPipeline(file, onProgress, options, {
+    return runImportBankPipeline(source, onProgress, options, {
       user,
       getCachedUser,
       banks,
@@ -2249,6 +2594,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       generateId,
       isNativeCapacitorPlatform,
       isNativeAndroid,
+      supportsNativeMediaStorage,
       storeFile,
       saveBatchBlobsToDB,
       yieldToMainThread,
@@ -2281,7 +2627,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   ) => {
     const { runExportAdminBankPipeline } = await import('./useSamplerStore.exportAdminBank');
 
-    return runExportAdminBankPipeline(
+    const result = await runExportAdminBankPipeline(
       {
         id,
         title,
@@ -2307,6 +2653,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         ensureStorageHeadroom,
         padHasExpectedImageAsset,
         loadPadMediaBlob,
+        resolvePadMediaSourcePath,
         shouldAttemptTrim,
         trimAudio,
         remapSavedHotcuesForBakedTrim,
@@ -2314,6 +2661,14 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         detectAudioFormat,
         sha256HexFromBlob,
         sha256HexFromText,
+        getElectronBridgeDiagnostics,
+        createElectronZipArchive: hasElectronZipArchiveBridge() ? createElectronZipArchiveForExport : undefined,
+        createAndSaveElectronZipArchive: hasElectronZipArchiveSaveBridge() ? createAndSaveElectronZipArchiveForExport : undefined,
+        stageElectronZipEntry: hasElectronZipEntryStagingBridge() ? stageElectronZipEntryForExport : undefined,
+        cleanupStagedElectronZipEntries: cleanupStagedElectronZipEntriesForExport,
+        canUseElectronZipArchive: hasElectronZipArchiveBridge(),
+        runElectronExportArchiveJob: hasElectronExportArchiveJobBridge() ? runElectronExportArchiveJobForExport : undefined,
+        canUseElectronExportArchiveJob: hasElectronExportArchiveJobBridge() && hasElectronZipEntryStagingBridge(),
         yieldToMainThread,
         extFromMime,
         inferImageExtFromPath,
@@ -2328,6 +2683,36 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         writeOperationDiagnosticsLog,
       }
     );
+    if (addToDatabase && result.linkedStoreBank?.bankId) {
+      setBanks((prev) => prev.map((bank) => {
+        if (bank.id !== id) return bank;
+        const currentMetadata = bank.bankMetadata;
+        return {
+          ...bank,
+          name: result.linkedStoreBank?.title || bank.name,
+          sourceBankId: result.linkedStoreBank.bankId,
+          isAdminBank: true,
+          transferable: true,
+          exportable: false,
+          bankMetadata: {
+            ...(currentMetadata || {
+              password: result.linkedStoreBank.assetProtection === 'encrypted',
+              transferable: true,
+            }),
+            password: result.linkedStoreBank.assetProtection === 'encrypted',
+            transferable: true,
+            exportable: false,
+            bankId: result.linkedStoreBank.bankId,
+            catalogItemId: result.linkedStoreBank.catalogItemId || currentMetadata?.catalogItemId,
+            title: result.linkedStoreBank.title,
+            description: result.linkedStoreBank.description,
+            color: bank.defaultColor || currentMetadata?.color,
+            thumbnailUrl: result.linkedStoreBank.thumbnailUrl || currentMetadata?.thumbnailUrl,
+          },
+        };
+      }));
+    }
+    return result.message;
   }, [banks, enqueueAdminExportUpload, user, profile]);
 
   const updateStoreBank = React.useCallback(async (
@@ -2352,6 +2737,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         ensureStorageHeadroom,
         padHasExpectedImageAsset,
         loadPadMediaBlob,
+        resolvePadMediaSourcePath,
         shouldAttemptTrim,
         trimAudio,
         remapSavedHotcuesForBakedTrim,
@@ -2359,6 +2745,11 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         detectAudioFormat,
         sha256HexFromBlob,
         sha256HexFromText,
+        createElectronZipArchive: hasElectronZipArchiveBridge() ? createElectronZipArchiveForExport : undefined,
+        runElectronExportArchiveJob: hasElectronExportArchiveJobBridge() ? runElectronExportArchiveJobForExport : undefined,
+        stageElectronZipEntry: hasElectronZipEntryStagingBridge() ? stageElectronZipEntryForExport : undefined,
+        cleanupStagedElectronZipEntries: cleanupStagedElectronZipEntriesForExport,
+        canUseElectronExportArchiveJob: hasElectronExportArchiveJobBridge() && hasElectronZipEntryStagingBridge(),
         yieldToMainThread,
         extFromMime,
         inferImageExtFromPath,
@@ -2380,6 +2771,94 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       },
     );
   }, [enqueueAdminExportUpload, user, profile]);
+
+  const listLinkableStoreBanks = React.useCallback(async (): Promise<LinkExistingStoreBankCandidate[]> => {
+    if (profile?.role !== 'admin') {
+      throw new Error('Only admins can link store banks.');
+    }
+    const response = await adminApi.listStoreCatalog();
+    return (response.items || []).map((item) => ({
+      catalogItemId: item.id,
+      bankId: item.bank_id,
+      title: item.bank?.title || 'Untitled Bank',
+      description: item.bank?.description || '',
+      color: item.bank?.color || null,
+      thumbnailUrl: item.thumbnail_path || null,
+      catalogSha256: item.sha256 || null,
+      assetProtection: item.asset_protection === 'public' ? 'public' : 'encrypted',
+      status: item.status === 'published' ? 'published' : 'draft',
+      createdAt: item.created_at || null,
+      updatedAt: item.updated_at || null,
+    }));
+  }, [profile?.role]);
+
+  const linkExistingStoreBank = React.useCallback(async (
+    runtimeBankId: string,
+    candidate: LinkExistingStoreBankCandidate,
+  ): Promise<string> => {
+    if (profile?.role !== 'admin') {
+      throw new Error('Only admins can link store banks.');
+    }
+
+    const normalizedRuntimeBankId = typeof runtimeBankId === 'string' ? runtimeBankId.trim() : '';
+    if (!normalizedRuntimeBankId) {
+      throw new Error('Local bank id is required.');
+    }
+
+    const latestBanks = banksRef.current;
+    const targetBank = latestBanks.find((bank) => bank.id === normalizedRuntimeBankId) || null;
+    if (!targetBank) {
+      throw new Error('Local bank not found.');
+    }
+
+    const normalizedCatalogItemId = typeof candidate.catalogItemId === 'string' ? candidate.catalogItemId.trim() : '';
+    const normalizedBankId = typeof candidate.bankId === 'string' ? candidate.bankId.trim() : '';
+    if (!normalizedCatalogItemId || !normalizedBankId) {
+      throw new Error('Selected store bank is missing link metadata.');
+    }
+
+    const conflictingBank = latestBanks.find((bank) => (
+      bank.id !== normalizedRuntimeBankId
+      && (
+        bank.bankMetadata?.catalogItemId === normalizedCatalogItemId
+        || bank.bankMetadata?.bankId === normalizedBankId
+        || bank.sourceBankId === normalizedBankId
+      )
+    ));
+    if (conflictingBank) {
+      throw new Error(`This Store bank is already linked to "${conflictingBank.name}".`);
+    }
+
+    setBanks((prev) => prev.map((bank) => {
+      if (bank.id !== normalizedRuntimeBankId) return bank;
+      const currentMetadata = bank.bankMetadata;
+      return {
+        ...bank,
+        sourceBankId: normalizedBankId,
+        isAdminBank: true,
+        transferable: true,
+        exportable: false,
+        bankMetadata: {
+          ...(currentMetadata || {
+            password: candidate.assetProtection === 'encrypted',
+            transferable: true,
+          }),
+          password: candidate.assetProtection === 'encrypted',
+          transferable: true,
+          exportable: false,
+          bankId: normalizedBankId,
+          catalogItemId: normalizedCatalogItemId,
+          title: candidate.title || currentMetadata?.title || bank.name,
+          description: candidate.description || '',
+          color: candidate.color || currentMetadata?.color || bank.defaultColor,
+          thumbnailUrl: candidate.thumbnailUrl || currentMetadata?.thumbnailUrl,
+          catalogSha256: candidate.catalogSha256 || currentMetadata?.catalogSha256,
+        },
+      };
+    }));
+
+    return `${candidate.status === 'published' ? 'Published' : 'Draft'} Store bank linked to "${targetBank.name}".`;
+  }, [profile?.role]);
 
   const publishDefaultBankRelease = React.useCallback(async (
     bankId: string,
@@ -2417,6 +2896,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         ensureStorageHeadroom,
         padHasExpectedImageAsset,
         loadPadMediaBlob,
+        resolvePadMediaSourcePath,
         shouldAttemptTrim,
         trimAudio,
         remapSavedHotcuesForBakedTrim,
@@ -2849,7 +3329,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     }
 
     const isBankOfficial =
-      isDefaultBankIdentity(bank) ||
+      isExplicitDefaultBankIdentity(bank) ||
       bank.restoreKind === 'default_bank' ||
       bank.restoreKind === 'paid_bank' ||
       Boolean(bank.bankMetadata?.defaultBankSource) ||
@@ -2966,8 +3446,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
 
   return {
     banks, startupRestoreCompleted, primaryBankId, secondaryBankId, currentBankId, primaryBank, secondaryBank, currentBank, isDualMode,
-    addPad, addPads, updatePad, removePad, createBank, setPrimaryBank, setSecondaryBank, setVisibleBanks, setCurrentBank, updateBank, deleteBank, duplicateBank, duplicatePad, importBank, exportBank, reorderPads, moveBankUp, moveBankDown, transferPad, exportAdminBank, updateStoreBank, publishDefaultBankRelease, canTransferFromBank,
-    exportAppBackup, restoreAppBackup, applySamplerMetadataSnapshot, relinkPadAudioFromFile, rehydratePadMedia, rehydrateMissingMediaInBank, prefetchOfficialBankMediaForOffline, getBankPreparedSummary, prepareBankForLive, cancelPrepareBankForLive, recoverMissingMediaFromBanks,
+    addPad, addPads, updatePad, removePad, createBank, setPrimaryBank, setSecondaryBank, setVisibleBanks, setCurrentBank, updateBank, deleteBank, duplicateBank, duplicatePad, importBank, exportBank, reorderPads, moveBankUp, moveBankDown, moveBankToPosition, transferPad, exportAdminBank, updateStoreBank, adminExportUploadQueueSummary, retryPendingAdminExportUploads, publishDefaultBankRelease, canTransferFromBank,
+    listLinkableStoreBanks, linkExistingStoreBank, exportAppBackup, restoreAppBackup, applySamplerMetadataSnapshot, relinkPadAudioFromFile, rehydratePadMedia, rehydrateMissingMediaInBank, prefetchOfficialBankMediaForOffline, getBankPreparedSummary, prepareBankForLive, cancelPrepareBankForLive, recoverMissingMediaFromBanks, resolveStoreRecoveryCatalogItem,
   };
 }
-

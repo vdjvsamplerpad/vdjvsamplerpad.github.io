@@ -6,6 +6,15 @@ interface WindowSize {
 }
 
 export function useWindowSize(): WindowSize {
+  const isDesktopRuntime = React.useMemo(() => {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') return true;
+    const ua = navigator.userAgent || '';
+    const isElectron = /Electron/i.test(ua) || Boolean((window as Window & { process?: { versions?: { electron?: string } } }).process?.versions?.electron);
+    const isCapacitorNative = Boolean((window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
+    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+    return isElectron || (!isCapacitorNative && !isMobile);
+  }, []);
+
   const readViewportSize = React.useCallback((): WindowSize => {
     if (typeof window === 'undefined') {
       return { width: 1024, height: 768 };
@@ -28,13 +37,20 @@ export function useWindowSize(): WindowSize {
     if (typeof window === 'undefined') return;
 
     function handleResize() {
-      setWindowSize(readViewportSize());
+      const nextSize = readViewportSize();
+      setWindowSize((prev) => (
+        prev.width === nextSize.width && prev.height === nextSize.height
+          ? prev
+          : nextSize
+      ));
     }
 
     window.addEventListener('resize', handleResize);
     window.addEventListener('orientationchange', handleResize);
     window.visualViewport?.addEventListener('resize', handleResize);
-    window.visualViewport?.addEventListener('scroll', handleResize);
+    if (!isDesktopRuntime) {
+      window.visualViewport?.addEventListener('scroll', handleResize);
+    }
 
     // Initialize with current viewport.
     handleResize();
@@ -43,9 +59,11 @@ export function useWindowSize(): WindowSize {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
       window.visualViewport?.removeEventListener('resize', handleResize);
-      window.visualViewport?.removeEventListener('scroll', handleResize);
+      if (!isDesktopRuntime) {
+        window.visualViewport?.removeEventListener('scroll', handleResize);
+      }
     };
-  }, [readViewportSize]);
+  }, [isDesktopRuntime, readViewportSize]);
 
   return windowSize;
 }

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { PadData } from '../types/sampler';
+import { PadData, StopMode } from '../types/sampler';
 import { useGlobalPlaybackManagerApi, usePadPlaybackState, usePadWarmStatus } from './useGlobalPlaybackManager';
 import { getAudioTelemetry } from '@/lib/audio-telemetry';
 import {
@@ -28,6 +28,7 @@ interface AudioPlayerState {
   filterStop: () => void;
   releaseAudio: () => void;
   queueNextPlaySettings: (updatedPad: PadData) => void;
+  syncLiveMetadata: (updatedPad: PadData) => void;
 }
 
 export function useAudioPlayer(
@@ -35,7 +36,8 @@ export function useAudioPlayer(
   bankId: string,
   bankName: string,
   _globalMuted: boolean = false,
-  _masterVolume: number = 1
+  _masterVolume: number = 1,
+  currentStopMode: StopMode = 'instant'
 ): AudioPlayerState {
   const playbackManager = useGlobalPlaybackManagerApi();
   const telemetry = React.useMemo(
@@ -159,10 +161,10 @@ export function useAudioPlayer(
   const triggerPlayback = React.useCallback(() => {
     switch (pad.triggerMode) {
       case 'toggle':
-        playbackManager.triggerToggle(pad.id);
+        playbackManager.triggerToggle(pad.id, { groupStopMode: currentStopMode });
         break;
       case 'stutter':
-        playbackManager.triggerStutter(pad.id);
+        playbackManager.triggerStutter(pad.id, { groupStopMode: currentStopMode });
         break;
       case 'hold':
         if (!holdIntentRef.current) {
@@ -173,14 +175,14 @@ export function useAudioPlayer(
           setIsHolding(true);
         }
         // Always trigger hold-start so rapid tap sequences are not blocked by async React state timing.
-        playbackManager.triggerHoldStart(pad.id);
+        playbackManager.triggerHoldStart(pad.id, { groupStopMode: currentStopMode });
         break;
       case 'unmute':
-        playbackManager.triggerUnmuteToggle(pad.id);
+        playbackManager.triggerUnmuteToggle(pad.id, { groupStopMode: currentStopMode });
         break;
     }
     scheduleAudioStateCheck();
-  }, [pad.id, pad.triggerMode, playbackManager, scheduleAudioStateCheck]);
+  }, [currentStopMode, pad.id, pad.triggerMode, playbackManager, scheduleAudioStateCheck]);
 
   const playAudio = React.useCallback(() => {
     const requestToken = ++playRequestTokenRef.current;
@@ -320,6 +322,16 @@ export function useAudioPlayer(
       buildAudioPlayerNextPlaySettings(updatedPad, isIOS)
     );
   }, [isIOS, playbackManager]);
+
+  const syncLiveMetadata = React.useCallback((updatedPad: PadData) => {
+    playbackManager.updatePadMetadata(updatedPad.id, {
+      name: updatedPad.name,
+      artist: updatedPad.artist,
+      color: updatedPad.color,
+      bankId,
+      bankName,
+    });
+  }, [bankId, bankName, playbackManager]);
   
    return {
     isPlaying,
@@ -335,6 +347,7 @@ export function useAudioPlayer(
     forceWarmAudio,
     stopAudio,
     queueNextPlaySettings,
+    syncLiveMetadata,
     fadeOutStop,
     brakeStop,
     backspinStop,

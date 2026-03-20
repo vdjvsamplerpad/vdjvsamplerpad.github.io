@@ -176,7 +176,7 @@ const encodeAudioBufferToMP3 = (
       result.set(chunk, offset);
       offset += chunk.length;
     }
-    return { blob: new Blob([result], { type: 'audio/mp3' }), format: 'mp3' };
+    return { blob: new Blob([result], { type: 'audio/mpeg' }), format: 'mp3' };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return { blob: audioBufferToWavBlob(audioBuffer), format: 'wav', errorMessage };
@@ -289,7 +289,7 @@ export const transcodeAudioToMP3 = async (
         throw new Error('Electron MP3 export returned no audio data.');
       }
       const newDurationMs = (Math.max(1, appliedTrim ? trimmedLength : audioBuffer.length) / sampleRate) * 1000;
-      return { blob: new Blob([normalizedBytes], { type: 'audio/mp3' }), newDurationMs, appliedTrim };
+      return { blob: new Blob([normalizedBytes], { type: 'audio/mpeg' }), newDurationMs, appliedTrim };
     }
 
     const mp3ReadyBuffer = await resampleAudioBuffer(

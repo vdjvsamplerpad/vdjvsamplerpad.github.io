@@ -19,7 +19,7 @@ import { useGlobalPlaybackManager } from './hooks/useGlobalPlaybackManager';
 import { useSamplerPadAppMappings } from './hooks/useSamplerPadAppMappings';
 import { useTheme } from './hooks/useTheme';
 import { useWindowSize } from './hooks/useWindowSize';
-import { PadData } from './types/sampler';
+import { PadData, SamplerBank } from './types/sampler';
 import { normalizeShortcutKey, normalizeStoredShortcutKey } from '@/lib/keyboard-shortcuts';
 import { MidiMessage, useWebMidi } from '@/lib/midi';
 import { DEFAULT_SYSTEM_MAPPINGS, SystemAction, SystemMappings } from '@/lib/system-mappings';
@@ -27,7 +27,7 @@ import type { MidiDeviceProfile } from '@/lib/midi/device-profiles';
 import { performanceMonitor, type PerformanceTier } from '@/lib/performance-monitor';
 import { getSamplerRuntimeTuningProfile } from '@/lib/sampler-runtime-profile';
 import { edgeFunctionUrl } from '@/lib/edge-api';
-import { getCachedUser, useAuth } from '@/hooks/useAuth';
+import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { getAudioTelemetry } from '@/lib/audio-telemetry';
 import { getLatestUserSamplerMetadataSnapshot } from '@/lib/user-sampler-snapshot-api';
 import {
@@ -35,7 +35,7 @@ import {
   type RemoteSnapshotPromptState,
   type SamplerMetadataSnapshot,
 } from './hooks/useSamplerStore.snapshotMetadata';
-import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
+import { isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { getPadMissingMediaState } from './hooks/useSamplerStore.padHelpers';
 import {
   DECK_LAYOUT_SCHEMA_VERSION,
@@ -52,6 +52,7 @@ import {
   type SamplerSearchResult,
   type SamplerSearchScope,
 } from './samplerSearch';
+import { createPadDragTransferPayload } from './padDragTransfer';
 import {
   resolvePadPlaybackAudioUrl,
   resolvePadPlaybackBytes,
@@ -117,6 +118,15 @@ const resolvePadWarmupPolicy = (): PadWarmupPolicy => {
   const ua = nav.userAgent || '';
   const isMobileUA = /Android|iPhone|iPad|iPod/i.test(ua);
   const runtimeProfile = getSamplerRuntimeTuningProfile();
+  if (runtimeProfile?.kind === 'electron_desktop') {
+    return {
+      maxPerBank: 0,
+      maxTotal: 0,
+      idleDelayMs: 0,
+      maxDurationMs: null,
+      skipUnknownDuration: true,
+    };
+  }
   const base = runtimeProfile?.warmupPolicy ?? {
     maxPerBank: isMobileUA ? 8 : 14,
     maxTotal: isMobileUA ? 14 : 36,
@@ -175,6 +185,10 @@ const getPadDurationForWarmup = (pad: PadData): number | null => {
 };
 
 const isRemoteHttpAudioUrl = (url: string): boolean => /^https?:\/\//i.test(url);
+const isBlobAudioUrl = (url: string | null | undefined): boolean => {
+  const normalized = String(url || '').trim().toLowerCase();
+  return normalized.startsWith('blob:');
+};
 const isLikelyLocalAudioUrl = (url: string): boolean => {
   const normalized = url.trim().toLowerCase();
   if (!normalized) return false;
@@ -298,9 +312,14 @@ export function SamplerPadApp() {
     reorderPads,
     moveBankUp,
     moveBankDown,
+    moveBankToPosition,
     transferPad,
     exportAdminBank,
     updateStoreBank,
+    adminExportUploadQueueSummary,
+    retryPendingAdminExportUploads,
+    listLinkableStoreBanks,
+    linkExistingStoreBank,
     publishDefaultBankRelease,
     canTransferFromBank,
     exportAppBackup,
@@ -313,7 +332,8 @@ export function SamplerPadApp() {
     getBankPreparedSummary,
     prepareBankForLive,
     cancelPrepareBankForLive,
-    recoverMissingMediaFromBanks
+    recoverMissingMediaFromBanks,
+    resolveStoreRecoveryCatalogItem,
   } = useSamplerStore({ samplerConfig });
 
   const playbackManager = useGlobalPlaybackManager() as ReturnType<typeof useGlobalPlaybackManager> & {
@@ -326,7 +346,7 @@ export function SamplerPadApp() {
   const { theme, toggleTheme } = useTheme();
   const { width: windowWidth, height: windowHeight } = useWindowSize();
   const midi = useWebMidi();
-  const { user, profile, loading, authTransition } = useAuth();
+  const { user, profile, loading, authTransition } = useAuthState();
   const audioTelemetry = React.useMemo(
     () => getAudioTelemetry((import.meta as any).env?.VITE_APP_VERSION || 'unknown'),
     []
@@ -505,6 +525,9 @@ export function SamplerPadApp() {
   const [showRecoverBankModeDialog, setShowRecoverBankModeDialog] = React.useState(false);
   const [pendingRecoverAddAsNew, setPendingRecoverAddAsNew] = React.useState(false);
   const [editRequest, setEditRequest] = React.useState<{ padId: string; token: number } | null>(null);
+  const [closeEditRequest, setCloseEditRequest] = React.useState<{ padId: string; token: number } | null>(null);
+  const [activePadEditId, setActivePadEditId] = React.useState<string | null>(null);
+  const [pendingPadEditRequest, setPendingPadEditRequest] = React.useState<{ padId: string; token: number } | null>(null);
   const [editBankRequest, setEditBankRequest] = React.useState<{ bankId: string; token: number } | null>(null);
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [searchScope, setSearchScope] = React.useState<SamplerSearchScope>('all_banks');
@@ -834,8 +857,33 @@ export function SamplerPadApp() {
   }, []);
 
   const requestEditPad = React.useCallback((padId: string) => {
-    setEditRequest({ padId, token: Date.now() });
+    const nextRequest = { padId, token: Date.now() };
+    if (activePadEditId && activePadEditId !== padId) {
+      setPendingPadEditRequest(nextRequest);
+      setCloseEditRequest({ padId: activePadEditId, token: nextRequest.token });
+      return;
+    }
+    setPendingPadEditRequest(null);
+    setCloseEditRequest(null);
+    setEditRequest(nextRequest);
+  }, [activePadEditId]);
+
+  const handlePadEditDialogOpenChange = React.useCallback((padId: string, open: boolean) => {
+    if (open) {
+      setActivePadEditId(padId);
+      setCloseEditRequest((current) => (current?.padId === padId ? null : current));
+      return;
+    }
+    setActivePadEditId((current) => (current === padId ? null : current));
+    setCloseEditRequest((current) => (current?.padId === padId ? null : current));
   }, []);
+
+  React.useEffect(() => {
+    if (activePadEditId !== null) return;
+    if (!pendingPadEditRequest) return;
+    setEditRequest(pendingPadEditRequest);
+    setPendingPadEditRequest(null);
+  }, [activePadEditId, pendingPadEditRequest]);
 
   const requestEditBank = React.useCallback((bankId: string) => {
     setEditBankRequest({ bankId, token: Date.now() });
@@ -1097,7 +1145,7 @@ export function SamplerPadApp() {
       }
     }
 
-    const hasLocalUserBanks = banks.some((bank) => bank.remoteSnapshotApplied || !isDefaultBankIdentity(bank));
+    const hasLocalUserBanks = banks.some((bank) => bank.remoteSnapshotApplied || !isExplicitDefaultBankIdentity(bank));
     if (hasLocalUserBanks) return;
 
     setRemoteSnapshotPrompt(remoteSnapshotAvailable);
@@ -1264,6 +1312,11 @@ export function SamplerPadApp() {
     });
     return Array.from(ids).sort();
   }, [channelStates]);
+  const deckLoadedBankIdsSignature = React.useMemo(
+    () => deckLoadedBankIds.join('|'),
+    [deckLoadedBankIds]
+  );
+  const lastDeckLoadedBankIdsSignatureRef = React.useRef<string | null>(null);
   const hasActiveDeckPlayback = React.useMemo(
     () => channelStates.some((channel) => channel.isPlaying),
     [channelStates]
@@ -1293,7 +1346,7 @@ export function SamplerPadApp() {
         const audioUrl = typeof pad.audioUrl === 'string' ? pad.audioUrl.trim() : '';
         const requiresAuthToLoad =
           !effectiveAuthUser &&
-          (bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isDefaultBankIdentity(bank));
+          (bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(bank));
         const canRecoverAudioOnDemand = Boolean(
           pad.audioStorageKey ||
           pad.audioBackend ||
@@ -1314,9 +1367,13 @@ export function SamplerPadApp() {
           bankName: bank.name,
           padId: pad.id,
           padName: pad.name,
+          padArtist: typeof pad.artist === 'string' ? pad.artist.trim() : '',
           bankOrder: typeof bank.sortOrder === 'number' ? bank.sortOrder : 0,
           padOrder: typeof pad.position === 'number' ? pad.position : padIndex,
           padNameToken: normalizeSamplerSearchToken(pad.name),
+          padArtistToken: normalizeSamplerSearchToken(pad.artist),
+          padKeywordText: normalizeSamplerSearchKeywordText([pad.name, pad.artist, bank.name].filter(Boolean).join(' ')),
+          padKeywords: normalizeSamplerSearchKeywords([pad.name, pad.artist, bank.name].filter(Boolean).join(' ')),
           bankNameToken: normalizeSamplerSearchToken(bank.name),
           canLoad: loadAvailability === 'ready' || loadAvailability === 'sync_on_open',
           loadAvailability,
@@ -1359,7 +1416,12 @@ export function SamplerPadApp() {
 
     const filteredPadsByQuery = queryToken
       ? filteredPadsByScope.filter((result) => {
-          return result.padNameToken.includes(queryToken) || result.bankNameToken.includes(queryToken);
+          return (
+            result.padNameToken.includes(queryToken) ||
+            result.padArtistToken.includes(queryToken) ||
+            result.bankNameToken.includes(queryToken) ||
+            (queryKeywords.length > 0 && queryKeywords.every((keyword) => result.padKeywords.includes(keyword)))
+          );
         })
       : filteredPadsByScope;
     const filteredBanksByQuery = queryToken
@@ -1374,11 +1436,21 @@ export function SamplerPadApp() {
       const rightPadIndex = queryToken ? right.padNameToken.indexOf(queryToken) : -1;
       const leftBankIndex = queryToken ? left.bankNameToken.indexOf(queryToken) : -1;
       const rightBankIndex = queryToken ? right.bankNameToken.indexOf(queryToken) : -1;
+      const leftArtistIndex = queryToken ? left.padArtistToken.indexOf(queryToken) : -1;
+      const rightArtistIndex = queryToken ? right.padArtistToken.indexOf(queryToken) : -1;
       const leftScore = queryToken
-        ? Math.min(leftPadIndex >= 0 ? leftPadIndex : 1000, leftBankIndex >= 0 ? leftBankIndex + 200 : 1000)
+        ? Math.min(
+            leftPadIndex >= 0 ? leftPadIndex : 1000,
+            leftArtistIndex >= 0 ? leftArtistIndex + 80 : 1000,
+            leftBankIndex >= 0 ? leftBankIndex + 200 : 1000
+          )
         : 0;
       const rightScore = queryToken
-        ? Math.min(rightPadIndex >= 0 ? rightPadIndex : 1000, rightBankIndex >= 0 ? rightBankIndex + 200 : 1000)
+        ? Math.min(
+            rightPadIndex >= 0 ? rightPadIndex : 1000,
+            rightArtistIndex >= 0 ? rightArtistIndex + 80 : 1000,
+            rightBankIndex >= 0 ? rightBankIndex + 200 : 1000
+          )
         : 0;
       if (leftScore !== rightScore) return leftScore - rightScore;
       if (left.bankOrder !== right.bankOrder) return left.bankOrder - right.bankOrder;
@@ -1420,10 +1492,12 @@ export function SamplerPadApp() {
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (lastDeckLoadedBankIdsSignatureRef.current === deckLoadedBankIdsSignature) return;
+    lastDeckLoadedBankIdsSignatureRef.current = deckLoadedBankIdsSignature;
     window.dispatchEvent(new CustomEvent(DECK_LOADED_BANKS_EVENT, {
       detail: { bankIds: deckLoadedBankIds },
     }));
-  }, [deckLoadedBankIds]);
+  }, [deckLoadedBankIds, deckLoadedBankIdsSignature]);
 
   React.useEffect(() => {
     return () => {
@@ -2092,6 +2166,16 @@ export function SamplerPadApp() {
     setSecondaryBank(bankId);
   }, [isDualMode, primaryBankId, secondaryBankId, setCurrentBank, setPrimaryBank, setSecondaryBank, setVisibleBanks]);
 
+  const handleNavigateToPlayingPad = React.useCallback((padId: string, bankId: string) => {
+    clearSearchLocator();
+    setSearchLoadError(null);
+    setPendingSearchLoadPicker(null);
+    applyDualSearchBankSelection(bankId, 'auto');
+    setPendingSearchPadScroll({ bankId, padId, padName: '' });
+    setHighlightedPadTarget(null);
+    updateSetting('mixerOpen', false);
+  }, [applyDualSearchBankSelection, clearSearchLocator, updateSetting]);
+
   const handleSearchGo = React.useCallback((result: SamplerSearchResult) => {
     setSearchLoadError(null);
     setPendingSearchLoadPicker(null);
@@ -2132,11 +2216,10 @@ export function SamplerPadApp() {
 
     applyDualSearchBankSelection(result.bankId, 'auto');
 
-    setPendingSearchPadScroll({ bankId: result.bankId, padId: result.padId, padName: result.padName });
     setHighlightedPadTarget(null);
-    setEditRequest({ padId: result.padId, token: Date.now() });
+    requestEditPad(result.padId);
     closeSearchOverlay();
-  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay]);
+  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay, requestEditPad]);
 
   const runSearchLoad = React.useCallback(async (result: SamplerSearchResult, channelId: number): Promise<boolean> => {
     if (!result.canLoad) {
@@ -2253,6 +2336,15 @@ export function SamplerPadApp() {
     }, durationMs + 520));
   }, [banks, clearSearchLocator, effectiveGraphicsTier]);
 
+  const resolveSearchScrollContainer = React.useCallback((bankId: string): HTMLDivElement | null => {
+    if (!isDualMode) {
+      return currentBankId === bankId ? singleScrollRef.current : null;
+    }
+    if (primaryBankId === bankId) return primaryScrollRef.current;
+    if (secondaryBankId === bankId) return secondaryScrollRef.current;
+    return null;
+  }, [currentBankId, isDualMode, primaryBankId, secondaryBankId]);
+
   React.useEffect(() => {
     if (!pendingSearchPadScroll) return;
     const isVisible =
@@ -2260,33 +2352,76 @@ export function SamplerPadApp() {
       (isDualMode && (primaryBankId === pendingSearchPadScroll.bankId || secondaryBankId === pendingSearchPadScroll.bankId));
     if (!isVisible) return;
 
+    setHighlightedPadTarget((current) => (
+      current?.bankId === pendingSearchPadScroll.bankId && current.padId === pendingSearchPadScroll.padId
+        ? current
+        : pendingSearchPadScroll
+    ));
+    const targetBank = banks.find((entry) => entry.id === pendingSearchPadScroll.bankId);
+    const provisionalColorHex = normalizeSearchLocatorHex(targetBank?.defaultColor, '#22d3ee');
+    const provisionalKey = Date.now() + Math.floor(Math.random() * 1000);
+    const provisionalContainer = resolveSearchScrollContainer(pendingSearchPadScroll.bankId);
+    if (provisionalContainer) {
+      const containerRect = provisionalContainer.getBoundingClientRect();
+      setSearchSpotlight({
+        key: provisionalKey,
+        x: containerRect.left + containerRect.width / 2,
+        y: containerRect.top + Math.min(containerRect.height / 2, 220),
+        colorRgb: searchLocatorRgb(provisionalColorHex),
+        tier: effectiveGraphicsTier,
+      });
+    }
+    const clearProvisionalSpotlight = () => {
+      setSearchSpotlight((current) => (current?.key === provisionalKey ? null : current));
+    };
+
     let cancelled = false;
     let attempt = 0;
     const anchorId = buildPadSearchAnchorId(pendingSearchPadScroll.bankId, pendingSearchPadScroll.padId);
     let settleFrameId: number | null = null;
+    let settleTimeoutId: number | null = null;
+
+    const scrollElementIntoContainerView = (element: HTMLElement, container: HTMLDivElement | null) => {
+      if (!container) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        return;
+      }
+      const containerRect = container.getBoundingClientRect();
+      const elementRect = element.getBoundingClientRect();
+      const targetTop = container.scrollTop
+        + (elementRect.top - containerRect.top)
+        - ((container.clientHeight - elementRect.height) / 2);
+      container.scrollTo({
+        top: Math.max(0, targetTop),
+        behavior: 'smooth',
+      });
+    };
 
     const tryScroll = () => {
       if (cancelled) return;
       const element = document.getElementById(anchorId);
       if (element) {
-        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        const container = resolveSearchScrollContainer(pendingSearchPadScroll.bankId);
+        scrollElementIntoContainerView(element as HTMLElement, container);
         const settleStart = window.performance.now();
         let stableFrames = 0;
         let settleAttempts = 0;
         let previousRect: DOMRect | null = null;
-        let previousScrollY = window.scrollY;
-        let previousScrollX = window.scrollX;
+        let previousScrollTop = container?.scrollTop ?? window.scrollY;
+        let previousScrollLeft = container?.scrollLeft ?? window.scrollX;
         const settleAndLaunch = () => {
           if (cancelled) return;
           const settledElement = document.getElementById(anchorId) as HTMLElement | null;
           if (!settledElement) {
+            clearProvisionalSpotlight();
             setPendingSearchPadScroll(null);
             return;
           }
+          const activeContainer = resolveSearchScrollContainer(pendingSearchPadScroll.bankId);
           const rect = settledElement.getBoundingClientRect();
           const scrollStable =
-            Math.abs(window.scrollY - previousScrollY) < 1 &&
-            Math.abs(window.scrollX - previousScrollX) < 1;
+            Math.abs((activeContainer?.scrollTop ?? window.scrollY) - previousScrollTop) < 1 &&
+            Math.abs((activeContainer?.scrollLeft ?? window.scrollX) - previousScrollLeft) < 1;
           const rectStable = Boolean(
             previousRect &&
             Math.abs(rect.left - previousRect.left) < 1 &&
@@ -2298,8 +2433,8 @@ export function SamplerPadApp() {
             stableFrames = 0;
           }
           previousRect = rect;
-          previousScrollY = window.scrollY;
-          previousScrollX = window.scrollX;
+          previousScrollTop = activeContainer?.scrollTop ?? window.scrollY;
+          previousScrollLeft = activeContainer?.scrollLeft ?? window.scrollX;
           settleAttempts += 1;
           const elapsed = window.performance.now() - settleStart;
           if ((elapsed >= 180 && stableFrames >= 4) || elapsed >= 520 || settleAttempts >= 28) {
@@ -2309,16 +2444,17 @@ export function SamplerPadApp() {
           }
           settleFrameId = window.requestAnimationFrame(settleAndLaunch);
         };
-        window.setTimeout(() => {
+        settleTimeoutId = window.setTimeout(() => {
           if (cancelled) return;
           settleFrameId = window.requestAnimationFrame(settleAndLaunch);
         }, 120);
         return;
       }
       attempt += 1;
-      if (attempt < 18) {
+      if (attempt < 90) {
         window.requestAnimationFrame(tryScroll);
       } else {
+        clearProvisionalSpotlight();
         setPendingSearchPadScroll(null);
       }
     };
@@ -2326,11 +2462,15 @@ export function SamplerPadApp() {
     window.requestAnimationFrame(tryScroll);
     return () => {
       cancelled = true;
+      clearProvisionalSpotlight();
+      if (settleTimeoutId !== null) {
+        window.clearTimeout(settleTimeoutId);
+      }
       if (settleFrameId !== null) {
         window.cancelAnimationFrame(settleFrameId);
       }
     };
-  }, [currentBankId, isDualMode, launchSearchLocator, pendingSearchPadScroll, primaryBankId, secondaryBankId]);
+  }, [banks, currentBankId, effectiveGraphicsTier, isDualMode, launchSearchLocator, pendingSearchPadScroll, primaryBankId, resolveSearchScrollContainer, secondaryBankId]);
 
   React.useEffect(() => {
     if (!highlightedPadTarget) return;
@@ -2592,25 +2732,23 @@ export function SamplerPadApp() {
   }, [isDualMode, currentBankId, secondaryBankId]);
 
   React.useEffect(() => {
+    if (warmupPolicy.maxTotal <= 0 || warmupPolicy.maxPerBank <= 0) {
+      return;
+    }
     const runId = ++warmupRunIdRef.current;
     let cancelled = false;
     let startTimer: number | null = null;
     let delayTimer: number | null = null;
 
     const knownPadAudioById = new Map<string, string>();
+    const knownPadBankById = new Map<string, string>();
     banks.forEach((bank) => {
       bank.pads.forEach((pad) => {
         const audioUrl = resolvePadPlaybackAudioUrl(pad);
+        knownPadBankById.set(pad.id, bank.id);
         if (!audioUrl) return;
         knownPadAudioById.set(pad.id, audioUrl);
       });
-    });
-
-    warmedPadAudioRef.current.forEach((audioUrl, padId) => {
-      const knownAudioUrl = knownPadAudioById.get(padId);
-      if (!knownAudioUrl || knownAudioUrl !== audioUrl) {
-        warmedPadAudioRef.current.delete(padId);
-      }
     });
 
     const activeBankIds: string[] = [];
@@ -2620,6 +2758,38 @@ export function SamplerPadApp() {
     } else if (currentBankId) {
       activeBankIds.push(currentBankId);
     }
+    const activeBankIdSet = new Set(activeBankIds);
+    const retainedPadIds = new Set<string>();
+    playbackManager.getAllPlayingPads().forEach((pad) => {
+      if (pad.padId) retainedPadIds.add(pad.padId);
+    });
+    playbackManager.getDeckChannelStates().forEach((channel) => {
+      const loadedPadId = channel.loadedPadRef?.padId || channel.pad?.padId || null;
+      if (loadedPadId) retainedPadIds.add(loadedPadId);
+    });
+
+    const prunedWarmPadIds: string[] = [];
+    warmedPadAudioRef.current.forEach((audioUrl, padId) => {
+      const knownAudioUrl = knownPadAudioById.get(padId);
+      const bankId = knownPadBankById.get(padId) || null;
+      const shouldDropForBankScope = Boolean(bankId) && !activeBankIdSet.has(bankId) && !retainedPadIds.has(padId);
+      if (!knownAudioUrl || knownAudioUrl !== audioUrl || shouldDropForBankScope) {
+        warmedPadAudioRef.current.delete(padId);
+        if (shouldDropForBankScope) {
+          prunedWarmPadIds.push(padId);
+          playbackManager.unregisterPad(padId);
+        }
+      }
+    });
+
+    if (prunedWarmPadIds.length > 0) {
+      audioTelemetry.log('warmup_cache_pruned', {
+        runId,
+        padCount: prunedWarmPadIds.length,
+        activeBankIds,
+      });
+    }
+
     if (activeBankIds.length === 0) {
       audioTelemetry.log('warmup_queue_skipped', {
         runId,
@@ -2631,6 +2801,8 @@ export function SamplerPadApp() {
     }
 
     const focusedBankId = lastSelectedBankIdRef.current;
+    const runtimeKind = getSamplerRuntimeTuningProfile().kind;
+    const avoidDesktopWebBlobWarmup = runtimeKind === 'desktop_web';
     const orderedActiveBankIds = [...activeBankIds].sort((left, right) => {
       if (left === focusedBankId) return -1;
       if (right === focusedBankId) return 1;
@@ -2647,6 +2819,7 @@ export function SamplerPadApp() {
           const audioUrl = resolvePadPlaybackAudioUrl(pad);
           if (!audioUrl) return false;
           if (!isOnline && isRemoteHttpAudioUrl(audioUrl)) return false;
+          if (avoidDesktopWebBlobWarmup && isBlobAudioUrl(audioUrl)) return false;
           const durationMs = getPadDurationForWarmup(pad);
           if (warmupPolicy.maxDurationMs !== null) {
             if (durationMs === null && warmupPolicy.skipUnknownDuration && !shouldWarmUnknownDurationPad(pad)) return false;
@@ -3623,6 +3796,7 @@ export function SamplerPadApp() {
     }
 
     if (
+      profile?.role !== 'admin' &&
       isOfficialPadContent(sourcePad) &&
       !targetBank.containsOfficialContent &&
       !targetBank.officialTransferAcknowledged
@@ -3638,7 +3812,7 @@ export function SamplerPadApp() {
     }
 
     commitTransferPad(padId, sourceBankId, targetBankId);
-  }, [banks, commitTransferPad]);
+  }, [banks, commitTransferPad, profile?.role]);
 
   // Enhanced drag start handler with better logging
   const handlePadDragStart = React.useCallback((e: React.DragEvent, pad: PadData, sourceBankId: string) => {
@@ -3647,18 +3821,15 @@ export function SamplerPadApp() {
       return;
     }
 
-    // Set drag data with comprehensive information
-    const transferData = {
-      type: 'pad-transfer',
-      pad: pad,
-      sourceBankId: sourceBankId,
-      isDualMode: isDualMode,
-      primaryBankId: primaryBankId,
-      secondaryBankId: secondaryBankId
-    };
-
-    e.dataTransfer.setData('application/json', JSON.stringify(transferData));
-    e.dataTransfer.setData('text/plain', JSON.stringify(transferData)); // Fallback
+    const transferData = JSON.stringify(createPadDragTransferPayload({
+      padId: pad.id,
+      sourceBankId,
+      isDualMode,
+      primaryBankId,
+      secondaryBankId,
+    }));
+    e.dataTransfer.setData('application/json', transferData);
+    e.dataTransfer.setData('text/plain', transferData);
     e.dataTransfer.effectAllowed = 'move';
   }, [settings.editMode, isDualMode, primaryBankId, secondaryBankId]);
 
@@ -3817,10 +3988,15 @@ export function SamplerPadApp() {
     onExportBank: exportBank,
     onMoveBankUp: moveBankUp,
     onMoveBankDown: moveBankDown,
+    onMoveBankToPosition: moveBankToPosition,
     onTransferPad: handleTransferPad,
     canTransferFromBank,
     onExportAdmin: canUseAdminExport ? exportAdminBank : undefined,
     onUpdateStoreBank: canUseAdminExport ? updateStoreBank : undefined,
+    adminExportUploadQueueSummary: canUseAdminExport ? adminExportUploadQueueSummary : undefined,
+    onRetryPendingAdminExportUploads: canUseAdminExport ? retryPendingAdminExportUploads : undefined,
+    onListLinkableStoreBanks: canUseAdminExport ? listLinkableStoreBanks : undefined,
+    onLinkExistingStoreBank: canUseAdminExport ? linkExistingStoreBank : undefined,
     midiEnabled: midi.enabled && midi.accessGranted,
     blockedShortcutKeys,
     blockedMidiNotes,
@@ -3831,6 +4007,7 @@ export function SamplerPadApp() {
     onRequestRestoreBackup: handleRestoreBackupPrompt,
     onRequestRecoverBankFiles: handleRecoverBankPrompt,
     onRetryBankMissingMedia: rehydrateMissingMediaInBank,
+    onResolveStoreRecoveryCatalogItem: resolveStoreRecoveryCatalogItem,
     onPrefetchOfficialBankMediaForOffline: prefetchOfficialBankMediaForOffline,
     getBankPreparedSummary,
     onPrepareBankForLive: prepareBankForLive,
@@ -3848,6 +4025,7 @@ export function SamplerPadApp() {
     onMasterVolumeChange: (volume: number) => updateSetting('masterVolume', volume),
     onPadVolumeChange: handlePadVolumeChange,
     onStopPad: handleStopSpecificPad,
+    onNavigateToPad: handleNavigateToPlayingPad,
     onChannelVolumeChange: handleChannelVolumeChange,
     onStopChannel: handleStopChannel,
     onPlayChannel: handlePlayChannel,
@@ -3962,7 +4140,7 @@ export function SamplerPadApp() {
         id: bank.id,
         title: bank.name,
         padCount: bank.pads.length,
-        isDefaultBank: isDefaultBankIdentity(bank),
+        isDefaultBank: isExplicitDefaultBankIdentity(bank),
       })),
     onPublishDefaultBankRelease: publishDefaultBankRelease
   };
@@ -4024,6 +4202,9 @@ export function SamplerPadApp() {
         highlightedPadTarget={highlightedPadTarget}
         graphicsTier={effectiveGraphicsTier}
         editRequest={editRequest}
+        closeEditRequest={closeEditRequest}
+        onRequestEditPad={requestEditPad}
+        onPadEditDialogOpenChange={handlePadEditDialogOpenChange}
         blockedShortcutKeys={blockedShortcutKeys}
         blockedMidiNotes={blockedMidiNotes}
         blockedMidiCCs={blockedMidiCCs}

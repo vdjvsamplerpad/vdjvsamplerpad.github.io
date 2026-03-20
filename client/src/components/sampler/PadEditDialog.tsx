@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import { HelpTooltip } from '@/components/ui/help-tooltip';
 import { Copy, Image as ImageIcon, RefreshCw } from 'lucide-react';
 import { PadData, SamplerBank } from './types/sampler';
 import { WaveformTrim } from './WaveformTrim';
@@ -31,6 +32,7 @@ interface PadEditDialogProps {
   blockedMidiNotes?: Set<number>;
   blockedMidiCCs?: Set<number>;
   graphicsTier?: import('@/lib/performance-monitor').PerformanceTier;
+  closeRequestToken?: number;
 }
 
 const MIN_PAD_GAIN_DB = -24;
@@ -53,6 +55,81 @@ const resolvePadGainDb = (pad: PadData): number => {
 };
 
 const gainDbToLinear = (gainDb: number): number => Math.pow(10, gainDb / 20);
+
+const normalizePadEditMs = (value: number | null | undefined): number => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.round(Number(value)));
+};
+
+const normalizePadEditVolume = (value: number): number => {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(0, Math.min(1, Math.round(value * 100) / 100));
+};
+
+const normalizePadEditGainDb = (value: number): number => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value * 2) / 2;
+};
+
+const normalizePadEditHotcues = (
+  value: [number | null, number | null, number | null, number | null]
+): [number | null, number | null, number | null, number | null] => (
+  value.map((entry) => (
+    typeof entry === 'number' && Number.isFinite(entry)
+      ? normalizePadEditMs(entry)
+      : null
+  )) as [number | null, number | null, number | null, number | null]
+);
+
+const serializePadEditSnapshot = (input: {
+  name: string;
+  artist: string;
+  color: string;
+  triggerMode: PadData['triggerMode'];
+  playbackMode: PadData['playbackMode'];
+  padGroup: number | null;
+  padGroupUniversal: boolean;
+  volume: number;
+  gainDb: number;
+  startTimeMs: number;
+  endTimeMs: number;
+  fadeInMs: number;
+  fadeOutMs: number;
+  pitch: number;
+  tempoPercent: number;
+  keyLock: boolean;
+  imageUrl: string;
+  imageData: string;
+  shortcutKey: string;
+  midiNote: number | null;
+  midiCC: number | null;
+  savedHotcuesMs: [number | null, number | null, number | null, number | null];
+}): string => {
+  return JSON.stringify({
+    name: input.name,
+    artist: input.artist,
+    color: input.color,
+    triggerMode: input.triggerMode,
+    playbackMode: input.playbackMode,
+    padGroup: input.padGroup,
+    padGroupUniversal: Boolean(input.padGroupUniversal && input.padGroup !== null),
+    volume: normalizePadEditVolume(input.volume),
+    gainDb: normalizePadEditGainDb(input.gainDb),
+    startTimeMs: normalizePadEditMs(input.startTimeMs),
+    endTimeMs: normalizePadEditMs(input.endTimeMs),
+    fadeInMs: normalizePadEditMs(input.fadeInMs),
+    fadeOutMs: normalizePadEditMs(input.fadeOutMs),
+    pitch: Number.isFinite(input.pitch) ? Math.round(input.pitch) : 0,
+    tempoPercent: Number.isFinite(input.tempoPercent) ? Math.round(input.tempoPercent) : 0,
+    keyLock: Boolean(input.keyLock),
+    imageUrl: input.imageUrl,
+    imageData: input.imageData,
+    shortcutKey: input.shortcutKey,
+    midiNote: typeof input.midiNote === 'number' && Number.isFinite(input.midiNote) ? input.midiNote : null,
+    midiCC: typeof input.midiCC === 'number' && Number.isFinite(input.midiCC) ? input.midiCC : null,
+    savedHotcuesMs: normalizePadEditHotcues(input.savedHotcuesMs),
+  });
+};
 
 const observedDurationByAudioUrl = new Map<string, number>();
 
@@ -94,7 +171,8 @@ export function PadEditDialog({
   blockedShortcutKeys,
   blockedMidiNotes,
   blockedMidiCCs,
-  graphicsTier = 'low'
+  graphicsTier = 'low',
+  closeRequestToken
 }: PadEditDialogProps) {
   type PadWithMidi = PadData & { midiNote?: number; midiCC?: number };
   const isIOS = React.useMemo(
@@ -102,9 +180,16 @@ export function PadEditDialog({
     []
   );
   const [name, setName] = React.useState(pad.name);
+  const [artist, setArtist] = React.useState(pad.artist || '');
   const [color, setColor] = React.useState(pad.color);
   const [triggerMode, setTriggerMode] = React.useState(pad.triggerMode);
   const [playbackMode, setPlaybackMode] = React.useState(pad.playbackMode);
+  const [padGroupInput, setPadGroupInput] = React.useState(
+    typeof pad.padGroup === 'number' && Number.isFinite(pad.padGroup) && pad.padGroup > 0
+      ? String(Math.trunc(pad.padGroup))
+      : ''
+  );
+  const [padGroupUniversal, setPadGroupUniversal] = React.useState(pad.padGroupUniversal === true);
   const [volume, setVolume] = React.useState([pad.volume * 100]);
   const [gainDb, setGainDb] = React.useState([resolvePadGainDb(pad)]);
   const [startTimeMs, setStartTimeMs] = React.useState([pad.startTimeMs || 0]);
@@ -134,9 +219,11 @@ export function PadEditDialog({
   const [isDuplicating, setIsDuplicating] = React.useState(false);
   const [savedHotcues, setSavedHotcues] = React.useState<[number | null, number | null, number | null, number | null]>(pad.savedHotcuesMs ?? [null, null, null, null]);
   const [hotcueMarkerMs, setHotcueMarkerMs] = React.useState<number | null>(null);
+  const [stableAudioUrl, setStableAudioUrl] = React.useState(pad.audioUrl || '');
   const imageInputRef = React.useRef<HTMLInputElement>(null);
   const initialSnapshotRef = React.useRef<string>('');
   const hydratedPadIdentityRef = React.useRef<string | null>(null);
+  const lastCloseRequestTokenRef = React.useRef<number | undefined>(undefined);
 
   React.useEffect(() => {
     if (!open) {
@@ -151,9 +238,16 @@ export function PadEditDialog({
 
     if (open) {
       setName(pad.name);
+      setArtist(pad.artist || '');
       setColor(pad.color);
       setTriggerMode(pad.triggerMode);
       setPlaybackMode(pad.playbackMode);
+      setPadGroupInput(
+        typeof pad.padGroup === 'number' && Number.isFinite(pad.padGroup) && pad.padGroup > 0
+          ? String(Math.trunc(pad.padGroup))
+          : ''
+      );
+      setPadGroupUniversal(pad.padGroupUniversal === true);
       setVolume([pad.volume * 100]);
       setGainDb([resolvePadGainDb(pad)]);
       setStartTimeMs([pad.startTimeMs || 0]);
@@ -176,11 +270,15 @@ export function PadEditDialog({
       setSavedHotcues(pad.savedHotcuesMs ?? [null, null, null, null]);
       setHotcueMarkerMs(null);
       setAudioDuration(resolveSourceDurationMs(pad));
-      initialSnapshotRef.current = JSON.stringify({
+      setStableAudioUrl(pad.audioUrl || '');
+      initialSnapshotRef.current = serializePadEditSnapshot({
         name: pad.name,
+        artist: pad.artist || '',
         color: pad.color,
         triggerMode: pad.triggerMode,
         playbackMode: pad.playbackMode,
+        padGroup: typeof pad.padGroup === 'number' && Number.isFinite(pad.padGroup) && pad.padGroup > 0 ? Math.trunc(pad.padGroup) : null,
+        padGroupUniversal: pad.padGroupUniversal === true,
         volume: pad.volume,
         gainDb: resolvePadGainDb(pad),
         startTimeMs: pad.startTimeMs || 0,
@@ -255,12 +353,24 @@ export function PadEditDialog({
     }
   }, [isIOS, open, pad]);
 
+  React.useEffect(() => {
+    if (!open) return;
+    if (stableAudioUrl || !pad.audioUrl) return;
+    setStableAudioUrl(pad.audioUrl);
+  }, [open, pad.audioUrl, stableAudioUrl]);
+
   const getCurrentSnapshot = React.useCallback(() => {
-    return JSON.stringify({
+    const normalizedPadGroupValue = Number.parseInt(padGroupInput.trim(), 10);
+    return serializePadEditSnapshot({
       name,
+      artist,
       color,
       triggerMode,
       playbackMode,
+      padGroup: Number.isFinite(normalizedPadGroupValue) && normalizedPadGroupValue > 0
+        ? Math.trunc(normalizedPadGroupValue)
+        : null,
+      padGroupUniversal,
       volume: volume[0] / 100,
       gainDb: gainDb[0],
       startTimeMs: startTimeMs[0],
@@ -279,9 +389,12 @@ export function PadEditDialog({
     });
   }, [
     name,
+    artist,
     color,
     triggerMode,
     playbackMode,
+    padGroupInput,
+    padGroupUniversal,
     volume,
     gainDb,
     startTimeMs,
@@ -551,13 +664,21 @@ export function PadEditDialog({
         return false;
       }
       const trimmedName = name.slice(0, 32);
+      const trimmedArtist = artist.trim().slice(0, 64);
+      const normalizedPadGroupValue = Number.parseInt(padGroupInput.trim(), 10);
+      const normalizedPadGroup = Number.isFinite(normalizedPadGroupValue) && normalizedPadGroupValue > 0
+        ? Math.trunc(normalizedPadGroupValue)
+        : null;
 
       const updatedPad: PadData = {
         ...pad,
         name: trimmedName,
+        artist: trimmedArtist || undefined,
         color,
         triggerMode,
         playbackMode,
+        padGroup: normalizedPadGroup,
+        padGroupUniversal: normalizedPadGroup ? padGroupUniversal : false,
         volume: volume[0] / 100,
         gainDb: gainDb[0],
         gain: gainDbToLinear(gainDb[0]),
@@ -589,14 +710,17 @@ export function PadEditDialog({
 
       await onSave(updatedPad);
       setName(trimmedName);
-      initialSnapshotRef.current = JSON.stringify({
+      setArtist(trimmedArtist);
+      initialSnapshotRef.current = serializePadEditSnapshot({
         name: trimmedName,
+        artist: trimmedArtist,
         color,
         triggerMode,
         playbackMode,
+        padGroup: normalizedPadGroup,
+        padGroupUniversal: normalizedPadGroup ? padGroupUniversal : false,
         volume: volume[0] / 100,
         gainDb: gainDb[0],
-        gain: gainDbToLinear(gainDb[0]),
         startTimeMs: startTimeMs[0],
         endTimeMs: endTimeMs[0],
         fadeInMs: fadeInMs[0],
@@ -637,6 +761,18 @@ export function PadEditDialog({
     }
     onOpenChange(nextOpen);
   }, [isDirty, onOpenChange]);
+
+  React.useEffect(() => {
+    if (!open || !closeRequestToken) return;
+    if (lastCloseRequestTokenRef.current === closeRequestToken) return;
+    lastCloseRequestTokenRef.current = closeRequestToken;
+    handleDialogOpenChange(false);
+  }, [closeRequestToken, handleDialogOpenChange, open]);
+
+  React.useEffect(() => {
+    if (open) return;
+    lastCloseRequestTokenRef.current = undefined;
+  }, [open]);
 
   const handleContentKeyDown = React.useCallback((event: React.KeyboardEvent) => {
     if (event.key !== 'Enter') return;
@@ -803,7 +939,7 @@ export function PadEditDialog({
     <>
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
-          className="grid w-[calc(100vw-1rem)] grid-rows-[auto_1fr] sm:w-full sm:max-w-lg max-h-[80vh] overflow-hidden backdrop-blur-md bg-white/95 border-gray-300 dark:bg-gray-800/95 dark:border-gray-600"
+          className="grid h-[100dvh] max-h-[100dvh] w-[calc(100vw-1rem)] grid-rows-[auto_1fr] overflow-hidden border-gray-300 bg-white/95 backdrop-blur-md dark:border-gray-600 dark:bg-gray-800/95 sm:h-auto sm:max-h-[80vh] sm:w-full sm:max-w-lg"
           aria-describedby={undefined}
           onKeyDown={handleContentKeyDown}
         >
@@ -811,7 +947,7 @@ export function PadEditDialog({
             <DialogTitle>Edit Pad Settings</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4 overflow-y-auto overflow-x-hidden pr-1">
+          <div className="space-y-4 overflow-y-auto overflow-x-hidden overscroll-contain pr-1 pb-[max(6rem,env(safe-area-inset-bottom))] sm:pb-0">
             {uploadError && (
               <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
                 {uploadError}
@@ -823,7 +959,9 @@ export function PadEditDialog({
             {/* Image Upload */}
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <Label>Pad Image</Label>
+                <div className="flex items-center gap-1.5">
+                  <Label>Pad Image</Label>
+                </div>
                 <div className="flex items-center gap-2">
                   {canRetryMedia && (
                     <Button
@@ -904,14 +1042,13 @@ export function PadEditDialog({
                   </Button>
                 </>
               )}
-              <p className="text-xs text-gray-500">
-                It will replace the pad name display. Maximum: 1024x1024px, 2MB
-              </p>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="name">Pad Name</Label>
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="name">Pad Name</Label>
+                </div>
                 <Input
                   id="name"
                   value={name}
@@ -923,7 +1060,6 @@ export function PadEditDialog({
                   spellCheck="false"
                   maxLength={32}
                   onFocus={(e) => {
-                    // Prevent immediate focus on mobile
                     if (window.innerWidth <= 1800) {
                       setTimeout(() => e.target.focus(), 100);
                     }
@@ -932,7 +1068,26 @@ export function PadEditDialog({
               </div>
 
               <div className="space-y-2">
-                <Label>Pad Color</Label>
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="artist">Artist</Label>
+                </div>
+                <Input
+                  id="artist"
+                  value={artist}
+                  onChange={(e) => setArtist(e.target.value.slice(0, 64))}
+                  placeholder="Optional artist / source"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
+                  maxLength={64}
+                />
+              </div>
+
+              <div className="space-y-2 sm:col-span-2">
+                <div className="flex items-center gap-1.5">
+                  <Label>Pad Color</Label>
+                </div>
                 <div className="flex gap-1 flex-wrap">
                   {(showAllColors ? [...PRIMARY_PAD_COLORS, ...EXTRA_PAD_COLORS] : PRIMARY_PAD_COLORS).map((colorOption) => (
                     <button
@@ -961,7 +1116,10 @@ export function PadEditDialog({
 
             <div className={`grid gap-3 ${midiEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <div className="space-y-2">
-                <Label htmlFor="shortcutKey">Keyboard Shortcut</Label>
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="shortcutKey">Keyboard Shortcut</Label>
+                  <HelpTooltip content={`Press a single key or supported modifier combo. Reserved keys stay blocked: ${reservedKeysText}.`} label="Keyboard shortcut help" />
+                </div>
                 <Input
                   id="shortcutKey"
                   value={shortcutKey}
@@ -972,16 +1130,14 @@ export function PadEditDialog({
                 {shortcutError && (
                   <p className="text-xs text-red-500">{shortcutError}</p>
                 )}
-                {!shortcutError && (
-                  <p className="text-xs text-gray-500">
-                    Reserved keys: {reservedKeysText}
-                  </p>
-                )}
               </div>
 
               {midiEnabled && (
                 <div className="space-y-2">
-                  <Label>MIDI Assignment</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Label>MIDI Assignment</Label>
+                    <HelpTooltip content="Use Learn MIDI to capture the next incoming Note or CC message for this pad." label="MIDI assignment help" />
+                  </div>
                   <div className="text-xs text-gray-500">
                     Note: {midiNote ?? '-'} | CC: {midiCC ?? '-'}
                   </div>
@@ -1016,7 +1172,10 @@ export function PadEditDialog({
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label>Trigger Mode</Label>
+                <div className="flex items-center gap-1.5">
+                  <Label>Trigger Mode</Label>
+                  <HelpTooltip content="Choose how the pad reacts when triggered: toggle, hold, stutter restart, or continuous unmute mode." label="Trigger mode help" />
+                </div>
                 <Select value={triggerMode} onValueChange={(value: any) => setTriggerMode(value)}>
                   <SelectTrigger>
                     <SelectValue />
@@ -1031,7 +1190,10 @@ export function PadEditDialog({
               </div>
 
               <div className="space-y-2">
-                <Label>Playback Mode</Label>
+                <div className="flex items-center gap-1.5">
+                  <Label>Playback Mode</Label>
+                  <HelpTooltip content="Choose whether the pad plays once, loops continuously, or behaves like a stopper that cuts other pads when started." label="Playback mode help" />
+                </div>
                 <Select value={playbackMode} onValueChange={(value: any) => setPlaybackMode(value)}>
                   <SelectTrigger>
                     <SelectValue />
@@ -1042,6 +1204,44 @@ export function PadEditDialog({
                     <SelectItem value="stopper">Stopper - Play and stop all other pads</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 items-end">
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="padGroup">Pad Group</Label>
+                  <HelpTooltip content="Pads with the same group number become mutually exclusive. Starting one stops the other pad in that same group first." label="Pad group help" />
+                </div>
+                <Input
+                  id="padGroup"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={padGroupInput}
+                  onChange={(event) => {
+                    const digitsOnly = event.target.value.replace(/[^0-9]/g, '').slice(0, 4);
+                    setPadGroupInput(digitsOnly);
+                    if (!digitsOnly) {
+                      setPadGroupUniversal(false);
+                    }
+                  }}
+                  placeholder="Optional group number"
+                />
+              </div>
+
+              <div className="space-y-2 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor={`pad-group-universal-${pad.id}`}>Universal</Label>
+                  <HelpTooltip content="When enabled, the group rule applies across all banks that share the same group number instead of only the current bank." label="Universal group help" />
+                </div>
+                <div className="flex items-center justify-end rounded-lg border px-3 py-2 min-h-10">
+                  <Switch
+                    id={`pad-group-universal-${pad.id}`}
+                    checked={padGroupUniversal && padGroupInput.trim().length > 0}
+                    onCheckedChange={setPadGroupUniversal}
+                    disabled={padGroupInput.trim().length === 0}
+                  />
+                </div>
               </div>
             </div>
 
@@ -1096,7 +1296,7 @@ export function PadEditDialog({
                     <Label>Trim In / Trim Out</Label>
                   </div>
                   <WaveformTrim
-                    audioUrl={pad.audioUrl}
+                    audioUrl={stableAudioUrl || pad.audioUrl}
                     startTimeMs={startTimeMs[0]}
                     endTimeMs={endTimeMs[0]}
                     durationMs={trimDurationMs}
@@ -1216,15 +1416,18 @@ export function PadEditDialog({
             )}
 
             {!isIOS && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <Label
-                    className="cursor-pointer"
-                    onDoubleClick={handleDoubleClickReset(setTempoPercent, 0)}
-                    title="Double-click to reset to 0%"
-                  >
-                    Tempo: {tempoPercent[0] > 0 ? '+' : ''}{tempoPercent[0]}%
-                  </Label>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <Label
+                        className="cursor-pointer"
+                        onDoubleClick={handleDoubleClickReset(setTempoPercent, 0)}
+                        title="Double-click to reset to 0%"
+                      >
+                        Tempo: {tempoPercent[0] > 0 ? '+' : ''}{tempoPercent[0]}%
+                      </Label>
+                      <HelpTooltip content="Tempo changes playback speed. With Key Lock enabled, the pad keeps its original key while tempo changes." label="Tempo help" />
+                    </div>
                   <div className="flex items-center gap-2">
                     <Label htmlFor={`pad-key-lock-${pad.id}`} className="text-xs text-gray-500">Key Lock</Label>
                     <Switch
@@ -1243,9 +1446,6 @@ export function PadEditDialog({
                   className="w-full cursor-pointer"
                   onDoubleClick={handleDoubleClickReset(setTempoPercent, 0)}
                 />
-                <p className="text-xs text-gray-500">
-                  Changes playback speed. With Key Lock on, tempo changes keep the original key.
-                </p>
               </div>
             )}
 

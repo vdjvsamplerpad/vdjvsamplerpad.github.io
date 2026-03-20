@@ -188,6 +188,7 @@ export class AudioPlaybackInspectionRuntime {
         playing.push({
           padId: snapshot.padId,
           padName: snapshot.padName,
+          padArtist: typeof snapshot.artist === 'string' ? snapshot.artist : undefined,
           bankId: snapshot.bankId,
           bankName: snapshot.bankName,
           color: snapshot.color,
@@ -230,6 +231,7 @@ export class AudioPlaybackInspectionRuntime {
       playing.push({
         padId: instance.padId,
         padName: instance.padName,
+        padArtist: typeof instance.artist === 'string' ? instance.artist : undefined,
         bankId: instance.bankId,
         bankName: instance.bankName,
         color: instance.color,
@@ -252,6 +254,7 @@ export class AudioPlaybackInspectionRuntime {
       return this.getAllPlayingPads().map((item) => ({
         padId: item.padId,
         padName: item.padName,
+        padArtist: item.padArtist,
         bankId: item.bankId,
         bankName: item.bankName,
         color: item.color,
@@ -289,6 +292,7 @@ export class AudioPlaybackInspectionRuntime {
       playing.push({
         padId: instance.padId,
         padName: instance.padName,
+        padArtist: typeof instance.artist === 'string' ? instance.artist : undefined,
         bankId: instance.bankId,
         bankName: instance.bankName,
         color: instance.color,

@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2 } from 'lucide-react';
 import type { SamplerBank, StopMode } from './types/sampler';
 import { createPortal } from 'react-dom';
-import { getCachedUser, useAuth } from '@/hooks/useAuth';
+import { getCachedUser, useAuthActions, useAuthState } from '@/hooks/useAuth';
 import type { SystemAction, SystemMappings } from '@/lib/system-mappings';
 import type { MidiDeviceProfile } from '@/lib/midi/device-profiles';
 import type { GraphicsProfile } from '@/lib/performance-monitor';
@@ -13,6 +13,7 @@ import type { LoginModal as LoginModalType } from '@/components/auth/LoginModal'
 import type { AboutDialog as AboutDialogType } from '@/components/ui/about-dialog';
 import type { HeaderAdminDebugPanel as HeaderAdminDebugPanelType } from './HeaderAdminDebugPanel';
 import { EXTRA_PAD_COLORS, PRIMARY_PAD_COLORS, getPadColorOptionLabel } from './padColorPalette';
+import { useAppUpdate } from '@/hooks/useAppUpdate';
 
 const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then((module) => ({ default: module.LoginModal }))) as unknown as typeof LoginModalType;
 const AboutDialog = React.lazy(() => import('@/components/ui/about-dialog').then((module) => ({ default: module.AboutDialog }))) as unknown as typeof AboutDialogType;
@@ -322,7 +323,8 @@ export function HeaderControls({
   onPublishDefaultBankRelease,
 }: HeaderControlsProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const { user, profile, loading, authTransition, signOut } = useAuth();
+  const { user, profile, loading, authTransition } = useAuthState();
+  const { signOut } = useAuthActions();
   const isAdmin = profile?.role === 'admin';
   const [adminDialogOpen, setAdminDialogOpen] = React.useState(false);
   const [AdminAccessDialog, setAdminAccessDialog] = React.useState<React.ComponentType<any> | null>(null);
@@ -333,16 +335,17 @@ export function HeaderControls({
   const [pendingPadColor, setPendingPadColor] = React.useState<string>(adminPadColorPaintColor || PRIMARY_PAD_COLORS[0]?.value || '#f59e0b');
   const appVersion = (import.meta as any).env?.VITE_APP_VERSION || 'unknown';
   const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.onFullscreenChange);
+  const { state: appUpdateState, checkForUpdates, installUpdate } = useAppUpdate();
 
   // Dynamically load AdminAccessDialog only for admin users
   React.useEffect(() => {
-    if (isAdmin && !AdminAccessDialog) {
+    if (isAdmin && adminDialogOpen && !AdminAccessDialog) {
       import('./AdminAccessDialog').then((module) => {
         setAdminAccessDialog(() => module.AdminAccessDialog);
       }).catch((error) => {
       });
     }
-  }, [isAdmin, AdminAccessDialog]);
+  }, [isAdmin, adminDialogOpen, AdminAccessDialog]);
 
   // Slide notices
   const { notices, pushNotice, dismiss } = useNotices()
@@ -757,6 +760,8 @@ export function HeaderControls({
             onClick={onToggleMute}
             variant="outline"
             size={isMobileScreen ? "sm" : "default"}
+            title={globalMuted ? 'Master output is muted. Click to unmute.' : 'Mute all sampler output.'}
+            aria-pressed={globalMuted}
             className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${globalMuted
               ? theme === 'dark'
                 ? 'bg-red-500 border-red-400 text-red-300'
@@ -771,7 +776,7 @@ export function HeaderControls({
             ) : (
               <Volume2 className="w-4 h-4" />
             )}
-            {!isMobileScreen && (isMobileScreen ? '' : globalMuted ? 'Unmute' : 'Mute')}
+            {!isMobileScreen && (isMobileScreen ? '' : globalMuted ? 'Muted' : 'Mute')}
           </Button>
 
           {/* Stop All Button */}
@@ -866,6 +871,21 @@ export function HeaderControls({
           )}
         </div>
 
+        {globalMuted && (
+          <div className={`mx-auto mb-2 inline-flex max-w-[92vw] flex-wrap items-center justify-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${
+            theme === 'dark'
+              ? 'border-red-400/50 bg-red-500/15 text-red-100'
+              : 'border-red-300 bg-red-50 text-red-700'
+          }`}>
+            <VolumeX className="h-3.5 w-3.5 shrink-0" />
+            <span>Master output muted</span>
+            <span className={theme === 'dark' ? 'text-red-100/80' : 'text-red-600/80'}>
+              Pad taps still trigger, but no sound will come out until you unmute.
+            </span>
+
+          </div>
+        )}
+
         {isAdmin && adminPadColorPaintActive && adminPadColorPaintColor && (
           <div className={`mx-auto mb-2 inline-flex max-w-[92vw] flex-wrap items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
             theme === 'dark'
@@ -948,7 +968,7 @@ export function HeaderControls({
         </DialogContent>
       </Dialog>
 
-      {isAdmin && AdminAccessDialog && (
+      {isAdmin && adminDialogOpen && AdminAccessDialog && (
         <AdminAccessDialog
           open={adminDialogOpen}
           onOpenChange={setAdminDialogOpen}
@@ -965,6 +985,17 @@ export function HeaderControls({
             onOpenChange={setAboutOpen}
             displayName={displayName}
             version={appVersion}
+            appUpdatePlatform={appUpdateState.platform}
+            appUpdateEnabled={appUpdateState.enabled}
+            appUpdateStatus={appUpdateState.status}
+            appUpdateMessage={appUpdateState.message}
+            appUpdateTargetVersion={appUpdateState.nextVersion}
+            appUpdateCanCheck={appUpdateState.canCheck}
+            appUpdateCanInstall={appUpdateState.canInstall}
+            appUpdateBusy={appUpdateState.busy}
+            appUpdateError={appUpdateState.lastError}
+            onCheckForAppUpdates={checkForUpdates}
+            onInstallAppUpdate={installUpdate}
             theme={theme}
             onToggleTheme={onToggleTheme}
             midiSupported={midiSupported}

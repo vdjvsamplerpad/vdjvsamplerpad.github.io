@@ -98,9 +98,17 @@ export const runSelectedBankHydrationPipeline = async (
     const hasPersistentThumbnail = Boolean(
       current.bankMetadata?.thumbnailStorageKey || current.bankMetadata?.thumbnailBackend
     );
-    const hasPersistentPreparedAudio = current.pads.some((pad) => Boolean(pad.preparedAudioStorageKey || pad.preparedAudioBackend));
+    const missingThumbnail =
+      hasPersistentThumbnail &&
+      !(typeof current.bankMetadata?.thumbnailUrl === 'string' && current.bankMetadata.thumbnailUrl.trim().length > 0);
+    const missingPreparedAudio = current.pads.some((pad) =>
+      Boolean(pad.preparedAudioStorageKey || pad.preparedAudioBackend) &&
+      pad.preparedStatus !== 'queued' &&
+      pad.preparedStatus !== 'preparing' &&
+      !(typeof pad.preparedAudioUrl === 'string' && pad.preparedAudioUrl.trim().length > 0)
+    );
     const missingBefore = current.pads.filter((pad) => padNeedsMediaHydration(pad)).length;
-    if (missingBefore <= 0 && !hasPersistentThumbnail && !hasPersistentPreparedAudio) {
+    if (missingBefore <= 0 && !missingThumbnail && !missingPreparedAudio) {
       delete retryAttemptsRef.current[bankId];
       continue;
     }
@@ -149,7 +157,7 @@ export const runSelectedBankHydrationPipeline = async (
 
     const missingAfter = hydrated.pads.filter((pad) => padNeedsMediaHydration(pad)).length;
 
-    if (hasPersistentThumbnail) {
+    if (missingThumbnail || missingPreparedAudio) {
       const previousThumbnailUrl = hydrated.bankMetadata?.thumbnailUrl;
       const hydratedWithThumbnail = await rehydrateBankMediaFromStorage(hydrated);
       if (isCancelled() || runIdRef.current !== runId) return;
@@ -158,7 +166,14 @@ export const runSelectedBankHydrationPipeline = async (
         hydrated.bankMetadata?.thumbnailUrl !== previousThumbnailUrl ||
         hydrated.bankMetadata?.thumbnailStorageKey !== current.bankMetadata?.thumbnailStorageKey ||
         hydrated.bankMetadata?.thumbnailBackend !== current.bankMetadata?.thumbnailBackend;
-      if (thumbnailImproved) {
+      const preparedImproved = hydrated.pads.some((pad, index) => {
+        const previousPad = current.pads[index];
+        return (
+          previousPad &&
+          pad.preparedAudioUrl !== previousPad.preparedAudioUrl
+        );
+      });
+      if (thumbnailImproved || preparedImproved) {
         improved = true;
         setBanks((prev) => {
           const targetIndex = prev.findIndex((bank) => bank.id === hydrated.id);

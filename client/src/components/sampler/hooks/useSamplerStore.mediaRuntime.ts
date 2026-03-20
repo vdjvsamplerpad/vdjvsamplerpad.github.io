@@ -11,6 +11,7 @@ import {
   estimatePadMediaBytesPipeline,
   loadPadMediaBlobPipeline,
   loadPadMediaBlobWithUrlFallbackPipeline,
+  resolvePadMediaSourcePathPipeline,
   restoreFileAccessPipeline,
   storeFilePipeline,
   type MediaReferenceSet,
@@ -59,6 +60,7 @@ export type SamplerMediaHelpers = {
   collectMediaReferenceSet: (banks: SamplerBank[]) => MediaReferenceSet;
   deletePadMediaArtifactsExcept: (pad: Partial<PadData> & { id: string }, keepRefs: MediaReferenceSet) => Promise<void>;
   estimateBankMediaBytes: (bank: SamplerBank) => Promise<number>;
+  resolvePadMediaSourcePath: (pad: PadData, type: 'audio' | 'image') => Promise<string | null>;
 };
 
 export const createSamplerMediaHelpers = (input: CreateSamplerMediaHelpersInput): SamplerMediaHelpers => {
@@ -130,6 +132,9 @@ export const createSamplerMediaHelpers = (input: CreateSamplerMediaHelpersInput)
   const estimateBankMediaBytes = async (bank: SamplerBank): Promise<number> =>
     estimateBankMediaBytesPipeline(bank, estimatePadMediaBytes);
 
+  const resolvePadMediaSourcePath = async (pad: PadData, type: 'audio' | 'image'): Promise<string | null> =>
+    resolvePadMediaSourcePathPipeline({ pad, type }, mediaStorageDeps);
+
   return {
     restoreFileAccess,
     storeFile,
@@ -140,5 +145,6 @@ export const createSamplerMediaHelpers = (input: CreateSamplerMediaHelpersInput)
     collectMediaReferenceSet,
     deletePadMediaArtifactsExcept,
     estimateBankMediaBytes,
+    resolvePadMediaSourcePath,
   };
 };

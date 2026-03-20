@@ -5,14 +5,22 @@ import type { ExportAudioMode, StoreBankAssetProtection } from './useSamplerStor
 import { derivePassword } from '@/lib/bank-utils';
 import { ensureManagedStoreThumbnail } from './storeThumbnailUpload';
 import { stripPreparedAudioForExport } from './preparedAudio';
+import {
+  encodeTextToUint8Array,
+  type ElectronExportArchiveJobEntry,
+  type ElectronExportArchiveJobResult,
+} from './electronArchiveJob';
+import {
+  failOperationDiagnostics,
+  finishOperationDiagnostics,
+  startOperationHeartbeat,
+  type OperationDiagnostics,
+} from './useSamplerStore.operationDiagnostics';
 
 type SamplerPad = SamplerBank['pads'][number];
 type MediaBackend = 'native' | 'idb';
 
-type ExportDiagnosticsLike = {
-  operationId: string;
-  metrics: Record<string, number>;
-};
+type ExportDiagnosticsLike = OperationDiagnostics;
 
 type SaveExportFileResult = {
   success: boolean;
@@ -54,6 +62,9 @@ type EnqueueAdminExportUploadInput = {
   blob: Blob;
 };
 
+const padHasExpectedAudioAsset = (pad: Partial<SamplerPad>): boolean =>
+  Boolean((pad.audioStorageKey && pad.audioStorageKey.trim()) || (pad.audioUrl && pad.audioUrl.trim()));
+
 export interface RunUpdateStoreBankInput {
   bankSnapshot: SamplerBank;
   title: string;
@@ -78,6 +89,7 @@ export interface RunUpdateStoreBankDeps {
   ensureStorageHeadroom: (requiredBytes: number, operationName: string) => Promise<void>;
   padHasExpectedImageAsset: (pad: Partial<SamplerPad>) => boolean;
   loadPadMediaBlob: (pad: SamplerPad, type: 'audio' | 'image') => Promise<Blob | null>;
+  resolvePadMediaSourcePath?: (pad: SamplerPad, type: 'audio' | 'image') => Promise<string | null>;
   shouldAttemptTrim: (pad: SamplerPad, mode: ExportAudioMode) => boolean;
   trimAudio: (
     source: Blob,
@@ -100,6 +112,30 @@ export interface RunUpdateStoreBankDeps {
   detectAudioFormat: (blob: Blob) => string;
   sha256HexFromBlob: (blob: Blob) => Promise<string>;
   sha256HexFromText: (text: string) => Promise<string>;
+  createElectronZipArchive?: (input: {
+    entries: Array<{
+      path: string;
+      data: Uint8Array;
+    }>;
+    compression?: 'STORE' | 'DEFLATE';
+    compressionLevel?: number;
+  }) => Promise<Uint8Array | null>;
+  runElectronExportArchiveJob?: (input: {
+    jobId: string;
+    entries: ElectronExportArchiveJobEntry[];
+    fileName: string;
+    relativeFolder?: string;
+    compression?: 'STORE' | 'DEFLATE';
+    encryptionPassword?: string;
+    returnArchiveBytes?: boolean;
+  }) => Promise<ElectronExportArchiveJobResult | null>;
+  stageElectronZipEntry?: (input: {
+    archivePath: string;
+    blob: Blob;
+    fileName?: string;
+  }) => Promise<{ sourcePath: string; bytes: number } | null>;
+  cleanupStagedElectronZipEntries?: (paths: string[]) => Promise<void>;
+  canUseElectronExportArchiveJob?: boolean;
   yieldToMainThread: () => Promise<void>;
   extFromMime: (mime: string | undefined, fallbackType: 'audio' | 'image') => string;
   inferImageExtFromPath: (value: string | undefined) => string;
@@ -184,6 +220,7 @@ export const runUpdateStoreBankPipeline = async (
     ensureStorageHeadroom,
     padHasExpectedImageAsset,
     loadPadMediaBlob,
+    resolvePadMediaSourcePath,
     shouldAttemptTrim,
     trimAudio,
     remapSavedHotcuesForBakedTrim,
@@ -191,6 +228,10 @@ export const runUpdateStoreBankPipeline = async (
     detectAudioFormat,
     sha256HexFromBlob,
     sha256HexFromText,
+    runElectronExportArchiveJob,
+    stageElectronZipEntry,
+    cleanupStagedElectronZipEntries,
+    canUseElectronExportArchiveJob,
     yieldToMainThread,
     extFromMime,
     inferImageExtFromPath,
@@ -207,6 +248,7 @@ export const runUpdateStoreBankPipeline = async (
 
   const isHttpUrl = (value: string | null | undefined): value is string =>
     typeof value === 'string' && /^https?:\/\//i.test(value.trim());
+  const shouldStoreArchive = isNativeCapacitorPlatform() || exportMode !== 'compact';
 
   if (!user || profileRole !== 'admin') throw new Error('Only admins can update store banks.');
   const catalogItemId = typeof bankSnapshot.bankMetadata?.catalogItemId === 'string'
@@ -216,6 +258,16 @@ export const runUpdateStoreBankPipeline = async (
 
   const normalizedTitle = (title || bankSnapshot.name || 'Bank').trim();
   const diagnostics = createOperationDiagnostics('admin_bank_export', user.id);
+  const stopHeartbeat = startOperationHeartbeat(diagnostics, {
+    getDetails: () => ({
+      bankId: bankSnapshot.id,
+      bankName: bankSnapshot.name,
+      catalogItemId,
+      syncMetadata,
+      assetProtection,
+      exportMode,
+    }),
+  });
   addOperationStage(diagnostics, 'start', {
     bankId: bankSnapshot.id,
     bankName: bankSnapshot.name,
@@ -234,6 +286,7 @@ export const runUpdateStoreBankPipeline = async (
   let saveCompletedAt = exportStartedAt;
   let exportedArchiveBytes = 0;
   let managedThumbnailCleanup: (() => Promise<void>) | null = null;
+  const stagedElectronEntryPaths: string[] = [];
 
   try {
     onProgress?.(5);
@@ -252,14 +305,34 @@ export const runUpdateStoreBankPipeline = async (
     await ensureStorageHeadroom(Math.ceil(estimatedBytes * 0.35), 'store bank update');
     preflightCompletedAt = getNowMs();
 
+    const canUseElectronArchiveJob =
+      canUseElectronExportArchiveJob === true &&
+      typeof runElectronExportArchiveJob === 'function' &&
+      typeof stageElectronZipEntry === 'function';
     const zip = new JSZip();
     const audioFolder = zip.folder('audio');
     const imageFolder = zip.folder('images');
     if (!audioFolder || !imageFolder) throw new Error('Could not prepare files for store update.');
+    const electronArchiveJobEntries: ElectronExportArchiveJobEntry[] | null = canUseElectronArchiveJob ? [] : null;
+    const stageElectronArchiveSource = async (
+      archivePath: string,
+      blob: Blob,
+      fileName?: string
+    ): Promise<string> => {
+      const stagedEntry = await stageElectronZipEntry!({ archivePath, blob, fileName });
+      if (!stagedEntry?.sourcePath) {
+        throw new Error(`Electron export staging failed for ${archivePath}.`);
+      }
+      stagedElectronEntryPaths.push(stagedEntry.sourcePath);
+      return stagedEntry.sourcePath;
+    };
 
     const totalMediaItems = Math.max(
       1,
-      bankSnapshot.pads.reduce((count, pad) => count + (pad.audioUrl ? 1 : 0) + (padHasExpectedImageAsset(pad) ? 1 : 0), 0),
+      bankSnapshot.pads.reduce(
+        (count, pad) => count + (padHasExpectedAudioAsset(pad) ? 1 : 0) + (padHasExpectedImageAsset(pad) ? 1 : 0),
+        0
+      ),
     );
     let processedItems = 0;
     let totalExportBytes = 0;
@@ -276,84 +349,172 @@ export const runUpdateStoreBankPipeline = async (
       imageUrl: undefined as string | undefined,
     }));
     const exportPadMap = new Map(exportPads.map((pad) => [pad.id, pad]));
+    const resolveAudioExportSignature = async (input: {
+      sourceHash: string;
+      mode: ExportAudioMode;
+      shouldBakeTrim: boolean;
+      startTimeMs?: number;
+      endTimeMs?: number;
+    }): Promise<string> => {
+      if (input.mode === 'fast' && !input.shouldBakeTrim) return input.sourceHash;
+      return await sha256HexFromText(
+        JSON.stringify({
+          sourceHash: input.sourceHash,
+          mode: input.mode,
+          shouldBakeTrim: input.shouldBakeTrim,
+          startTimeMs: input.startTimeMs || 0,
+          endTimeMs: input.endTimeMs || 0,
+        })
+      );
+    };
 
     for (const pad of bankSnapshot.pads) {
-      if (pad.audioUrl) {
+      if (padHasExpectedAudioAsset(pad)) {
         const exportPad = exportPadMap.get(pad.id);
-        const sourceBlob = await loadPadMediaBlob(pad, 'audio');
-        if (sourceBlob) {
-          let audioBlob = sourceBlob;
+        const directAudioSourcePath =
+          electronArchiveJobEntries && typeof resolvePadMediaSourcePath === 'function'
+            ? await resolvePadMediaSourcePath(pad, 'audio')
+            : null;
+        const sourceBlob =
+          !electronArchiveJobEntries || !directAudioSourcePath
+            ? await loadPadMediaBlob(pad, 'audio')
+            : null;
+        if (sourceBlob || directAudioSourcePath) {
           const shouldBakeTrim = shouldAttemptTrim(pad, 'compact');
+          const sourceHash = directAudioSourcePath
+            ? await sha256HexFromText((typeof pad.audioStorageKey === 'string' && pad.audioStorageKey.trim()) || directAudioSourcePath)
+            : await sha256HexFromBlob(sourceBlob!);
+          let audioBlob = sourceBlob;
           if (exportMode === 'trim_mp3') {
-            const mp3Result = await transcodeAudioToMP3({
-              source: sourceBlob,
-              startTimeMs: pad.startTimeMs,
-              endTimeMs: pad.endTimeMs,
-              applyTrim: shouldBakeTrim,
-              bitrate: 128,
-            });
-            audioBlob = mp3Result.blob;
-            if (exportPad && mp3Result.appliedTrim) {
+            if (exportPad && shouldBakeTrim) {
               exportPad.startTimeMs = 0;
-              exportPad.endTimeMs = mp3Result.newDurationMs;
+              exportPad.endTimeMs = Math.max(0, (pad.endTimeMs || 0) - (pad.startTimeMs || 0));
               exportPad.savedHotcuesMs = remapSavedHotcuesForBakedTrim(
                 pad.savedHotcuesMs,
                 pad.startTimeMs,
-                mp3Result.newDurationMs
+                exportPad.endTimeMs
               );
             }
-            addOperationStage(diagnostics, mp3Result.appliedTrim ? 'audio-trim-mp3' : 'audio-mp3-transcoded', {
-              padId: pad.id,
-              padName: pad.name || 'Untitled Pad',
-              originalBytes: sourceBlob.size,
-              outputBytes: audioBlob.size,
-              bitrate: 128,
-            });
-          } else if (shouldAttemptTrim(pad, exportMode)) {
-            try {
-              const trimResult = await trimAudio(sourceBlob, pad.startTimeMs, pad.endTimeMs, detectAudioFormat(sourceBlob));
-              audioBlob = trimResult.blob;
-              if (exportPad) {
+            if (!electronArchiveJobEntries && sourceBlob) {
+              const mp3Result = await transcodeAudioToMP3({
+                source: sourceBlob,
+                startTimeMs: pad.startTimeMs,
+                endTimeMs: pad.endTimeMs,
+                applyTrim: shouldBakeTrim,
+                bitrate: 128,
+              });
+              audioBlob = mp3Result.blob;
+              if (exportPad && mp3Result.appliedTrim) {
                 exportPad.startTimeMs = 0;
-                exportPad.endTimeMs = trimResult.newDurationMs;
+                exportPad.endTimeMs = mp3Result.newDurationMs;
                 exportPad.savedHotcuesMs = remapSavedHotcuesForBakedTrim(
                   pad.savedHotcuesMs,
                   pad.startTimeMs,
-                  trimResult.newDurationMs
+                  mp3Result.newDurationMs
                 );
               }
-              addOperationStage(diagnostics, 'audio-trimmed', {
+              addOperationStage(diagnostics, mp3Result.appliedTrim ? 'audio-trim-mp3' : 'audio-mp3-transcoded', {
                 padId: pad.id,
                 padName: pad.name || 'Untitled Pad',
                 originalBytes: sourceBlob.size,
-                trimmedBytes: audioBlob.size,
+                outputBytes: audioBlob?.size || 0,
+                bitrate: 128,
               });
-            } catch (trimError) {
-              addOperationStage(diagnostics, 'audio-trim-fallback', {
+            } else {
+              addOperationStage(diagnostics, shouldBakeTrim ? 'audio-trim-mp3-queued' : 'audio-mp3-queued', {
                 padId: pad.id,
                 padName: pad.name || 'Untitled Pad',
-                reason: trimError instanceof Error ? trimError.message : String(trimError),
+                originalBytes: sourceBlob?.size,
+                bitrate: 128,
+              });
+            }
+          } else if (shouldAttemptTrim(pad, exportMode)) {
+            if (!electronArchiveJobEntries && sourceBlob) {
+              try {
+                const trimResult = await trimAudio(sourceBlob, pad.startTimeMs, pad.endTimeMs, detectAudioFormat(sourceBlob));
+                audioBlob = trimResult.blob;
+                if (exportPad) {
+                  exportPad.startTimeMs = 0;
+                  exportPad.endTimeMs = trimResult.newDurationMs;
+                  exportPad.savedHotcuesMs = remapSavedHotcuesForBakedTrim(
+                    pad.savedHotcuesMs,
+                    pad.startTimeMs,
+                    trimResult.newDurationMs
+                  );
+                }
+                addOperationStage(diagnostics, 'audio-trimmed', {
+                  padId: pad.id,
+                  padName: pad.name || 'Untitled Pad',
+                  originalBytes: sourceBlob.size,
+                  trimmedBytes: audioBlob?.size || 0,
+                });
+              } catch (trimError) {
+                addOperationStage(diagnostics, 'audio-trim-fallback', {
+                  padId: pad.id,
+                  padName: pad.name || 'Untitled Pad',
+                  reason: trimError instanceof Error ? trimError.message : String(trimError),
+                });
+              }
+            } else {
+              if (exportPad) {
+                exportPad.startTimeMs = 0;
+                exportPad.endTimeMs = Math.max(0, (pad.endTimeMs || 0) - (pad.startTimeMs || 0));
+                exportPad.savedHotcuesMs = remapSavedHotcuesForBakedTrim(
+                  pad.savedHotcuesMs,
+                  pad.startTimeMs,
+                  exportPad.endTimeMs
+                );
+              }
+              addOperationStage(diagnostics, 'audio-trim-queued', {
+                padId: pad.id,
+                padName: pad.name || 'Untitled Pad',
+                originalBytes: sourceBlob?.size,
               });
             }
           }
-          const audioHash = await sha256HexFromBlob(audioBlob);
+          const audioHash = electronArchiveJobEntries
+            ? await resolveAudioExportSignature({
+                sourceHash,
+                mode: exportMode,
+                shouldBakeTrim: exportMode === 'trim_mp3' ? shouldBakeTrim : shouldAttemptTrim(pad, exportMode),
+                startTimeMs: pad.startTimeMs,
+                endTimeMs: pad.endTimeMs,
+              })
+            : await sha256HexFromBlob(audioBlob);
           const existingAudioPath = audioHashToPath.get(audioHash);
           if (existingAudioPath) {
             dedupedAudioReuses += 1;
             if (exportPad) exportPad.audioUrl = existingAudioPath;
           } else {
             const fileName = `${audioHash}.audio`;
-            audioFolder.file(fileName, audioBlob);
             const path = `audio/${fileName}`;
+            if (electronArchiveJobEntries) {
+              const stagedSourcePath = directAudioSourcePath || await stageElectronArchiveSource(path, sourceBlob!, fileName);
+              electronArchiveJobEntries.push({
+                kind: 'audio',
+                path,
+                sourcePath: stagedSourcePath,
+                mimeType: sourceBlob?.type,
+                transform: exportMode === 'trim_mp3' ? 'trim_mp3' : (shouldAttemptTrim(pad, exportMode) ? 'trim' : 'copy'),
+                startTimeMs: shouldBakeTrim ? pad.startTimeMs : undefined,
+                endTimeMs: shouldBakeTrim ? pad.endTimeMs : undefined,
+                bitrate: exportMode === 'trim_mp3' ? 128 : undefined,
+                cleanupSourcePath: !directAudioSourcePath,
+              });
+            } else {
+              audioFolder.file(fileName, audioBlob!);
+            }
             audioHashToPath.set(audioHash, path);
             if (exportPad) exportPad.audioUrl = path;
-            uniqueExportBytes += audioBlob.size;
+            uniqueExportBytes += electronArchiveJobEntries
+              ? (sourceBlob?.size || Math.max(0, Number(pad.audioBytes || 0)))
+              : (audioBlob?.size || 0);
             if (isNativeCapacitorPlatform() && uniqueExportBytes > maxNativeBankExportBytes) {
               throw new Error('This bank is too large to update from mobile. Try desktop upload.');
             }
           }
           exportedAudio += 1;
-          totalExportBytes += audioBlob.size;
+          totalExportBytes += audioBlob?.size || sourceBlob?.size || Math.max(0, Number(pad.audioBytes || 0));
         }
         processedItems += 1;
         onProgress?.(10 + (processedItems / totalMediaItems) * 45);
@@ -362,26 +523,45 @@ export const runUpdateStoreBankPipeline = async (
 
       if (padHasExpectedImageAsset(pad)) {
         const exportPad = exportPadMap.get(pad.id);
-        const imageBlob = await loadPadMediaBlob(pad, 'image');
-        if (imageBlob) {
-          const imageHash = await sha256HexFromBlob(imageBlob);
+        const directImageSourcePath =
+          electronArchiveJobEntries && typeof resolvePadMediaSourcePath === 'function'
+            ? await resolvePadMediaSourcePath(pad, 'image')
+            : null;
+        const imageBlob =
+          !electronArchiveJobEntries || !directImageSourcePath
+            ? await loadPadMediaBlob(pad, 'image')
+            : null;
+        if (imageBlob || directImageSourcePath) {
+          const imageHash = directImageSourcePath
+            ? await sha256HexFromText((typeof pad.imageStorageKey === 'string' && pad.imageStorageKey.trim()) || directImageSourcePath)
+            : await sha256HexFromBlob(imageBlob!);
           const existingImagePath = imageHashToPath.get(imageHash);
           if (existingImagePath) {
             dedupedImageReuses += 1;
             if (exportPad) exportPad.imageUrl = existingImagePath;
           } else {
             const fileName = `${imageHash}.image`;
-            imageFolder.file(fileName, imageBlob);
             const path = `images/${fileName}`;
+            if (electronArchiveJobEntries) {
+              const stagedSourcePath = directImageSourcePath || await stageElectronArchiveSource(path, imageBlob!, fileName);
+              electronArchiveJobEntries.push({
+                kind: 'raw',
+                path,
+                sourcePath: stagedSourcePath,
+                cleanupSourcePath: !directImageSourcePath,
+              });
+            } else {
+              imageFolder.file(fileName, imageBlob!);
+            }
             imageHashToPath.set(imageHash, path);
             if (exportPad) exportPad.imageUrl = path;
-            uniqueExportBytes += imageBlob.size;
+            uniqueExportBytes += imageBlob?.size || 0;
             if (isNativeCapacitorPlatform() && uniqueExportBytes > maxNativeBankExportBytes) {
               throw new Error('This bank is too large to update from mobile. Try desktop upload.');
             }
           }
           exportedImages += 1;
-          totalExportBytes += imageBlob.size;
+          totalExportBytes += imageBlob?.size || 0;
         }
         processedItems += 1;
         onProgress?.(10 + (processedItems / totalMediaItems) * 45);
@@ -414,7 +594,21 @@ export const runUpdateStoreBankPipeline = async (
         let ext = extFromMime(thumbnailBlob.type, 'image');
         if (ext === 'bin') ext = inferImageExtFromPath(thumbnailPath);
         embeddedThumbnailAssetPath = `thumbnail/bank-thumbnail.${ext}`;
-        zip.file(embeddedThumbnailAssetPath, thumbnailBlob);
+        if (electronArchiveJobEntries) {
+          const stagedSourcePath = await stageElectronArchiveSource(
+            embeddedThumbnailAssetPath,
+            thumbnailBlob,
+            `bank-thumbnail.${ext}`
+          );
+          electronArchiveJobEntries.push({
+            kind: 'raw',
+            path: embeddedThumbnailAssetPath,
+            sourcePath: stagedSourcePath,
+            cleanupSourcePath: true,
+          });
+        } else {
+          zip.file(embeddedThumbnailAssetPath, thumbnailBlob);
+        }
         addOperationStage(diagnostics, 'thumbnail-embedded', {
           source: thumbnailPath,
           bytes: thumbnailBlob.size,
@@ -464,35 +658,89 @@ export const runUpdateStoreBankPipeline = async (
       pads: exportPads,
     };
     const bankJsonText = JSON.stringify(bankData, null, 2);
-    zip.file('bank.json', bankJsonText);
+    if (electronArchiveJobEntries) {
+      electronArchiveJobEntries.push({
+        kind: 'raw',
+        path: 'bank.json',
+        data: encodeTextToUint8Array(bankJsonText),
+      });
+    } else {
+      zip.file('bank.json', bankJsonText);
+    }
     await sha256HexFromText(bankJsonText);
     const fileName = buildStoreUpdateFileName(normalizedTitle, catalogItemId);
-    addBankMetadata(zip, sanitizedMetadata);
+    if (electronArchiveJobEntries) {
+      electronArchiveJobEntries.push({
+        kind: 'raw',
+        path: 'metadata.json',
+        data: encodeTextToUint8Array(JSON.stringify(sanitizedMetadata, null, 2)),
+      });
+    } else {
+      addBankMetadata(zip, sanitizedMetadata);
+    }
 
     onProgress?.(65);
     let outputBlob: Blob;
+    let preSavedJobResult: ElectronExportArchiveJobResult | null = null;
     if (assetProtection === 'public') {
-      outputBlob = isNativeCapacitorPlatform()
-        ? await zip.generateAsync({ type: 'blob', compression: 'STORE' }, (meta) => onProgress?.(65 + meta.percent * 0.23))
-        : await zip.generateAsync(
-          { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 9 } },
-          (meta) => onProgress?.(65 + meta.percent * 0.23),
-        );
+      if (electronArchiveJobEntries && typeof runElectronExportArchiveJob === 'function') {
+        const jobResult = await runElectronExportArchiveJob({
+          jobId: diagnostics.operationId,
+          entries: electronArchiveJobEntries,
+          fileName,
+          compression: 'STORE',
+          returnArchiveBytes: true,
+        });
+        if (!jobResult?.archiveData) {
+          throw new Error('Electron export job returned no archive data.');
+        }
+        preSavedJobResult = jobResult;
+        outputBlob = new Blob([jobResult.archiveData], { type: 'application/zip' });
+      } else {
+        outputBlob = shouldStoreArchive
+          ? await zip.generateAsync({ type: 'blob', compression: 'STORE' }, (meta) => onProgress?.(65 + meta.percent * 0.23))
+          : await zip.generateAsync(
+            { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 5 } },
+            (meta) => onProgress?.(65 + meta.percent * 0.23),
+          );
+      }
     } else {
       const bankId = typeof bankSnapshot.bankMetadata?.bankId === 'string' ? bankSnapshot.bankMetadata.bankId.trim() : '';
       const derivedKey = bankId ? await derivePassword(bankId) : catalogItemId;
-      outputBlob = await encryptZip(zip, derivedKey);
+      if (electronArchiveJobEntries && typeof runElectronExportArchiveJob === 'function') {
+        const jobResult = await runElectronExportArchiveJob({
+          jobId: diagnostics.operationId,
+          entries: electronArchiveJobEntries,
+          fileName,
+          compression: 'STORE',
+          encryptionPassword: derivedKey,
+          returnArchiveBytes: true,
+        });
+        if (!jobResult?.archiveData) {
+          throw new Error('Electron export job returned no encrypted archive data.');
+        }
+        preSavedJobResult = jobResult;
+        outputBlob = new Blob([jobResult.archiveData], { type: 'application/octet-stream' });
+      } else {
+        outputBlob = await encryptZip(zip, derivedKey);
+      }
       onProgress?.(88);
     }
     archiveCompletedAt = getNowMs();
     exportedArchiveBytes = outputBlob.size;
 
-    const saveResult = await saveExportFile(outputBlob, fileName);
+    const saveResult = preSavedJobResult
+      ? {
+          success: true,
+          savedPath: preSavedJobResult.savedPath,
+          message: preSavedJobResult.message,
+        }
+      : await saveExportFile(outputBlob, fileName);
     if (!saveResult.success) {
       throw new Error(saveResult.message || 'Failed to save store bank update export.');
     }
     addOperationStage(diagnostics, 'saved', { path: saveResult.savedPath || fileName });
-    saveCompletedAt = getNowMs();
+    saveCompletedAt = preSavedJobResult ? archiveCompletedAt : getNowMs();
 
     let metadataSynced = false;
     let uploadWarningMessage = '';
@@ -591,6 +839,14 @@ export const runUpdateStoreBankPipeline = async (
     diagnostics.metrics.exportSaveMs = timing.saveMs;
     diagnostics.metrics.archiveBytes = exportedArchiveBytes;
     addOperationStage(diagnostics, 'timings', timing);
+    finishOperationDiagnostics(diagnostics, {
+      bankId: bankSnapshot.id,
+      bankName: bankSnapshot.name,
+      catalogItemId,
+      archiveBytes: exportedArchiveBytes,
+      syncMetadata,
+      assetProtection,
+    });
     onProgress?.(100);
 
     const metadataMessage = metadataSynced ? ' Store metadata synced.' : '';
@@ -615,8 +871,21 @@ export const runUpdateStoreBankPipeline = async (
     diagnostics.metrics.exportSaveMs = partialTiming.saveMs;
     diagnostics.metrics.archiveBytes = exportedArchiveBytes;
     addOperationStage(diagnostics, 'timings-partial', partialTiming);
+    failOperationDiagnostics(diagnostics, error, {
+      bankId: bankSnapshot.id,
+      bankName: bankSnapshot.name,
+      catalogItemId,
+      archiveBytes: exportedArchiveBytes,
+      syncMetadata,
+      assetProtection,
+    });
     const errorMessage = error instanceof Error ? error.message : String(error);
     const logPath = await writeOperationDiagnosticsLog(diagnostics, error);
     throw new Error(logPath ? `${errorMessage} (Diagnostics log: ${logPath})` : errorMessage);
+  } finally {
+    if (typeof cleanupStagedElectronZipEntries === 'function' && stagedElectronEntryPaths.length > 0) {
+      await cleanupStagedElectronZipEntries(stagedElectronEntryPaths).catch(() => undefined);
+    }
+    stopHeartbeat();
   }
 };

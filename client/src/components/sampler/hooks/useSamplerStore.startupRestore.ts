@@ -2,7 +2,11 @@ import type { PadData, SamplerBank } from '../types/sampler';
 import { getSamplerRuntimeTuningProfile } from '@/lib/sampler-runtime-profile';
 import { applyBankContentPolicy } from './useSamplerStore.provenance';
 import { loadDefaultBankFromAssetsPipeline } from './useSamplerStore.defaultBankAssets';
-import { DEFAULT_BANK_SOURCE_ID, isDefaultBankIdentity } from './useSamplerStore.bankIdentity';
+import {
+  DEFAULT_BANK_SOURCE_ID,
+  isCanonicalDefaultBankIdentity,
+  isExplicitDefaultBankIdentity,
+} from './useSamplerStore.bankIdentity';
 
 type MediaBackend = 'native' | 'idb';
 type SetState<T> = (value: T | ((prev: T) => T)) => void;
@@ -51,6 +55,14 @@ export interface RunRestoreAllFilesDeps {
   ) => Promise<{ url: string | null; storageKey?: string; backend: MediaBackend }>;
   base64ToBlob: (value: string) => Blob;
 }
+
+const resolveDefaultBankIdForStartup = (banks: SamplerBank[]): string | null => {
+  return (
+    banks.find((bank) => isExplicitDefaultBankIdentity(bank))?.id
+    || banks.find((bank) => isCanonicalDefaultBankIdentity(bank, banks))?.id
+    || null
+  );
+};
 
 export const runRestoreAllFilesPipeline = async (
   input: RunRestoreAllFilesInput,
@@ -105,13 +117,13 @@ export const runRestoreAllFilesPipeline = async (
   if (!savedState) {
     savedState = await readIdbJsonFallback(stateIdbFallbackKey);
   }
-  const ownerId = user?.id || getCachedUser()?.id || lastAuthenticatedUserIdRef.current || null;
-  const lastOpenBankId = readLastOpenBankId(ownerId);
+    const ownerId = user?.id || getCachedUser()?.id || lastAuthenticatedUserIdRef.current || null;
+    const lastOpenBankId = readLastOpenBankId(ownerId);
 
-  if (!savedData) {
-    const defaultBank: SamplerBank = {
-      id: generateId(),
-      name: defaultBankName,
+    if (!savedData) {
+      const defaultBank: SamplerBank = {
+        id: generateId(),
+        name: defaultBankName,
       defaultColor: defaultBankColor,
       pads: [],
       createdAt: new Date(),
@@ -124,7 +136,7 @@ export const runRestoreAllFilesPipeline = async (
     setIsBanksHydrated(true);
     return;
   }
-  try {
+    try {
     const { banks: savedBanks } = JSON.parse(savedData);
     let restoredState: { primaryBankId: string | null; secondaryBankId: string | null; currentBankId: string | null } = {
       primaryBankId: null,
@@ -132,11 +144,8 @@ export const runRestoreAllFilesPipeline = async (
       currentBankId: null,
     };
     if (savedState) try { restoredState = JSON.parse(savedState); } catch { }
-    if ((!restoredState.currentBankId || typeof restoredState.currentBankId !== 'string') && lastOpenBankId) {
-      restoredState.currentBankId = lastOpenBankId;
-    }
-
     const applyRestoredState = (nextBanks: SamplerBank[]) => {
+      const defaultBankId = resolveDefaultBankIdForStartup(nextBanks);
       setBanks(nextBanks);
       setPrimaryBankIdState(restoredState.primaryBankId);
       setSecondaryBankIdState(restoredState.secondaryBankId);
@@ -146,7 +155,7 @@ export const runRestoreAllFilesPipeline = async (
       const currentFromLastOpen = !currentFromState && lastOpenBankId && nextBanks.find((b) => b.id === lastOpenBankId)
         ? lastOpenBankId
         : null;
-      const resolvedCurrent = currentFromState || currentFromLastOpen || nextBanks[0]?.id || null;
+      const resolvedCurrent = defaultBankId || currentFromState || currentFromLastOpen || nextBanks[0]?.id || null;
       setCurrentBankIdState(resolvedCurrent);
       writeLastOpenBankId(ownerId, resolvedCurrent);
       setIsBanksHydrated(true);
@@ -208,7 +217,7 @@ export const runRestoreAllFilesPipeline = async (
     };
 
     const restoreBankMedia = async (bank: SamplerBank): Promise<SamplerBank> => {
-      const defaultBankAssetSource = isDefaultBankIdentity(bank)
+      const defaultBankAssetSource = isExplicitDefaultBankIdentity(bank)
         ? await getDefaultBankAssetSource().catch(() => null)
         : null;
       const defaultBankAssetPadsById = defaultBankAssetSource
@@ -314,9 +323,10 @@ export const runRestoreAllFilesPipeline = async (
     const eagerRestoreLimit = getSamplerRuntimeTuningProfile().startupRestorePadLimit
       || (isNativeCapacitorPlatform() ? maxNativeStartupRestorePads : 1200);
     const priorityBankId =
-      (restoredState.currentBankId && restoredBanks.some((bank) => bank.id === restoredState.currentBankId))
+      resolveDefaultBankIdForStartup(restoredBanks)
+      ?? (restoredState.currentBankId && restoredBanks.some((bank) => bank.id === restoredState.currentBankId)
         ? restoredState.currentBankId
-        : (lastOpenBankId && restoredBanks.some((bank) => bank.id === lastOpenBankId) ? lastOpenBankId : null);
+        : (lastOpenBankId && restoredBanks.some((bank) => bank.id === lastOpenBankId) ? lastOpenBankId : null));
     const orderedBanks = prioritizeBanksForMediaRestore(restoredBanks, priorityBankId);
 
     applyRestoredState(restoredBanks);

@@ -11,8 +11,10 @@ import {
     type TransportState,
     MAX_AUDIO_ELEMENTS,
     IS_ANDROID,
+    IS_CAPACITOR_NATIVE,
     IS_IOS,
 } from './types';
+import { shouldUseEagerMediaPreload } from './mediaPreloadPolicy';
 
 const REGION_MONITOR_INTERVAL_MS = 20;
 const LOOP_WRAP_DUCK_SEC = IS_ANDROID ? 0.006 : IS_IOS ? 0.005 : 0.004;
@@ -65,8 +67,14 @@ export class MediaBackend implements IAudioBackend {
 
         const audio = new Audio();
         audio.crossOrigin = 'anonymous';
-        audio.src = url;
-        audio.preload = 'metadata';
+        const eagerPreload = shouldUseEagerMediaPreload({
+            sourceUrl: url,
+            audioDurationMs: transport.audioDurationMs,
+            audioBytes: transport.audioBytes,
+            isAndroid: IS_ANDROID,
+            isCapacitorNative: IS_CAPACITOR_NATIVE,
+        });
+        audio.preload = eagerPreload ? 'auto' : 'metadata';
         (audio as any).playsInline = true;
         audio.muted = false;
         audio.volume = 1.0;
@@ -83,9 +91,14 @@ export class MediaBackend implements IAudioBackend {
         MediaBackend.activeElements.add(audio);
         audio.addEventListener('ended', this.handleEnded);
 
-        // Wait for metadata to load
         return new Promise<boolean>((resolve) => {
-            const onLoaded = () => {
+            let metadataReady = false;
+            let settled = false;
+            let eagerFallbackTimeout: ReturnType<typeof setTimeout> | null = null;
+
+            const finalizeLoaded = () => {
+                if (settled) return;
+                settled = true;
                 cleanup();
                 this.applyRegionState(transport);
                 if (this.regionStartSec > 0) {
@@ -94,18 +107,53 @@ export class MediaBackend implements IAudioBackend {
                 resolve(true);
             };
 
+            const onLoaded = () => {
+                metadataReady = true;
+                if (!eagerPreload) {
+                    finalizeLoaded();
+                }
+            };
+
+            const onEagerReady = () => {
+                finalizeLoaded();
+            };
+
             const onError = () => {
+                if (settled) return;
+                settled = true;
                 cleanup();
                 resolve(false);
             };
 
             const cleanup = () => {
                 audio.removeEventListener('loadedmetadata', onLoaded);
+                audio.removeEventListener('loadeddata', onEagerReady);
+                audio.removeEventListener('canplay', onEagerReady);
                 audio.removeEventListener('error', onError);
+                if (eagerFallbackTimeout) {
+                    clearTimeout(eagerFallbackTimeout);
+                    eagerFallbackTimeout = null;
+                }
             };
 
             audio.addEventListener('loadedmetadata', onLoaded, { once: true });
+            if (eagerPreload) {
+                audio.addEventListener('loadeddata', onEagerReady, { once: true });
+                audio.addEventListener('canplay', onEagerReady, { once: true });
+                eagerFallbackTimeout = setTimeout(() => {
+                    if (!metadataReady) return;
+                    finalizeLoaded();
+                }, 900);
+            }
             audio.addEventListener('error', onError, { once: true });
+            audio.src = url;
+            if (eagerPreload) {
+                try {
+                    audio.load();
+                } catch {
+                    // Ignore; the media element will still continue loading from src assignment.
+                }
+            }
         });
     }
 

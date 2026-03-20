@@ -2,6 +2,7 @@ import {
   executeStop,
   type StopTarget,
 } from '../../../lib/audio-engine';
+import { shouldUseEagerMediaPreload } from '../../../lib/audio-engine/mediaPreloadPolicy';
 import type { AudioRuntimeStage } from './audioRuntimeStage';
 import type {
   HotcueTuple,
@@ -131,6 +132,7 @@ export interface DeckLayoutSnapshotEntry {
 export interface DeckPadSnapshot {
   padId: string;
   padName: string;
+  artist?: string;
   bankId: string;
   bankName: string;
   color: string;
@@ -147,6 +149,8 @@ export interface DeckPadSnapshot {
   keyLock: boolean;
   triggerMode: PadTriggerMode;
   playbackMode: PadPlaybackMode;
+  padGroup?: number | null;
+  padGroupUniversal?: boolean;
   savedHotcuesMs: HotcueTuple;
   audioBytes?: number;
   audioDurationMs?: number;
@@ -944,13 +948,27 @@ export class AudioDeckRuntime {
     const audio = new Audio();
     audio.crossOrigin = 'anonymous';
     (audio as any).playsInline = true;
-    audio.preload = IS_CAPACITOR_NATIVE ? 'metadata' : 'auto';
+    const eagerPreload = shouldUseEagerMediaPreload({
+      sourceUrl: channel.pad.audioUrl,
+      audioDurationMs: channel.pad.audioDurationMs,
+      audioBytes: channel.pad.audioBytes,
+      isAndroid: IS_ANDROID_ENV,
+      isCapacitorNative: IS_CAPACITOR_NATIVE,
+    });
+    audio.preload = eagerPreload ? 'auto' : IS_CAPACITOR_NATIVE ? 'metadata' : 'auto';
     audio.loop = channel.pad.playbackMode === 'loop';
     audio.playbackRate = Math.pow(2, (channel.pad.pitch || 0) / 12);
     this.host.disablePitchPreservation(audio);
     channel.pendingInitialSeekSec = (channel.pad.startTimeMs || 0) / 1000;
     this.disconnectDeckChannelAudioGraph(channel);
     audio.src = channel.pad.audioUrl;
+    if (eagerPreload) {
+      try {
+        audio.load();
+      } catch {
+        // Ignore; src assignment is enough when the browser rejects explicit load.
+      }
+    }
 
     audio.addEventListener('loadedmetadata', () => {
       if (!channel.pad) return;

@@ -27,9 +27,13 @@ export interface SamplerSearchResult {
   bankName: string;
   padId: string;
   padName: string;
+  padArtist?: string;
   bankOrder: number;
   padOrder: number;
   padNameToken: string;
+  padArtistToken: string;
+  padKeywordText: string;
+  padKeywords: string[];
   bankNameToken: string;
   canLoad: boolean;
   loadAvailability: SamplerSearchLoadAvailability;

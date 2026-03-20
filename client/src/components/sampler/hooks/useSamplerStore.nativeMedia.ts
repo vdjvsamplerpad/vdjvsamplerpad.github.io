@@ -20,6 +20,39 @@ export interface NativeMediaRuntimeDeps {
   normalizeBase64Data: (raw: string) => string;
 }
 
+type NativeMediaResolvedDescriptor = {
+  storageKey?: string;
+  exists?: boolean;
+  sourcePath?: string;
+  fileUrl?: string;
+  bytes?: number;
+};
+
+const normalizeElectronBinaryPayload = (value: unknown): Uint8Array | null => {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  if (value && typeof value === 'object' && Array.isArray((value as { data?: number[] }).data)) {
+    return Uint8Array.from((value as { data: number[] }).data);
+  }
+  return null;
+};
+
+const getElectronNativeMediaApi = () => {
+  if (typeof window === 'undefined') return null;
+  const electronAPI = window.electronAPI;
+  if (!electronAPI) return null;
+  if (
+    typeof electronAPI.resolveNativeMedia !== 'function' ||
+    typeof electronAPI.writeNativeMedia !== 'function' ||
+    typeof electronAPI.readNativeMedia !== 'function' ||
+    typeof electronAPI.deleteNativeMedia !== 'function'
+  ) {
+    return null;
+  }
+  return electronAPI;
+};
+
 const buildNativeStorageKey = (
   padId: string,
   blob: Blob,
@@ -77,8 +110,25 @@ export const createNativeMediaRuntime = (deps: NativeMediaRuntimeDeps) => {
   } = deps;
 
   const nativeWriteFallbackLogged = new Set<NativeMediaKind>();
+  const canUseElectronNativeMedia = (): boolean => getElectronNativeMediaApi() !== null;
+  const canUseNativeMediaStorage = (): boolean => isNativeCapacitorPlatform() || canUseElectronNativeMedia();
+
+  const resolveElectronNativeMedia = async (
+    storageKey?: string | null
+  ): Promise<NativeMediaResolvedDescriptor | null> => {
+    if (!canUseElectronNativeMedia() || !storageKey) return null;
+    try {
+      return await getElectronNativeMediaApi()!.resolveNativeMedia!({ storageKey });
+    } catch {
+      return null;
+    }
+  };
 
   const getNativeMediaPlaybackUrl = async (storageKey: string): Promise<string | null> => {
+    if (canUseElectronNativeMedia()) {
+      const descriptor = await resolveElectronNativeMedia(storageKey);
+      return descriptor?.exists ? descriptor.fileUrl || null : null;
+    }
     if (!isNativeCapacitorPlatform()) return null;
     try {
       const { Filesystem, Directory } = await import('@capacitor/filesystem');
@@ -95,6 +145,10 @@ export const createNativeMediaRuntime = (deps: NativeMediaRuntimeDeps) => {
   };
 
   const readNativeMediaSize = async (storageKey?: string | null): Promise<number> => {
+    if (canUseElectronNativeMedia()) {
+      const descriptor = await resolveElectronNativeMedia(storageKey);
+      return descriptor?.exists ? Math.max(0, Number(descriptor.bytes || 0)) : 0;
+    }
     if (!isNativeCapacitorPlatform() || !storageKey) return 0;
     try {
       const { Filesystem, Directory } = await import('@capacitor/filesystem');
@@ -114,6 +168,21 @@ export const createNativeMediaRuntime = (deps: NativeMediaRuntimeDeps) => {
     type: NativeMediaKind,
     storageKeyHint?: string
   ): Promise<string | null> => {
+    if (canUseElectronNativeMedia()) {
+      try {
+        const storageKey = buildNativeStorageKey(padId, blob, type, storageKeyHint, extFromMime);
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const response = await getElectronNativeMediaApi()!.writeNativeMedia!({
+          storageKey,
+          data: bytes,
+        });
+        return typeof response?.storageKey === 'string' && response.storageKey.trim().length > 0
+          ? response.storageKey.trim()
+          : storageKey;
+      } catch {
+        return null;
+      }
+    }
     if (!isNativeCapacitorPlatform()) return null;
     const nativeWriteLimitBytes = type === 'audio' ? maxNativeAudioWriteBytes : maxNativeImageWriteBytes;
     if (blob.size > nativeWriteLimitBytes) {
@@ -139,6 +208,20 @@ export const createNativeMediaRuntime = (deps: NativeMediaRuntimeDeps) => {
   };
 
   const readNativeMediaBlob = async (storageKey: string, type: NativeMediaKind): Promise<Blob | null> => {
+    if (canUseElectronNativeMedia()) {
+      try {
+        const descriptor = await resolveElectronNativeMedia(storageKey);
+        if (!descriptor?.exists) return null;
+        const response = await getElectronNativeMediaApi()!.readNativeMedia!({ storageKey });
+        const bytes = normalizeElectronBinaryPayload(response?.data);
+        if (!bytes || bytes.byteLength <= 0) return null;
+        return new Blob([bytes], {
+          type: mimeFromExt(parseStorageKeyExt(storageKey), type),
+        });
+      } catch {
+        return null;
+      }
+    }
     if (!isNativeCapacitorPlatform()) return null;
     try {
       const uri = await getNativeMediaPlaybackUrl(storageKey);
@@ -179,7 +262,24 @@ export const createNativeMediaRuntime = (deps: NativeMediaRuntimeDeps) => {
     }
   };
 
+  const resolveNativeMediaSourcePath = async (storageKey?: string | null): Promise<string | null> => {
+    if (canUseElectronNativeMedia()) {
+      const descriptor = await resolveElectronNativeMedia(storageKey);
+      return descriptor?.exists ? descriptor.sourcePath || null : null;
+    }
+    return null;
+  };
+
   const deleteNativeMediaBlob = async (storageKey?: string | null): Promise<void> => {
+    if (canUseElectronNativeMedia()) {
+      if (!storageKey) return;
+      try {
+        await getElectronNativeMediaApi()!.deleteNativeMedia!({ storageKey });
+      } catch {
+        // Ignore missing file errors.
+      }
+      return;
+    }
     if (!isNativeCapacitorPlatform() || !storageKey) return;
     try {
       const { Filesystem, Directory } = await import('@capacitor/filesystem');
@@ -193,10 +293,12 @@ export const createNativeMediaRuntime = (deps: NativeMediaRuntimeDeps) => {
   };
 
   return {
+    canUseNativeMediaStorage,
     getNativeMediaPlaybackUrl,
     writeNativeMediaBlob,
     readNativeMediaBlob,
     readNativeMediaSize,
+    resolveNativeMediaSourcePath,
     deleteNativeMediaBlob,
   };
 };

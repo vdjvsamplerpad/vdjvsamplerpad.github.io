@@ -60,11 +60,12 @@ export const buildAudioPlayerPadSettings = (
 };
 
 export const buildAudioPlayerPadMetadata = (
-  pad: Pick<PadData, 'name' | 'color'>,
+  pad: Pick<PadData, 'name' | 'artist' | 'color'>,
   bankId: string,
   bankName: string
 ) => ({
   name: pad.name,
+  artist: pad.artist,
   color: pad.color,
   bankId,
   bankName,
@@ -120,7 +121,7 @@ export function useAudioPlayerRuntimeSync({
 }: UseAudioPlayerRuntimeSyncOptions): UseAudioPlayerRuntimeSyncResult {
   const registeredRef = React.useRef(false);
   const pendingSettingsRef = React.useRef<Record<string, unknown> | null>(null);
-  const pendingMetadataRef = React.useRef<{ name: string; color: string; bankId: string; bankName: string } | null>(null);
+  const pendingMetadataRef = React.useRef<{ name: string; artist?: string; color: string; bankId: string; bankName: string } | null>(null);
   const runtimePad = React.useMemo(() => buildAudioPlayerRuntimePad(pad), [pad]);
 
   const flushPendingRuntimeState = React.useCallback(() => {
@@ -193,7 +194,7 @@ export function useAudioPlayerRuntimeSync({
       return;
     }
     pendingMetadataRef.current = nextMetadata;
-  }, [playbackManager, pad.id, pad.name, pad.color, bankId, bankName]);
+  }, [playbackManager, pad.id, pad.name, pad.artist, pad.color, bankId, bankName]);
 
   return {
     registeredRef,

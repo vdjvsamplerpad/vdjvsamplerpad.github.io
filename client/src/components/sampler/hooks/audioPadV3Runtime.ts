@@ -3,6 +3,7 @@ import type { AudioRuntimeStage } from './audioRuntimeStage';
 import type { DeckPadSnapshot, StopMode } from './audioDeckRuntime';
 import type { AudioPadRuntimeRegistrationData } from './audioPadRuntimeTypes';
 import { AudioPadV3StateRuntime } from './audioPadV3StateRuntime';
+import { resolvePadGroupStopMode, shouldStopPadForGroup } from './padGroupRuntime';
 
 const IS_IOS_ENV = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
 const IS_ANDROID_ENV = typeof navigator !== 'undefined' && /Android/.test(navigator.userAgent);
@@ -27,6 +28,7 @@ const V3_SHORT_BURST_CAP_LOW_MEMORY = 4;
 const V3_STUTTER_RETRIGGER_GUARD_MS = IS_ANDROID_ENV ? (IS_CAPACITOR_NATIVE ? 6 : 10) : 0;
 
 type TransportStatePayload = Parameters<AudioEngineCore['registerTransport']>[1];
+type GroupStopOptions = { groupStopMode?: StopMode };
 
 interface AudioPadV3RuntimeHost {
   getRegisteredPads(): Map<string, DeckPadSnapshot>;
@@ -80,7 +82,7 @@ export class AudioPadV3Runtime {
     return stoppedAny;
   }
 
-  togglePad(padId: string): void {
+  togglePad(padId: string, options?: GroupStopOptions): void {
     const engine = this.host.getEngine();
     const stateRuntime = this.host.getStateRuntime();
     if (stateRuntime.hasPendingPlay(padId)) {
@@ -92,22 +94,25 @@ export class AudioPadV3Runtime {
       this.stopPadBasic(padId, 'instant');
       return;
     }
-    this.playPadBasic(padId);
+    this.playPadBasic(padId, options);
   }
 
-  triggerHoldStart(padId: string): void {
+  triggerHoldStart(padId: string, options?: GroupStopOptions): void {
     const engine = this.host.getEngine();
     const transport = engine.getTransportState(padId);
     if (transport?.isPlaying) return;
-    if (this.playLoadedTransportImmediate(padId, { stageAction: 'pad_play_hold_loaded' })) return;
-    this.playPadBasic(padId);
+    if (this.playLoadedTransportImmediate(padId, {
+      stageAction: 'pad_play_hold_loaded',
+      groupStopMode: options?.groupStopMode,
+    })) return;
+    this.playPadBasic(padId, options);
   }
 
   triggerHoldStop(padId: string): void {
     this.stopPadBasic(padId, 'instant');
   }
 
-  triggerStutter(padId: string): void {
+  triggerStutter(padId: string, options?: GroupStopOptions): void {
     const engine = this.host.getEngine();
     const stateRuntime = this.host.getStateRuntime();
     const nowMs = this.host.getNowMs();
@@ -126,22 +131,32 @@ export class AudioPadV3Runtime {
         this.stopPadBasic(padId, 'instant', {
           emitAction: null,
         });
-        this.playPadBasic(padId, { forceRestart: true });
+        this.playPadBasic(padId, {
+          forceRestart: true,
+          groupStopMode: options?.groupStopMode,
+        });
       } else {
         this.playLoadedTransportImmediate(padId, {
           retrigger: true,
           stageAction: 'pad_stutter_retrigger',
+          groupStopMode: options?.groupStopMode,
         });
       }
       return;
     }
-    if (this.playLoadedTransportImmediate(padId, { stageAction: 'pad_stutter_loaded_start' })) {
+    if (this.playLoadedTransportImmediate(padId, {
+      stageAction: 'pad_stutter_loaded_start',
+      groupStopMode: options?.groupStopMode,
+    })) {
       return;
     }
-    this.playPadBasic(padId, { forceRestart: true });
+    this.playPadBasic(padId, {
+      forceRestart: true,
+      groupStopMode: options?.groupStopMode,
+    });
   }
 
-  triggerUnmuteToggle(padId: string): void {
+  triggerUnmuteToggle(padId: string, options?: GroupStopOptions): void {
     const engine = this.host.getEngine();
     const stateRuntime = this.host.getStateRuntime();
     if (stateRuntime.hasPendingPlay(padId)) {
@@ -151,7 +166,7 @@ export class AudioPadV3Runtime {
     const transport = engine.getTransportState(padId);
     const isActive = Boolean(transport?.isPlaying);
     if (!isActive) {
-      this.playPadBasic(padId);
+      this.playPadBasic(padId, options);
       return;
     }
     const nextMuted = !Boolean(transport?.softMuted);
@@ -237,7 +252,7 @@ export class AudioPadV3Runtime {
     return this.preloadPad(padId, padData, bankId, bankName);
   }
 
-  playPadBasic(padId: string, options?: { forceRestart?: boolean }): void {
+  playPadBasic(padId: string, options?: { forceRestart?: boolean; groupStopMode?: StopMode }): void {
     const engine = this.host.getEngine();
     const stateRuntime = this.host.getStateRuntime();
     const snapshot = this.host.getRegisteredPads().get(padId);
@@ -284,6 +299,7 @@ export class AudioPadV3Runtime {
         if (this.host.getIsIOS()) {
           await engine.preUnlock();
         }
+        this.enforcePadGroup(latestSnapshot, padId, resolvePadGroupStopMode(options?.groupStopMode));
         if (latestSnapshot.playbackMode === 'stopper') {
           stateRuntime.cancelAllPendingPlays(padId);
           this.stopOtherPads(padId, 'instant');
@@ -356,7 +372,10 @@ export class AudioPadV3Runtime {
           this.playRetryCountByPad.set(padId, retryCount + 1);
           stateRuntime.cancelPendingPlay(padId);
           this.host.emitAudioRuntimeStageInfo('pad_play_error_retry');
-          this.playPadBasic(padId, { forceRestart: true });
+          this.playPadBasic(padId, {
+            forceRestart: true,
+            groupStopMode: options?.groupStopMode,
+          });
           return;
         }
         stateRuntime.cancelPendingPlay(padId);
@@ -451,7 +470,7 @@ export class AudioPadV3Runtime {
 
   private playLoadedTransportImmediate(
     padId: string,
-    options?: { retrigger?: boolean; stageAction?: string }
+    options?: { retrigger?: boolean; stageAction?: string; groupStopMode?: StopMode }
   ): boolean {
     const engine = this.host.getEngine();
     const stateRuntime = this.host.getStateRuntime();
@@ -463,6 +482,9 @@ export class AudioPadV3Runtime {
     }
 
     const snapshot = this.host.getRegisteredPads().get(padId);
+    if (snapshot) {
+      this.enforcePadGroup(snapshot, padId, resolvePadGroupStopMode(options?.groupStopMode));
+    }
     if (snapshot?.playbackMode === 'stopper') {
       stateRuntime.cancelAllPendingPlays(padId);
       this.stopOtherPads(padId, 'instant');
@@ -480,6 +502,24 @@ export class AudioPadV3Runtime {
       this.host.emitAudioRuntimeStageInfo(options.stageAction);
     }
     return true;
+  }
+
+  private enforcePadGroup(targetSnapshot: DeckPadSnapshot, targetPadId: string, mode: StopMode = 'instant'): void {
+    const engine = this.host.getEngine();
+    const stateRuntime = this.host.getStateRuntime();
+    this.host.getRegisteredPads().forEach((candidateSnapshot, candidatePadId) => {
+      if (!shouldStopPadForGroup(targetPadId, targetSnapshot, candidatePadId, candidateSnapshot)) {
+        return;
+      }
+      const candidateTransport = engine.getTransportState(candidatePadId);
+      const candidatePending = stateRuntime.hasPendingPlay(candidatePadId);
+      if (!candidateTransport?.isPlaying && !candidatePending) return;
+      const candidateStopMode = candidateTransport?.isPlaying ? mode : 'instant';
+      this.stopPadBasic(candidatePadId, candidateStopMode, {
+        emitAction: null,
+        notify: false,
+      });
+    });
   }
 
   private stopOtherPads(targetPadId: string, mode: StopMode = 'instant'): void {

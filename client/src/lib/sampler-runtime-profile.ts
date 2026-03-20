@@ -237,12 +237,35 @@ export const getSamplerRuntimeTuningProfile = (): SamplerRuntimeTuningProfile =>
           dehydrateIdleMs: electronProfile.dehydrateIdleMs,
         },
         preparedPlayback: {
-          autoScanOnIdle: true,
+          autoScanOnIdle: false,
           queueAfterPlay: true,
           diagEnabled: true,
         },
       };
     }
+
+    // Preload/system memory info can be temporarily unavailable during early boot.
+    // Fall back to a safe desktop profile instead of indexing the mobile profile map.
+    return {
+      kind: 'electron_desktop',
+      tier: 'medium',
+      warmupPolicy: { ...DEFAULT_DESKTOP_WARMUP },
+      startupRestorePadLimit: 900,
+      backgroundHydrationPadLimit: 320,
+      sessionMediaRetention: {
+        enabled: true,
+        minBanksForDehydration: 5,
+        maxRecentWarmBanks: 2,
+        hotPadCount: 16,
+        hotPadTtlMs: 180_000,
+        dehydrateIdleMs: 10_000,
+      },
+      preparedPlayback: {
+        autoScanOnIdle: false,
+        queueAfterPlay: true,
+        diagEnabled: true,
+      },
+    };
   }
 
   if (runtimeKind === 'desktop_web') {

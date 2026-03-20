@@ -321,6 +321,11 @@ const formatOcrAmount = (value: number | null | undefined): string => {
   return `PHP ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
+const isManualWalletPaymentChannel = (value: string | null | undefined): boolean => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'gcash_manual' || normalized === 'maya_manual';
+};
+
 const formatHourLabel = (value: string): string => {
   const parsed = Number(value || 0);
   const normalized = Number.isFinite(parsed) ? Math.max(0, Math.min(23, Math.floor(parsed))) : 0;
@@ -1022,7 +1027,9 @@ export function AccountRequestsTab({
           <div className="space-y-2">
             {rows.length === 0 ? (
               <p className="text-center py-8 opacity-50 text-sm">No {filter} account registration requests.</p>
-            ) : rows.map((req) => (
+            ) : rows.map((req) => {
+              const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
+              return (
               <div key={req.id} className={`p-3 rounded-lg border ${cardClass}`}>
                 <div className="flex justify-between items-start gap-2">
                   <div className="min-w-0">
@@ -1081,10 +1088,15 @@ export function AccountRequestsTab({
                       {req.decision_source && (
                         <div><span className="opacity-70">Decision:</span> {formatAutomationLabel(req.decision_source)}</div>
                       )}
-                      {req.automation_result && (
+                      {req.automation_result && !suppressOcrDetails && (
                         <div><span className="opacity-70">Auto Check:</span> {formatAutomationLabel(req.automation_result)}</div>
                       )}
-                      {req.ocr_reference_no && (
+                      {suppressOcrDetails && (
+                        <div className="col-span-2">
+                          <span className="opacity-70">Manual Review:</span> Uses the entered payer name and reference number only.
+                        </div>
+                      )}
+                      {req.ocr_reference_no && !suppressOcrDetails && (
                         <div>
                           <span className="opacity-70">OCR Ref:</span>{' '}
                           <CopyableValue
@@ -1095,7 +1107,7 @@ export function AccountRequestsTab({
                           />
                         </div>
                       )}
-                      {req.ocr_recipient_number && (
+                      {req.ocr_recipient_number && !suppressOcrDetails && (
                         <div>
                           <span className="opacity-70">OCR Wallet:</span>{' '}
                           <CopyableValue
@@ -1106,10 +1118,10 @@ export function AccountRequestsTab({
                           />
                         </div>
                       )}
-                      {typeof req.ocr_amount_php === 'number' && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
-                      {req.ocr_status && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
-                      {req.ocr_provider && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
-                      {req.ocr_error_code && (
+                      {typeof req.ocr_amount_php === 'number' && !suppressOcrDetails && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
+                      {req.ocr_status && !suppressOcrDetails && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
+                      {req.ocr_provider && !suppressOcrDetails && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
+                      {req.ocr_error_code && !suppressOcrDetails && (
                         <div className="col-span-2">
                           <span className="opacity-70">OCR Error:</span> {formatOcrErrorLabel(req.ocr_error_code)}
                           <span className="opacity-60 font-mono text-[11px]"> ({req.ocr_error_code})</span>
@@ -1156,7 +1168,8 @@ export function AccountRequestsTab({
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
           <Pagination page={page} totalPages={totalPages} onPageChange={onPageChange} />
         </>
@@ -1211,7 +1224,9 @@ export function StoreRequestsTab({
           <div className="space-y-2">
             {rows.length === 0 ? (
               <p className="text-center py-8 opacity-50 text-sm">No {filter} purchase requests.</p>
-            ) : rows.map((req) => (
+            ) : rows.map((req) => {
+              const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
+              return (
               <div key={req.id} className={`p-3 rounded-lg border ${cardClass}`}>
                 <div className="flex justify-between items-start gap-2">
                   <div className="min-w-0">
@@ -1275,8 +1290,13 @@ export function StoreRequestsTab({
                       </div>
                       <div className="col-span-2"><span className="opacity-70">Amount:</span> {req.hasTbdAmount ? 'TBD' : `PHP ${req.totalAmountPhp.toLocaleString()}`}</div>
                       {req.decision_source && <div><span className="opacity-70">Decision:</span> {formatAutomationLabel(req.decision_source)}</div>}
-                      {req.automation_result && <div><span className="opacity-70">Auto Check:</span> {formatAutomationLabel(req.automation_result)}</div>}
-                      {req.ocr_reference_no && (
+                      {req.automation_result && !suppressOcrDetails && <div><span className="opacity-70">Auto Check:</span> {formatAutomationLabel(req.automation_result)}</div>}
+                      {suppressOcrDetails && (
+                        <div className="col-span-2">
+                          <span className="opacity-70">Manual Review:</span> Uses the entered payer name and reference number only.
+                        </div>
+                      )}
+                      {req.ocr_reference_no && !suppressOcrDetails && (
                         <div>
                           <span className="opacity-70">OCR Ref:</span>{' '}
                           <CopyableValue
@@ -1287,7 +1307,7 @@ export function StoreRequestsTab({
                           />
                         </div>
                       )}
-                      {req.ocr_recipient_number && (
+                      {req.ocr_recipient_number && !suppressOcrDetails && (
                         <div>
                           <span className="opacity-70">OCR Wallet:</span>{' '}
                           <CopyableValue
@@ -1298,10 +1318,10 @@ export function StoreRequestsTab({
                           />
                         </div>
                       )}
-                      {typeof req.ocr_amount_php === 'number' && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
-                      {req.ocr_status && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
-                      {req.ocr_provider && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
-                      {req.ocr_error_code && (
+                      {typeof req.ocr_amount_php === 'number' && !suppressOcrDetails && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
+                      {req.ocr_status && !suppressOcrDetails && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
+                      {req.ocr_provider && !suppressOcrDetails && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
+                      {req.ocr_error_code && !suppressOcrDetails && (
                         <div className="col-span-2">
                           <span className="opacity-70">OCR Error:</span> {formatOcrErrorLabel(req.ocr_error_code)}
                           <span className="opacity-60 font-mono text-[11px]"> ({req.ocr_error_code})</span>
@@ -1354,7 +1374,8 @@ export function StoreRequestsTab({
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
           <Pagination page={page} totalPages={totalPages} onPageChange={onPageChange} />
         </>

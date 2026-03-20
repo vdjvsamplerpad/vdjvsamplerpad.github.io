@@ -138,13 +138,32 @@ export const isPreparedTrimmedPlaybackCurrent = (
   isPreparedAudioCurrent(pad) &&
   (pad.preparedAudioKind === 'trimmed_lossless' || pad.preparedAudioKind === 'trimmed_mp3');
 
+const hasResolvedPreparedPlaybackAsset = (
+  pad: Pick<
+    PadData,
+    | 'preparedAudioUrl'
+    | 'preparedStatus'
+    | 'preparedAudioStorageKey'
+    | 'preparedSourceSignature'
+    | 'audioStorageKey'
+    | 'audioUrl'
+    | 'startTimeMs'
+    | 'endTimeMs'
+    | 'audioBytes'
+    | 'audioDurationMs'
+  >
+): boolean =>
+  isPreparedAudioCurrent(pad) &&
+  typeof pad.preparedAudioUrl === 'string' &&
+  pad.preparedAudioUrl.trim().length > 0;
+
 export const resolvePadPlaybackAudioUrl = (
   pad: Pick<
     PadData,
     'audioUrl' | 'preparedAudioUrl' | 'preparedStatus' | 'preparedAudioStorageKey' | 'preparedSourceSignature' | 'audioStorageKey' | 'startTimeMs' | 'endTimeMs' | 'audioBytes' | 'audioDurationMs'
   >
 ): string => {
-  if (isPreparedAudioCurrent(pad) && typeof pad.preparedAudioUrl === 'string' && pad.preparedAudioUrl.trim().length > 0) {
+  if (hasResolvedPreparedPlaybackAsset(pad)) {
     return pad.preparedAudioUrl.trim();
   }
   return typeof pad.audioUrl === 'string' ? pad.audioUrl.trim() : '';
@@ -161,7 +180,7 @@ export const resolvePadPlaybackBytes = (
     'audioBytes' | 'preparedBytes' | 'preparedStatus' | 'preparedAudioStorageKey' | 'preparedSourceSignature' | 'audioStorageKey' | 'audioUrl' | 'startTimeMs' | 'endTimeMs' | 'audioDurationMs'
   >
 ): number | undefined =>
-  isPreparedAudioCurrent(pad) && clampNumber(pad.preparedBytes) !== null
+  hasResolvedPreparedPlaybackAsset(pad) && clampNumber(pad.preparedBytes) !== null
     ? clampNumber(pad.preparedBytes) ?? undefined
     : clampNumber(pad.audioBytes) ?? undefined;
 
@@ -171,7 +190,7 @@ export const resolvePadPlaybackDurationMs = (
     'audioDurationMs' | 'preparedDurationMs' | 'preparedStatus' | 'preparedAudioStorageKey' | 'preparedSourceSignature' | 'audioStorageKey' | 'audioUrl' | 'startTimeMs' | 'endTimeMs' | 'audioBytes'
   >
 ): number | undefined =>
-  isPreparedAudioCurrent(pad) && clampNumber(pad.preparedDurationMs) !== null
+  hasResolvedPreparedPlaybackAsset(pad) && clampNumber(pad.preparedDurationMs) !== null
     ? clampNumber(pad.preparedDurationMs) ?? undefined
     : clampNumber(pad.audioDurationMs) ?? undefined;
 
@@ -202,7 +221,7 @@ export const resolvePadPlaybackWindow = (
     | 'audioDurationMs'
   >
 ): { startTimeMs: number; endTimeMs: number } => {
-  if (isPreparedTrimmedPlaybackCurrent(pad)) {
+  if (hasResolvedPreparedPlaybackAsset(pad) && isPreparedTrimmedPlaybackCurrent(pad)) {
     const preparedDurationMs = clampNumber(pad.preparedDurationMs) ?? 0;
     return {
       startTimeMs: 0,

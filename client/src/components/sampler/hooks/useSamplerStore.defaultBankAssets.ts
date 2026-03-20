@@ -10,35 +10,60 @@ const getDefaultBankAssetBasePath = (): string => {
   return '/assets/DEFAULT_BANK';
 };
 
+const defaultBankAssetJsonCache = new Map<string, unknown | null>();
+const defaultBankAssetJsonInFlight = new Map<string, Promise<unknown | null>>();
+
 const fetchDefaultBankAssetJson = async <T,>(
   fileName: string,
   required: boolean = true
 ): Promise<T | null> => {
+  if (defaultBankAssetJsonCache.has(fileName)) {
+    return (defaultBankAssetJsonCache.get(fileName) as T | null) ?? null;
+  }
+  const inFlight = defaultBankAssetJsonInFlight.get(fileName);
+  if (inFlight) {
+    const shared = await inFlight;
+    return (shared as T | null) ?? null;
+  }
+
   if (typeof window === 'undefined') {
     if (required) throw new Error(`Default bank asset missing: ${fileName}`);
     return null;
   }
 
-  const basePath = getDefaultBankAssetBasePath();
-  const candidates = new Set<string>([`${basePath}/${fileName}`]);
-  if (/Android/.test(navigator.userAgent) && basePath.startsWith('/')) {
-    candidates.add(`./assets/DEFAULT_BANK/${fileName}`);
-  }
-  if (window.navigator.userAgent.includes('Electron') && basePath.startsWith('./')) {
-    candidates.add(`/assets/DEFAULT_BANK/${fileName}`);
-  }
-
-  for (const assetUrl of candidates) {
-    try {
-      const response = await fetch(assetUrl);
-      if (!response.ok) continue;
-      return await response.json() as T;
-    } catch {
+  const request = (async () => {
+    const basePath = getDefaultBankAssetBasePath();
+    const candidates = new Set<string>([`${basePath}/${fileName}`]);
+    if (/Android/.test(navigator.userAgent) && basePath.startsWith('/')) {
+      candidates.add(`./assets/DEFAULT_BANK/${fileName}`);
     }
-  }
+    if (window.navigator.userAgent.includes('Electron') && basePath.startsWith('./')) {
+      candidates.add(`/assets/DEFAULT_BANK/${fileName}`);
+    }
 
-  if (required) throw new Error(`Default bank asset missing: ${fileName}`);
-  return null;
+    for (const assetUrl of candidates) {
+      try {
+        const response = await fetch(assetUrl);
+        if (!response.ok) continue;
+        const parsed = await response.json() as T;
+        defaultBankAssetJsonCache.set(fileName, parsed);
+        return parsed;
+      } catch {
+      }
+    }
+
+    if (required) throw new Error(`Default bank asset missing: ${fileName}`);
+    defaultBankAssetJsonCache.set(fileName, null);
+    return null;
+  })();
+
+  defaultBankAssetJsonInFlight.set(fileName, request);
+  try {
+    const resolved = await request;
+    return (resolved as T | null) ?? null;
+  } finally {
+    defaultBankAssetJsonInFlight.delete(fileName);
+  }
 };
 
 export const loadDefaultBankFromAssetsPipeline = async (
@@ -92,6 +117,7 @@ export const loadDefaultBankFromAssetsPipeline = async (
     return {
       id: resolvedPadId,
       name: typeof pad?.name === 'string' && pad.name.trim().length > 0 ? pad.name : 'Untitled Pad',
+      artist: typeof pad?.artist === 'string' && pad.artist.trim().length > 0 ? pad.artist.trim() : undefined,
       audioUrl: allowAudio ? (audioAssetUrl || '') : '',
       imageUrl: imageAssetUrl,
       audioStorageKey: undefined,
@@ -107,6 +133,8 @@ export const loadDefaultBankFromAssetsPipeline = async (
       color: typeof pad?.color === 'string' && pad.color.trim().length > 0 ? pad.color : defaultColor,
       triggerMode: toTriggerMode(pad?.triggerMode),
       playbackMode: toPlaybackMode(pad?.playbackMode),
+      padGroup: typeof pad?.padGroup === 'number' && Number.isFinite(pad.padGroup) && pad.padGroup > 0 ? Math.trunc(pad.padGroup) : undefined,
+      padGroupUniversal: pad?.padGroupUniversal === true,
       volume: Math.max(0, Math.min(1, toNumber(pad?.volume, 1))),
       gainDb: toNumber(pad?.gainDb, 0),
       gain: Math.max(0, toNumber(pad?.gain, 1)),

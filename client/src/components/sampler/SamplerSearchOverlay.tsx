@@ -369,6 +369,11 @@ export function SamplerSearchOverlay({
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="truncate text-sm font-semibold">{result.padName}</div>
+                            {result.padArtist ? (
+                              <div className={`mt-1 truncate text-xs ${isDark ? 'text-cyan-200/90' : 'text-cyan-700'}`}>
+                                {result.padArtist}
+                              </div>
+                            ) : null}
                             <div className={`mt-1 truncate text-xs ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
                               {result.bankName}
                             </div>

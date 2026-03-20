@@ -26,7 +26,7 @@ export interface RunDefaultBankSyncDeps {
   setPrimaryBankIdState: SetState<string | null>;
   setSecondaryBankIdState: SetState<string | null>;
   setCurrentBankIdState: SetState<string | null>;
-  isDefaultBankIdentity: (bank: Pick<SamplerBank, 'name' | 'sourceBankId'>) => boolean;
+  isCanonicalDefaultBankIdentity: (bank: Pick<SamplerBank, 'name' | 'sourceBankId' | 'bankMetadata'>) => boolean;
   defaultBankSourceId: string;
   dedupeBanksByIdentity: (banks: SamplerBank[]) => DedupeResult;
 }
@@ -52,7 +52,7 @@ export const runDefaultBankSyncPipeline = async (
     setPrimaryBankIdState,
     setSecondaryBankIdState,
     setCurrentBankIdState,
-    isDefaultBankIdentity,
+    isCanonicalDefaultBankIdentity,
     defaultBankSourceId,
     dedupeBanksByIdentity,
   } = deps;
@@ -169,14 +169,14 @@ export const runDefaultBankSyncPipeline = async (
     };
 
     const existingDefault = prev.find(
-      (bank) => isDefaultBankIdentity(bank) && !bank.isLocalDuplicate && Array.isArray(bank.pads) && bank.pads.length > 0
+      (bank) => isCanonicalDefaultBankIdentity(bank) && !bank.isLocalDuplicate && Array.isArray(bank.pads) && bank.pads.length > 0
     );
 
     let nextBanks: SamplerBank[];
     if (!existingDefault) {
       const withoutDefaultPlaceholders = prev.filter((bank) => {
         const isPlaceholder =
-          isDefaultBankIdentity(bank) &&
+          isCanonicalDefaultBankIdentity(bank) &&
           !bank.isLocalDuplicate &&
           (!Array.isArray(bank.pads) || bank.pads.length === 0);
         if (isPlaceholder) removedPlaceholderIds.add(bank.id);
@@ -185,7 +185,7 @@ export const runDefaultBankSyncPipeline = async (
       nextBanks = [...withoutDefaultPlaceholders, assetDefault];
     } else {
       nextBanks = prev.map((bank) => {
-        if (!isDefaultBankIdentity(bank) || bank.isLocalDuplicate) return bank;
+        if (!isCanonicalDefaultBankIdentity(bank) || bank.isLocalDuplicate) return bank;
         const mergedPads = mergeDefaultPads(bank.pads || [], assetDefault.pads || [], allowAudio);
         return applyBankContentPolicy({
           ...bank,
@@ -212,7 +212,7 @@ export const runDefaultBankSyncPipeline = async (
 
     const deduped = dedupeBanksByIdentity(nextBanks);
     removedIdToKeptId = deduped.removedIdToKeptId;
-    const defaultAfter = deduped.banks.find((bank) => isDefaultBankIdentity(bank));
+    const defaultAfter = deduped.banks.find((bank) => isCanonicalDefaultBankIdentity(bank));
     if (defaultAfter) resolvedDefaultBankId = defaultAfter.id;
     return deduped.banks;
   });

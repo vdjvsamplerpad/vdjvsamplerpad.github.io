@@ -62,6 +62,7 @@ import {
   resolveChannelSeekProfile,
   shouldUseIOSHotcueScheduler,
 } from './audioDeckChannelControllerUtils';
+import { shouldStopPadForGroup } from './padGroupRuntime';
 import {
   applyLoadedDeckChannelState,
   resetUnloadedDeckChannelState,
@@ -230,6 +231,7 @@ export interface PadLatencyStats {
 export interface AudioInstance {
   padId: string;
   padName: string;
+  artist?: string;
   bankId: string;
   bankName: string;
   color: string;
@@ -308,17 +310,17 @@ export interface GlobalPlaybackManager {
   preloadPad: (padId: string, padData: AudioPadRuntimeRegistrationData, bankId: string, bankName: string) => Promise<boolean>;
   forceWarmPad: (padId: string, padData: AudioPadRuntimeRegistrationData, bankId: string, bankName: string) => Promise<boolean>;
   unregisterPad: (padId: string) => void;
-  playPad: (padId: string) => void;
+  playPad: (padId: string, options?: { groupStopMode?: StopMode }) => void;
   stopPad: (padId: string, mode?: StopMode, keepChannel?: boolean) => void;
-  togglePad: (padId: string) => void;
-  triggerToggle: (padId: string) => void;
-  triggerHoldStart: (padId: string) => void;
+  togglePad: (padId: string, options?: { groupStopMode?: StopMode }) => void;
+  triggerToggle: (padId: string, options?: { groupStopMode?: StopMode }) => void;
+  triggerHoldStart: (padId: string, options?: { groupStopMode?: StopMode }) => void;
   triggerHoldStop: (padId: string) => void;
-  triggerStutter: (padId: string) => void;
-  triggerUnmuteToggle: (padId: string) => void;
+  triggerStutter: (padId: string, options?: { groupStopMode?: StopMode }) => void;
+  triggerUnmuteToggle: (padId: string, options?: { groupStopMode?: StopMode }) => void;
   updatePadSettings: (padId: string, settings: AudioPadRuntimeSettings) => void;
   updatePadSettingsNextPlay: (padId: string, settings: AudioPadRuntimeSettings) => void;
-  updatePadMetadata: (padId: string, metadata: { name?: string; color?: string; bankId?: string; bankName?: string }) => void;
+  updatePadMetadata: (padId: string, metadata: { name?: string; artist?: string; color?: string; bankId?: string; bankName?: string }) => void;
   getPadState: (padId: string) => { isPlaying: boolean; progress: number; effectiveVolume: number; softMuted: boolean } | null;
   getAllPlayingPads: () => {
     padId: string;
@@ -862,16 +864,31 @@ class GlobalPlaybackManagerClass {
     this.legacyPadRuntime.startFadeOutMonitor(instance);
   }
 
-  playPad(padId: string): void {
+  private enforceLegacyPadGroupForPlay(targetPadId: string, mode: StopMode = 'instant'): void {
+    const targetSnapshot = this.registeredPads.get(targetPadId);
+    if (!targetSnapshot) return;
+
+    this.registeredPads.forEach((candidateSnapshot, candidatePadId) => {
+      if (!shouldStopPadForGroup(targetPadId, targetSnapshot, candidatePadId, candidateSnapshot)) {
+        return;
+      }
+      const candidateInstance = this.audioInstances.get(candidatePadId);
+      if (!candidateInstance?.isPlaying) return;
+      this.legacyPadRuntime.stopPad(candidatePadId, mode);
+    });
+  }
+
+  playPad(padId: string, options?: { groupStopMode?: StopMode }): void {
     if (this.audioRuntimeStage === 'disabled') {
       emitAudioEngineDisabledRuntime(this.audioRuntimeStage, 'playPad', 'pad');
       return;
     }
 
     if (!usesLegacyAudioRuntimePath(this.audioRuntimeStage)) {
-      this.v3PadRuntime.playPadBasic(padId);
+      this.v3PadRuntime.playPadBasic(padId, options);
       return;
     }
+    this.enforceLegacyPadGroupForPlay(padId, options?.groupStopMode ?? 'instant');
     this.legacyPadRuntime.playPad(padId);
   }
 
@@ -951,21 +968,21 @@ class GlobalPlaybackManagerClass {
     this.padRegistryRuntime.unregisterPad(padId);
   }
 
-  togglePad(padId: string): void {
+  togglePad(padId: string, options?: { groupStopMode?: StopMode }): void {
     if (this.audioRuntimeStage === 'disabled') {
       emitAudioEngineDisabledRuntime(this.audioRuntimeStage, 'togglePad', 'pad');
       return;
     }
 
     if (!usesLegacyAudioRuntimePath(this.audioRuntimeStage)) {
-      this.v3PadRuntime.togglePad(padId);
+      this.v3PadRuntime.togglePad(padId, options);
       return;
     }
 
     const instance = this.audioInstances.get(padId);
     if (!instance) return;
     if (instance.isPlaying) this.stopPad(padId);
-    else this.playPad(padId);
+    else this.playPad(padId, options);
   }
 
   updatePadSettings(padId: string, settings: AudioPadRuntimeSettings): void {
@@ -976,7 +993,7 @@ class GlobalPlaybackManagerClass {
     this.padRegistryRuntime.updatePadSettingsNextPlay(padId, settings);
   }
 
-  updatePadMetadata(padId: string, metadata: { name?: string; color?: string; bankId?: string; bankName?: string }): void {
+  updatePadMetadata(padId: string, metadata: { name?: string; artist?: string; color?: string; bankId?: string; bankName?: string }): void {
     this.padRegistryRuntime.updatePadMetadata(padId, metadata);
   }
 
@@ -1215,29 +1232,36 @@ class GlobalPlaybackManagerClass {
         : this.v3PadRuntime.forceWarmPad(padId, padData, bankId, bankName);
   }
 
-  triggerToggle(padId: string): void {
+  triggerToggle(padId: string, options?: { groupStopMode?: StopMode }): void {
     if (this.audioRuntimeStage === 'disabled') {
       emitAudioEngineDisabledRuntime(this.audioRuntimeStage, 'triggerToggle', 'pad');
       return;
     }
 
     if (!usesLegacyAudioRuntimePath(this.audioRuntimeStage)) {
-      this.v3PadRuntime.togglePad(padId);
+      this.v3PadRuntime.togglePad(padId, options);
       return;
     }
-    this.legacyPadRuntime.triggerToggle(padId);
+    const instance = this.audioInstances.get(padId);
+    if (!instance) return;
+    if (instance.isPlaying) {
+      this.legacyPadRuntime.triggerToggle(padId);
+      return;
+    }
+    this.playPad(padId, options);
   }
 
-  triggerHoldStart(padId: string): void {
+  triggerHoldStart(padId: string, options?: { groupStopMode?: StopMode }): void {
     if (this.audioRuntimeStage === 'disabled') {
       emitAudioEngineDisabledRuntime(this.audioRuntimeStage, 'triggerHoldStart', 'pad');
       return;
     }
 
     if (!usesLegacyAudioRuntimePath(this.audioRuntimeStage)) {
-      this.v3PadRuntime.triggerHoldStart(padId);
+      this.v3PadRuntime.triggerHoldStart(padId, options);
       return;
     }
+    this.enforceLegacyPadGroupForPlay(padId, options?.groupStopMode ?? 'instant');
     this.legacyPadRuntime.triggerHoldStart(padId);
   }
 
@@ -1254,28 +1278,38 @@ class GlobalPlaybackManagerClass {
     this.legacyPadRuntime.triggerHoldStop(padId);
   }
 
-  triggerStutter(padId: string): void {
+  triggerStutter(padId: string, options?: { groupStopMode?: StopMode }): void {
     if (this.audioRuntimeStage === 'disabled') {
       emitAudioEngineDisabledRuntime(this.audioRuntimeStage, 'triggerStutter', 'pad');
       return;
     }
 
     if (!usesLegacyAudioRuntimePath(this.audioRuntimeStage)) {
-      this.v3PadRuntime.triggerStutter(padId);
+      this.v3PadRuntime.triggerStutter(padId, options);
       return;
+    }
+    const instance = this.audioInstances.get(padId);
+    if (!instance) return;
+    if (!instance.isPlaying) {
+      this.enforceLegacyPadGroupForPlay(padId, options?.groupStopMode ?? 'instant');
     }
     this.legacyPadRuntime.triggerStutter(padId);
   }
 
-  triggerUnmuteToggle(padId: string): void {
+  triggerUnmuteToggle(padId: string, options?: { groupStopMode?: StopMode }): void {
     if (this.audioRuntimeStage === 'disabled') {
       emitAudioEngineDisabledRuntime(this.audioRuntimeStage, 'triggerUnmuteToggle', 'pad');
       return;
     }
 
     if (!usesLegacyAudioRuntimePath(this.audioRuntimeStage)) {
-      this.v3PadRuntime.triggerUnmuteToggle(padId);
+      this.v3PadRuntime.triggerUnmuteToggle(padId, options);
       return;
+    }
+    const instance = this.audioInstances.get(padId);
+    if (!instance) return;
+    if (!instance.isPlaying) {
+      this.enforceLegacyPadGroupForPlay(padId, options?.groupStopMode ?? 'instant');
     }
     this.legacyPadRuntime.triggerUnmuteToggle(padId);
   }

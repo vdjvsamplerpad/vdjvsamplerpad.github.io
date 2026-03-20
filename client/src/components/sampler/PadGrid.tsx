@@ -2,6 +2,7 @@
 import { SamplerPad } from './SamplerPad';
 import { PadData, SamplerBank, StopMode } from './types/sampler';
 import { buildPadSearchAnchorId } from './samplerSearch';
+import { parsePadDragTransferPayload } from './padDragTransfer';
 
 const normalizeSearchHitColor = (value: string | undefined, fallback = '#22d3ee'): string => {
   if (!value) return fallback;
@@ -52,6 +53,9 @@ export interface PadGridProps {
   onAdminPadColorPaint?: (bankId: string, pad: PadData) => void | Promise<void>;
   graphicsTier?: import('@/lib/performance-monitor').PerformanceTier;
   editRequest?: { padId: string; token: number } | null;
+  closeEditRequest?: { padId: string; token: number } | null;
+  onRequestEditPad?: (padId: string) => void;
+  onPadEditDialogOpenChange?: (padId: string, open: boolean) => void;
   channelLoadArmed?: boolean;
   onSelectPadForChannelLoad?: (pad: PadData, bankId: string, bankName: string) => void;
   requiresAuthToPlay?: boolean;
@@ -92,6 +96,9 @@ export const PadGrid = React.memo(function PadGrid({
   onAdminPadColorPaint,
   graphicsTier = 'low',
   editRequest = null,
+  closeEditRequest = null,
+  onRequestEditPad,
+  onPadEditDialogOpenChange,
   channelLoadArmed = false,
   onSelectPadForChannelLoad,
   requiresAuthToPlay = false,
@@ -116,18 +123,12 @@ export const PadGrid = React.memo(function PadGrid({
       data = e.dataTransfer.getData('text/plain');
     }
 
-    if (data) {
-      try {
-        const dragData = JSON.parse(data);
-        if (dragData.type === 'pad-transfer' && dragData.sourceBankId !== bankId && onTransferPad) {
-          // Check if source bank allows transfers
-          if (!canTransferFromBank || canTransferFromBank(dragData.sourceBankId)) {
-            onTransferPad(dragData.pad.id, dragData.sourceBankId, bankId);
-          }
-          return;
-        }
-      } catch {
+    const dragData = parsePadDragTransferPayload(data);
+    if (dragData && dragData.sourceBankId !== bankId && onTransferPad) {
+      if (!canTransferFromBank || canTransferFromBank(dragData.sourceBankId)) {
+        onTransferPad(dragData.padId, dragData.sourceBankId, bankId);
       }
+      return;
     }
 
     // Handle file uploads
@@ -143,7 +144,7 @@ export const PadGrid = React.memo(function PadGrid({
         break;
       }
     }
-  }, [onFileUpload, onTransferPad, bankId]);
+  }, [bankId, canTransferFromBank, onFileUpload, onTransferPad]);
 
   const handleDragOver = React.useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -154,26 +155,19 @@ export const PadGrid = React.memo(function PadGrid({
       data = e.dataTransfer.getData('text/plain');
     }
 
-    if (data) {
-      try {
-        const dragData = JSON.parse(data);
-        if (dragData.type === 'pad-transfer' && dragData.sourceBankId !== bankId) {
-          // Check if source bank allows transfers
-          if (!canTransferFromBank || canTransferFromBank(dragData.sourceBankId)) {
-            setDragOverPadTransfer(true);
-            setIsDragOverGrid(false);
-          }
-          return;
-        }
-      } catch {
-        // Not a pad transfer, continue with file drag
+    const dragData = parsePadDragTransferPayload(data);
+    if (dragData && dragData.sourceBankId !== bankId) {
+      if (!canTransferFromBank || canTransferFromBank(dragData.sourceBankId)) {
+        setDragOverPadTransfer(true);
+        setIsDragOverGrid(false);
       }
+      return;
     }
 
     // Regular file drag over
     setIsDragOverGrid(true);
     setDragOverPadTransfer(false);
-  }, [bankId]);
+  }, [bankId, canTransferFromBank]);
 
   const handleDragLeave = React.useCallback((e: React.DragEvent) => {
     // Only clear if actually leaving the grid
@@ -382,8 +376,8 @@ export const PadGrid = React.memo(function PadGrid({
             } ${
             highlightedPadId === pad.id
               ? (theme === 'dark'
-                  ? 'sampler-search-hit sampler-search-hit-dark ring-4 ring-cyan-300 ring-offset-2 ring-offset-gray-900 scale-[1.02] z-10'
-                  : 'sampler-search-hit sampler-search-hit-light ring-4 ring-cyan-400 ring-offset-2 ring-offset-white scale-[1.02] z-10')
+                  ? 'sampler-search-hit sampler-search-hit-dark ring-4 ring-cyan-300 ring-offset-2 ring-offset-gray-900 z-10'
+                  : 'sampler-search-hit sampler-search-hit-light ring-4 ring-cyan-400 ring-offset-2 ring-offset-white z-10')
               : ''
             }`}
           style={{
@@ -432,6 +426,9 @@ export const PadGrid = React.memo(function PadGrid({
             onAdminPaintPad={onAdminPadColorPaint}
             graphicsTier={graphicsTier}
             editRequestToken={editRequest?.padId === pad.id ? editRequest.token : undefined}
+            closeEditRequestToken={closeEditRequest?.padId === pad.id ? closeEditRequest.token : undefined}
+            onRequestEditPad={onRequestEditPad}
+            onEditDialogOpenChange={onPadEditDialogOpenChange}
             channelLoadArmed={channelLoadArmed}
             onSelectPadForChannelLoad={onSelectPadForChannelLoad}
             requiresAuthToPlay={requiresAuthToPlay}

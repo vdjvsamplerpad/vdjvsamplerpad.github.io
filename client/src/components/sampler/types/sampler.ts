@@ -1,6 +1,7 @@
 export interface PadData {
   id: string;
   name: string;
+  artist?: string;
   audioUrl: string;
   sourceAudioUrl?: string; // Runtime-only original full-source URL used by deck/load paths
   audioStorageKey?: string; // Persistent media key for native storage recovery
@@ -27,6 +28,8 @@ export interface PadData {
   color: string;
   triggerMode: 'toggle' | 'hold' | 'stutter' | 'unmute';
   playbackMode: 'once' | 'loop' | 'stopper';
+  padGroup?: number | null;
+  padGroupUniversal?: boolean;
   volume: number;
   gainDb?: number; // Per-pad gain in dB (-24 to +24), default 0dB.
   gain?: number; // Legacy linear gain multiplier kept for backward compatibility.
@@ -140,6 +143,7 @@ export type StopMode = 'fadeout' | 'brake' | 'backspin' | 'filter' | 'instant';
 export interface PlayingPadInfo {
   padId: string;
   padName: string;
+  padArtist?: string;
   bankId: string;
   bankName: string;
   audioUrl?: string;

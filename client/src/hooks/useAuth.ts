@@ -117,6 +117,14 @@ interface AuthActions {
 }
 
 type AuthContextValue = AuthState & AuthActions
+type AuthProviderValue = {
+  state: AuthState
+  actions: AuthActions
+  combined: AuthContextValue
+}
+
+const AuthStateContext = React.createContext<AuthState | null>(null)
+const AuthActionsContext = React.createContext<AuthActions | null>(null)
 const AuthContext = React.createContext<AuthContextValue | null>(null)
 
 const getPendingOfflineSignout = (): boolean => {
@@ -239,7 +247,7 @@ async function loadProfile(userId: string) {
   }
 }
 
-function useAuthValue(): AuthState & AuthActions {
+function useAuthValue(): AuthProviderValue {
   const cachedBan = getCachedBan()
   const cachedUser = cachedBan ? null : getCachedUser()
   const cachedProfile = cachedBan ? null : getCachedProfile()
@@ -901,20 +909,62 @@ function useAuthValue(): AuthState & AuthActions {
     setSessionConflictReason(null)
   }, [setSessionConflictReason])
 
-  return {
-    ...state,
+  const actions = React.useMemo<AuthActions>(() => ({
     signIn,
     signOut,
     requestPasswordReset,
     verifyPasswordResetCode,
     updatePassword,
     clearSessionConflictReason,
+  }), [
+    clearSessionConflictReason,
+    requestPasswordReset,
+    signIn,
+    signOut,
+    updatePassword,
+    verifyPasswordResetCode,
+  ])
+
+  const combined = React.useMemo<AuthContextValue>(() => ({
+    ...state,
+    ...actions,
+  }), [actions, state])
+
+  return {
+    state,
+    actions,
+    combined,
   }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const value = useAuthValue()
-  return React.createElement(AuthContext.Provider, { value }, children)
+  const { state, actions, combined } = useAuthValue()
+
+  return React.createElement(
+    AuthStateContext.Provider,
+    { value: state },
+    React.createElement(
+      AuthActionsContext.Provider,
+      { value: actions },
+      React.createElement(AuthContext.Provider, { value: combined }, children)
+    )
+  )
+}
+
+export function useAuthState(): AuthState {
+  const context = React.useContext(AuthStateContext)
+  if (!context) {
+    throw new Error('useAuthState must be used within AuthProvider')
+  }
+  return context
+}
+
+export function useAuthActions(): AuthActions {
+  const context = React.useContext(AuthActionsContext)
+  if (!context) {
+    throw new Error('useAuthActions must be used within AuthProvider')
+  }
+  return context
 }
 
 export function useAuth(): AuthContextValue {

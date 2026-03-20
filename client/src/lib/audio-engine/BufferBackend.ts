@@ -680,6 +680,21 @@ export class BufferBackend implements IAudioBackend {
         BufferBackend.bufferMemoryUsage = 0;
     }
 
+    static trimCacheTo(maxBytes: number): void {
+        const safeMaxBytes = Math.max(0, Math.floor(maxBytes));
+        if (BufferBackend.bufferMemoryUsage <= safeMaxBytes) return;
+        BufferBackend.evictOldest(0, safeMaxBytes);
+    }
+
+    static trimIdleCache(): void {
+        const maxBufferMemory = BufferBackend.getMaxBufferMemory();
+        const idleTargetBytes = Math.max(
+            8 * 1024 * 1024,
+            Math.floor(maxBufferMemory * (IS_ELECTRON ? 0.35 : 0.45)),
+        );
+        BufferBackend.trimCacheTo(idleTargetBytes);
+    }
+
     static getCacheStats(): { count: number; memoryBytes: number } {
         return {
             count: BufferBackend.bufferCache.size,

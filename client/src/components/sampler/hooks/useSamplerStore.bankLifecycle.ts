@@ -15,7 +15,7 @@ import {
 import {
   DEFAULT_BANK_SOURCE_ID,
   dedupeBanksByIdentity,
-  isDefaultBankIdentity,
+  isCanonicalDefaultBankIdentity,
 } from './useSamplerStore.bankIdentity';
 import {
   clearSelectedBankHydrationRetryTimer,
@@ -378,8 +378,11 @@ export function useSamplerStoreBankLifecycle({
     if (startupMediaRestoreInProgressRef.current) return;
     if (backgroundBankHydrationInProgressRef.current) return;
 
+    const runtimeProfile = getSamplerRuntimeTuningProfile();
+    if (runtimeProfile.kind === 'electron_desktop') return;
+
     const totalPads = banks.reduce((sum, bank) => sum + (Array.isArray(bank.pads) ? bank.pads.length : 0), 0);
-    const backgroundHydrationPadLimit = getSamplerRuntimeTuningProfile().backgroundHydrationPadLimit ?? 480;
+    const backgroundHydrationPadLimit = runtimeProfile.backgroundHydrationPadLimit ?? 480;
     if (totalPads > backgroundHydrationPadLimit) return;
 
     const hasMissingMedia = banks.some((bank) =>
@@ -483,7 +486,7 @@ export function useSamplerStoreBankLifecycle({
         .filter((id) => !activeIds.has(id))
         .slice(0, maxRecentWarmBanks);
       const defaultBankIds = banks
-        .filter((bank) => isDefaultBankIdentity(bank))
+        .filter((bank) => isCanonicalDefaultBankIdentity(bank, banks))
         .map((bank) => bank.id);
       const preserveIds = new Set<string>([
         ...activeIds,
@@ -593,7 +596,7 @@ export function useSamplerStoreBankLifecycle({
     }
 
     const installedRemoteDefault = banksRef.current.find(
-      (bank) => isDefaultBankIdentity(bank) && bank.bankMetadata?.defaultBankSource === 'remote'
+      (bank) => isCanonicalDefaultBankIdentity(bank, banksRef.current) && bank.bankMetadata?.defaultBankSource === 'remote'
     );
     if (installedRemoteDefault) {
       return await loadInstalledDefaultBankSource(installedRemoteDefault, allowAudio);
@@ -633,7 +636,7 @@ export function useSamplerStoreBankLifecycle({
     const syncDefaultBankFromAssets = async () => {
       const allowAudio = Boolean(authSessionUserId) && !isGuestLockedSession;
       const defaultBank = banksRef.current.find(
-        (bank) => isDefaultBankIdentity(bank) && Array.isArray(bank.pads) && bank.pads.length > 0
+        (bank) => isCanonicalDefaultBankIdentity(bank, banksRef.current) && Array.isArray(bank.pads) && bank.pads.length > 0
       );
       const needsInsert = !defaultBank;
       const hasAnyAudio = Boolean(defaultBank?.pads.some((pad) => Boolean(pad.audioUrl)));
@@ -674,7 +677,7 @@ export function useSamplerStoreBankLifecycle({
           setPrimaryBankIdState,
           setSecondaryBankIdState,
           setCurrentBankIdState,
-          isDefaultBankIdentity,
+          isCanonicalDefaultBankIdentity: (bank) => isCanonicalDefaultBankIdentity(bank, banksRef.current),
           defaultBankSourceId: DEFAULT_BANK_SOURCE_ID,
           dedupeBanksByIdentity,
         }
@@ -722,7 +725,7 @@ export function useSamplerStoreBankLifecycle({
 
     const metaState = readDefaultBankReleaseMetaState();
     const installedRemoteVersion = banksRef.current.find(
-      (bank) => isDefaultBankIdentity(bank) && bank.bankMetadata?.defaultBankSource === 'remote'
+      (bank) => isCanonicalDefaultBankIdentity(bank, banksRef.current) && bank.bankMetadata?.defaultBankSource === 'remote'
     )?.bankMetadata?.defaultBankReleaseVersion ?? null;
     const missingInstalledRemote =
       Boolean(metaState.manifest) && (!installedRemoteVersion || installedRemoteVersion !== metaState.manifest?.version);
@@ -826,25 +829,15 @@ export function useSamplerStoreBankLifecycle({
     if (selectionOwnerRef.current === ownerId) return;
     const previousOwnerId = selectionOwnerRef.current;
     selectionOwnerRef.current = ownerId;
+    if (previousOwnerId === null) return;
 
-    const lastOpenBankId = readLastOpenBankId(ownerId);
-    if (!lastOpenBankId) return;
-    if (!banks.some((bank) => bank.id === lastOpenBankId)) return;
-    if (currentBankId === lastOpenBankId && primaryBankId === null && secondaryBankId === null) return;
-
-    const currentBank = currentBankId ? banks.find((bank) => bank.id === currentBankId) || null : null;
-    const shouldRestoreSelection =
-      previousOwnerId === null ||
-      !currentBank ||
-      isDefaultBankIdentity(currentBank) ||
-      primaryBankId !== null ||
-      secondaryBankId !== null;
-
-    if (!shouldRestoreSelection) return;
+    const defaultBankId = banks.find((bank) => isCanonicalDefaultBankIdentity(bank, banks))?.id;
+    if (!defaultBankId) return;
+    if (currentBankId === defaultBankId && primaryBankId === null && secondaryBankId === null) return;
 
     setPrimaryBankIdState(null);
     setSecondaryBankIdState(null);
-    setCurrentBankIdState(lastOpenBankId);
+    setCurrentBankIdState(defaultBankId);
   }, [
     authSessionUserId,
     banks,
@@ -853,7 +846,6 @@ export function useSamplerStoreBankLifecycle({
     isBanksHydrated,
     isDefaultBankSyncing,
     primaryBankId,
-    readLastOpenBankId,
     secondaryBankId,
     selectionOwnerRef,
     setCurrentBankIdState,
@@ -927,7 +919,7 @@ export function useSamplerStoreBankLifecycle({
     }
 
     const defaultBank = banks.find(
-      (bank) => isDefaultBankIdentity(bank) && Array.isArray(bank.pads) && bank.pads.length > 0
+      (bank) => isCanonicalDefaultBankIdentity(bank, banks) && Array.isArray(bank.pads) && bank.pads.length > 0
     );
     if (!defaultBank) return;
 

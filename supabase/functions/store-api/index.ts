@@ -2459,6 +2459,18 @@ const buildReceiptOcrMetadata = (
   fallbackProvider: string | null = null,
 ): ReceiptOcrMetadata => {
   if (!detected) {
+    if (!fallbackErrorCode) {
+      return {
+        referenceNo: null,
+        payerName: null,
+        amountPhp: null,
+        recipientNumber: null,
+        provider: null,
+        scannedAt: null,
+        status: "skipped",
+        errorCode: null,
+      };
+    }
     if (fallbackErrorCode === "MANUAL_REVIEW_MODE") {
       return {
         referenceNo: null,
@@ -3665,7 +3677,7 @@ const sendAccountRejectionDecisionEmail = async (input: {
       { label: "Reason", value: reasonText },
     ],
     bodyText: textBody,
-    brandName: "VDJV SAMPLER PAD",
+    brandName: "VDJV Sampler Pad",
   });
 
   try {

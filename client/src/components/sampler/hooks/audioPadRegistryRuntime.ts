@@ -15,6 +15,7 @@ import { hotcueTupleEqualsValue } from './audioHotcueUtils';
 import type { AudioRuntimeStage } from './audioRuntimeStage';
 import type { DeckPadSnapshot, StopMode } from './audioDeckRuntime';
 import type { AudioPadRuntimeRegistrationData, AudioPadRuntimeSettings } from './audioPadRuntimeTypes';
+import { normalizePadGroupUniversalValue, normalizePadGroupValue } from './padGroupRuntime';
 import type { AudioInstance } from './useGlobalPlaybackManager';
 
 interface AudioPadRegistryRuntimeHost {
@@ -75,6 +76,7 @@ export class AudioPadRegistryRuntime {
 
     if (existing && existing.lastAudioUrl === padData.audioUrl) {
       existing.padName = padData.name;
+      existing.artist = typeof padData.artist === 'string' ? padData.artist : undefined;
       existing.bankId = bankId;
       existing.bankName = bankName;
       existing.color = padData.color;
@@ -121,6 +123,7 @@ export class AudioPadRegistryRuntime {
     const instance: AudioInstance = {
       padId,
       padName: padData.name,
+      artist: typeof padData.artist === 'string' ? padData.artist : undefined,
       bankId,
       bankName,
       color: padData.color,
@@ -226,6 +229,7 @@ export class AudioPadRegistryRuntime {
       const registered = this.host.getRegisteredPads().get(padId);
       if (!registered) return;
       if (typeof settings.name === 'string') registered.padName = settings.name;
+      if (typeof settings.artist === 'string' || settings.artist === undefined) registered.artist = settings.artist;
       if (typeof settings.color === 'string') registered.color = settings.color;
       this.updateV3PadSettings(padId, settings);
       return;
@@ -236,12 +240,13 @@ export class AudioPadRegistryRuntime {
     instance.nextPlayOverrides = { ...(instance.nextPlayOverrides || {}), ...settings };
   }
 
-  updatePadMetadata(padId: string, metadata: { name?: string; color?: string; bankId?: string; bankName?: string }): void {
+  updatePadMetadata(padId: string, metadata: { name?: string; artist?: string; color?: string; bankId?: string; bankName?: string }): void {
     const registered = this.host.getRegisteredPads().get(padId);
 
     if (!this.host.usesLegacyAudioRuntimePath()) {
       if (!registered) return;
       if (metadata.name !== undefined) registered.padName = metadata.name;
+      if (metadata.artist !== undefined || Object.prototype.hasOwnProperty.call(metadata, 'artist')) registered.artist = metadata.artist;
       if (metadata.color !== undefined) registered.color = metadata.color;
       if (metadata.bankId !== undefined) registered.bankId = metadata.bankId;
       if (metadata.bankName !== undefined) registered.bankName = metadata.bankName;
@@ -252,11 +257,13 @@ export class AudioPadRegistryRuntime {
     const instance = this.host.getAudioInstances().get(padId);
     if (!instance) return;
     if (metadata.name !== undefined) instance.padName = metadata.name;
+    if (metadata.artist !== undefined || Object.prototype.hasOwnProperty.call(metadata, 'artist')) instance.artist = metadata.artist;
     if (metadata.color !== undefined) instance.color = metadata.color;
     if (metadata.bankId !== undefined) instance.bankId = metadata.bankId;
     if (metadata.bankName !== undefined) instance.bankName = metadata.bankName;
     if (registered) {
       if (metadata.name !== undefined) registered.padName = metadata.name;
+      if (metadata.artist !== undefined || Object.prototype.hasOwnProperty.call(metadata, 'artist')) registered.artist = metadata.artist;
       if (metadata.color !== undefined) registered.color = metadata.color;
       if (metadata.bankId !== undefined) registered.bankId = metadata.bankId;
       if (metadata.bankName !== undefined) registered.bankName = metadata.bankName;
@@ -312,6 +319,12 @@ export class AudioPadRegistryRuntime {
       registered.playbackMode = normalizePadPlaybackModeValue(settings.playbackMode);
       this.host.v3SetTransportPlaybackMode(padId, registered.playbackMode);
     }
+    if (settings.padGroup !== undefined) {
+      registered.padGroup = normalizePadGroupValue(settings.padGroup);
+    }
+    if (settings.padGroupUniversal !== undefined) {
+      registered.padGroupUniversal = normalizePadGroupUniversalValue(settings.padGroupUniversal);
+    }
     if (settings.savedHotcuesMs !== undefined) {
       const nextHotcues: HotcueTuple = Array.isArray(settings.savedHotcuesMs)
         ? (settings.savedHotcuesMs.slice(0, 4) as HotcueTuple)
@@ -355,6 +368,12 @@ export class AudioPadRegistryRuntime {
       if (registered) {
         registered.playbackMode = playbackMode;
       }
+    }
+    if (settings.padGroup !== undefined && registered) {
+      registered.padGroup = normalizePadGroupValue(settings.padGroup);
+    }
+    if (settings.padGroupUniversal !== undefined && registered) {
+      registered.padGroupUniversal = normalizePadGroupUniversalValue(settings.padGroupUniversal);
     }
     if (settings.startTimeMs !== undefined) {
       instance.startTimeMs = settings.startTimeMs;
@@ -458,6 +477,7 @@ export class AudioPadRegistryRuntime {
     return {
       padId,
       padName: padData.name,
+      artist: typeof padData.artist === 'string' ? padData.artist : undefined,
       bankId,
       bankName,
       color: padData.color,
@@ -474,6 +494,8 @@ export class AudioPadRegistryRuntime {
       keyLock: normalizeKeyLockForRuntime(this.host.getIsIOS(), padData?.keyLock),
       triggerMode: normalizePadTriggerModeValue(padData.triggerMode),
       playbackMode: normalizePadPlaybackModeValue(padData.playbackMode),
+      padGroup: normalizePadGroupValue(padData?.padGroup),
+      padGroupUniversal: normalizePadGroupUniversalValue(padData?.padGroupUniversal),
       savedHotcuesMs: Array.isArray(padData.savedHotcuesMs)
         ? (padData.savedHotcuesMs.slice(0, 4) as HotcueTuple)
         : [null, null, null, null],

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PaymentReceiptCard } from '@/components/ui/payment-receipt-card'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuthActions, useAuthState } from '@/hooks/useAuth'
 import { ensureActivityRuntime, logActivityEvent } from '@/lib/activityLogger'
 import { edgeFunctionUrl } from '@/lib/edge-api'
 import { runReceiptOcr } from '@/lib/receipt-ocr'
@@ -210,15 +210,17 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
 
   const {
     user,
+    authTransition,
+    sessionConflictReason,
+    banned,
+  } = useAuthState()
+  const {
     signIn,
     requestPasswordReset,
     verifyPasswordResetCode,
     updatePassword,
-    authTransition,
-    sessionConflictReason,
     clearSessionConflictReason,
-    banned,
-  } = useAuth()
+  } = useAuthActions()
 
   const colorText = theme === 'dark' ? 'text-white' : 'text-gray-900'
   const panelClass = `sm:max-w-xl ${theme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'}`
@@ -1443,9 +1445,13 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                               <button
                                 type="button"
                                 onClick={() => setExpandedQrUrl(paymentConfig.qr_image_path || null)}
-                                className="rounded-xl border p-1 bg-white hover:opacity-90 transition-opacity"
+                                className="flex max-w-[min(70vw,220px)] max-h-[260px] items-center justify-center rounded-xl border bg-white p-2 hover:opacity-90 transition-opacity"
                               >
-                                <img src={paymentConfig.qr_image_path} alt="Payment QR" className="w-[180px] h-[180px] rounded-xl object-cover" />
+                                <img
+                                  src={paymentConfig.qr_image_path}
+                                  alt="Payment QR"
+                                  className="block max-w-[min(64vw,200px)] max-h-[240px] h-auto w-auto rounded-lg object-contain"
+                                />
                               </button>
                               <Button
                                 type="button"
@@ -1473,7 +1479,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                       className={`w-full rounded-md border px-3 py-2 text-sm outline-none ${isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
                       disabled={loading}
                     >
-                      <option value="image_proof">Upload Receipt / Image Proof</option>
+                      <option value="image_proof">Upload Official Receipt (Fast Approval)</option>
                       <option value="gcash_manual">GCash (Manual)</option>
                       <option value="maya_manual">Maya (Manual)</option>
                     </select>
@@ -1587,8 +1593,14 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
             )}
             {expandedQrUrl && (
               <div className="fixed inset-0 z-[220] bg-black/75 flex items-center justify-center p-4" onClick={() => setExpandedQrUrl(null)}>
-                <div className="relative max-w-[95vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
-                  <img src={expandedQrUrl} alt="Expanded payment QR" className="max-w-[90vw] max-h-[80vh] rounded-xl border bg-white p-2" />
+                <div className="relative flex max-w-[95vw] max-h-[90vh] flex-col items-center" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex max-w-[min(92vw,40rem)] max-h-[82vh] items-center justify-center rounded-xl border bg-white p-3 shadow-2xl">
+                    <img
+                      src={expandedQrUrl}
+                      alt="Expanded payment QR"
+                      className="block max-w-[min(88vw,36rem)] max-h-[76vh] h-auto w-auto object-contain"
+                    />
+                  </div>
                   <div className="mt-2 flex justify-center gap-2">
                     <Button
                       type="button"
@@ -1613,5 +1625,4 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     </Dialog>
   )
 }
-
 

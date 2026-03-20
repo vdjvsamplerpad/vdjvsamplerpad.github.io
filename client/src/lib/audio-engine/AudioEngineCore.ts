@@ -76,6 +76,7 @@ export class AudioEngineCore implements LifecycleDelegate {
     private transportRegistrationQueue = new Map<string, Promise<void>>();
     private stateListeners = new Set<() => void>();
     private notifyTimeout: ReturnType<typeof setTimeout> | null = null;
+    private idleCacheTrimTimeout: ReturnType<typeof setTimeout> | null = null;
 
     private masterVolume = 1;
     private globalMuted = false;
@@ -264,7 +265,26 @@ export class AudioEngineCore implements LifecycleDelegate {
             this.transportEvictScheduled = false;
             this.enforceTransportBudget(excludePadId);
             this.enforceTotalTransportCap(excludePadId);
+            this.scheduleIdleCacheTrim();
         }, 0);
+    }
+
+    private hasActivePlayback(): boolean {
+        for (const transport of this.transports.values()) {
+            if (transport.state.isPlaying || transport.state.isPaused || transport.stopCancel) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private scheduleIdleCacheTrim(): void {
+        if (this.idleCacheTrimTimeout) return;
+        this.idleCacheTrimTimeout = setTimeout(() => {
+            this.idleCacheTrimTimeout = null;
+            if (this.hasActivePlayback()) return;
+            BufferBackend.trimIdleCache();
+        }, 1800);
     }
 
     private initAudioContext(): void {
@@ -902,6 +922,7 @@ export class AudioEngineCore implements LifecycleDelegate {
             t.gainConnectedToMaster = false;
         }
         this.transports.delete(padId);
+        this.scheduleIdleCacheTrim();
     }
 
     setMasterVolume(volume: number): void {
@@ -1091,6 +1112,11 @@ export class AudioEngineCore implements LifecycleDelegate {
             clearTimeout(this.notifyTimeout);
             this.notifyTimeout = null;
         }
+        if (this.idleCacheTrimTimeout) {
+            clearTimeout(this.idleCacheTrimTimeout);
+            this.idleCacheTrimTimeout = null;
+        }
+        BufferBackend.clearCache();
         if (this.masterGain) {
             try { this.masterGain.disconnect(); } catch { /* */ }
             this.masterGain = null;

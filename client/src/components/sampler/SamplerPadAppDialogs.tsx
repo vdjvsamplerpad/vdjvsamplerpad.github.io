@@ -119,14 +119,14 @@ export function SamplerPadAppDialogs({
             </div>
             <div className="grid grid-cols-1 gap-2">
               <Button onClick={onApplyRemoteSnapshot} variant="default" disabled={Boolean(remoteSnapshotRestoreProgress)}>
-                {remoteSnapshotRestoreProgress ? 'Restoring...' : 'Manual Sync Metadata'}
+                {remoteSnapshotRestoreProgress ? 'Restoring...' : 'Restore Bank List Only'}
               </Button>
               <Button
                 onClick={onRestoreFromBackupForRemoteSnapshot}
                 variant="outline"
                 disabled={Boolean(remoteSnapshotRestoreProgress)}
               >
-                Restore from Full Backup
+                Restore Account Backup
               </Button>
               <Button
                 onClick={onSkipRemoteSnapshotPrompt}
@@ -151,8 +151,8 @@ export function SamplerPadAppDialogs({
               </div>
             )}
             <div className={`rounded-md border p-3 text-xs ${theme === 'dark' ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-500'}`}>
-              <div><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Manual Sync Metadata:</span> rebuild the bank list first, then recover downloads or missing media per bank.</div>
-              <div className="mt-1"><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Restore from Full Backup:</span> use your exported backup file for the fastest full-media restore.</div>
+              <div><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Restore Bank List Only:</span> rebuild the bank list first, then repair downloads or missing media per bank.</div>
+              <div className="mt-1"><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Restore Account Backup:</span> use your exported account backup for the fastest full-media restore.</div>
             </div>
           </div>
         </DialogContent>
@@ -173,8 +173,8 @@ export function SamplerPadAppDialogs({
               </p>
             ) : null}
             <div className="grid grid-cols-1 gap-2">
-              <Button onClick={onRestoreBackupPrompt} variant="default">Restore from Backup</Button>
-              <Button onClick={onRecoverBankPrompt} variant="outline">Import .bank files one by one</Button>
+              <Button onClick={onRestoreBackupPrompt} variant="default">Restore Account Backup</Button>
+              <Button onClick={onRecoverBankPrompt} variant="outline">Repair from .bank Files</Button>
               <Button onClick={() => onMissingMediaSummaryChange(null)} variant="ghost">Continue</Button>
             </div>
           </div>
@@ -184,7 +184,7 @@ export function SamplerPadAppDialogs({
       <Dialog open={showRecoverBankModeDialog} onOpenChange={onShowRecoverBankModeDialogChange}>
         <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Recover Missing Media</DialogTitle>
+            <DialogTitle>Repair Missing Media</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 text-sm">
             <p className={theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}>

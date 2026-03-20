@@ -12,6 +12,8 @@ import {
   type MappingExport,
   type PadMappingValue
 } from '../SamplerPadApp.shared';
+import type { ImportBankSource } from './nativeBankImport.types';
+import { isRecoverableDuplicateImportError } from './useSamplerStore.importErrors';
 
 type UpdateBank = (bankId: string, updates: Partial<SamplerBank>) => void | Promise<void>;
 type UpdatePad = (bankId: string, padId: string, pad: PadData) => void | Promise<void>;
@@ -45,7 +47,7 @@ interface UseSamplerPadAppMappingsParams {
   playbackManager: PlaybackManagerLike;
   updateBank: UpdateBank;
   updatePad: UpdatePad;
-  importBank: (file: File) => Promise<SamplerBank | null>;
+  importBank: (source: ImportBankSource) => Promise<SamplerBank | null>;
   exportAppBackup: (payload: Record<string, unknown>, options?: { riskMode?: boolean }) => Promise<string>;
   restoreAppBackup: (file: File, companionFiles?: File[]) => Promise<RestoreAppBackupResult>;
   recoverMissingMediaFromBanks: (files: File[], options?: { addAsNewWhenNoTarget?: boolean }) => Promise<string>;
@@ -390,13 +392,28 @@ export function useSamplerPadAppMappings({
     return `Mappings imported. Banks: ${appliedBanks} updated, ${skippedBanks} skipped. Pads: ${appliedPads} updated, ${skippedPads} skipped.`;
   }, [banks, setSettings, settings.systemMappings.channelMappings, updateBank, updatePad]);
 
-  const handleImportSharedBank = React.useCallback(async (file: File) => {
-    const imported = await importBank(file);
-    if (!imported) {
-      throw new Error('Shared bank import failed.');
+  const handleImportSharedBank = React.useCallback(async (source: ImportBankSource) => {
+    try {
+      const imported = await importBank(source);
+      if (!imported) {
+        throw new Error('Shared bank import failed.');
+      }
+      return `Imported shared bank "${imported.name}".`;
+    } catch (error) {
+      if (isRecoverableDuplicateImportError(error)) {
+        if (source instanceof File) {
+          const repairMessage = await recoverMissingMediaFromBanks([source], {
+            addAsNewWhenNoTarget: false,
+          });
+          return `Repaired existing bank from "${source.name}". ${repairMessage}`;
+        }
+        throw new Error(
+          'This bank matches a restored bank already on this device. Use the bank repair action or restore your account backup on this device.'
+        );
+      }
+      throw error;
     }
-    return `Imported shared bank "${imported.name}".`;
-  }, [importBank]);
+  }, [importBank, recoverMissingMediaFromBanks]);
 
   const handleExportAppBackup = React.useCallback(async (options?: { riskMode?: boolean }) => {
     const payload = {

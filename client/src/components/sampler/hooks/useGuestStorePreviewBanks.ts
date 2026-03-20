@@ -21,7 +21,7 @@ type GuestStorePreviewCache = {
 const GUEST_STORE_PREVIEW_CACHE_KEY = 'vdjv-guest-store-preview-banks-v1';
 const GUEST_STORE_PREVIEW_SUPPRESSED_KEY = 'vdjv-guest-store-preview-suppressed-v1';
 const GUEST_STORE_PREVIEW_CACHE_VERSION = 1;
-const GUEST_STORE_PREVIEW_LIMIT = 10;
+export const STORE_PREVIEW_LIMIT = 10;
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -114,13 +114,13 @@ const normalizePreviewItems = (items: unknown): GuestStorePreviewBank[] => {
     });
   });
 
-  return normalized.slice(0, GUEST_STORE_PREVIEW_LIMIT);
+  return normalized.slice(0, STORE_PREVIEW_LIMIT);
 };
 
-const fetchGuestPreviewBanks = async (): Promise<{ items: GuestStorePreviewBank[]; maintenanceEnabled: boolean }> => {
+export const fetchStorePreviewBanks = async (): Promise<{ items: GuestStorePreviewBank[]; maintenanceEnabled: boolean }> => {
   const params = new URLSearchParams();
   params.set('page', '1');
-  params.set('perPage', String(GUEST_STORE_PREVIEW_LIMIT));
+  params.set('perPage', String(STORE_PREVIEW_LIMIT));
   params.set('sort', 'default');
   params.set('includeBanners', '0');
   params.set('includeCount', '0');
@@ -174,7 +174,7 @@ export function useGuestStorePreviewBanks(effectiveUser: { id?: string | null } 
     let cancelled = false;
     const load = async () => {
       try {
-        const fetched = await fetchGuestPreviewBanks();
+        const fetched = await fetchStorePreviewBanks();
         if (cancelled) return;
         if (fetched.maintenanceEnabled) {
           writeCache([]);
@@ -198,7 +198,7 @@ export function useGuestStorePreviewBanks(effectiveUser: { id?: string | null } 
     if (isSuppressed || effectiveUser || typeof window === 'undefined') return;
 
     const handleOnline = () => {
-      void fetchGuestPreviewBanks()
+      void fetchStorePreviewBanks()
         .then((fetched) => {
           if (fetched.maintenanceEnabled) {
             writeCache([]);

@@ -188,6 +188,7 @@ export const createSamplerBackupRuntimeHelpers = (input: CreateSamplerBackupRunt
           message,
           elapsedMs: Math.max(0, now - startedAt),
           progress,
+          stage: stageId || null,
           stageId: stageId || null,
         },
       })
@@ -208,4 +209,3 @@ export const createSamplerBackupRuntimeHelpers = (input: CreateSamplerBackupRunt
     emitImportStage,
   };
 };
-

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useAuth, getCachedProfile, getCachedUser, type Profile } from '@/hooks/useAuth';
+import { useAuthState, getCachedProfile, getCachedUser, type Profile } from '@/hooks/useAuth';
 
 const DEFAULT_OWNED_BANK_QUOTA = 6;
 const DEFAULT_OWNED_BANK_PAD_CAP = 64;
@@ -49,7 +49,7 @@ export const resolveBankQuotaPolicy = (profile: Profile | null | undefined): Ban
 });
 
 export const useSamplerStoreSession = () => {
-  const { user, profile, loading, sessionConflictReason, offlineTrustedSession } = useAuth();
+  const { user, profile, loading, sessionConflictReason, offlineTrustedSession } = useAuthState();
   const effectiveProfile = React.useMemo<Profile | null>(() => profile || getCachedProfile(), [profile]);
   const quotaPolicy = React.useMemo(() => resolveBankQuotaPolicy(effectiveProfile), [effectiveProfile]);
   const authSession = React.useMemo((): { mode: SamplerAuthSessionMode; user: ReturnType<typeof getCachedUser> } => {
@@ -72,4 +72,3 @@ export const useSamplerStoreSession = () => {
     isGuestLockedSession: authSession.mode === 'guest_locked',
   };
 };
-

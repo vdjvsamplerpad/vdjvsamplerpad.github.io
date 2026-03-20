@@ -10,17 +10,19 @@ import { SamplerBank, PadData } from './types/sampler';
 const BankEditDialog = React.lazy(() => import('./BankEditDialog').then(m => ({ default: m.BankEditDialog })));
 import type { OnlineBankStoreDialog as OnlineBankStoreDialogType } from './OnlineBankStoreDialog';
 const OnlineBankStoreDialog = React.lazy(() => import('./OnlineBankStoreDialog').then(m => ({ default: m.OnlineBankStoreDialog }))) as unknown as typeof OnlineBankStoreDialogType;
-import { getCachedUser, useAuth } from '@/hooks/useAuth';
+import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { createPortal } from 'react-dom';
 import { normalizeStoredShortcutKey } from '@/lib/keyboard-shortcuts';
 import type { PerformanceTier } from '@/lib/performance-monitor';
-import { useGuestStorePreviewBanks, type GuestStorePreviewBank } from './hooks/useGuestStorePreviewBanks';
-import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
+import { fetchStorePreviewBanks, useGuestStorePreviewBanks, type GuestStorePreviewBank } from './hooks/useGuestStorePreviewBanks';
+import { isCanonicalDefaultBankIdentity, isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { useOnlineStoreDownloadTransfer } from './hooks/useOnlineStoreDownloadTransfer';
 import { deriveSnapshotRestoreStatus } from './hooks/useSamplerStore.snapshotMetadata';
 import type { OnlineBankStoreImportMeta, StoreDownloadedArtifact, StoreItem, TransferState } from './onlineStore.types';
-import type { ExportAudioMode, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
+import type { ImportBankSource } from './hooks/nativeBankImport.types';
+import type { AdminStoreUploadQueueSummary, ExportAudioMode, LinkExistingStoreBankCandidate, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
 import type { BankPreparedSummary } from './hooks/preparedAudio';
+import { parsePadDragTransferPayload } from './padDragTransfer';
 
 type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string; closing?: boolean };
 const MAX_ACTIVE_NOTICES = 2;
@@ -39,6 +41,7 @@ const STORE_BUTTON_CONFETTI = [
   { key: 'c4', className: '-top-2 left-8 bg-emerald-300', delay: '160ms', duration: '2.3s', drift: '7px', rotate: '-20deg' },
   { key: 'c5', className: '-top-3 right-8 bg-fuchsia-300', delay: '420ms', duration: '2.5s', drift: '-10px', rotate: '28deg' },
 ];
+const STORE_PREVIEW_SEEN_KEY_PREFIX = 'vdjv-store-preview-seen-v1:';
 
 const withAlpha = (hex: string, alphaHex: string): string => {
   const normalized = hex.trim().replace('#', '');
@@ -57,6 +60,19 @@ const appendProgressLogLine = (
     const next = [...prev, nextMessage];
     return next.length > MAX_PROGRESS_LOG_LINES ? next.slice(-MAX_PROGRESS_LOG_LINES) : next;
   });
+};
+
+const buildStorePreviewSignature = (items: GuestStorePreviewBank[]): string => (
+  items
+    .slice(0, 10)
+    .map((item) => `${item.bankId}:${item.catalogItemId}:${item.order}`)
+    .join('|')
+);
+
+type StoreRecoveryResolution = {
+  catalogItemId: string;
+  bankId: string;
+  sha256?: string | null;
 };
 
 interface SideMenuProps {
@@ -78,7 +94,7 @@ interface SideMenuProps {
   onDeleteBank: (id: string) => void;
   onDuplicateBank?: (bankId: string, onProgress?: (progress: number) => void) => Promise<SamplerBank>;
   onImportBank: (
-    file: File,
+    source: ImportBankSource,
     onProgress?: (progress: number) => void,
     options?: {
       allowDuplicateImport?: boolean;
@@ -92,6 +108,7 @@ interface SideMenuProps {
   onExportBank: (id: string, onProgress?: (progress: number) => void) => Promise<string>;
   onMoveBankUp: (id: string) => void;
   onMoveBankDown: (id: string) => void;
+  onMoveBankToPosition: (id: string, targetIndex: number) => void;
   onTransferPad: (padId: string, sourceBankId: string, targetBankId: string) => void;
   canTransferFromBank?: (bankId: string) => boolean;
   onExportAdmin?: (
@@ -106,6 +123,10 @@ interface SideMenuProps {
     onProgress?: (progress: number) => void
   ) => Promise<string>;
   onUpdateStoreBank?: (input: UpdateStoreBankInput) => Promise<string>;
+  adminExportUploadQueueSummary?: AdminStoreUploadQueueSummary;
+  onRetryPendingAdminExportUploads?: () => Promise<string>;
+  onListLinkableStoreBanks?: () => Promise<LinkExistingStoreBankCandidate[]>;
+  onLinkExistingStoreBank?: (runtimeBankId: string, candidate: LinkExistingStoreBankCandidate) => Promise<string>;
   midiEnabled?: boolean;
   blockedShortcutKeys: Set<string>;
   blockedMidiNotes: Set<number>;
@@ -122,6 +143,7 @@ interface SideMenuProps {
     remainingOfficial: number;
     remainingUser: number;
   }>;
+  onResolveStoreRecoveryCatalogItem?: (bank: SamplerBank) => Promise<StoreRecoveryResolution | null>;
   onPrefetchOfficialBankMediaForOffline: (bankId: string) => Promise<{
     candidates: number;
     prefetched: number;
@@ -155,10 +177,15 @@ export function SideMenu({
   onExportBank,
   onMoveBankUp,
   onMoveBankDown,
+  onMoveBankToPosition,
   onTransferPad,
   canTransferFromBank,
   onExportAdmin,
   onUpdateStoreBank,
+  adminExportUploadQueueSummary,
+  onRetryPendingAdminExportUploads,
+  onListLinkableStoreBanks,
+  onLinkExistingStoreBank,
   midiEnabled = false,
   blockedShortcutKeys,
   blockedMidiNotes,
@@ -169,6 +196,7 @@ export function SideMenu({
   onRequestRestoreBackup,
   onRequestRecoverBankFiles,
   onRetryBankMissingMedia,
+  onResolveStoreRecoveryCatalogItem,
   onPrefetchOfficialBankMediaForOffline,
   getBankPreparedSummary,
   onPrepareBankForLive,
@@ -215,6 +243,8 @@ export function SideMenu({
     kind: 'download' | 'recover';
     bankId: string;
   } | null>(null);
+  const [adminUploadRetryBusy, setAdminUploadRetryBusy] = React.useState(false);
+  const [snapshotDownloadBusyBankId, setSnapshotDownloadBusyBankId] = React.useState<string | null>(null);
   const [snapshotRecoverBusyBankId, setSnapshotRecoverBusyBankId] = React.useState<string | null>(null);
   const [snapshotTransfers, setSnapshotTransfers] = React.useState<Record<string, TransferState>>({});
   const downloadedArtifactsRef = React.useRef<Record<string, StoreDownloadedArtifact>>({});
@@ -302,13 +332,48 @@ export function SideMenu({
     }
   }, [banks, editingBank, onUpdatePad, pushNotice]);
 
-  const { user, profile } = useAuth();
+  const { user, profile } = useAuthState();
   const isAdmin = profile?.role === 'admin';
+  const pendingAdminUploadCount = adminExportUploadQueueSummary?.pendingCount || 0;
+  const nextAdminUploadRetryLabel = React.useMemo(() => {
+    const nextRetryAt = adminExportUploadQueueSummary?.nextRetryAt || null;
+    if (!nextRetryAt) return null;
+    const retryDate = new Date(nextRetryAt);
+    if (Number.isNaN(retryDate.getTime())) return null;
+    return retryDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }, [adminExportUploadQueueSummary?.nextRetryAt]);
   const lastExportMilestoneRef = React.useRef(-1);
   const appendExportLog = React.useCallback((message: string) => {
     if (!isAdmin) return;
     appendProgressLogLine(setExportLogLines, message);
   }, [isAdmin]);
+
+  React.useEffect(() => {
+    if (!isAdmin || !showExportProgress || exportStatus !== 'loading') return;
+    const handleOperationDebug = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail || {};
+      if (detail.operation !== 'bank_export') return;
+      const phase = typeof detail.phase === 'string' ? detail.phase : '';
+      const opDetails = detail.details && typeof detail.details === 'object'
+        ? detail.details as Record<string, unknown>
+        : {};
+      if (phase === 'heartbeat') {
+        const idleText = typeof opDetails.sinceLastActivityMs === 'number'
+          ? ` idle=${Math.round(opDetails.sinceLastActivityMs)}ms`
+          : '';
+        const lastStageText = typeof opDetails.lastStage === 'string' && opDetails.lastStage
+          ? ` lastStage=${opDetails.lastStage}`
+          : '';
+        appendExportLog(`Heartbeat bank_export${lastStageText}${idleText}`);
+        return;
+      }
+      if (phase === 'error' && typeof opDetails.message === 'string') {
+        appendExportLog(`bank_export error: ${opDetails.message}`);
+      }
+    };
+    window.addEventListener('vdjv-operation-debug', handleOperationDebug as EventListener);
+    return () => window.removeEventListener('vdjv-operation-debug', handleOperationDebug as EventListener);
+  }, [appendExportLog, exportStatus, isAdmin, showExportProgress]);
 
   const isHighGraphics = graphicsTier === 'high';
   const isLowGraphics = graphicsTier === 'low';
@@ -331,11 +396,69 @@ export function SideMenu({
   }, []);
   const effectiveUser = user || getCachedUser();
   const { previewBanks } = useGuestStorePreviewBanks(effectiveUser);
+  const [signedInPreviewBanks, setSignedInPreviewBanks] = React.useState<GuestStorePreviewBank[]>([]);
+  const storePreviewItems = effectiveUser ? signedInPreviewBanks : previewBanks;
+  const storePreviewSignature = React.useMemo(
+    () => buildStorePreviewSignature(storePreviewItems),
+    [storePreviewItems]
+  );
+  const storePreviewSeenKey = React.useMemo(
+    () => `${STORE_PREVIEW_SEEN_KEY_PREFIX}${profile?.id || effectiveUser?.id || 'guest'}`,
+    [effectiveUser?.id, profile?.id]
+  );
+  const [seenStorePreviewSignature, setSeenStorePreviewSignature] = React.useState('');
   const displayName = profile?.display_name?.trim() || effectiveUser?.email?.split('@')[0] || 'Guest';
   const isLowestGraphics = graphicsTier === 'lowest';
   const requestStoreLogin = React.useCallback((reason?: string) => {
     requestLoginPrompt(reason || 'Please sign in to download this bank.');
   }, [requestLoginPrompt]);
+  const showStoreNewBadge = Boolean(storePreviewSignature) && storePreviewSignature !== seenStorePreviewSignature;
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      setSeenStorePreviewSignature(window.localStorage.getItem(storePreviewSeenKey) || '');
+    } catch {
+      setSeenStorePreviewSignature('');
+    }
+  }, [storePreviewSeenKey]);
+
+  React.useEffect(() => {
+    if (!effectiveUser) {
+      setSignedInPreviewBanks([]);
+      return;
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const fetched = await fetchStorePreviewBanks();
+        if (cancelled || fetched.maintenanceEnabled) return;
+        setSignedInPreviewBanks(fetched.items);
+      } catch {
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveUser]);
+
+  const markStorePreviewSeen = React.useCallback(() => {
+    if (!storePreviewSignature || typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(storePreviewSeenKey, storePreviewSignature);
+    } catch {
+    }
+    setSeenStorePreviewSignature(storePreviewSignature);
+  }, [storePreviewSeenKey, storePreviewSignature]);
+
+  React.useEffect(() => {
+    if (!showStoreDialog) return;
+    markStorePreviewSeen();
+  }, [markStorePreviewSeen, showStoreDialog]);
 
   const mergeOfficialPadAssets = React.useCallback((targetPad: PadData, sourcePad: PadData): PadData => ({
     ...targetPad,
@@ -446,7 +569,7 @@ export function SideMenu({
   }, [banks, mergeOfficialPadAssets, onUpdateBank]);
 
   const importBankFromStoreWithSnapshotReconcile = React.useCallback(async (
-    file: File,
+    source: ImportBankSource,
     meta: OnlineBankStoreImportMeta,
     onProgress?: (progress: number) => void
   ) => {
@@ -462,7 +585,7 @@ export function SideMenu({
         || null
       );
 
-      const importedBank = await onImportBank(file, onProgress, {
+      const importedBank = await onImportBank(source, onProgress, {
         preferredDerivedKey: meta.derivedKey || null,
         preferredBankId: meta.bankId || null,
         entitlementToken: meta.entitlementToken || null,
@@ -531,13 +654,23 @@ export function SideMenu({
     onImportBankFromStore: importBankFromStoreWithSnapshotReconcile,
   });
 
-  const buildSnapshotStoreItem = React.useCallback((bank: SamplerBank): StoreItem | null => {
-    const catalogItemId = typeof bank.bankMetadata?.catalogItemId === 'string' ? bank.bankMetadata.catalogItemId.trim() : '';
+  const buildSnapshotStoreItem = React.useCallback((
+    bank: SamplerBank,
+    resolvedItem?: StoreRecoveryResolution | null
+  ): StoreItem | null => {
+    const catalogItemId = typeof bank.bankMetadata?.catalogItemId === 'string'
+      ? bank.bankMetadata.catalogItemId.trim()
+      : (typeof resolvedItem?.catalogItemId === 'string' ? resolvedItem.catalogItemId.trim() : '');
     const storeBankId = typeof bank.bankMetadata?.bankId === 'string'
       ? bank.bankMetadata.bankId.trim()
-      : (typeof bank.sourceBankId === 'string' ? bank.sourceBankId.trim() : '');
+      : (
+        typeof bank.sourceBankId === 'string' && bank.sourceBankId.trim().length > 0
+          ? bank.sourceBankId.trim()
+          : (typeof resolvedItem?.bankId === 'string' ? resolvedItem.bankId.trim() : '')
+      );
     if (!catalogItemId || !storeBankId) return null;
     const requiresGrant = Boolean(
+      bank.restoreKind === 'paid_bank' ||
       bank.bankMetadata?.entitlementToken ||
       bank.bankMetadata?.entitlementTokenKid ||
       bank.bankMetadata?.entitlementTokenIssuedAt ||
@@ -558,7 +691,7 @@ export function SideMenu({
       is_downloadable: true,
       is_purchased: true,
       price_php: null,
-      sha256: bank.bankMetadata?.catalogSha256 || null,
+      sha256: bank.bankMetadata?.catalogSha256 || resolvedItem?.sha256 || null,
       thumbnail_path: bank.bankMetadata?.thumbnailUrl || bank.bankMetadata?.remoteSnapshotThumbnailUrl || null,
       status: 'granted_download',
       rejection_message: null,
@@ -568,7 +701,7 @@ export function SideMenu({
         color: bank.defaultColor || bank.bankMetadata?.color || defaultBankColor,
       }
     };
-  }, []);
+  }, [defaultBankColor]);
 
   const handleSnapshotBankRecovery = React.useCallback(async (bankId: string) => {
     setSnapshotRecoverBusyBankId(bankId);
@@ -659,7 +792,7 @@ export function SideMenu({
 
     const previewEntries: BankListEntry[] = previewBanks.map((preview) => ({ kind: 'preview', preview }));
     const defaultBankIndex = realEntries.findIndex(
-      (entry) => entry.kind === 'real' && isDefaultBankIdentity(entry.bank)
+      (entry) => entry.kind === 'real' && isCanonicalDefaultBankIdentity(entry.bank, banks)
     );
 
     if (defaultBankIndex < 0) {
@@ -718,7 +851,7 @@ export function SideMenu({
   }, [banks, editBankRequest, editMode]);
 
   const handleDeleteBank = (bank: SamplerBank) => {
-    if (isDefaultBankIdentity(bank)) return;
+    if (isExplicitDefaultBankIdentity(bank)) return;
     setBankToDelete(bank);
     setShowDeleteConfirm(true);
   };
@@ -807,15 +940,11 @@ export function SideMenu({
 
     if (!data) return;
 
-    try {
-      const dragData = JSON.parse(data);
+    const dragData = parsePadDragTransferPayload(data);
+    if (!dragData) return;
 
-      if (dragData.type === 'pad-transfer' && dragData.sourceBankId !== bankId) {
-        if (canTransferFrom(dragData.sourceBankId)) {
-          setDragOverBankId(bankId);
-        }
-      }
-    } catch {
+    if (dragData.sourceBankId !== bankId && canTransferFrom(dragData.sourceBankId)) {
+      setDragOverBankId(bankId);
     }
   };
 
@@ -835,15 +964,11 @@ export function SideMenu({
       return;
     }
 
-    try {
-      const dragData = JSON.parse(data);
+    const dragData = parsePadDragTransferPayload(data);
+    if (!dragData) return;
 
-      if (dragData.type === 'pad-transfer' && dragData.sourceBankId !== targetBankId) {
-        if (canTransferFrom(dragData.sourceBankId)) {
-          onTransferPad(dragData.pad.id, dragData.sourceBankId, targetBankId);
-        }
-      }
-    } catch {
+    if (dragData.sourceBankId !== targetBankId && canTransferFrom(dragData.sourceBankId)) {
+      onTransferPad(dragData.padId, dragData.sourceBankId, targetBankId);
     }
   };
 
@@ -1024,7 +1149,10 @@ export function SideMenu({
                   </>
                 )}
                 <Button
-                  onClick={() => setShowStoreDialog(true)}
+                  onClick={() => {
+                    markStorePreviewSeen();
+                    setShowStoreDialog(true);
+                  }}
                   className={`relative min-w-0 w-full px-2 sm:px-3 text-[13px] sm:text-sm gap-0 transition-all duration-200 ${showEnhancedStoreButton ? 'shadow-[0_0_14px_rgba(99,102,241,0.26)]' : ''} ${theme === 'dark'
                     ? 'bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500'
                     : 'bg-indigo-50 border-indigo-300 text-indigo-700 hover:bg-indigo-100'
@@ -1050,6 +1178,18 @@ export function SideMenu({
                       />
                     </>
                   )}
+                  {showStoreNewBadge && (
+                    <span
+                      className={`absolute -top-2 -right-2 z-[2] inline-flex h-5 min-w-[2.1rem] items-center justify-center rounded-full border px-1.5 text-[10px] font-bold uppercase tracking-[0.14em] shadow-sm ${
+                        theme === 'dark'
+                          ? 'border-rose-300/70 bg-rose-500 text-white'
+                          : 'border-rose-200 bg-rose-500 text-white'
+                      }`}
+                      title="There are newly published banks in the store."
+                    >
+                      New
+                    </span>
+                  )}
                   <ShoppingCart className="relative z-[1] w-4 h-4 mr-1.5 shrink-0" style={storeIconMotionStyle} />
                   <span className="relative z-[1] truncate">Bank Store</span>
                 </Button>
@@ -1064,6 +1204,53 @@ export function SideMenu({
                 <p className="text-xs text-center font-medium">
                   Drag sampler to transfer bank
                 </p>
+              </div>
+            )}
+
+            {isAdmin && pendingAdminUploadCount > 0 && onRetryPendingAdminExportUploads && (
+              <div className={`mb-2 rounded-lg border p-2 ${theme === 'dark'
+                ? 'border-sky-700 bg-sky-950/50 text-sky-100'
+                : 'border-sky-200 bg-sky-50 text-sky-900'
+                }`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-wide">Store Upload Queue</p>
+                    <p className="mt-1 text-xs">
+                      {pendingAdminUploadCount === 1
+                        ? '1 bank upload is waiting to reach Store.'
+                        : `${pendingAdminUploadCount} bank uploads are waiting to reach Store.`}
+                    </p>
+                    <p className={`mt-1 text-[11px] ${theme === 'dark' ? 'text-sky-200/80' : 'text-sky-700'}`}>
+                      {typeof navigator !== 'undefined' && !navigator.onLine
+                        ? 'Waiting for internet connection.'
+                        : nextAdminUploadRetryLabel
+                          ? `Next automatic retry: ${nextAdminUploadRetryLabel}`
+                          : 'Automatic retry is enabled while this app stays open.'}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className={`h-8 shrink-0 ${theme === 'dark' ? 'border-sky-700 text-sky-100 hover:bg-sky-900/60' : 'border-sky-300 text-sky-800 hover:bg-sky-100'}`}
+                    disabled={adminUploadRetryBusy}
+                    onClick={async () => {
+                      setAdminUploadRetryBusy(true);
+                      try {
+                        const message = await onRetryPendingAdminExportUploads();
+                        pushNotice({ variant: 'info', message });
+                      } catch (error) {
+                        pushNotice({
+                          variant: 'error',
+                          message: error instanceof Error ? error.message : 'Could not retry pending Store uploads.',
+                        });
+                      } finally {
+                        setAdminUploadRetryBusy(false);
+                      }
+                    }}
+                  >
+                    {adminUploadRetryBusy ? 'Retrying...' : 'Retry Now'}
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -1416,7 +1603,7 @@ export function SideMenu({
                             <Crown className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
                           </Button>
 
-                        {shouldShowOfflinePrefetchAction && !isPreview && bank && isDefaultBankIdentity(bank) && bank.pads.some((pad) => {
+                        {shouldShowOfflinePrefetchAction && !isPreview && bank && isExplicitDefaultBankIdentity(bank) && bank.pads.some((pad) => {
                           const hasUrlBackedAudio = Boolean(pad.audioUrl) && !pad.audioStorageKey && !pad.audioBackend;
                           const hasUrlBackedImage = Boolean(pad.imageUrl) && pad.hasImageAsset === true && !pad.imageStorageKey && !pad.imageBackend;
                           return hasUrlBackedAudio || hasUrlBackedImage;
@@ -1510,19 +1697,32 @@ export function SideMenu({
             )}
             <div className="grid grid-cols-1 gap-2">
               <Button
+                disabled={snapshotDownloadBusyBankId === snapshotActionBank?.id}
                 onClick={async () => {
                   if (!snapshotActionBank) return;
-                  const item = buildSnapshotStoreItem(snapshotActionBank);
-                  if (!item) {
-                    pushNotice({ variant: 'error', message: 'Download information is incomplete for this bank.' });
+                  setSnapshotDownloadBusyBankId(snapshotActionBank.id);
+                  try {
+                    let item = buildSnapshotStoreItem(snapshotActionBank);
+                    if (!item && onResolveStoreRecoveryCatalogItem) {
+                      const resolvedItem = await onResolveStoreRecoveryCatalogItem(snapshotActionBank);
+                      item = buildSnapshotStoreItem(snapshotActionBank, resolvedItem);
+                    }
+                    if (!item) {
+                      pushNotice({
+                        variant: 'error',
+                        message: 'This restored bank is missing Store download metadata on this device. Restore your account backup or open Store once to refresh the bank record.',
+                      });
+                      setSnapshotBankAction(null);
+                      return;
+                    }
                     setSnapshotBankAction(null);
-                    return;
+                    await handleSnapshotBankDownload(item);
+                  } finally {
+                    setSnapshotDownloadBusyBankId(null);
                   }
-                  setSnapshotBankAction(null);
-                  await handleSnapshotBankDownload(item);
                 }}
               >
-                Download Bank
+                {snapshotDownloadBusyBankId === snapshotActionBank?.id ? 'Preparing Download...' : 'Download Bank'}
               </Button>
               <Button variant="ghost" onClick={() => setSnapshotBankAction(null)}>
                 Cancel
@@ -1540,7 +1740,7 @@ export function SideMenu({
       >
         <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Recover Missing Bank Media</DialogTitle>
+            <DialogTitle>Repair Missing Bank Media</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 text-sm">
             <p className={theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}>
@@ -1549,8 +1749,8 @@ export function SideMenu({
                 : 'This bank was restored from metadata only. Use .bank recovery or full backup to restore custom media on this device.'}
             </p>
             <div className={`rounded-md border p-3 text-xs ${theme === 'dark' ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-500'}`}>
-              <div><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Import .bank files:</span> recover custom banks or mixed banks from exports copied from the old device.</div>
-              <div className="mt-1"><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Restore from Full Backup:</span> fastest full-media restore if you exported a backup on the old device.</div>
+              <div><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Repair from .bank Files:</span> restore custom banks or mixed banks from exports copied from the old device.</div>
+              <div className="mt-1"><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Restore Account Backup:</span> fastest full-media restore if you exported an account backup on the old device.</div>
               {snapshotActionBank?.restoreKind !== 'custom_bank' && (
                 <div className="mt-1"><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Sync official assets:</span> tries to restore Default/Paid source assets automatically before manual recovery.</div>
               )}
@@ -1576,7 +1776,7 @@ export function SideMenu({
                   onRequestRecoverBankFiles();
                 }}
               >
-                Import .bank Files
+                Repair from .bank Files
               </Button>
               <Button
                 variant="outline"
@@ -1585,7 +1785,7 @@ export function SideMenu({
                   onRequestRestoreBackup();
                 }}
               >
-                Restore from Full Backup
+                Restore Account Backup
               </Button>
               <Button variant="ghost" onClick={() => setSnapshotBankAction(null)}>
                 Cancel
@@ -1661,7 +1861,7 @@ export function SideMenu({
               onUpdateBank(editingBank.id, nextUpdates);
             }}
             onDelete={() => {
-              if (isDefaultBankIdentity(editingBank)) return;
+              if (isExplicitDefaultBankIdentity(editingBank)) return;
               setShowEditDialog(false);
               onDeleteBank(editingBank.id);
             }}
@@ -1682,11 +1882,16 @@ export function SideMenu({
             } : undefined}
             onExportAdmin={onExportAdmin}
             onUpdateStoreBank={onUpdateStoreBank}
-            preparedSummary={getBankPreparedSummary(editingBank.id)}
-            onPrepareForLive={async (bankId) => {
-              await onPrepareBankForLive(bankId, { explicit: true });
-            }}
-            onCancelPrepareForLive={onCancelPrepareBankForLive}
+            onListLinkableStoreBanks={onListLinkableStoreBanks}
+            onLinkExistingStoreBank={onLinkExistingStoreBank}
+            onMoveToPosition={onMoveBankToPosition}
+            preparedSummary={profile?.role === 'admin' ? getBankPreparedSummary(editingBank.id) : undefined}
+            onPrepareForLive={profile?.role === 'admin'
+              ? async (bankId) => {
+                await onPrepareBankForLive(bankId, { explicit: true });
+              }
+              : undefined}
+            onCancelPrepareForLive={profile?.role === 'admin' ? onCancelPrepareBankForLive : undefined}
             onAdminThumbnailChange={profile?.role === 'admin' ? async (thumbnail) => {
               const latestBank = banks.find((bank) => bank.id === editingBank.id);
               if (!latestBank) return;
@@ -1776,6 +1981,7 @@ export function SideMenu({
         theme={theme}
         errorMessage={exportError}
         logLines={isAdmin ? exportLogLines : undefined}
+        debugOperations={isAdmin ? ['bank_export'] : undefined}
         hideCloseButton
         useHistory={false}
         onRetry={() => {
@@ -1808,6 +2014,24 @@ export function SideMenu({
               keys.forEach((key) => {
                 if (!next[key]) next[key] = [];
                 if (!next[key].includes(bank.id)) next[key].push(bank.id);
+              });
+            });
+            return next;
+          }, [banks])}
+          runtimeCatalogShasBySource={React.useMemo(() => {
+            const next: Record<string, string[]> = {};
+            banks.forEach((bank) => {
+              const sha = typeof bank.bankMetadata?.catalogSha256 === 'string'
+                ? bank.bankMetadata.catalogSha256.trim().toLowerCase()
+                : '';
+              if (!sha) return;
+              const keys = [
+                typeof bank.bankMetadata?.bankId === 'string' ? bank.bankMetadata.bankId.trim() : '',
+                typeof bank.sourceBankId === 'string' ? bank.sourceBankId.trim() : '',
+              ].filter(Boolean);
+              keys.forEach((key) => {
+                if (!next[key]) next[key] = [];
+                if (!next[key].includes(sha)) next[key].push(sha);
               });
             });
             return next;

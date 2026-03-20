@@ -8,6 +8,7 @@ import { Play, Pause, MousePointer2, Zap, VolumeX, Loader2, Ban } from 'lucide-r
 import { normalizeShortcutKey, normalizeStoredShortcutKey } from '@/lib/keyboard-shortcuts';
 import type { PadEditDialog as PadEditDialogType } from './PadEditDialog';
 import type { PadTransferDialog as PadTransferDialogType } from './PadTransferDialog';
+import { createPadDragTransferPayload } from './padDragTransfer';
 
 const PadEditDialog = React.lazy(() => import('./PadEditDialog').then((module) => ({ default: module.PadEditDialog }))) as unknown as typeof PadEditDialogType;
 const PadTransferDialog = React.lazy(() => import('./PadTransferDialog').then((module) => ({ default: module.PadTransferDialog }))) as unknown as typeof PadTransferDialogType;
@@ -44,6 +45,9 @@ interface SamplerPadProps {
   onAdminPaintPad?: (bankId: string, pad: PadData) => void | Promise<void>;
   graphicsTier?: import('@/lib/performance-monitor').PerformanceTier;
   editRequestToken?: number;
+  closeEditRequestToken?: number;
+  onRequestEditPad?: (padId: string) => void;
+  onEditDialogOpenChange?: (padId: string, open: boolean) => void;
   channelLoadArmed?: boolean;
   onSelectPadForChannelLoad?: (pad: PadData, bankId: string, bankName: string) => void;
   requiresAuthToPlay?: boolean;
@@ -129,6 +133,9 @@ export const SamplerPad = React.memo(function SamplerPad({
   onAdminPaintPad,
   graphicsTier = 'low',
   editRequestToken,
+  closeEditRequestToken,
+  onRequestEditPad,
+  onEditDialogOpenChange,
   channelLoadArmed = false,
   onSelectPadForChannelLoad,
   requiresAuthToPlay = false,
@@ -139,10 +146,11 @@ export const SamplerPad = React.memo(function SamplerPad({
     bankId,
     bankName,
     globalMuted,
-    masterVolume
+    masterVolume,
+    stopMode
   );
 
-  const { isPlaying, progress, isSoftMuted, playAudio, stopAudio, releaseAudio, queueNextPlaySettings } = audioPlayer;
+  const { isPlaying, progress, isSoftMuted, playAudio, stopAudio, releaseAudio, queueNextPlaySettings, syncLiveMetadata } = audioPlayer;
   const {
     isWarmReady,
     isWarming,
@@ -178,6 +186,10 @@ export const SamplerPad = React.memo(function SamplerPad({
     lastEditTokenRef.current = editRequestToken;
     setShowEditDialog(true);
   }, [editMode, editRequestToken]);
+
+  React.useEffect(() => {
+    onEditDialogOpenChange?.(pad.id, showEditDialog);
+  }, [onEditDialogOpenChange, pad.id, showEditDialog]);
 
   const shortcutLabel = React.useMemo(() => {
     if (!pad.shortcutKey) return null;
@@ -276,7 +288,11 @@ export const SamplerPad = React.memo(function SamplerPad({
     }
 
     if (editMode) {
-      setShowEditDialog(true);
+      if (onRequestEditPad) {
+        onRequestEditPad(pad.id);
+      } else {
+        setShowEditDialog(true);
+      }
     } else if (pad.triggerMode === 'toggle') {
       if (isPlaying) stopAudio();
       else {
@@ -314,6 +330,18 @@ export const SamplerPad = React.memo(function SamplerPad({
       e.preventDefault();
       queueMissingPadAction();
       return;
+    }
+    if (
+      (pad.triggerMode === 'toggle' || pad.triggerMode === 'unmute') &&
+      shouldAutoWarmBeforePlay &&
+      !isQuarantined &&
+      !isWarming &&
+      !isPendingPlay &&
+      !queuedPlaybackIntentRef.current
+    ) {
+      if (e.pointerType !== 'mouse' || e.button === 0) {
+        forceWarmAudio();
+      }
     }
     if (pad.triggerMode === 'stutter') {
       if (e.pointerType === 'mouse') return;
@@ -392,16 +420,12 @@ export const SamplerPad = React.memo(function SamplerPad({
 
     setIsDragging(true);
     e.dataTransfer.effectAllowed = 'move';
-
-    // Set both data formats for better compatibility
-    const transferData = {
-      type: 'pad-transfer',
-      pad: pad,
-      sourceBankId: bankId
-    };
-
-    e.dataTransfer.setData('application/json', JSON.stringify(transferData));
-    e.dataTransfer.setData('text/plain', JSON.stringify(transferData));
+    const transferData = JSON.stringify(createPadDragTransferPayload({
+      padId: pad.id,
+      sourceBankId: bankId,
+    }));
+    e.dataTransfer.setData('application/json', transferData);
+    e.dataTransfer.setData('text/plain', transferData);
 
     if (onDragStart) {
       onDragStart(e, pad, bankId);
@@ -437,6 +461,7 @@ export const SamplerPad = React.memo(function SamplerPad({
   const handleSave = async (updatedPad: PadData) => {
     try {
       await onUpdatePad(bankId, pad.id, updatedPad);
+      syncLiveMetadata(updatedPad);
       queueNextPlaySettings(updatedPad);
       setShowEditDialog(false);
     } catch {
@@ -723,6 +748,12 @@ export const SamplerPad = React.memo(function SamplerPad({
   const isUnmutePlayingMuted = pad.triggerMode === 'unmute' && isPlaying && isSoftMuted;
   const isUnmutePlayingAudible = pad.triggerMode === 'unmute' && isPlaying && !isSoftMuted;
   const isStopperPad = pad.playbackMode === 'stopper';
+  const isLoopPad = pad.playbackMode === 'loop';
+  const hasPadGroupBadge = typeof pad.padGroup === 'number' && Number.isFinite(pad.padGroup) && Math.trunc(pad.padGroup) > 0;
+  const padGroupLabel = hasPadGroupBadge ? `G${Math.trunc(pad.padGroup as number)}` : null;
+  const padGroupTitle = hasPadGroupBadge
+    ? `Pad Group ${Math.trunc(pad.padGroup as number)}${pad.padGroupUniversal ? ' (Universal)' : ''}`
+    : '';
   const lowestGraphicsTextColor = React.useMemo(() => getContrastTextColor(normalizedPadColor), [normalizedPadColor]);
   const lowestGraphicsTextClass = lowestGraphicsTextColor === '#111827' ? 'text-gray-900' : 'text-white';
   const inactiveTextColor = React.useMemo(() => getContrastTextColor(normalizedPadColor), [normalizedPadColor]);
@@ -741,6 +772,13 @@ export const SamplerPad = React.memo(function SamplerPad({
   const stopperStrokeShadow = theme === 'dark'
     ? '0 0 0 1px rgba(127,29,29,0.35)'
     : '0 0 0 1px rgba(127,29,29,0.18)';
+  const loopOuterStrokeColor = '#166534';
+  const loopInnerStrokeColor = lowestGraphicsTextColor === '#111827'
+    ? 'rgba(21,128,61,0.42)'
+    : 'rgba(187,247,208,0.92)';
+  const loopStrokeShadow = theme === 'dark'
+    ? '0 0 0 1px rgba(22,101,52,0.32)'
+    : '0 0 0 1px rgba(22,101,52,0.18)';
   const isMotionOff =
     typeof document !== 'undefined' && document.documentElement.classList.contains('motion-off');
 
@@ -790,7 +828,7 @@ export const SamplerPad = React.memo(function SamplerPad({
     <>
       <Button
         onClick={handlePadClick}
-        onPointerDown={(pad.triggerMode === 'hold' || pad.triggerMode === 'stutter') && !editMode ? handlePointerDown : undefined}
+        onPointerDown={!editMode ? handlePointerDown : undefined}
         onPointerUp={pad.triggerMode === 'hold' && !editMode ? handlePointerRelease : undefined}
         onPointerCancel={pad.triggerMode === 'hold' && !editMode ? handlePointerRelease : undefined}
         onPointerLeave={pad.triggerMode === 'hold' && !editMode ? handlePointerLeave : undefined}
@@ -884,6 +922,23 @@ export const SamplerPad = React.memo(function SamplerPad({
             />
           </>
         )}
+        {isLoopPad && !isStopperPad && (
+          <>
+            <div
+              className="absolute inset-[1px] z-[15] rounded-[0.68rem] pointer-events-none border-[3px]"
+              style={{
+                borderColor: loopOuterStrokeColor,
+                boxShadow: loopStrokeShadow,
+              }}
+            />
+            <div
+              className="absolute inset-[5px] z-[16] rounded-[0.5rem] pointer-events-none border"
+              style={{
+                borderColor: loopInnerStrokeColor,
+              }}
+            />
+          </>
+        )}
         {(editMode || channelLoadArmed) && (
           <div
             className="absolute inset-[3px] z-20 rounded-[0.62rem] pointer-events-none border-2"
@@ -939,6 +994,23 @@ export const SamplerPad = React.memo(function SamplerPad({
             }`}
           >
             Link failed
+          </div>
+        )}
+        {padGroupLabel && !missingPadBusy && !missingPadError && !isSnapshotMissingPad && (
+          <div
+            className={`absolute bottom-0 left-0 opacity-75 whitespace-nowrap z-20 ${
+              theme === 'dark'
+                ? 'text-cyan-300'
+                : 'text-cyan-700'
+            }`}
+            title={padGroupTitle}
+            style={{
+              fontSize: 'clamp(8px, 1.8vw, 10px)',
+              lineHeight: 1,
+              textShadow: isHighGraphics ? highReadabilityTextShadow : '0 1px 2px rgba(0,0,0,0.55)',
+            }}
+          >
+            {padGroupLabel}
           </div>
         )}
         {/* Drag/Transfer indicator for edit mode - smaller on mobile */}
@@ -1188,6 +1260,7 @@ export const SamplerPad = React.memo(function SamplerPad({
             graphicsTier={graphicsTier}
             open={showEditDialog}
             onOpenChange={setShowEditDialog}
+            closeRequestToken={closeEditRequestToken}
             onSave={handleSave}
             onDuplicate={onDuplicatePad ? handleDuplicatePad : undefined}
             onUnload={handleUnload}

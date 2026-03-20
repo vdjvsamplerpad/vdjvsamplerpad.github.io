@@ -1,6 +1,6 @@
 import type { AppSettings, MappingExport } from '../SamplerPadApp.shared';
 import type { BankMetadata, PadData, SamplerBank } from '../types/sampler';
-import { DEFAULT_BANK_SOURCE_ID, isDefaultBankIdentity } from './useSamplerStore.bankIdentity';
+import { DEFAULT_BANK_SOURCE_ID, isExplicitDefaultBankIdentity } from './useSamplerStore.bankIdentity';
 import { getPadContentOrigin, isOfficialBankSource, isOfficialPadContent } from './useSamplerStore.provenance';
 
 export type SnapshotPadRecord = Omit<
@@ -59,7 +59,7 @@ const cloneBankMetadataForSnapshot = (metadata: BankMetadata | undefined): BankM
 };
 
 export const getSnapshotBankRestoreKind = (bank: SamplerBank): SnapshotBankRecord['restoreKind'] => {
-  if (isDefaultBankIdentity(bank)) return 'default_bank';
+  if (isExplicitDefaultBankIdentity(bank)) return 'default_bank';
   if (isOfficialBankSource(bank)) return 'paid_bank';
   return 'custom_bank';
 };
@@ -301,7 +301,7 @@ export const applyResolvedOfficialPadMedia = (banks: SamplerBank[]): SamplerBank
       if (pad.originCatalogItemId) {
         sourcePadsByKey.set(`catalog:${pad.originCatalogItemId}:${sourcePadKey}`, pad);
       }
-      if (isDefaultBankIdentity(bank)) {
+      if (isExplicitDefaultBankIdentity(bank)) {
         sourcePadsByKey.set(`default:${sourcePadKey}`, pad);
       }
     });

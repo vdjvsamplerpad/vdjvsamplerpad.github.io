@@ -11,7 +11,7 @@ import { edgeFunctionUrl } from '@/lib/edge-api';
 import { DEFAULT_LANDING_DOWNLOAD_CONFIG, normalizeLandingDownloadConfig } from '@/components/landing/download-config';
 import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig, type SamplerAppConfig } from './samplerAppConfig';
 import { Edit, Eye, EyeOff, Plus, RefreshCw, Shield, Trash2, UserPlus, Users, Loader2, Store, CreditCard, History, Save, Check, X, Search, Menu } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuthState } from '@/hooks/useAuth';
 import {
   ACTIVE_SORT_STORAGE_KEY,
   HOME_WINDOW_OPTIONS,
@@ -76,7 +76,7 @@ export function AdminAccessDialog({
   defaultBankSourceOptions = [],
   onPublishDefaultBankRelease,
 }: AdminAccessDialogProps) {
-  const { profile } = useAuth();
+  const { profile } = useAuthState();
   const isAdmin = profile?.role === 'admin';
   const readStoredActiveSort = React.useCallback((): { sortBy: ActiveSortBy; sortDir: SortDirection } => {
     if (typeof window === 'undefined') return { sortBy: 'last_seen_at', sortDir: 'desc' };

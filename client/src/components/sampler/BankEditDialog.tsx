@@ -1,21 +1,23 @@
 ﻿import * as React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { ProgressDialog } from '@/components/ui/progress-dialog';
+import { HelpTooltip } from '@/components/ui/help-tooltip';
 import { Copy } from 'lucide-react';
 import { SamplerBank, PadData } from './types/sampler';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuthState } from '@/hooks/useAuth';
 import { isReservedShortcutCombo, normalizeShortcutKey, normalizeStoredShortcutKey, RESERVED_SHORTCUT_KEYS } from '@/lib/keyboard-shortcuts';
 import { MidiMessage } from '@/lib/midi';
 import { BankEditAdminExportDialog } from './BankEditAdminExportDialog';
 import { BankEditUpdateStoreDialog } from './BankEditUpdateStoreDialog';
 import { BankEditCoreForm } from './BankEditCoreForm';
 import { bankColorOptions, extraBankColorOptions, formatBankEditDate, primaryBankColorOptions } from './bankEdit.shared';
-import { isDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
+import { isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { validateManagedImageFile } from '@/lib/image-upload';
 import { deleteBlobFromDB, saveBlobToDB } from './hooks/useSamplerStore.idbStorage';
-import type { ExportAudioMode, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
+import type { ExportAudioMode, LinkExistingStoreBankCandidate, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
 import type { BankPreparedSummary } from './hooks/preparedAudio';
 
 const MAX_PROGRESS_LOG_LINES = 80;
@@ -63,6 +65,9 @@ interface BankEditDialogProps {
     onProgress?: (progress: number) => void
   ) => Promise<string>;
   onUpdateStoreBank?: (input: UpdateStoreBankInput) => Promise<string>;
+  onListLinkableStoreBanks?: () => Promise<LinkExistingStoreBankCandidate[]>;
+  onLinkExistingStoreBank?: (runtimeBankId: string, candidate: LinkExistingStoreBankCandidate) => Promise<string>;
+  onMoveToPosition?: (bankId: string, targetIndex: number) => void;
   onDuplicate?: (onProgress?: (progress: number) => void) => Promise<void> | void;
   preparedSummary?: BankPreparedSummary;
   onPrepareForLive?: (bankId: string) => Promise<void>;
@@ -89,6 +94,9 @@ export function BankEditDialog({
   onAdminThumbnailChange,
   onExportAdmin,
   onUpdateStoreBank,
+  onListLinkableStoreBanks,
+  onLinkExistingStoreBank,
+  onMoveToPosition,
   onDuplicate,
   preparedSummary,
   midiEnabled = false,
@@ -98,8 +106,9 @@ export function BankEditDialog({
 }: BankEditDialogProps) {
   type BankWithMidi = SamplerBank & { midiNote?: number; midiCC?: number };
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
-  const canDeleteBank = !isDefaultBankIdentity(bank);
-  const { profile } = useAuth();
+  const canDeleteBank = !isExplicitDefaultBankIdentity(bank);
+  const { profile } = useAuthState();
+  const shouldShowPreparedPlaybackUi = profile?.role === 'admin';
   const [name, setName] = React.useState(bank.name);
   const [defaultColor, setDefaultColor] = React.useState(bank.defaultColor);
   const [shortcutKey, setShortcutKey] = React.useState(bank.shortcutKey || '');
@@ -111,6 +120,7 @@ export function BankEditDialog({
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
   const [showAdminExport, setShowAdminExport] = React.useState(false);
   const [showStoreUpdateDialog, setShowStoreUpdateDialog] = React.useState(false);
+  const [showStoreLinkDialog, setShowStoreLinkDialog] = React.useState(false);
   const [adminTitle, setAdminTitle] = React.useState(bank.name);
   const [adminDescription, setAdminDescription] = React.useState('');
   const [adminAddToDatabase, setAdminAddToDatabase] = React.useState(false);
@@ -134,12 +144,28 @@ export function BankEditDialog({
   const [storeUpdateStatus, setStoreUpdateStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
   const [storeUpdateError, setStoreUpdateError] = React.useState('');
   const [storeUpdateLogLines, setStoreUpdateLogLines] = React.useState<string[]>([]);
+  const [storeLinkCandidates, setStoreLinkCandidates] = React.useState<LinkExistingStoreBankCandidate[]>([]);
+  const [storeLinkQuery, setStoreLinkQuery] = React.useState('');
+  const [storeLinkLoading, setStoreLinkLoading] = React.useState(false);
+  const [storeLinkBusy, setStoreLinkBusy] = React.useState(false);
+  const [storeLinkError, setStoreLinkError] = React.useState('');
+  const [storeLinkNotice, setStoreLinkNotice] = React.useState('');
+  const [selectedStoreLinkCatalogItemId, setSelectedStoreLinkCatalogItemId] = React.useState('');
   const [adminThumbnailFile, setAdminThumbnailFile] = React.useState<File | null>(null);
   const [adminThumbnailPreviewUrl, setAdminThumbnailPreviewUrl] = React.useState<string | null>(null);
   const [adminThumbnailUploading, setAdminThumbnailUploading] = React.useState(false);
   const [adminThumbnailError, setAdminThumbnailError] = React.useState<string>('');
   const [adminThumbnailNotice, setAdminThumbnailNotice] = React.useState<string>('');
   const [hideThumbnailPreview, setHideThumbnailPreview] = React.useState(Boolean(bank.bankMetadata?.hideThumbnailPreview));
+  const orderedBanks = React.useMemo(
+    () => [...allBanks].sort((left, right) => (left.sortOrder || 0) - (right.sortOrder || 0)),
+    [allBanks]
+  );
+  const currentBankPosition = React.useMemo(
+    () => Math.max(0, orderedBanks.findIndex((entry) => entry.id === bank.id)),
+    [bank.id, orderedBanks]
+  );
+  const [selectedBankPosition, setSelectedBankPosition] = React.useState(String(currentBankPosition));
   const [showDuplicateConfirm, setShowDuplicateConfirm] = React.useState(false);
   const [showDuplicateProgress, setShowDuplicateProgress] = React.useState(false);
   const [duplicateProgress, setDuplicateProgress] = React.useState(0);
@@ -148,6 +174,60 @@ export function BankEditDialog({
   const [showDiscardConfirm, setShowDiscardConfirm] = React.useState(false);
   const adminExportMilestoneRef = React.useRef(-1);
   const storeUpdateMilestoneRef = React.useRef(-1);
+
+  React.useEffect(() => {
+    if (profile?.role !== 'admin' || !showAdminExportProgress || adminExportStatus !== 'loading') return;
+    const handleOperationDebug = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail || {};
+      if (detail.operation !== 'admin_bank_export') return;
+      const phase = typeof detail.phase === 'string' ? detail.phase : '';
+      const opDetails = detail.details && typeof detail.details === 'object'
+        ? detail.details as Record<string, unknown>
+        : {};
+      if (phase === 'heartbeat') {
+        const idleText = typeof opDetails.sinceLastActivityMs === 'number'
+          ? ` idle=${Math.round(opDetails.sinceLastActivityMs)}ms`
+          : '';
+        const lastStageText = typeof opDetails.lastStage === 'string' && opDetails.lastStage
+          ? ` lastStage=${opDetails.lastStage}`
+          : '';
+        appendProgressLogLine(setAdminExportLogLines, `Heartbeat admin_bank_export${lastStageText}${idleText}`);
+        return;
+      }
+      if (phase === 'error' && typeof opDetails.message === 'string') {
+        appendProgressLogLine(setAdminExportLogLines, `admin_bank_export error: ${opDetails.message}`);
+      }
+    };
+    window.addEventListener('vdjv-operation-debug', handleOperationDebug as EventListener);
+    return () => window.removeEventListener('vdjv-operation-debug', handleOperationDebug as EventListener);
+  }, [adminExportStatus, profile?.role, showAdminExportProgress]);
+
+  React.useEffect(() => {
+    if (profile?.role !== 'admin' || !showStoreUpdateProgress || storeUpdateStatus !== 'loading') return;
+    const handleOperationDebug = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail || {};
+      if (detail.operation !== 'admin_bank_export') return;
+      const phase = typeof detail.phase === 'string' ? detail.phase : '';
+      const opDetails = detail.details && typeof detail.details === 'object'
+        ? detail.details as Record<string, unknown>
+        : {};
+      if (phase === 'heartbeat') {
+        const idleText = typeof opDetails.sinceLastActivityMs === 'number'
+          ? ` idle=${Math.round(opDetails.sinceLastActivityMs)}ms`
+          : '';
+        const lastStageText = typeof opDetails.lastStage === 'string' && opDetails.lastStage
+          ? ` lastStage=${opDetails.lastStage}`
+          : '';
+        appendProgressLogLine(setStoreUpdateLogLines, `Heartbeat admin_bank_export${lastStageText}${idleText}`);
+        return;
+      }
+      if (phase === 'error' && typeof opDetails.message === 'string') {
+        appendProgressLogLine(setStoreUpdateLogLines, `admin_bank_export error: ${opDetails.message}`);
+      }
+    };
+    window.addEventListener('vdjv-operation-debug', handleOperationDebug as EventListener);
+    return () => window.removeEventListener('vdjv-operation-debug', handleOperationDebug as EventListener);
+  }, [profile?.role, showStoreUpdateProgress, storeUpdateStatus]);
 
   React.useEffect(() => {
     if (open) {
@@ -166,11 +246,13 @@ export function BankEditDialog({
       setAdminThumbnailError('');
       setAdminThumbnailNotice('');
       setHideThumbnailPreview(Boolean(bank.bankMetadata?.hideThumbnailPreview));
+      setSelectedBankPosition(String(currentBankPosition));
       setAdminAddToDatabase(false);
       setAdminAllowExport(true); // Default to true when Add to Database is disabled
       setAdminPublicCatalogAsset(false);
       setAdminExportMode('fast');
       setShowStoreUpdateDialog(false);
+      setShowStoreLinkDialog(false);
       setStoreUpdateTitle(bank.name);
       setStoreUpdateDescription(bank.bankMetadata?.description || '');
       setStoreUpdateSyncMetadata(true);
@@ -180,6 +262,13 @@ export function BankEditDialog({
       setStoreUpdateProgress(0);
       setStoreUpdateStatus('loading');
       setStoreUpdateError('');
+      setStoreLinkCandidates([]);
+      setStoreLinkQuery('');
+      setStoreLinkLoading(false);
+      setStoreLinkBusy(false);
+      setStoreLinkError('');
+      setStoreLinkNotice('');
+      setSelectedStoreLinkCatalogItemId('');
       setAdminExportLogLines([]);
       setStoreUpdateLogLines([]);
       setShowDuplicateConfirm(false);
@@ -189,7 +278,7 @@ export function BankEditDialog({
       setDuplicateError('');
       setShowDiscardConfirm(false);
     }
-  }, [open, bank.id]);
+  }, [bank.id, currentBankPosition, open]);
 
   React.useEffect(() => {
     if (!adminThumbnailFile) {
@@ -320,6 +409,11 @@ export function BankEditDialog({
       } else {
         delete nextBankMetadata.hideThumbnailPreview;
       }
+    }
+
+    const targetPosition = Number(selectedBankPosition);
+    if (onMoveToPosition && Number.isFinite(targetPosition) && targetPosition !== currentBankPosition) {
+      onMoveToPosition(bank.id, targetPosition);
     }
 
     onSave({
@@ -592,6 +686,120 @@ export function BankEditDialog({
     }
   };
 
+  const resolvePreferredStoreLinkCandidateId = React.useCallback((candidates: LinkExistingStoreBankCandidate[]) => {
+    const normalizedBankId = typeof bank.bankMetadata?.bankId === 'string'
+      ? bank.bankMetadata.bankId.trim()
+      : typeof bank.sourceBankId === 'string'
+        ? bank.sourceBankId.trim()
+        : '';
+    if (normalizedBankId) {
+      const exactBankMatch = candidates.find((candidate) => candidate.bankId.trim() === normalizedBankId);
+      if (exactBankMatch) return exactBankMatch.catalogItemId;
+    }
+
+    const normalizedTitle = (name || bank.name).trim().toLowerCase();
+    if (normalizedTitle) {
+      const exactTitleMatches = candidates.filter((candidate) => candidate.title.trim().toLowerCase() === normalizedTitle);
+      if (exactTitleMatches.length === 1) return exactTitleMatches[0].catalogItemId;
+    }
+
+    return candidates[0]?.catalogItemId || '';
+  }, [bank.bankMetadata?.bankId, bank.name, bank.sourceBankId, name]);
+
+  React.useEffect(() => {
+    if (!showStoreLinkDialog) return;
+    if (!onListLinkableStoreBanks) {
+      setStoreLinkError('Store link lookup is unavailable in this build.');
+      return;
+    }
+
+    let cancelled = false;
+    setStoreLinkLoading(true);
+    setStoreLinkError('');
+
+    const loadCandidates = async () => {
+      try {
+        const candidates = await onListLinkableStoreBanks();
+        if (cancelled) return;
+        const sortedCandidates = [...candidates].sort((left, right) => {
+          const leftUpdated = left.updatedAt || left.createdAt || '';
+          const rightUpdated = right.updatedAt || right.createdAt || '';
+          if (leftUpdated !== rightUpdated) return rightUpdated.localeCompare(leftUpdated);
+          return left.title.localeCompare(right.title);
+        });
+        setStoreLinkCandidates(sortedCandidates);
+        setSelectedStoreLinkCatalogItemId((current) => {
+          if (current && sortedCandidates.some((candidate) => candidate.catalogItemId === current)) {
+            return current;
+          }
+          return resolvePreferredStoreLinkCandidateId(sortedCandidates);
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setStoreLinkCandidates([]);
+        setSelectedStoreLinkCatalogItemId('');
+        setStoreLinkError(error instanceof Error ? error.message : 'Failed to load Store banks.');
+      } finally {
+        if (!cancelled) {
+          setStoreLinkLoading(false);
+        }
+      }
+    };
+
+    void loadCandidates();
+    return () => {
+      cancelled = true;
+    };
+  }, [bank.bankMetadata?.bankId, bank.name, bank.sourceBankId, name, onListLinkableStoreBanks, resolvePreferredStoreLinkCandidateId, showStoreLinkDialog]);
+
+  const filteredStoreLinkCandidates = React.useMemo(() => {
+    const normalizedQuery = storeLinkQuery.trim().toLowerCase();
+    if (!normalizedQuery) return storeLinkCandidates;
+    return storeLinkCandidates.filter((candidate) => (
+      candidate.title.toLowerCase().includes(normalizedQuery)
+      || candidate.bankId.toLowerCase().includes(normalizedQuery)
+      || candidate.catalogItemId.toLowerCase().includes(normalizedQuery)
+      || candidate.status.toLowerCase().includes(normalizedQuery)
+    ));
+  }, [storeLinkCandidates, storeLinkQuery]);
+
+  const handleStoreLink = React.useCallback(async () => {
+    if (!onLinkExistingStoreBank) return;
+    if (shortcutError) return;
+
+    const selectedCandidate = storeLinkCandidates.find(
+      (candidate) => candidate.catalogItemId === selectedStoreLinkCatalogItemId,
+    );
+    if (!selectedCandidate) {
+      setStoreLinkError('Choose the published bank you want to link.');
+      return;
+    }
+
+    setStoreLinkBusy(true);
+    setStoreLinkError('');
+    setStoreLinkNotice('');
+
+    try {
+      (onApplyLocalBankUpdates || onSave)(buildPendingBankUpdates());
+      const result = await onLinkExistingStoreBank(bank.id, selectedCandidate);
+      setStoreLinkNotice(result || 'Store bank linked.');
+      setShowStoreLinkDialog(false);
+    } catch (error) {
+      setStoreLinkError(error instanceof Error ? error.message : 'Failed to link Store bank.');
+    } finally {
+      setStoreLinkBusy(false);
+    }
+  }, [
+    bank.id,
+    buildPendingBankUpdates,
+    onApplyLocalBankUpdates,
+    onLinkExistingStoreBank,
+    onSave,
+    selectedStoreLinkCatalogItemId,
+    shortcutError,
+    storeLinkCandidates,
+  ]);
+
   const handleDuplicate = async () => {
     if (!onDuplicate) return;
     setShowDuplicateConfirm(false);
@@ -755,18 +963,25 @@ export function BankEditDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className={`grid grid-rows-[auto_1fr] max-h-[80vh] overflow-hidden sm:max-w-md backdrop-blur-md ${theme === 'dark' ? 'bg-gray-800/90' : 'bg-white/90'
+        <DialogContent className={`grid h-[100dvh] max-h-[100dvh] w-[calc(100vw-1rem)] grid-rows-[auto_1fr] overflow-hidden backdrop-blur-md sm:h-auto sm:max-h-[80vh] sm:w-full sm:max-w-md ${theme === 'dark' ? 'bg-gray-800/90' : 'bg-white/90'
           }`} aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Edit Bank</DialogTitle>
           </DialogHeader>
-          <div className="overflow-y-auto pr-1">
-            {preparedSummary && (
+          <div className="overflow-y-auto overscroll-contain pr-1 pb-[max(6rem,env(safe-area-inset-bottom))] sm:pb-0">
+            {shouldShowPreparedPlaybackUi && preparedSummary && (
               <div className={`mb-3 flex items-center justify-between rounded-lg border px-3 py-2 text-xs ${
                 theme === 'dark' ? 'border-gray-700 bg-gray-900/50 text-gray-200' : 'border-gray-200 bg-gray-50 text-gray-700'
               }`}>
                 <div className="min-w-0">
-                  <div className="font-semibold uppercase tracking-wide">Prepared Playback</div>
+                  <div className="flex items-center gap-1.5 font-semibold uppercase tracking-wide">
+                    <span>Prepared Playback</span>
+                    <HelpTooltip
+                      content="Admin-only live-readiness summary. Prepared playback prebuilds eligible pad playback assets so first trigger is more consistent on supported runtimes."
+                      label="Prepared playback help"
+                      iconClassName="h-3 w-3"
+                    />
+                  </div>
                   <div className="opacity-80">
                     {preparedSummary.label}
                     {preparedSummary.activePads > 0 ? ` · ${preparedSummary.readyPads}/${preparedSummary.activePads} eligible prepared` : ''}
@@ -785,6 +1000,9 @@ export function BankEditDialog({
               setDefaultColor={setDefaultColor}
               name={name}
               setName={setName}
+              orderedBanks={orderedBanks}
+              selectedBankPosition={selectedBankPosition}
+              setSelectedBankPosition={setSelectedBankPosition}
               isAdmin={isAdmin}
               activeAdminThumbnailUrl={activeAdminThumbnailUrl}
               adminThumbnailUploading={adminThumbnailUploading}
@@ -817,9 +1035,18 @@ export function BankEditDialog({
               shortcutAssignments={shortcutAssignments}
               formatDate={formatBankEditDate}
               showDatabaseDescription={showDatabaseDescription}
+              canLinkExistingStoreBank={isAdmin && !isLinkedStoreBank && Boolean(onListLinkableStoreBanks) && Boolean(onLinkExistingStoreBank)}
+              storeLinkNotice={storeLinkNotice || null}
+              storeLinkError={storeLinkError || null}
               onSave={handleSave}
               onShowDuplicateConfirm={() => setShowDuplicateConfirm(true)}
               onShowAdminExport={() => setShowAdminExport(true)}
+              onShowStoreLink={() => {
+                setStoreLinkError('');
+                setStoreLinkNotice('');
+                setStoreLinkQuery('');
+                setShowStoreLinkDialog(true);
+              }}
               onShowStoreUpdate={() => {
                 setStoreUpdateTitle(name);
                 setStoreUpdateDescription(bank.bankMetadata?.description || '');
@@ -933,6 +1160,124 @@ export function BankEditDialog({
         onSubmit={handleStoreUpdate}
       />
 
+      <Dialog
+        open={showStoreLinkDialog}
+        onOpenChange={(openState) => {
+          setShowStoreLinkDialog(openState);
+          if (!openState) {
+            setStoreLinkBusy(false);
+            setStoreLinkError('');
+            setStoreLinkQuery('');
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-xl" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>Link Existing Published Bank</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className={`text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+              Attach this local bank to one of your existing Store entries so future edits can use Update Store Bank without redownloading.
+            </p>
+            <Input
+              value={storeLinkQuery}
+              onChange={(event) => setStoreLinkQuery(event.target.value)}
+              placeholder="Search by title, bank id, or catalog item id"
+              disabled={storeLinkBusy}
+            />
+            <div className={`max-h-80 overflow-y-auto rounded-lg border ${theme === 'dark' ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-gray-50'}`}>
+              {storeLinkLoading ? (
+                <div className="p-4 text-sm text-gray-500">Loading your Store banks...</div>
+              ) : filteredStoreLinkCandidates.length === 0 ? (
+                <div className="p-4 text-sm text-gray-500">
+                  {storeLinkCandidates.length === 0 ? 'No admin Store banks were found for this account.' : 'No Store banks match this search.'}
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-200 dark:divide-gray-800">
+                  {filteredStoreLinkCandidates.map((candidate) => {
+                    const isSelected = candidate.catalogItemId === selectedStoreLinkCatalogItemId;
+                    const isExactBankMatch = Boolean(
+                      candidate.bankId
+                      && (
+                        candidate.bankId === bank.bankMetadata?.bankId
+                        || candidate.bankId === bank.sourceBankId
+                      ),
+                    );
+                    return (
+                      <button
+                        key={candidate.catalogItemId}
+                        type="button"
+                        onClick={() => setSelectedStoreLinkCatalogItemId(candidate.catalogItemId)}
+                        className={`w-full px-4 py-3 text-left transition ${
+                          isSelected
+                            ? theme === 'dark'
+                              ? 'bg-indigo-600/20'
+                              : 'bg-indigo-50'
+                            : theme === 'dark'
+                              ? 'hover:bg-gray-800/80'
+                              : 'hover:bg-white'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate font-medium">{candidate.title}</span>
+                              <span className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+                                theme === 'dark' ? 'bg-gray-700 text-gray-200' : 'bg-gray-200 text-gray-700'
+                              }`}>
+                                {candidate.status}
+                              </span>
+                              {isExactBankMatch ? (
+                                <span className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+                                  theme === 'dark' ? 'bg-emerald-900/60 text-emerald-200' : 'bg-emerald-100 text-emerald-700'
+                                }`}>
+                                  Exact bank match
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className={`mt-1 text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                              <div>Bank ID: {candidate.bankId}</div>
+                              <div>Catalog Item: {candidate.catalogItemId}</div>
+                              <div>Protection: {candidate.assetProtection === 'public' ? 'Public' : 'Encrypted'}</div>
+                              {candidate.updatedAt ? <div>Updated: {candidate.updatedAt}</div> : null}
+                            </div>
+                            {candidate.description ? (
+                              <p className={`mt-2 line-clamp-2 text-xs ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+                                {candidate.description}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className={`mt-1 h-3 w-3 rounded-full border ${isSelected ? 'bg-indigo-500 border-indigo-500' : theme === 'dark' ? 'border-gray-500' : 'border-gray-300'}`} />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            {storeLinkError ? (
+              <p className="text-sm text-red-500">{storeLinkError}</p>
+            ) : null}
+            <div className="flex gap-2">
+              <Button
+                className="flex-1"
+                onClick={() => { void handleStoreLink(); }}
+                disabled={storeLinkBusy || storeLinkLoading || !selectedStoreLinkCatalogItemId}
+              >
+                {storeLinkBusy ? 'Linking...' : 'Link Store Bank'}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setShowStoreLinkDialog(false)}
+                disabled={storeLinkBusy}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Admin Export Progress Dialog */}
       <ProgressDialog
         open={showAdminExportProgress}
@@ -950,6 +1295,7 @@ export function BankEditDialog({
         theme={theme}
         errorMessage={adminExportError}
         logLines={isAdmin ? adminExportLogLines : undefined}
+        debugOperations={isAdmin ? ['admin_bank_export'] : undefined}
         onRetry={handleAdminExport}
       />
 
@@ -982,6 +1328,7 @@ export function BankEditDialog({
         theme={theme}
         errorMessage={storeUpdateError}
         logLines={isAdmin ? storeUpdateLogLines : undefined}
+        debugOperations={isAdmin ? ['admin_bank_export'] : undefined}
         onRetry={handleStoreUpdate}
       />
 

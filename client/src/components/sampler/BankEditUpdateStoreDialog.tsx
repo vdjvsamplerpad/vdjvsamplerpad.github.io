@@ -47,7 +47,14 @@ export function BankEditUpdateStoreDialog({
   const protectionLabel = assetProtection === 'public' ? 'Unencrypted' : 'Encrypted';
   const isDark = theme === 'dark';
   const isNativeCapacitor = typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
-  const isElectronDesktop = typeof window !== 'undefined' && Boolean(window.electronAPI?.transcodeAudioToMp3);
+  const isElectronDesktop = typeof window !== 'undefined' && /Electron/i.test(window.navigator.userAgent || '');
+  const hasElectronMp3Bridge = typeof window !== 'undefined' && Boolean(window.electronAPI?.transcodeAudioToMp3);
+
+  React.useEffect(() => {
+    if (!hasElectronMp3Bridge && exportMode === 'trim_mp3') {
+      setExportMode('fast');
+    }
+  }, [exportMode, hasElectronMp3Bridge, setExportMode]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -139,7 +146,7 @@ export function BankEditUpdateStoreDialog({
 
           <div className="space-y-2">
             <Label>Audio Processing</Label>
-            <div className={`grid gap-2 ${isElectronDesktop ? 'grid-cols-3' : 'grid-cols-2'}`}>
+            <div className={`grid gap-2 ${hasElectronMp3Bridge ? 'grid-cols-3' : 'grid-cols-2'}`}>
               <Button
                 type="button"
                 variant={exportMode === 'fast' ? 'default' : 'outline'}
@@ -154,7 +161,7 @@ export function BankEditUpdateStoreDialog({
               >
                 Compact
               </Button>
-              {isElectronDesktop ? (
+              {hasElectronMp3Bridge ? (
                 <Button
                   type="button"
                   variant={exportMode === 'trim_mp3' ? 'default' : 'outline'}
@@ -165,13 +172,15 @@ export function BankEditUpdateStoreDialog({
               ) : null}
             </div>
             <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-              {isElectronDesktop
+              {hasElectronMp3Bridge
                 ? 'Fast keeps original audio. Compact applies trim windows and can reduce file size. Trim + MP3 trims first when applicable and always exports MP3 at 128 kbps.'
                 : 'Fast keeps original audio. Compact applies trim windows and can reduce file size.'}
             </p>
-            {!isElectronDesktop ? (
+            {!hasElectronMp3Bridge ? (
               <p className={`text-xs ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>
-                Trim + MP3 is available only in the Electron desktop build.
+                {isElectronDesktop
+                  ? 'Trim + MP3 is unavailable in this Electron build because the MP3 export bridge is missing.'
+                  : 'Trim + MP3 is available only in the Electron desktop build.'}
               </p>
             ) : null}
             {isNativeCapacitor && exportMode === 'trim_mp3' ? (

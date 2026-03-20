@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { edgeFunctionUrl } from '@/lib/edge-api';
+import { isElectronImportBridgeAvailable, isNativeBankImportAvailable } from '@/lib/native-bank-import';
 import {
     OnlineBankStoreImportMeta,
     StoreDownloadDebugLevel,
@@ -7,6 +8,11 @@ import {
     StoreItem,
     TransferState,
 } from '@/components/sampler/onlineStore.types';
+import type { ImportBankSource } from './nativeBankImport.types';
+import {
+    emitOperationDebug,
+    startOperationHeartbeat,
+} from '@/components/sampler/hooks/useSamplerStore.operationDiagnostics';
 
 type EffectiveUserLike = {
     id: string;
@@ -22,7 +28,7 @@ type UseOnlineStoreDownloadTransferArgs = {
     pushDownloadDebugLog: (level: StoreDownloadDebugLevel, event: string, details?: Record<string, unknown>) => void;
     showToast: (message: string, type: 'success' | 'error') => void;
     onImportBankFromStore: (
-        file: File,
+        source: ImportBankSource,
         meta: OnlineBankStoreImportMeta,
         onProgress?: (progress: number) => void
     ) => Promise<void>;
@@ -130,8 +136,24 @@ export function useOnlineStoreDownloadTransfer({
         );
 
         let failedStage: TransferState['errorStage'] = 'download';
+        const startedAt = Date.now();
+        const operationId = `store-${item.id}-${startedAt.toString(36)}`;
+        const heartbeatState = {
+            phase: 'starting',
+            progress: 0,
+            bankId: item.bank_id,
+            catalogItemId: item.id,
+        };
+        const stopHeartbeat = startOperationHeartbeat(
+            { operationId, operation: 'bankstore_download' },
+            {
+                getDetails: () => ({
+                    ...heartbeatState,
+                    durationMs: Date.now() - startedAt,
+                }),
+            }
+        );
         try {
-            const startedAt = Date.now();
             const controller = new AbortController();
             abortControllersRef.current[item.id] = controller;
             let blob: Blob | null = null;
@@ -141,6 +163,17 @@ export function useOnlineStoreDownloadTransfer({
             let importedEntitlementTokenKid: string | null = null;
             let importedEntitlementTokenIssuedAt: string | null = null;
             let importedEntitlementTokenExpiresAt: string | null = null;
+            emitOperationDebug({
+                operationId,
+                operation: 'bankstore_download',
+                phase: 'start',
+                details: {
+                    bankId: item.bank_id,
+                    bankTitle: item.bank.title,
+                    catalogItemId: item.id,
+                    expectedSha256: (item.sha256 || '').trim().toLowerCase() || null,
+                },
+            });
             pushDownloadDebugLog('info', 'download_start', {
                 catalogItemId: item.id,
                 bankId: item.bank_id,
@@ -153,11 +186,23 @@ export function useOnlineStoreDownloadTransfer({
                 failedStage = 'import';
                 blob = cachedArtifact.blob;
                 fileName = cachedArtifact.fileName || fileName;
+                heartbeatState.phase = 'importing';
                 pushDownloadDebugLog('info', 'download_use_cached_artifact_for_retry', {
                     catalogItemId: item.id,
                     bankId: item.bank_id,
                     cachedBytes: cachedArtifact.blob.size,
                     cachedAt: new Date(cachedArtifact.savedAt).toISOString(),
+                });
+                emitOperationDebug({
+                    operationId,
+                    operation: 'bankstore_download',
+                    phase: 'stage',
+                    details: {
+                        stage: 'retry-import-from-cache',
+                        bankId: item.bank_id,
+                        catalogItemId: item.id,
+                        cachedBytes: cachedArtifact.blob.size,
+                    },
                 });
                 setTransfers(prev => ({
                     ...prev,
@@ -172,6 +217,7 @@ export function useOnlineStoreDownloadTransfer({
                     }
                 }));
             } else {
+                heartbeatState.phase = 'downloading';
                 setTransfers(prev => ({
                     ...prev,
                     [item.id]: {
@@ -188,6 +234,17 @@ export function useOnlineStoreDownloadTransfer({
                 const { supabase } = await import('@/lib/supabase');
                 const session = await supabase.auth.getSession();
                 const token = session.data.session?.access_token;
+                emitOperationDebug({
+                    operationId,
+                    operation: 'bankstore_download',
+                    phase: 'stage',
+                    details: {
+                        stage: 'session-checked',
+                        bankId: item.bank_id,
+                        catalogItemId: item.id,
+                        hasToken: Boolean(token),
+                    },
+                });
                 pushDownloadDebugLog('info', 'download_session_checked', {
                     catalogItemId: item.id,
                     hasToken: Boolean(token),
@@ -262,6 +319,16 @@ export function useOnlineStoreDownloadTransfer({
                 }
 
                 const ticketUrl = edgeFunctionUrl('store-api', `download/${item.id}?transport=signed_url`);
+                emitOperationDebug({
+                    operationId,
+                    operation: 'bankstore_download',
+                    phase: 'stage',
+                    details: {
+                        stage: 'download-ticket-request',
+                        bankId: item.bank_id,
+                        catalogItemId: item.id,
+                    },
+                });
                 pushDownloadDebugLog('info', 'download_ticket_request', {
                     catalogItemId: item.id,
                     ticketUrl: sanitizeUrlForLog(ticketUrl),
@@ -298,6 +365,74 @@ export function useOnlineStoreDownloadTransfer({
                     urlExpiresAt: String(ticketPayload?.urlExpiresAt || ticketPayload?.data?.urlExpiresAt || ''),
                 });
 
+                if (isNativeBankImportAvailable() || isElectronImportBridgeAvailable()) {
+                    failedStage = 'import';
+                    heartbeatState.phase = 'importing';
+                    heartbeatState.progress = 6;
+                    setTransfers(prev => ({
+                        ...prev,
+                        [item.id]: {
+                            ...prev[item.id],
+                            phase: 'importing',
+                            progress: 6,
+                            message: 'Importing on device...',
+                            error: undefined,
+                            errorStage: undefined,
+                            updatedAt: Date.now()
+                        }
+                    }));
+
+                    await onImportBankFromStore(
+                        isNativeBankImportAvailable()
+                          ? {
+                              kind: 'android-store',
+                              signedUrl: signedDownloadUrl,
+                              bankId: item.bank_id,
+                              catalogItemId: item.id,
+                              fileName,
+                              expectedSha256: item.sha256 || undefined,
+                            }
+                          : {
+                              kind: 'electron-store',
+                              signedUrl: signedDownloadUrl,
+                              bankId: item.bank_id,
+                              catalogItemId: item.id,
+                              fileName,
+                              expectedSha256: item.sha256 || undefined,
+                            },
+                        {
+                            bankId: item.bank_id,
+                            bankName: item.bank.title,
+                            catalogItemId: item.id,
+                            targetBankId: item.snapshot_target_bank_id || undefined,
+                            refreshAssetsOnly: options?.refreshAssetsOnly === true,
+                            catalogSha256: item.sha256 || undefined,
+                            thumbnailUrl: item.thumbnail_path || undefined,
+                            derivedKey: importedBankDerivedKey || undefined,
+                            entitlementToken: importedEntitlementToken || undefined,
+                            entitlementTokenKid: importedEntitlementTokenKid || undefined,
+                            entitlementTokenIssuedAt: importedEntitlementTokenIssuedAt || undefined,
+                            entitlementTokenExpiresAt: importedEntitlementTokenExpiresAt || undefined,
+                        },
+                        (progress) => {
+                            const normalized = normalizeProgress(progress);
+                            heartbeatState.phase = 'importing';
+                            heartbeatState.progress = normalized;
+                            setTransfers(prev => ({
+                                ...prev,
+                                [item.id]: {
+                                    ...prev[item.id],
+                                    phase: 'importing',
+                                    progress: normalized,
+                                    updatedAt: Date.now()
+                                }
+                            }));
+                        }
+                    );
+
+                    blob = new Blob([], { type: 'application/octet-stream' });
+                } else {
+
                 const res = await fetch(signedDownloadUrl, { cache: 'no-store', credentials: 'omit', signal: controller.signal });
                 pushDownloadDebugLog('info', 'download_asset_response', {
                     catalogItemId: item.id,
@@ -324,6 +459,7 @@ export function useOnlineStoreDownloadTransfer({
                     loaded += value.length;
                     if (total > 0) {
                         const progress = Math.min(100, Math.round((loaded / total) * 100));
+                        heartbeatState.progress = progress;
                         setTransfers(prev => ({
                             ...prev,
                             [item.id]: { ...prev[item.id], phase: 'downloading', progress, updatedAt: Date.now() }
@@ -335,6 +471,18 @@ export function useOnlineStoreDownloadTransfer({
                     loadedBytes: loaded,
                     totalBytes: total > 0 ? total : null,
                     chunkCount: chunks.length,
+                });
+                emitOperationDebug({
+                    operationId,
+                    operation: 'bankstore_download',
+                    phase: 'stage',
+                    details: {
+                        stage: 'download-stream-complete',
+                        bankId: item.bank_id,
+                        catalogItemId: item.id,
+                        loadedBytes: loaded,
+                        totalBytes: total > 0 ? total : null,
+                    },
                 });
 
                 const downloadedBlob = new Blob(chunks, { type: 'application/octet-stream' });
@@ -365,6 +513,8 @@ export function useOnlineStoreDownloadTransfer({
                     sha256: expectedSha || null,
                 };
                 failedStage = 'import';
+                heartbeatState.phase = 'importing';
+                heartbeatState.progress = 0;
                 setTransfers(prev => ({
                     ...prev,
                     [item.id]: {
@@ -377,9 +527,21 @@ export function useOnlineStoreDownloadTransfer({
                         updatedAt: Date.now()
                     }
                 }));
+                }
             }
 
-            if (!blob || blob.size <= 0) throw new Error('Downloaded file is empty');
+            if (!blob) throw new Error('Downloaded file is empty');
+            emitOperationDebug({
+                operationId,
+                operation: 'bankstore_download',
+                phase: 'stage',
+                details: {
+                    stage: 'import-start',
+                    bankId: item.bank_id,
+                    catalogItemId: item.id,
+                    blobBytes: blob.size,
+                },
+            });
             pushDownloadDebugLog('info', 'download_import_start', {
                 catalogItemId: item.id,
                 bankId: item.bank_id,
@@ -388,31 +550,35 @@ export function useOnlineStoreDownloadTransfer({
                 hasPreferredDerivedKey: Boolean(importedBankDerivedKey),
                 hasEntitlementToken: Boolean(importedEntitlementToken),
             });
-            const file = new File([blob], fileName, { type: 'application/octet-stream' });
+            if (blob.size > 0) {
+                const file = new File([blob], fileName, { type: 'application/octet-stream' });
 
-            await onImportBankFromStore(
-                file,
-                {
-                    bankId: item.bank_id,
-                    bankName: item.bank.title,
-                    catalogItemId: item.id,
-                    targetBankId: item.snapshot_target_bank_id || undefined,
-                    refreshAssetsOnly: options?.refreshAssetsOnly === true,
-                    catalogSha256: item.sha256 || undefined,
-                    thumbnailUrl: item.thumbnail_path || undefined,
-                    derivedKey: importedBankDerivedKey || undefined,
-                    entitlementToken: importedEntitlementToken || undefined,
-                    entitlementTokenKid: importedEntitlementTokenKid || undefined,
-                    entitlementTokenIssuedAt: importedEntitlementTokenIssuedAt || undefined,
-                    entitlementTokenExpiresAt: importedEntitlementTokenExpiresAt || undefined,
-                },
-                (progress) => {
-                    setTransfers(prev => ({
-                        ...prev,
-                        [item.id]: { ...prev[item.id], phase: 'importing', progress: normalizeProgress(progress), updatedAt: Date.now() }
-                    }));
-                }
-            );
+                await onImportBankFromStore(
+                    file,
+                    {
+                        bankId: item.bank_id,
+                        bankName: item.bank.title,
+                        catalogItemId: item.id,
+                        targetBankId: item.snapshot_target_bank_id || undefined,
+                        refreshAssetsOnly: options?.refreshAssetsOnly === true,
+                        catalogSha256: item.sha256 || undefined,
+                        thumbnailUrl: item.thumbnail_path || undefined,
+                        derivedKey: importedBankDerivedKey || undefined,
+                        entitlementToken: importedEntitlementToken || undefined,
+                        entitlementTokenKid: importedEntitlementTokenKid || undefined,
+                        entitlementTokenIssuedAt: importedEntitlementTokenIssuedAt || undefined,
+                        entitlementTokenExpiresAt: importedEntitlementTokenExpiresAt || undefined,
+                    },
+                    (progress) => {
+                        heartbeatState.phase = 'importing';
+                        heartbeatState.progress = normalizeProgress(progress);
+                        setTransfers(prev => ({
+                            ...prev,
+                            [item.id]: { ...prev[item.id], phase: 'importing', progress: normalizeProgress(progress), updatedAt: Date.now() }
+                        }));
+                    }
+                );
+            }
 
             setTransfers(prev => ({
                 ...prev,
@@ -427,14 +593,37 @@ export function useOnlineStoreDownloadTransfer({
                 }
             }));
             delete downloadedArtifactsRef.current[item.id];
+            emitOperationDebug({
+                operationId,
+                operation: 'bankstore_download',
+                phase: 'finish',
+                details: {
+                    bankId: item.bank_id,
+                    catalogItemId: item.id,
+                    durationMs: Date.now() - startedAt,
+                },
+            });
             pushDownloadDebugLog('info', 'download_import_success', {
                 catalogItemId: item.id,
                 bankId: item.bank_id,
                 durationMs: Date.now() - startedAt,
             });
+            stopHeartbeat();
 
         } catch (err: any) {
             if (err?.name === 'AbortError') {
+                emitOperationDebug({
+                    operationId,
+                    operation: 'bankstore_download',
+                    phase: 'error',
+                    level: 'error',
+                    details: {
+                        bankId: item.bank_id,
+                        catalogItemId: item.id,
+                        failedStage,
+                        message: 'Download aborted',
+                    },
+                });
                 pushDownloadDebugLog('info', 'download_cancelled', {
                     catalogItemId: item.id,
                     bankId: item.bank_id,
@@ -447,9 +636,22 @@ export function useOnlineStoreDownloadTransfer({
                     return next;
                 });
                 showToast('Download cancelled.', 'success');
+                stopHeartbeat();
                 return;
             }
             const errorMessage = err?.message || 'Download failed';
+            emitOperationDebug({
+                operationId,
+                operation: 'bankstore_download',
+                phase: 'error',
+                level: 'error',
+                details: {
+                    bankId: item.bank_id,
+                    catalogItemId: item.id,
+                    failedStage,
+                    message: errorMessage,
+                },
+            });
             pushDownloadDebugLog('error', 'download_failed', {
                 catalogItemId: item.id,
                 bankId: item.bank_id,
@@ -478,6 +680,7 @@ export function useOnlineStoreDownloadTransfer({
             } else {
                 showToast('Download failed. Please try again.', 'error');
             }
+            stopHeartbeat();
         }
         finally {
             delete abortControllersRef.current[item.id];
