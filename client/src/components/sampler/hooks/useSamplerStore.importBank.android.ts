@@ -1,5 +1,6 @@
 import type { BankMetadata, PadData, SamplerBank } from '../types/sampler';
 import {
+  derivePassword,
   getDerivedKey,
   parseBankIdFromFileName,
   resolveAdminBankMetadata,
@@ -63,7 +64,7 @@ const buildCandidateDerivedKeys = async (
   options: ImportBankOptions | undefined,
   deps: ImportBankPipelineDeps
 ): Promise<string[]> => {
-  const { user, getCachedUser } = deps;
+  const { user, getCachedUser, profileRole } = deps;
   const values = new Set<string>([SHARED_EXPORT_DISABLED_PASSWORD]);
   const preferredDerivedKey = typeof options?.preferredDerivedKey === 'string'
     ? options.preferredDerivedKey.trim()
@@ -109,6 +110,16 @@ const buildCandidateDerivedKeys = async (
   if (electronFilePath && source instanceof File) {
     const parsed = parseBankIdFromFileName(source.name);
     if (parsed) hintedIds.add(parsed);
+  }
+
+  if (profileRole === 'admin') {
+    for (const bankId of hintedIds) {
+      try {
+        const adminDerivedKey = await derivePassword(bankId);
+        if (adminDerivedKey?.trim()) values.add(adminDerivedKey.trim());
+      } catch {
+      }
+    }
   }
 
   for (const bankId of hintedIds) {

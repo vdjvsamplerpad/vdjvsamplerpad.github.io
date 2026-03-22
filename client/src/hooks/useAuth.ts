@@ -21,6 +21,7 @@ const SESSION_ENFORCEMENT_EVENT_KEY = 'vdjv-session-enforcement-event';
 const HIDE_PROTECTED_BANKS_KEY = 'vdjv-hide-protected-banks';
 const PASSWORD_RECOVERY_MODE_KEY = 'vdjv-password-recovery-mode';
 const PROFILE_SELECT = 'id, role, display_name, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap';
+const AUTH_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 
 export const isPasswordRecoveryMode = (): boolean => {
   if (typeof window === 'undefined') return false
@@ -695,7 +696,7 @@ function useAuthValue(): AuthProviderValue {
         }
       })
 
-    const interval = window.setInterval(heartbeat, 180_000)
+    const interval = window.setInterval(heartbeat, AUTH_HEARTBEAT_INTERVAL_MS)
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return
       if (typeof navigator !== 'undefined' && !navigator.onLine) return

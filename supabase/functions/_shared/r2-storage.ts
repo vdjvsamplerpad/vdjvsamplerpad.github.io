@@ -115,7 +115,7 @@ const resolveSigningKey = async (
 };
 
 const presignRequest = async (input: {
-  method: "GET" | "PUT" | "HEAD";
+  method: "GET" | "PUT" | "HEAD" | "DELETE";
   bucket: string;
   objectKey: string;
   expiresSeconds: number;
@@ -239,3 +239,25 @@ export const headObject = async (bucket: string, objectKey: string): Promise<Hea
   };
 };
 
+export const deleteObject = async (
+  bucket: string,
+  objectKey: string,
+  expiresSeconds = 300,
+): Promise<{ deleted: boolean }> => {
+  const signed = await presignRequest({
+    method: "DELETE",
+    bucket,
+    objectKey,
+    expiresSeconds,
+  });
+  const response = await fetch(signed.url, {
+    method: "DELETE",
+    cache: "no-store",
+    redirect: "follow",
+  });
+  if (response.status === 404) return { deleted: false };
+  if (!response.ok) {
+    throw new Error(`R2_DELETE_FAILED_${response.status}`);
+  }
+  return { deleted: true };
+};

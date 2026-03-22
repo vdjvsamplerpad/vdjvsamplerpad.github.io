@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { prepareManagedImageUpload } from '@/lib/image-upload';
+import { uploadManagedStoreAsset } from '@/lib/store-asset-upload';
 import {
   PAGE_SIZE,
   isValidHttpUrl,
@@ -548,17 +549,13 @@ export function useAdminAccessStoreManager({
     }
   }, [editingPromotionId, pushNotice, resetStorePromotionForm, storeAuthFetch]);
 
-  const uploadStoreBannerImage = React.useCallback(async (file: File): Promise<string> => {
-    const { supabase } = await import('@/lib/supabase');
+  const uploadStoreBannerImage = React.useCallback(async (file: File): Promise<{ url: string; cleanup: () => Promise<void> }> => {
     const preparedFile = await prepareManagedImageUpload(file, 'banner');
-    const ext = String(preparedFile.name.split('.').pop() || 'webp').toLowerCase();
-    const fileName = `store-banner-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const { error } = await supabase.storage.from('store-assets').upload(fileName, preparedFile, { upsert: true });
-    if (error) throw error;
-    const { data } = supabase.storage.from('store-assets').getPublicUrl(fileName);
-    const publicUrl = String(data?.publicUrl || '').trim();
-    if (!publicUrl) throw new Error('Failed to resolve public URL for banner image.');
-    return publicUrl;
+    const uploaded = await uploadManagedStoreAsset(preparedFile, { kind: 'banner' });
+    return {
+      url: uploaded.url,
+      cleanup: uploaded.cleanup,
+    };
   }, []);
 
   const handleNewBannerImageChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -604,8 +601,8 @@ export function useAdminAccessStoreManager({
     }
     setBannerUploadingIds((prev) => new Set(prev).add(bannerId));
     try {
-      const imageUrl = await uploadStoreBannerImage(file);
-      updateBannerDraft(bannerId, { image_url: imageUrl });
+      const uploaded = await uploadStoreBannerImage(file);
+      updateBannerDraft(bannerId, { image_url: uploaded.url });
       pushNotice({ variant: 'success', message: 'Banner image uploaded. Click Save to apply changes.' });
     } catch (err: any) {
       pushNotice({ variant: 'error', message: err?.message || 'Could not upload banner image.' });
@@ -642,8 +639,13 @@ export function useAdminAccessStoreManager({
       return;
     }
     setBannerLoading(true);
+    let uploadedBannerCleanup: (() => Promise<void>) | null = null;
     try {
-      if (newBannerImageFile) finalImageUrl = await uploadStoreBannerImage(newBannerImageFile);
+      if (newBannerImageFile) {
+        const uploaded = await uploadStoreBannerImage(newBannerImageFile);
+        finalImageUrl = uploaded.url;
+        uploadedBannerCleanup = uploaded.cleanup;
+      }
       const res = await storeAuthFetch('/api/admin/store/banners', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -663,8 +665,14 @@ export function useAdminAccessStoreManager({
       setNewBannerImageUrl('');
       setNewBannerLinkUrl('');
       setNewBannerSortOrder('0');
+      uploadedBannerCleanup = null;
       await loadStoreCatalog();
     } catch (err: any) {
+      if (uploadedBannerCleanup) {
+        try {
+          await uploadedBannerCleanup();
+        } catch {}
+      }
       pushNotice({ variant: 'error', message: err?.message || 'Could not create marketing banner.' });
     } finally {
       setBannerLoading(false);
@@ -892,20 +900,16 @@ export function useAdminAccessStoreManager({
     }
 
     setStoreLoading(true);
-    let uploadedFileName = '';
+    let uploadedQrCleanup: (() => Promise<void>) | null = null;
     let finalQrPath = nextConfig.qr_image_path;
     try {
       if (storeQrFile) {
         const validationError = validateStoreQrFile(storeQrFile);
         if (validationError) throw new Error(validationError);
         const preparedFile = await prepareManagedImageUpload(storeQrFile, 'qr');
-        const { supabase } = await import('@/lib/supabase');
-        const ext = preparedFile.name.split('.').pop();
-        uploadedFileName = `payment-qr-${Date.now()}.${ext}`;
-        const { error } = await supabase.storage.from('store-assets').upload(uploadedFileName, preparedFile, { upsert: true });
-        if (error) throw error;
-        const { data: { publicUrl } } = supabase.storage.from('store-assets').getPublicUrl(uploadedFileName);
-        finalQrPath = publicUrl;
+        const uploaded = await uploadManagedStoreAsset(preparedFile, { kind: 'qr' });
+        finalQrPath = uploaded.url;
+        uploadedQrCleanup = uploaded.cleanup;
       }
       const payload = buildStoreConfigPayload(nextConfig, finalQrPath);
       const res = await storeAuthFetch('/api/admin/store/config', {
@@ -933,10 +937,9 @@ export function useAdminAccessStoreManager({
       pushNotice({ variant: 'success', message: options?.successMessage || 'Configuration saved successfully.' });
       return true;
     } catch (err: any) {
-      if (uploadedFileName) {
+      if (uploadedQrCleanup) {
         try {
-          const { supabase } = await import('@/lib/supabase');
-          await supabase.storage.from('store-assets').remove([uploadedFileName]);
+          await uploadedQrCleanup();
         } catch {}
       }
       pushNotice({ variant: 'error', message: err?.message || 'Network error saving config' });
@@ -1344,6 +1347,7 @@ export function useAdminAccessStoreManager({
     deleteStorePromotion,
     editStorePromotion,
     handleStoreQrFileChange,
+    loadStoreRequests,
     handleStoreRequestAction,
     handleStoreRequestRetryEmail,
     hasStoreCatalogFilters,

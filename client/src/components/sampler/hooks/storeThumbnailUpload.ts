@@ -1,4 +1,5 @@
 import { prepareManagedImageUpload } from '@/lib/image-upload';
+import { uploadManagedStoreAsset } from '@/lib/store-asset-upload';
 
 type EnsureManagedStoreThumbnailInput = {
   bankId: string;
@@ -14,17 +15,6 @@ type EnsureManagedStoreThumbnailResult = {
 
 const isHttpUrl = (value: string | null | undefined): value is string =>
   typeof value === 'string' && /^https?:\/\//i.test(value.trim());
-
-const getObjectPathFromPublicUrl = (value: string): string | null => {
-  try {
-    const parsed = new URL(value, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
-    const marker = '/storage/v1/object/public/store-assets/';
-    if (!parsed.pathname.includes(marker)) return null;
-    return decodeURIComponent(parsed.pathname.slice(parsed.pathname.indexOf(marker) + marker.length)).replace(/^\/+/, '');
-  } catch {
-    return null;
-  }
-};
 
 export const ensureManagedStoreThumbnail = async (
   input: EnsureManagedStoreThumbnailInput,
@@ -58,32 +48,14 @@ export const ensureManagedStoreThumbnail = async (
     type: sourceBlob.type || 'image/webp',
   });
   const preparedFile = await prepareManagedImageUpload(sourceFile, 'thumbnail');
-  const ext = (preparedFile.name.split('.').pop() || sourceExt || 'webp').toLowerCase();
-  const suffix = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
-    ? crypto.randomUUID().slice(0, 8)
-    : Math.random().toString(36).slice(2, 10);
-  const objectPath = `bank-thumbnails/${input.bankId}/${Date.now()}-${suffix}.${ext}`;
-
-  const { supabase } = await import('@/lib/supabase');
-  const upload = await supabase.storage
-    .from('store-assets')
-    .upload(objectPath, preparedFile, { upsert: false, cacheControl: '3600' });
-  if (upload.error) {
-    const uploadError = upload.error as Error | { message?: unknown };
-    throw uploadError instanceof Error
-      ? uploadError
-      : new Error(String(uploadError.message || 'Thumbnail upload failed.'));
-  }
-
-  const { data: { publicUrl } } = supabase.storage.from('store-assets').getPublicUrl(objectPath);
+  const uploaded = await uploadManagedStoreAsset(preparedFile, {
+    kind: 'thumbnail',
+    bankId: input.bankId,
+  });
 
   return {
-    url: publicUrl,
+    url: uploaded.url,
     uploaded: true,
-    cleanup: async () => {
-      const cleanupPath = getObjectPathFromPublicUrl(publicUrl);
-      if (!cleanupPath) return;
-      await supabase.storage.from('store-assets').remove([cleanupPath]).catch(() => undefined);
-    },
+    cleanup: uploaded.cleanup,
   };
 };

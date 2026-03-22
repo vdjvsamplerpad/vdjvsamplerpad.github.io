@@ -67,6 +67,36 @@ const validateProofFile = (file: File): string | null => {
     return null;
 };
 
+function StoreCardThumbnail({
+    src,
+    alt,
+    fallbackColor,
+}: {
+    src: string | null | undefined;
+    alt: string;
+    fallbackColor: string;
+}) {
+    const normalizedSrc = typeof src === 'string' ? src.trim() : '';
+    if (!normalizedSrc) {
+        return (
+            <div
+                className="absolute inset-0 transition-transform duration-700 ease-out group-hover:scale-110"
+                style={{ backgroundColor: fallbackColor }}
+            />
+        );
+    }
+    return (
+        <img
+            src={normalizedSrc}
+            alt={alt}
+            loading="lazy"
+            decoding="async"
+            sizes="(min-width: 1024px) 320px, (min-width: 640px) 45vw, 92vw"
+            className="absolute inset-0 w-full h-full object-cover object-left transition-transform duration-700 ease-out group-hover:scale-110"
+        />
+    );
+}
+
 const formatPhp = (value: number): string =>
     `PHP ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -812,10 +842,10 @@ export function OnlineBankStoreDialog({
                                                     onClick={() => window.open(activeBanner.link_url || '', '_blank', 'noopener,noreferrer')}
                                                     className="block w-full h-full text-left"
                                                 >
-                                                    <img src={activeBanner.image_url} alt="Store banner" className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105" />
+                                                    <img src={activeBanner.image_url} alt="Store banner" loading="eager" decoding="async" className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105" />
                                                 </button>
                                             ) : (
-                                                <img src={activeBanner.image_url} alt="Store banner" className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105" />
+                                                <img src={activeBanner.image_url} alt="Store banner" loading="eager" decoding="async" className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105" />
                                             )}
 
                                             {banners.length > 1 && (
@@ -899,17 +929,11 @@ export function OnlineBankStoreDialog({
                                                 return (
                                                 <div key={item.id} className={`group relative h-[160px] sm:h-[180px] flex flex-col rounded-2xl border transition-all duration-300 overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 ${isDark ? 'border-white/5 bg-gray-800/30 hover:border-indigo-500/40 hover:bg-gray-800/50' : 'border-gray-200 hover:border-indigo-300 hover:shadow-indigo-900/10 bg-white'}`}>
                                                     <div className="absolute inset-0 overflow-hidden">
-                                                        {item.thumbnail_path ? (
-                                                            <div
-                                                                className="absolute inset-0 bg-cover bg-left transition-transform duration-700 ease-out group-hover:scale-110"
-                                                                style={{ backgroundImage: `url(${item.thumbnail_path})` }}
-                                                            />
-                                                        ) : (
-                                                            <div
-                                                                className="absolute inset-0 transition-transform duration-700 ease-out group-hover:scale-110"
-                                                                style={{ backgroundColor: item.bank.color || '#3b82f6' }}
-                                                            />
-                                                        )}
+                                                        <StoreCardThumbnail
+                                                            src={item.thumbnail_path}
+                                                            alt={item.bank.title ? `${item.bank.title} thumbnail` : 'Bank thumbnail'}
+                                                            fallbackColor={item.bank.color || '#3b82f6'}
+                                                        />
                                                         <div className="absolute inset-0 mix-blend-multiply opacity-40 transition-opacity duration-300 group-hover:opacity-60" style={{ backgroundColor: item.bank.color || '#1e1b4b' }} />
                                                         <div className="absolute inset-0 bg-gradient-to-b from-black/0 via-black/40 to-black/95 transition-opacity duration-300 group-hover:via-black/50 group-hover:to-black" />
                                                     </div>

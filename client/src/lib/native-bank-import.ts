@@ -121,14 +121,25 @@ type NativeBankImportPlugin = {
 
 const NativeBankImport = registerPlugin<NativeBankImportPlugin>('NativeBankImport');
 
+const getCapacitorRuntime = (): any => {
+  if (typeof window === 'undefined') return Capacitor;
+  return (window as any).Capacitor || Capacitor;
+};
+
 const isNativeAndroid = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  const capacitor = (window as any).Capacitor || Capacitor;
+  const capacitor = getCapacitorRuntime();
   return capacitor?.isNativePlatform?.() === true && capacitor?.getPlatform?.() === 'android';
 };
 
-export const isNativeBankImportAvailable = (): boolean =>
-  isNativeAndroid() && Capacitor.isPluginAvailable('NativeBankImport');
+export const isNativeBankImportAvailable = (): boolean => {
+  if (!isNativeAndroid()) return false;
+  const capacitor = getCapacitorRuntime();
+  if (capacitor?.Plugins?.NativeBankImport) return true;
+  if (Capacitor.isPluginAvailable('NativeBankImport')) return true;
+  // This app registers the Android plugin directly in MainActivity, so it may be callable
+  // even when it is not listed in capacitor.plugins.json.
+  return true;
+};
 
 export const isElectronImportBridgeAvailable = (): boolean =>
   typeof window !== 'undefined' && typeof window.electronAPI?.importArchiveJob === 'function';

@@ -65,6 +65,9 @@ import { AdminAccessNonStoreTabs } from './AdminAccessDialog.nonStoreTabs';
 import { AdminAccessDialogModals } from './AdminAccessDialog.dialogs';
 import { useAdminAccessStoreManager } from './AdminAccessDialog.store';
 
+const ADMIN_HOME_AUTO_REFRESH_MS = 5 * 60 * 1000;
+const ADMIN_HOME_FETCH_COOLDOWN_MS = 60 * 1000;
+
 
 
 
@@ -125,6 +128,7 @@ export function AdminAccessDialog({
     handleStoreRequestRetryEmail,
     hasStoreCatalogFilters,
     loadStoreCatalog,
+    loadStoreRequests,
     loadStorePromotions,
     newBannerImageFile,
     newBannerImageUrl,
@@ -221,10 +225,13 @@ export function AdminAccessDialog({
   const [bulkLoading, setBulkLoading] = React.useState(false);
 
   const [activeLoading, setActiveLoading] = React.useState(false);
-  const [activeCounts, setActiveCounts] = React.useState({ activeUsers: 0, activeSessions: 0 });
+  const [activeCounts, setActiveCounts] = React.useState({ activeUsers: 0, activeSessions: 0, activeTodayUsers: 0 });
   const [activeSessions, setActiveSessions] = React.useState<ActiveSessionRow[]>([]);
+  const [activeTodaySessions, setActiveTodaySessions] = React.useState<ActiveSessionRow[]>([]);
   const [activeTotal, setActiveTotal] = React.useState(0);
   const [activePage, setActivePage] = React.useState(1);
+  const [activeTodayTotal, setActiveTodayTotal] = React.useState(0);
+  const [activeTodayPage, setActiveTodayPage] = React.useState(1);
   const [activeSortBy, setActiveSortBy] = React.useState<ActiveSortBy>(initialActiveSort.sortBy);
   const [activeSortDir, setActiveSortDir] = React.useState<SortDirection>(initialActiveSort.sortDir);
   const [activityLoading, setActivityLoading] = React.useState(false);
@@ -262,6 +269,7 @@ export function AdminAccessDialog({
   const [homeLastRefresh, setHomeLastRefresh] = React.useState<string | null>(null);
   const homeFromDateRef = React.useRef(homeFromDate);
   const homeToDateRef = React.useRef(homeToDate);
+  const homeRefreshMetaRef = React.useRef<{ key: string; at: number }>({ key: '', at: 0 });
 
   const [createOpen, setCreateOpen] = React.useState(false);
   const [createEmail, setCreateEmail] = React.useState('');
@@ -404,10 +412,6 @@ export function AdminAccessDialog({
     () => banks.slice((banksPage - 1) * PAGE_SIZE, banksPage * PAGE_SIZE),
     [banks, banksPage],
   );
-  const pagedActiveUsers = React.useMemo(
-    () => activeUsersRows.slice((activePage - 1) * PAGE_SIZE, activePage * PAGE_SIZE),
-    [activeUsersRows, activePage],
-  );
   const pagedStorePromotions = React.useMemo(
     () => storePromotions.slice((storePromotionsPage - 1) * PAGE_SIZE, storePromotionsPage * PAGE_SIZE),
     [storePromotions, storePromotionsPage],
@@ -458,19 +462,19 @@ export function AdminAccessDialog({
     }
   }, [usersQuery, usersSortBy, usersSortDir]);
 
-  const refreshAssignmentUsers = React.useCallback(async () => {
-    setAssignmentUsersLoading(true);
-    try {
-      const data = await adminApi.listUsers({
-        q: usersQuery,
-        page: 1,
-        perPage: 2000,
-        includeAdmins: false,
-        sortBy: 'created_at',
-        sortDir: 'desc',
-      });
-      setAssignmentUsersSource(Array.isArray(data.users) ? data.users : []);
-      setError('');
+    const refreshAssignmentUsers = React.useCallback(async () => {
+      setAssignmentUsersLoading(true);
+      try {
+        const data = await adminApi.listUsers({
+          q: usersQuery,
+          page: 1,
+          perPage: 2000,
+          includeAdmins: true,
+          sortBy: 'created_at',
+          sortDir: 'desc',
+        });
+        setAssignmentUsersSource(Array.isArray(data.users) ? data.users : []);
+        setError('');
     } catch (e: any) {
       setError(e?.message || 'Could not load assignment users.');
       setAssignmentUsersSource([]);
@@ -680,30 +684,38 @@ export function AdminAccessDialog({
 
   const refreshActive = React.useCallback(async () => {
     setActiveLoading(true);
-    try {
-      const data = await adminApi.listActiveSessions({
-        page: 1,
-        perPage: 2000,
-        sortBy: activeSortBy,
-        sortDir: activeSortDir,
-      });
-      setActiveCounts({
-        activeUsers: Number(data?.counts?.activeUsers || 0),
-        activeSessions: Number(data?.counts?.activeSessions || 0),
-      });
-      const nextSessions = Array.isArray(data?.sessions) ? data.sessions : [];
-      setActiveSessions(nextSessions);
-      setActiveTotal(Math.max(Number(data?.total || 0), nextSessions.length));
-      setError('');
-    } catch (e: any) {
-      setError(e?.message || 'Could not load active sessions.');
-      setActiveCounts({ activeUsers: 0, activeSessions: 0 });
-      setActiveSessions([]);
-      setActiveTotal(0);
-    } finally {
-      setActiveLoading(false);
-    }
-  }, [activeSortBy, activeSortDir]);
+      try {
+        const data = await adminApi.listActiveSessions({
+          page: activePage,
+          perPage: PAGE_SIZE,
+          activeTodayPage,
+          activeTodayPerPage: PAGE_SIZE,
+          sortBy: activeSortBy,
+          sortDir: activeSortDir,
+        });
+        setActiveCounts({
+          activeUsers: Number(data?.counts?.activeUsers || 0),
+          activeSessions: Number(data?.counts?.activeSessions || 0),
+          activeTodayUsers: Number(data?.counts?.activeTodayUsers || 0),
+        });
+        const nextSessions = Array.isArray(data?.sessions) ? data.sessions : [];
+        const nextActiveTodaySessions = Array.isArray(data?.activeTodaySessions) ? data.activeTodaySessions : [];
+        setActiveSessions(nextSessions);
+        setActiveTodaySessions(nextActiveTodaySessions);
+        setActiveTotal(Math.max(Number(data?.total || 0), nextSessions.length));
+        setActiveTodayTotal(Math.max(Number(data?.activeTodayTotal || 0), nextActiveTodaySessions.length));
+        setError('');
+      } catch (e: any) {
+        setError(e?.message || 'Could not load active sessions.');
+        setActiveCounts({ activeUsers: 0, activeSessions: 0, activeTodayUsers: 0 });
+        setActiveSessions([]);
+        setActiveTodaySessions([]);
+        setActiveTotal(0);
+        setActiveTodayTotal(0);
+      } finally {
+        setActiveLoading(false);
+      }
+    }, [activePage, activeSortBy, activeSortDir, activeTodayPage]);
 
   const refreshUserData = React.useCallback(
     async () => Promise.all([refreshUsers(), refreshAssignmentUsers()]),
@@ -767,9 +779,21 @@ export function AdminAccessDialog({
     }
   }, [otherActivityPage, otherActivitySearch, otherActivitySortBy, otherActivitySortDir, otherActivityStatusFilter]);
 
-  const refreshHomeDashboard = React.useCallback(async (range?: { fromDate?: string; toDate?: string }) => {
+  const refreshHomeDashboard = React.useCallback(async (
+    range?: { fromDate?: string; toDate?: string },
+    options?: { force?: boolean },
+  ) => {
     const requestFromDate = (range?.fromDate || homeFromDateRef.current || '').trim();
     const requestToDate = (range?.toDate || homeToDateRef.current || '').trim();
+    const refreshKey = `${requestFromDate}:${requestToDate}`;
+    if (
+      !options?.force
+      && homeData
+      && homeRefreshMetaRef.current.key === refreshKey
+      && (Date.now() - homeRefreshMetaRef.current.at) < ADMIN_HOME_FETCH_COOLDOWN_MS
+    ) {
+      return;
+    }
     const fromParsed = parseIsoDateOnly(requestFromDate);
     const toParsed = parseIsoDateOnly(requestToDate);
     if (!fromParsed || !toParsed) {
@@ -804,6 +828,10 @@ export function AdminAccessDialog({
         homeToDateRef.current = nextTo;
         setHomeToDate(nextTo);
       }
+      homeRefreshMetaRef.current = {
+        key: refreshKey,
+        at: Date.now(),
+      };
       setHomeLastRefresh(new Date().toISOString());
       setHomeError('');
       setError('');
@@ -1001,7 +1029,8 @@ export function AdminAccessDialog({
   const assignmentUsersTotalPages = Math.max(1, Math.ceil(assignmentUsersSource.length / PAGE_SIZE));
   const banksTotalPages = Math.max(1, Math.ceil(banks.length / PAGE_SIZE));
   const assignmentBanksTotalPages = Math.max(1, Math.ceil(assignmentBanksSource.length / PAGE_SIZE));
-  const activeTotalPages = Math.max(1, Math.ceil(activeUsersRows.length / PAGE_SIZE));
+  const activeTotalPages = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
+  const activeTodayTotalPages = Math.max(1, Math.ceil(activeTodayTotal / PAGE_SIZE));
   const storePromotionsTotalPages = Math.max(1, Math.ceil(storePromotions.length / PAGE_SIZE));
   const accountReqTotalPages = Math.max(1, Math.ceil(accountReqTotal / PAGE_SIZE));
   const bankAccessTotalPages = Math.max(1, Math.ceil(bankAccessTotal / PAGE_SIZE));
@@ -1106,7 +1135,7 @@ export function AdminAccessDialog({
     } finally {
       setBankAccessLoading(false);
     }
-  }, []);
+  }, [homeData]);
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     localStorage.setItem(
@@ -1139,11 +1168,17 @@ export function AdminAccessDialog({
     }
   }, [assignmentBanksPage, assignmentBanksTotalPages]);
 
-  React.useEffect(() => {
-    if (activePage > activeTotalPages) {
-      setActivePage(activeTotalPages);
-    }
-  }, [activePage, activeTotalPages]);
+    React.useEffect(() => {
+      if (activePage > activeTotalPages) {
+        setActivePage(activeTotalPages);
+      }
+    }, [activePage, activeTotalPages]);
+
+    React.useEffect(() => {
+      if (activeTodayPage > activeTodayTotalPages) {
+        setActiveTodayPage(activeTodayTotalPages);
+      }
+    }, [activeTodayPage, activeTodayTotalPages]);
 
   React.useEffect(() => {
     if (storePromotionsPage > storePromotionsTotalPages) {
@@ -1176,7 +1211,11 @@ export function AdminAccessDialog({
 
   React.useEffect(() => {
     if (!open || tab !== 'home') return;
-    const timer = window.setInterval(() => void refreshHomeDashboard(), 60000);
+    const onTick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      void refreshHomeDashboard();
+    };
+    const timer = window.setInterval(onTick, ADMIN_HOME_AUTO_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [open, tab, refreshHomeDashboard]);
 
@@ -1580,7 +1619,7 @@ export function AdminAccessDialog({
                   onHomeFromDateChange: setHomeFromDate,
                   onHomeToDateChange: setHomeToDate,
                   onApplyPresetRange: applyHomePresetRange,
-                  onRefresh: () => void refreshHomeDashboard(),
+                  onRefresh: () => void refreshHomeDashboard(undefined, { force: true }),
                   onOpenAccountRequests: () => setTab('account_requests'),
                   onOpenStoreRequests: () => setTab('store_requests'),
                   formatMoney: formatHomeMoney,
@@ -1680,17 +1719,21 @@ export function AdminAccessDialog({
                   panelClass: tabPanelToneClass('banks'),
                   cardClass: tabCardToneClass('active'),
                   titleClass: tabTitleToneClass('active'),
-                  activeLoading,
-                  activeCounts,
-                  activeUsersRows: pagedActiveUsers,
-                  activePage,
-                  activeTotalPages,
-                  activeSortBy,
-                  activeSortDir,
-                  onRefreshActive: () => void refreshActive(),
-                  onActivePageChange: setActivePage,
-                  onToggleActiveSort: toggleActiveSort,
-                }}
+                    activeLoading,
+                      activeCounts,
+                      activeUsersRows: activeSessions,
+                      activeTodayUsersRows: activeTodaySessions,
+                    activePage,
+                    activeTotalPages,
+                    activeTodayPage,
+                    activeTodayTotalPages,
+                    activeSortBy,
+                    activeSortDir,
+                    onRefreshActive: () => void refreshActive(),
+                    onActivePageChange: setActivePage,
+                    onActiveTodayPageChange: setActiveTodayPage,
+                    onToggleActiveSort: toggleActiveSort,
+                  }}
                 activity={{
                   theme,
                   panelClass: tabPanelToneClass('activity'),
@@ -1802,13 +1845,14 @@ export function AdminAccessDialog({
                     setAccountReqFilter(nextFilter);
                     setAccountReqPage(1);
                   }}
-                  onSearchChange={(value) => {
-                    setAccountReqSearch(value);
-                    setAccountReqPage(1);
-                  }}
-                  onPageChange={setAccountReqPage}
-                  onApprove={(id) => void handleAccountRequestAction(id, 'approve')}
-                  onAssist={(id) => setAccountReqToAssist({ id })}
+                    onSearchChange={(value) => {
+                      setAccountReqSearch(value);
+                      setAccountReqPage(1);
+                    }}
+                    onRefresh={() => void loadAccountRegistrationRequests()}
+                    onPageChange={setAccountReqPage}
+                    onApprove={(id) => void handleAccountRequestAction(id, 'approve')}
+                    onAssist={(id) => setAccountReqToAssist({ id })}
                   onReject={(id) => setAccountReqToReject({ id, message: '' })}
                   onRetryEmail={(id) => void handleAccountRequestRetryEmail(id)}
                 />
@@ -1833,13 +1877,14 @@ export function AdminAccessDialog({
                     setStoreReqPage(1);
                     setExpandedStoreRequestId(null);
                   }}
-                  onSearchChange={(value) => {
-                    setStoreReqSearch(value);
-                    setStoreReqPage(1);
-                  }}
-                  onPageChange={setStoreReqPage}
-                  onToggleExpanded={(id) => setExpandedStoreRequestId((prev) => prev === id ? null : id)}
-                  onApprove={(id) => {
+                    onSearchChange={(value) => {
+                      setStoreReqSearch(value);
+                      setStoreReqPage(1);
+                    }}
+                    onRefresh={() => void loadStoreRequests()}
+                    onPageChange={setStoreReqPage}
+                    onToggleExpanded={(id) => setExpandedStoreRequestId((prev) => prev === id ? null : id)}
+                    onApprove={(id) => {
                     void handleStoreRequestAction(id, 'approve');
                   }}
                   onReject={(id) => setStoreRequestToReject({ id, message: '' })}

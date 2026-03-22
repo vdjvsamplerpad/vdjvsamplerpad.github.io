@@ -11,6 +11,27 @@ import {
 
 const STORE_SNAPSHOT_VERSION = 6;
 const STORE_SNAPSHOT_FRESH_TTL_MS = 30 * 60 * 1000;
+const STORE_VIEW_FETCH_COOLDOWN_MS = 2 * 60 * 1000;
+const STORE_PAYMENT_CONFIG_FETCH_COOLDOWN_MS = 15 * 60 * 1000;
+
+type StoreViewResponseCacheEntry = {
+    savedAt: number;
+    requestPage: number;
+    requestPerPage: number;
+    total: number;
+    totalPages: number;
+    items: StoreItem[];
+    maintenance: StoreMaintenanceState;
+    banners: StoreBanner[];
+};
+
+type StorePaymentConfigCacheEntry = {
+    savedAt: number;
+    paymentConfig: PaymentConfig | null;
+};
+
+const storeViewResponseCache = new Map<string, StoreViewResponseCacheEntry>();
+const storePaymentConfigCache = new Map<string, StorePaymentConfigCacheEntry>();
 
 type UseOnlineStoreCatalogDataArgs = {
     STORE_PAGE_SIZE: number;
@@ -92,6 +113,8 @@ export function useOnlineStoreCatalogData({
     );
     const exactCacheKey = `${cacheKey}:view`;
     const baseCacheKey = `${cacheKey}:base`;
+    const sessionViewCacheKey = `${userKey}:${viewQueryKey}`;
+    const sessionConfigCacheKey = userKey;
 
     const loadSnapshot = React.useCallback((): boolean => {
         const parseSnapshot = (raw: string | null): StoreSnapshot | null => {
@@ -217,6 +240,28 @@ export function useOnlineStoreCatalogData({
                 }
             }
 
+            const cachedView = storeViewResponseCache.get(sessionViewCacheKey);
+            if (cachedView && (Date.now() - cachedView.savedAt) <= STORE_VIEW_FETCH_COOLDOWN_MS) {
+                setItems(cachedView.items);
+                setStoreMaintenance(cachedView.maintenance);
+                setBanners(cachedView.banners);
+                setBannerIndex(0);
+                setStoreTotalItems(cachedView.total);
+                setStoreTotalPages(Math.max(1, cachedView.totalPages));
+                if (storeSort !== 'downloaded' && cachedView.requestPage !== storePage) {
+                    setStorePage(cachedView.requestPage);
+                }
+                pushDownloadDebugLog('info', 'catalog_session_cache_hit', {
+                    ageMs: Date.now() - cachedView.savedAt,
+                    itemCount: cachedView.items.length,
+                    total: cachedView.total,
+                    sort: storeSort,
+                    query: trimmedSearch || null,
+                });
+                setLoading(false);
+                return;
+            }
+
             const params = new URLSearchParams();
             params.set('page', String(requestPage));
             params.set('perPage', String(requestPerPage));
@@ -229,7 +274,8 @@ export function useOnlineStoreCatalogData({
             params.set('includeCount', includeCount ? '1' : '0');
             if (trimmedSearch) params.set('q', trimmedSearch);
 
-            const shouldFetchConfig = !paymentConfigRef.current;
+            const cachedConfig = storePaymentConfigCache.get(sessionConfigCacheKey);
+            const shouldFetchConfig = !paymentConfigRef.current || !cachedConfig || (Date.now() - cachedConfig.savedAt) > STORE_PAYMENT_CONFIG_FETCH_COOLDOWN_MS;
             const catalogReq = fetch(edgeFunctionUrl('store-api', `catalog?${params.toString()}`), { headers });
             const configReq = shouldFetchConfig
                 ? fetch(edgeFunctionUrl('store-api', 'payment-config'), { headers })
@@ -298,6 +344,12 @@ export function useOnlineStoreCatalogData({
             if (configRes?.ok) {
                 const data = await configRes.json();
                 fetchedConfig = data.config || null;
+                storePaymentConfigCache.set(sessionConfigCacheKey, {
+                    savedAt: Date.now(),
+                    paymentConfig: fetchedConfig,
+                });
+            } else if (cachedConfig) {
+                fetchedConfig = cachedConfig.paymentConfig;
             }
 
             const hydratedItems = fetchedItems.map((item) => {
@@ -320,6 +372,16 @@ export function useOnlineStoreCatalogData({
             setStoreTotalItems(Math.floor(fetchedTotal));
             setStoreTotalPages(normalizedTotalPages);
             if (storeSort !== 'downloaded' && normalizedPage !== storePage) setStorePage(normalizedPage);
+            storeViewResponseCache.set(sessionViewCacheKey, {
+                savedAt: Date.now(),
+                requestPage: normalizedPage,
+                requestPerPage,
+                total: Math.floor(fetchedTotal),
+                totalPages: normalizedTotalPages,
+                items: hydratedItems,
+                maintenance: fetchedMaintenance,
+                banners: nextBanners,
+            });
             saveSnapshot(hydratedItems, fetchedConfig, fetchedMaintenance, nextBanners, {
                 page: normalizedPage,
                 perPage: requestPerPage,
@@ -352,6 +414,8 @@ export function useOnlineStoreCatalogData({
         requestPage,
         requestPerPage,
         requestSort,
+        sessionConfigCacheKey,
+        sessionViewCacheKey,
         saveSnapshot,
         setBannerIndex,
         setBanners,

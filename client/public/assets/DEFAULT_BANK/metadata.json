@@ -5,7 +5,7 @@
   "title": "DEFAULT BANK",
   "description": "This is the Default/Main Bank of the VDJV Sampler Pad v1",
   "color": "#1e1e1e",
-  "thumbnailUrl": "https://bdwtvnvqlgvphxuibqqp.supabase.co/storage/v1/object/public/store-assets/bank-thumbnails/mmk5vbfq2lhni8b0uaf/1773259589195-f8ab8f29.webp",
+  "thumbnailUrl": "https://bdwtvnvqlgvphxuibqqp.supabase.co/functions/v1/store-api/asset?path=bank-thumbnails%2Fmmk5vbfq2lhni8b0uaf%2F1773259589195-f8ab8f29.webp",
   "thumbnailAssetPath": "thumbnail/bank-thumbnail.webp",
   "adminExportToken": "eyJhbGciOiJFUzI1NiIsInR5cCI6IlZESlYtQUVUIiwia2lkIjoiYWRtaW4tZXhwb3J0LXYxIn0.eyJ2IjoxLCJpc3MiOiJ2ZGp2LmFkbWluLWV4cG9ydCIsInN1YiI6IjAyYmU5OGY0LWU5NzQtNDE4My1hMzJiLTE5Njc5YmJlMzI3YyIsImlhdCI6MTc3MzI2MDE1MiwiZXhwIjoxOTMwOTQwMTUyLCJraWQiOiJhZG1pbi1leHBvcnQtdjEiLCJiYW5rX2pzb25fc2hhMjU2IjoiMjMxOGI0OWRlYzczN2ZlZTBkNTBhNWI1ZjYyYzc2ODMwNjYwM2Q2OWYzMmVmMmZlNGFkM2UzMjNjYmY3NzYyNCIsImJhbmtfbmFtZSI6IkRFRkFVTFQgQkFOSyIsInBhZF9jb3VudCI6NTAsImFsbG93X2V4cG9ydCI6dHJ1ZX0.TZyHOMFe98voGE3B_DgBUAnUEDdBEk26BuPhnrZehPiv6q3JXwoxSSn8-EATSYqpaViuydnPfrqowhJuPo0A-g",
   "adminExportTokenKid": "admin-export-v1",

@@ -66,6 +66,12 @@ export interface ActiveSessionRow {
   last_seen_at: string;
 }
 
+export interface AdminActiveSessionCounts {
+  activeUsers: number;
+  activeSessions: number;
+  activeTodayUsers: number;
+}
+
 export interface AdminAccountRegistrationRequest {
   id: string;
   email: string;
@@ -348,11 +354,11 @@ export const adminApi = {
     perPage?: number;
     sortBy?: 'title' | 'created_at' | 'access_count';
     sortDir?: SortDirection;
-  }) {
-    const query = toQueryString({
-      q: input.q,
-      page: input.page ?? 1,
-      perPage: input.perPage ?? 100,
+    }) {
+      const query = toQueryString({
+        q: input.q,
+        page: input.page ?? 1,
+        perPage: input.perPage ?? 100,
       sortBy: input.sortBy ?? 'created_at',
       sortDir: input.sortDir ?? 'desc',
     });
@@ -404,31 +410,39 @@ export const adminApi = {
   },
 
   async listActiveSessions(input: {
-    q?: string;
-    page?: number;
-    perPage?: number;
-    sortBy?: 'user_id' | 'email' | 'device_name' | 'platform' | 'last_seen_at';
-    sortDir?: SortDirection;
-  }) {
-    const query = toQueryString({
-      q: input.q,
-      page: input.page ?? 1,
-      perPage: input.perPage ?? 100,
-      sortBy: input.sortBy ?? 'last_seen_at',
-      sortDir: input.sortDir ?? 'desc',
-    });
-    return callAdmin<{
-      counts: { activeUsers: number; activeSessions: number };
-      sessions: ActiveSessionRow[];
-      total: number;
-      page: number;
-      perPage: number;
-      sortBy: string;
-      sortDir: SortDirection;
-    }>(
-      'GET',
-      `active-sessions${query}`,
-    );
+      q?: string;
+      page?: number;
+      perPage?: number;
+      activeTodayPage?: number;
+      activeTodayPerPage?: number;
+      sortBy?: 'user_id' | 'email' | 'device_name' | 'platform' | 'last_seen_at';
+      sortDir?: SortDirection;
+    }) {
+      const query = toQueryString({
+        q: input.q,
+        page: input.page ?? 1,
+        perPage: input.perPage ?? 100,
+        activeTodayPage: input.activeTodayPage ?? 1,
+        activeTodayPerPage: input.activeTodayPerPage ?? 100,
+        sortBy: input.sortBy ?? 'last_seen_at',
+        sortDir: input.sortDir ?? 'desc',
+        });
+        return callAdmin<{
+          counts: AdminActiveSessionCounts;
+          sessions: ActiveSessionRow[];
+          activeTodaySessions: ActiveSessionRow[];
+          total: number;
+          page: number;
+          perPage: number;
+          activeTodayTotal: number;
+          activeTodayPage: number;
+          activeTodayPerPage: number;
+          sortBy: string;
+          sortDir: SortDirection;
+        }>(
+        'GET',
+        `active-sessions${query}`,
+      );
   },
 
   async getDashboardOverview(input?: { windowDays?: number; fromDate?: string; toDate?: string }) {

@@ -1,6 +1,7 @@
 ﻿import JSZip, { type JSZipObject } from 'jszip';
 import type { BankMetadata, PadData, SamplerBank } from '../types/sampler';
 import {
+  derivePassword,
   getDerivedKey,
   parseBankIdFromFileName,
   refreshAccessibleBanksCache,
@@ -292,6 +293,12 @@ export const runImportBankPipeline = async (
       const buildCandidateKeys = async (allowRefresh: boolean): Promise<string[]> => {
         const keys: string[] = [SHARED_EXPORT_DISABLED_PASSWORD];
         if (preferredDerivedKey) keys.push(preferredDerivedKey);
+        if (profile?.role === 'admin') {
+          for (const bankId of candidateBankIds) {
+            const adminDerivedKey = await derivePassword(bankId).catch(() => '');
+            if (adminDerivedKey) keys.push(adminDerivedKey);
+          }
+        }
         if (effectiveUser && candidateBankIds.length > 0) {
           if (allowRefresh) {
             reportImportStage('Refreshing granted bank keys...', 17, 'decrypt-access-refresh');

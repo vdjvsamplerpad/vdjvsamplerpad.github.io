@@ -318,7 +318,10 @@ export function useOnlineStoreDownloadTransfer({
                     }
                 }
 
-                const ticketUrl = edgeFunctionUrl('store-api', `download/${item.id}?transport=signed_url`);
+                const downloadTransport = isNativeBankImportAvailable()
+                    ? 'native'
+                    : (isElectronImportBridgeAvailable() ? 'electron' : 'signed_url');
+                const ticketUrl = edgeFunctionUrl('store-api', `download/${item.id}?transport=${downloadTransport}`);
                 emitOperationDebug({
                     operationId,
                     operation: 'bankstore_download',
@@ -327,10 +330,12 @@ export function useOnlineStoreDownloadTransfer({
                         stage: 'download-ticket-request',
                         bankId: item.bank_id,
                         catalogItemId: item.id,
+                        transport: downloadTransport,
                     },
                 });
                 pushDownloadDebugLog('info', 'download_ticket_request', {
                     catalogItemId: item.id,
+                    transport: downloadTransport,
                     ticketUrl: sanitizeUrlForLog(ticketUrl),
                 });
                 const ticketRes = await fetch(

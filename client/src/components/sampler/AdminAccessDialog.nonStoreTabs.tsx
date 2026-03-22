@@ -146,14 +146,18 @@ interface ActiveTabProps {
   cardClass: string;
   titleClass: string;
   activeLoading: boolean;
-  activeCounts: { activeUsers: number; activeSessions: number };
+  activeCounts: { activeUsers: number; activeSessions: number; activeTodayUsers: number };
   activeUsersRows: ActiveSessionRow[];
+  activeTodayUsersRows: ActiveSessionRow[];
   activePage: number;
   activeTotalPages: number;
+  activeTodayPage: number;
+  activeTodayTotalPages: number;
   activeSortBy: ActiveSortBy;
   activeSortDir: SortDirection;
   onRefreshActive: () => void;
   onActivePageChange: (page: number) => void;
+  onActiveTodayPageChange: (page: number) => void;
   onToggleActiveSort: (next: ActiveSortBy) => void;
 }
 
@@ -579,7 +583,16 @@ function AssignmentsTab({
             <TableBody className="block md:table-row-group space-y-1 md:space-y-0 p-1 md:p-0">
               {assignmentUsers.map((user) => (
                 <TableRow key={user.id} className={`flex flex-col md:table-row cursor-pointer rounded md:rounded-none border md:border-none p-2 md:p-0 ${selectedUserId === user.id ? (theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100') : ''}`} onClick={() => onSelectUser(user.id)}>
-                  <TableCell className="block md:table-cell font-medium max-w-[200px] truncate border-none md:border-b pb-0 md:pb-4" title={user.display_name}>{user.display_name}</TableCell>
+                  <TableCell className="block md:table-cell font-medium max-w-[220px] border-none md:border-b pb-0 md:pb-4" title={user.display_name}>
+                    <div className="flex items-center gap-2">
+                      <span className="truncate">{user.display_name}</span>
+                      {user.role === 'admin' ? (
+                        <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-500">
+                          Admin
+                        </span>
+                      ) : null}
+                    </div>
+                  </TableCell>
                   <TableCell className="block md:table-cell text-xs opacity-70 max-w-[220px] border-none md:border-b pt-0 md:pt-4">
                     <CopyableValue
                       value={user.email || '-'}
@@ -797,65 +810,104 @@ function ActiveTab({
   activeLoading,
   activeCounts,
   activeUsersRows,
+  activeTodayUsersRows,
   activePage,
   activeTotalPages,
+  activeTodayPage,
+  activeTodayTotalPages,
   activeSortBy,
   activeSortDir,
   onRefreshActive,
   onActivePageChange,
+  onActiveTodayPageChange,
   onToggleActiveSort,
 }: ActiveTabProps) {
-  return (
-    <div className={`border rounded p-3 space-y-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
-      <div className="flex items-center justify-between">
-        <div>
-          <Label>Active Users</Label>
-          <div className="text-xs opacity-70">Non-admin users currently online.</div>
-        </div>
-        <Button variant="outline" onClick={onRefreshActive} disabled={activeLoading}>
-          <RefreshCw className={`w-4 h-4 mr-1 ${activeLoading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Users</div><div className="text-xl font-semibold">{activeCounts.activeUsers}</div></div>
-        <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Sessions</div><div className="text-xl font-semibold">{activeCounts.activeSessions}</div></div>
-      </div>
-      <div className={TABLE_SHELL_CLASS}>
-        <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
-          <TableHeader className="hidden md:table-header-group">
-            <TableRow>
-              <TableHead><SortHeader title="User" active={activeSortBy === 'user_id'} direction={activeSortDir} onClick={() => onToggleActiveSort('user_id')} /></TableHead>
-              <TableHead><SortHeader title="Email" active={activeSortBy === 'email'} direction={activeSortDir} onClick={() => onToggleActiveSort('email')} /></TableHead>
-              <TableHead><SortHeader title="Device Name" active={activeSortBy === 'device_name'} direction={activeSortDir} onClick={() => onToggleActiveSort('device_name')} /></TableHead>
-              <TableHead><SortHeader title="Platform / Browser / OS" active={activeSortBy === 'platform'} direction={activeSortDir} onClick={() => onToggleActiveSort('platform')} /></TableHead>
-              <TableHead><SortHeader title="Last Seen" active={activeSortBy === 'last_seen_at'} direction={activeSortDir} onClick={() => onToggleActiveSort('last_seen_at')} /></TableHead>
+  const renderActiveRows = (
+    rows: ActiveSessionRow[],
+    emptyLabel: string,
+    accentClass: string,
+  ) => (
+    <div className={TABLE_SHELL_CLASS}>
+      <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
+        <TableHeader className="hidden md:table-header-group">
+          <TableRow>
+            <TableHead>User</TableHead>
+            <TableHead>Email</TableHead>
+            <TableHead>Device Name</TableHead>
+            <TableHead>Platform / Browser / OS</TableHead>
+            <TableHead>Last Seen</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody className="block md:table-row-group space-y-2 md:space-y-0 p-2 md:p-0">
+          {rows.map((row) => (
+            <TableRow key={`${row.user_id}-${row.session_key}-${row.last_seen_at}`} className="flex flex-col md:table-row border border-gray-200 dark:border-gray-800 rounded-lg md:rounded-none md:border-none p-3 md:p-0">
+              <TableCell className="block md:table-cell font-mono text-xs border-none md:border-b pb-1 md:pb-4"><span className="md:hidden font-semibold font-sans">ID: </span>{row.user_id.slice(0, 8)}...</TableCell>
+              <TableCell className="block md:table-cell font-medium border-none md:border-b py-0 md:py-4">
+                <CopyableValue
+                  value={row.email || '-'}
+                  label="active session email"
+                  className="max-w-full"
+                  valueClassName="block max-w-[220px] truncate text-inherit"
+                  buttonClassName="h-5 w-5"
+                />
+              </TableCell>
+              <TableCell className="block md:table-cell text-xs opacity-70 border-none md:border-b py-0 md:py-4"><span className="md:hidden font-semibold opacity-100">Device: </span>{row.device_name || '-'}</TableCell>
+              <TableCell className="block md:table-cell text-xs opacity-70 border-none md:border-b py-0 md:py-4">{[row.platform, row.browser, row.os].filter(Boolean).join(' / ') || '-'}</TableCell>
+              <TableCell className={`block md:table-cell text-xs font-medium border-none md:border-b pt-1 md:pt-4 ${accentClass}`}><span className="md:hidden font-semibold text-gray-500 dark:text-gray-400 mr-1">Last seen: </span>{new Date(row.last_seen_at).toLocaleString()}</TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody className="block md:table-row-group space-y-2 md:space-y-0 p-2 md:p-0">
-            {activeUsersRows.map((row) => (
-              <TableRow key={row.user_id} className="flex flex-col md:table-row border border-gray-200 dark:border-gray-800 rounded-lg md:rounded-none md:border-none p-3 md:p-0">
-                <TableCell className="block md:table-cell font-mono text-xs border-none md:border-b pb-1 md:pb-4"><span className="md:hidden font-semibold font-sans">ID: </span>{row.user_id.slice(0, 8)}...</TableCell>
-                <TableCell className="block md:table-cell font-medium border-none md:border-b py-0 md:py-4">
-                  <CopyableValue
-                    value={row.email || '-'}
-                    label="active session email"
-                    className="max-w-full"
-                    valueClassName="block max-w-[220px] truncate text-inherit"
-                    buttonClassName="h-5 w-5"
-                  />
-                </TableCell>
-                <TableCell className="block md:table-cell text-xs opacity-70 border-none md:border-b py-0 md:py-4"><span className="md:hidden font-semibold opacity-100">Device: </span>{row.device_name || '-'}</TableCell>
-                <TableCell className="block md:table-cell text-xs opacity-70 border-none md:border-b py-0 md:py-4">{[row.platform, row.browser, row.os].filter(Boolean).join(' / ') || '-'}</TableCell>
-                <TableCell className="block md:table-cell text-xs font-medium text-cyan-600 dark:text-cyan-400 border-none md:border-b pt-1 md:pt-4"><span className="md:hidden font-semibold text-gray-500 dark:text-gray-400 mr-1">Last seen: </span>{new Date(row.last_seen_at).toLocaleString()}</TableCell>
-              </TableRow>
-            ))}
-            {!activeLoading && activeUsersRows.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={5} className="block md:table-cell text-center py-3 opacity-70">No active users</TableCell></TableRow>}
-          </TableBody>
-        </Table>
-      </div>
-      <Pagination page={activePage} totalPages={activeTotalPages} onPageChange={onActivePageChange} />
+          ))}
+          {!activeLoading && rows.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={5} className="block md:table-cell text-center py-3 opacity-70">{emptyLabel}</TableCell></TableRow>}
+        </TableBody>
+      </Table>
     </div>
+  );
+
+  return (
+      <div className={`border rounded p-3 space-y-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
+        <div className="flex items-center justify-between">
+          <div>
+            <Label>Active Users</Label>
+            <div className="text-xs opacity-70">Current live sessions, including admins, stay in the first table. Today&apos;s unique non-admin users are listed below.</div>
+          </div>
+          <Button variant="outline" onClick={onRefreshActive} disabled={activeLoading}>
+            <RefreshCw className={`w-4 h-4 mr-1 ${activeLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Users</div><div className="text-xl font-semibold">{activeCounts.activeUsers}</div></div>
+          <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Sessions</div><div className="text-xl font-semibold">{activeCounts.activeSessions}</div></div>
+          <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Today</div><div className="text-xl font-semibold">{activeCounts.activeTodayUsers}</div></div>
+        </div>
+
+          <div className={`border rounded p-3 space-y-3 ${cardClass}`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold">Currently Active</div>
+                <div className="text-xs opacity-70">Live sessions right now, including admins for monitoring.</div>
+              </div>
+            <div className="hidden md:flex items-center gap-2 text-xs opacity-70">
+              <span>Sort:</span>
+              <Button size="sm" variant={activeSortBy === 'user_id' ? 'secondary' : 'outline'} onClick={() => onToggleActiveSort('user_id')}>User</Button>
+              <Button size="sm" variant={activeSortBy === 'email' ? 'secondary' : 'outline'} onClick={() => onToggleActiveSort('email')}>Email</Button>
+              <Button size="sm" variant={activeSortBy === 'device_name' ? 'secondary' : 'outline'} onClick={() => onToggleActiveSort('device_name')}>Device</Button>
+              <Button size="sm" variant={activeSortBy === 'platform' ? 'secondary' : 'outline'} onClick={() => onToggleActiveSort('platform')}>Platform</Button>
+              <Button size="sm" variant={activeSortBy === 'last_seen_at' ? 'secondary' : 'outline'} onClick={() => onToggleActiveSort('last_seen_at')}>Last Seen</Button>
+            </div>
+          </div>
+          {renderActiveRows(activeUsersRows, 'No active users', 'text-cyan-600 dark:text-cyan-400')}
+          <Pagination page={activePage} totalPages={activeTotalPages} onPageChange={onActivePageChange} />
+        </div>
+
+          <div className={`border rounded p-3 space-y-3 ${cardClass}`}>
+            <div>
+              <div className="text-sm font-semibold">Active Today</div>
+              <div className="text-xs opacity-70">Unique non-admin users with at least one heartbeat today, ordered by most recent activity.</div>
+            </div>
+            {renderActiveRows(activeTodayUsersRows, 'No users have heartbeat activity today', 'text-sky-600 dark:text-sky-400')}
+            <Pagination page={activeTodayPage} totalPages={activeTodayTotalPages} onPageChange={onActiveTodayPageChange} />
+          </div>
+        </div>
   );
 }
 

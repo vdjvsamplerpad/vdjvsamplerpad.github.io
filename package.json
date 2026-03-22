@@ -1,7 +1,7 @@
 {
   "name": "vdjv-sampler-pad",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cross-platform sampler pad app for web, Android, and Windows.",
   "author": "VDJV Sampler Pad",
   "type": "module",
@@ -35,6 +35,7 @@
     "cap:open:android": "npx cap open android",
     "cap:open:ios": "npx cap open ios",
     "migrate:github-to-r2": "tsx scripts/migrate-github-assets-to-r2.ts",
+    "migrate:store-assets-to-r2": "tsx scripts/migrate-store-assets-to-r2.ts",
     "hooks:install": "node scripts/install-git-hooks.cjs"
   },
   "dependencies": {

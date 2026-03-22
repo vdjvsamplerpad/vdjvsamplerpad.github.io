@@ -1918,6 +1918,6 @@
     "password": false,
     "transferable": true,
     "exportable": true,
-    "thumbnailUrl": "https://bdwtvnvqlgvphxuibqqp.supabase.co/storage/v1/object/public/store-assets/bank-thumbnails/mmk5vbfq2lhni8b0uaf/1773259589195-f8ab8f29.webp"
+    "thumbnailUrl": "https://bdwtvnvqlgvphxuibqqp.supabase.co/functions/v1/store-api/asset?path=bank-thumbnails%2Fmmk5vbfq2lhni8b0uaf%2F1773259589195-f8ab8f29.webp"
   }
 }

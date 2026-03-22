@@ -1,6 +1,6 @@
 import "@supabase/functions-js/edge-runtime.d.ts";
 import { badRequest, buildCorsHeaders, handleCorsPreflight, json } from "../_shared/http.ts";
-import { createPresignedGetUrl } from "../_shared/r2-storage.ts";
+import { createPresignedGetUrl, createPresignedPutUrl, deleteObject } from "../_shared/r2-storage.ts";
 import { createSignedEntitlementToken, isEntitlementTokenSigningEnabled } from "../_shared/entitlement-token.ts";
 import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig } from "../_shared/sampler-app-config.ts";
 import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_shared/supabase.ts";
@@ -99,7 +99,20 @@ const STORE_DOWNLOAD_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("STORE_D
 const STORE_PURCHASE_RATE_LIMIT = readPositiveInt(Deno.env.get("STORE_PURCHASE_RATE_LIMIT"), 12);
 const STORE_PURCHASE_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("STORE_PURCHASE_RATE_WINDOW_SECONDS"), 3600);
 const STORE_MAX_PURCHASE_ITEMS = readPositiveInt(Deno.env.get("STORE_MAX_PURCHASE_ITEMS"), 20);
-const STORE_MAX_DOWNLOAD_BYTES = readPositiveInt(Deno.env.get("STORE_MAX_DOWNLOAD_BYTES"), 268435456); // 256 MB
+const STORE_MAX_DOWNLOAD_BYTES = readPositiveInt(Deno.env.get("STORE_MAX_DOWNLOAD_BYTES"), 478150656); // 456 MB
+const STORE_MAX_NATIVE_DOWNLOAD_BYTES = readPositiveInt(
+  Deno.env.get("STORE_MAX_NATIVE_DOWNLOAD_BYTES"),
+  2 * 1024 * 1024 * 1024 - 1,
+); // ~2 GB, aligned with native-capable archive handling
+const R2_BUCKET = asString(Deno.env.get("R2_BUCKET"), 200) || "";
+const R2_UPLOAD_URL_TTL_SECONDS = Math.max(
+  60,
+  Math.min(3600, readPositiveInt(Deno.env.get("R2_UPLOAD_URL_TTL_SECONDS"), 900)),
+);
+const STORE_MANAGED_ASSET_MAX_BYTES = readPositiveInt(
+  Deno.env.get("STORE_MANAGED_ASSET_MAX_BYTES"),
+  25 * 1024 * 1024,
+); // 25 MB for QR / banner / thumbnail assets
 const STORE_R2_SIGNED_DOWNLOAD_TTL_SECONDS = Math.max(
   60,
   Math.min(3600, readPositiveInt(Deno.env.get("R2_SIGNED_URL_TTL_SECONDS"), 300)),
@@ -1051,6 +1064,7 @@ const normalizeStoreCatalogItem = (
     pendingRequests: Set<string>;
     rejectedRequests: Map<string, string>;
     userId: string | null;
+    isAdmin: boolean;
   },
 ) => {
   const bank = getFirstRelationRow(item?.banks);
@@ -1060,6 +1074,7 @@ const normalizeStoreCatalogItem = (
   let status = "buy";
   let rejectionMessage: string | null = null;
   if (!item?.requires_grant) status = "free_download";
+  else if (input.isAdmin) status = "granted_download";
   else if (input.userId) {
     if (input.userGrants.has(bankId) || input.approvedRequests.has(bankId)) status = "granted_download";
     else if (input.pendingRequests.has(bankId)) status = "pending";
@@ -1076,7 +1091,7 @@ const normalizeStoreCatalogItem = (
     requires_grant: Boolean(item?.requires_grant),
     asset_protection: asString(item?.asset_protection, 40)?.toLowerCase() === "public" ? "public" : "encrypted",
     is_pinned: Boolean(item?.is_pinned),
-    is_owned: input.userGrants.has(bankId) || input.approvedRequests.has(bankId),
+    is_owned: input.isAdmin || input.userGrants.has(bankId) || input.approvedRequests.has(bankId),
     is_free_download: !item?.requires_grant,
     is_pending: input.pendingRequests.has(bankId),
     is_rejected: input.rejectedRequests.has(bankId),
@@ -1119,6 +1134,72 @@ const normalizeOptionalHttpUrl = (value: unknown): string | null => {
 const normalizeRequiredHttpUrl = (value: unknown): string | null => {
   const normalized = normalizeOptionalHttpUrl(value);
   return normalized || null;
+};
+
+const buildStoreApiBaseUrl = (req?: Request): string | null => {
+  const explicit = asString(Deno.env.get("APP_SUPABASE_URL") || Deno.env.get("SUPABASE_URL"), 500);
+  if (explicit) return `${explicit.replace(/\/+$/, "")}/functions/v1/store-api`;
+  if (!req) return null;
+  try {
+    const url = new URL(req.url);
+    const marker = "/functions/v1/store-api";
+    const markerIndex = url.pathname.indexOf(marker);
+    if (markerIndex >= 0) {
+      return `${url.origin}${url.pathname.slice(0, markerIndex + marker.length)}`;
+    }
+  } catch {
+  }
+  return null;
+};
+
+const buildManagedStoreAssetUrl = (objectKey: string, req?: Request): string | null => {
+  const baseUrl = buildStoreApiBaseUrl(req);
+  if (!baseUrl) return null;
+  return `${baseUrl}/asset?path=${encodeURIComponent(objectKey)}`;
+};
+
+type ManagedStoreAssetKind = "thumbnail" | "qr" | "banner";
+
+const sanitizeManagedAssetExt = (value: string | null | undefined, fallback: string): string => {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!normalized) return fallback;
+  return normalized.slice(0, 10);
+};
+
+const normalizeManagedStoreAssetKind = (value: unknown): ManagedStoreAssetKind | null => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "thumbnail") return "thumbnail";
+  if (normalized === "qr") return "qr";
+  if (normalized === "banner") return "banner";
+  return null;
+};
+
+const buildManagedStoreAssetObjectKey = (input: {
+  kind: ManagedStoreAssetKind;
+  fileName?: string | null;
+  bankId?: string | null;
+}): string => {
+  const extFromName = (() => {
+    const fileName = String(input.fileName || "").trim();
+    if (!fileName.includes(".")) return null;
+    return fileName.split(".").pop() || null;
+  })();
+  const ext = sanitizeManagedAssetExt(extFromName, "webp");
+  const suffix = crypto.randomUUID().slice(0, 8);
+  if (input.kind === "thumbnail") {
+    const bankId = asUuid(input.bankId) || "";
+    if (!bankId) throw new Error("bankId is required for thumbnail uploads");
+    return `bank-thumbnails/${bankId}/${Date.now()}-${suffix}.${ext}`;
+  }
+  if (input.kind === "qr") {
+    return `payment-qr/${Date.now()}-${suffix}.${ext}`;
+  }
+  return `store-banners/${Date.now()}-${suffix}.${ext}`;
+};
+
+const ensureStoreAssetUploadReady = (): string | null => {
+  if (!R2_BUCKET) return "R2_BUCKET_NOT_CONFIGURED";
+  return null;
 };
 
 const normalizeBannerRotationMs = (value: unknown): number | null => {
@@ -1500,47 +1581,123 @@ const loadAdminPromotionRows = async (
 
 const STORE_ASSETS_BUCKET = "store-assets";
 
-const extractManagedStoreAssetPath = (value: unknown): string | null => {
+const extractManagedStoreAssetReference = (value: unknown): { provider: "supabase" | "r2"; objectPath: string } | null => {
   const normalized = normalizeOptionalHttpUrl(value);
   if (!normalized) return null;
   try {
     const parsed = new URL(normalized);
     const publicPrefix = `/storage/v1/object/public/${STORE_ASSETS_BUCKET}/`;
     const renderPrefix = `/storage/v1/render/image/public/${STORE_ASSETS_BUCKET}/`;
-    const marker = parsed.pathname.includes(publicPrefix)
-      ? publicPrefix
-      : parsed.pathname.includes(renderPrefix)
-        ? renderPrefix
-        : null;
-    if (!marker) return null;
-    const objectPath = decodeURIComponent(parsed.pathname.slice(parsed.pathname.indexOf(marker) + marker.length)).replace(/^\/+/, "");
-    return objectPath || null;
+    if (parsed.pathname.includes(publicPrefix) || parsed.pathname.includes(renderPrefix)) {
+      const marker = parsed.pathname.includes(publicPrefix) ? publicPrefix : renderPrefix;
+      const objectPath = decodeURIComponent(parsed.pathname.slice(parsed.pathname.indexOf(marker) + marker.length)).replace(/^\/+/, "");
+      return objectPath ? { provider: "supabase", objectPath } : null;
+    }
+    if (parsed.pathname.endsWith("/store-api/asset")) {
+      const objectPath = decodeURIComponent(parsed.searchParams.get("path") || "").replace(/^\/+/, "");
+      return objectPath ? { provider: "r2", objectPath } : null;
+    }
   } catch {
-    return null;
   }
+  return null;
 };
 
 const deleteManagedStoreAsset = async (
   admin: ReturnType<typeof createServiceClient>,
   imageUrl: unknown,
 ): Promise<string | null> => {
-  const objectPath = extractManagedStoreAssetPath(imageUrl);
-  if (!objectPath) return null;
-  const { error } = await admin.storage.from(STORE_ASSETS_BUCKET).remove([objectPath]);
-  if (!error) return null;
-  const message = String(error.message || "");
-  if (/not found|does not exist|no such object/i.test(message)) return null;
-  return message || "Unknown cleanup error";
+  const reference = extractManagedStoreAssetReference(imageUrl);
+  if (!reference) return null;
+  if (reference.provider === "supabase") {
+    const { error } = await admin.storage.from(STORE_ASSETS_BUCKET).remove([reference.objectPath]);
+    if (!error) return null;
+    const message = String(error.message || "");
+    if (/not found|does not exist|no such object/i.test(message)) return null;
+    return message || "Unknown cleanup error";
+  }
+  try {
+    await deleteObject(R2_BUCKET, reference.objectPath);
+    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/404/.test(message)) return null;
+    return message || "Unknown cleanup error";
+  }
 };
 
 const extractOwnedBankThumbnailPath = (bankId: unknown, imageUrl: unknown): string | null => {
   const normalizedBankId = asString(bankId, 80);
   if (!normalizedBankId) return null;
-  const objectPath = extractManagedStoreAssetPath(imageUrl);
+  const objectPath = extractManagedStoreAssetReference(imageUrl)?.objectPath;
   if (!objectPath) return null;
   const expectedPrefix = `bank-thumbnails/${normalizedBankId}/`;
   if (!objectPath.startsWith(expectedPrefix)) return null;
   return objectPath;
+};
+
+const getManagedStoreAsset = async (req: Request): Promise<Response> => {
+  const objectPath = decodeURIComponent(String(new URL(req.url).searchParams.get("path") || "")).replace(/^\/+/, "");
+  if (!objectPath) return badRequest("Missing asset path");
+  const signed = await createPresignedGetUrl(R2_BUCKET, objectPath, STORE_R2_SIGNED_DOWNLOAD_TTL_SECONDS);
+  const headers = new Headers({
+    ...buildCorsHeaders(req),
+    "Cache-Control": "public, max-age=300",
+    "Location": signed.url,
+    "X-Store-Asset-Mode": "redirect",
+  });
+  headers.set("Access-Control-Expose-Headers", "Location, X-Store-Asset-Mode");
+  return new Response(null, { status: 302, headers });
+};
+
+const createAdminStoreAssetUpload = async (req: Request, body: any) => {
+  const adminCheck = await requireAdmin(req);
+  if (!adminCheck.ok) return adminCheck.response;
+  const kind = normalizeManagedStoreAssetKind(body?.kind ?? body?.assetKind);
+  if (!kind) return badRequest("Invalid asset kind");
+  const fileName = asString(body?.fileName ?? body?.file_name, 255) || null;
+  const contentType = asString(body?.contentType ?? body?.content_type, 200) || "application/octet-stream";
+  const fileSize = Number(body?.fileSize ?? body?.file_size ?? 0);
+  const bankId = kind === "thumbnail" ? asUuid(body?.bankId ?? body?.bank_id) : null;
+  if (kind === "thumbnail" && !bankId) return badRequest("bankId is required for thumbnail uploads");
+  if (!Number.isFinite(fileSize) || fileSize <= 0) return badRequest("Missing or invalid fileSize");
+  if (fileSize > STORE_MANAGED_ASSET_MAX_BYTES) {
+    return fail(413, "FILE_TOO_LARGE", { max_bytes: STORE_MANAGED_ASSET_MAX_BYTES, asset_bytes: fileSize });
+  }
+  const r2Error = ensureStoreAssetUploadReady();
+  if (r2Error) return fail(500, r2Error);
+  const objectKey = buildManagedStoreAssetObjectKey({ kind, fileName, bankId });
+  const upload = await createPresignedPutUrl(R2_BUCKET, objectKey, R2_UPLOAD_URL_TTL_SECONDS, contentType);
+  const assetUrl = buildManagedStoreAssetUrl(objectKey, req);
+  if (!assetUrl) return fail(500, "STORE_ASSET_URL_UNAVAILABLE");
+  return ok({
+    mode: "r2_direct",
+    kind,
+    uploadUrl: upload.url,
+    uploadMethod: "PUT",
+    uploadHeaders: upload.headers,
+    bucket: R2_BUCKET,
+    objectKey,
+    assetUrl,
+    urlExpiresAt: upload.expiresAt,
+  });
+};
+
+const deleteAdminStoreAsset = async (req: Request, body: any) => {
+  const adminCheck = await requireAdmin(req);
+  if (!adminCheck.ok) return adminCheck.response;
+  const objectKey =
+    asString(body?.objectKey ?? body?.object_key, 2000)
+    || extractManagedStoreAssetReference(body?.assetUrl ?? body?.asset_url)?.objectPath
+    || "";
+  if (!objectKey) return badRequest("Missing asset reference");
+  try {
+    await deleteObject(R2_BUCKET, objectKey);
+    return ok({ deleted: true, objectKey });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/404/.test(message)) return ok({ deleted: false, objectKey });
+    return fail(500, message || "STORE_ASSET_DELETE_FAILED");
+  }
 };
 
 const toNonNegativeSortOrder = (value: unknown, fallback = 0): number => {
@@ -1650,6 +1807,7 @@ const getStoreCatalog = async (req: Request) => {
   const authHeader = req.headers.get("Authorization");
   const user = await getUserFromAuthHeader(authHeader);
   const userId = user?.id || null;
+  const userIsAdmin = userId ? await isAdminUser(userId) : false;
   const maintenanceState = await getStoreMaintenanceState(req, admin);
   if ("response" in maintenanceState) return maintenanceState.response;
   if (maintenanceState.enabled && !maintenanceState.isAdmin) {
@@ -1791,6 +1949,7 @@ const getStoreCatalog = async (req: Request) => {
         pendingRequests,
         rejectedRequests,
         userId,
+        isAdmin: userIsAdmin,
       });
     })
     .filter(Boolean) as any[];
@@ -3505,6 +3664,14 @@ type StoreDownloadContext = {
   admin: ReturnType<typeof createServiceClient>;
   userId: string;
   catalogItem: any;
+  transport: "web" | "native" | "electron";
+};
+
+const normalizeStoreDownloadTransport = (value: string | null | undefined): "web" | "native" | "electron" => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "electron") return "electron";
+  if (normalized === "native" || normalized === "android" || normalized === "capacitor") return "native";
+  return "web";
 };
 
 const resolveStoreDownloadContext = async (
@@ -3513,6 +3680,8 @@ const resolveStoreDownloadContext = async (
   options?: { consumeRateLimit?: boolean },
 ): Promise<{ ok: true; context: StoreDownloadContext } | { ok: false; response: Response }> => {
   const admin = createServiceClient();
+  const requestUrl = new URL(req.url);
+  const transport = normalizeStoreDownloadTransport(requestUrl.searchParams.get("transport"));
   const authHeader = req.headers.get("Authorization");
   const user = await getUserFromAuthHeader(authHeader);
   const userId = user?.id || null;
@@ -3558,10 +3727,15 @@ const resolveStoreDownloadContext = async (
   if (catalogError || !catalogItem) return { ok: false, response: fail(404, "CATALOG_NOT_FOUND") };
   if (!catalogItem.is_published) return { ok: false, response: fail(403, "NOT_PUBLISHED") };
   const catalogSize = Number(catalogItem.file_size_bytes || 0);
-  if (Number.isFinite(catalogSize) && catalogSize > STORE_MAX_DOWNLOAD_BYTES) {
+  const maxDownloadBytes = transport === "web" ? STORE_MAX_DOWNLOAD_BYTES : STORE_MAX_NATIVE_DOWNLOAD_BYTES;
+  if (Number.isFinite(catalogSize) && catalogSize > maxDownloadBytes) {
     return {
       ok: false,
-      response: fail(413, "ASSET_TOO_LARGE", { max_bytes: STORE_MAX_DOWNLOAD_BYTES, asset_bytes: catalogSize }),
+      response: fail(413, "ASSET_TOO_LARGE", {
+        max_bytes: maxDownloadBytes,
+        asset_bytes: catalogSize,
+        transport,
+      }),
     };
   }
 
@@ -3592,6 +3766,7 @@ const resolveStoreDownloadContext = async (
       admin,
       userId,
       catalogItem,
+      transport,
     },
   };
 };
@@ -3599,7 +3774,7 @@ const resolveStoreDownloadContext = async (
 const downloadStoreCatalogItem = async (req: Request, catalogItemId: string) => {
   const resolved = await resolveStoreDownloadContext(req, catalogItemId, { consumeRateLimit: true });
   if (!resolved.ok) return resolved.response;
-  const { catalogItem } = resolved.context;
+  const { catalogItem, transport } = resolved.context;
 
   const requestUrl = new URL(req.url);
   const requestedTransport = String(requestUrl.searchParams.get("transport") || "").toLowerCase();
@@ -3609,7 +3784,9 @@ const downloadStoreCatalogItem = async (req: Request, catalogItemId: string) => 
   const useSignedUrlPayload =
     requestedTransport === "signed_url"
     || requestedTransport === "signed-url"
-    || requestedTransport === "direct";
+    || requestedTransport === "direct"
+    || transport === "native"
+    || transport === "electron";
   const storageProvider = asString(catalogItem.storage_provider, 40) || "";
   const storageBucket = asString(catalogItem.storage_bucket, 300) || "";
   const storageKey = asString(catalogItem.storage_key, 2000) || "";
@@ -5174,6 +5351,9 @@ Deno.serve(async (req) => {
     if (req.method === "GET" && scoped[0] === "default-bank" && scoped[1] === "download" && scoped.length === 2) {
       return await getPublicDefaultBankDownload();
     }
+    if (req.method === "GET" && scoped[0] === "asset" && scoped.length === 1) {
+      return await getManagedStoreAsset(req);
+    }
     if (req.method === "POST" && scoped[0] === "receipt-ocr" && scoped.length === 1) {
       return await createReceiptOcr(req);
     }
@@ -5243,6 +5423,14 @@ Deno.serve(async (req) => {
       return await adminStoreRequestAction(requestId, body, adminUserId);
     }
     if (req.method === "GET" && scoped[2] === "catalog" && scoped.length === 3) return await listAdminStoreCatalog();
+    if (req.method === "POST" && scoped[2] === "assets" && scoped[3] === "upload" && scoped.length === 4) {
+      const body = await req.json().catch(() => ({}));
+      return await createAdminStoreAssetUpload(req, body);
+    }
+    if (req.method === "POST" && scoped[2] === "assets" && scoped[3] === "delete" && scoped.length === 4) {
+      const body = await req.json().catch(() => ({}));
+      return await deleteAdminStoreAsset(req, body);
+    }
     if (req.method === "PATCH" && scoped[2] === "catalog" && scoped.length === 4) {
       const catalogItemId = asUuid(scoped[3]);
       if (!catalogItemId) return badRequest("Invalid catalog item id");

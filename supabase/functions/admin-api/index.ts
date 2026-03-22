@@ -492,8 +492,12 @@ const listActiveSessions = async (req: Request, admin: ReturnType<typeof createS
   const q = asString(url.searchParams.get("q"), 120)?.toLowerCase() || "";
   const page = Math.max(1, Number(url.searchParams.get("page") || 1));
   const perPage = Math.max(1, Math.min(200, Number(url.searchParams.get("perPage") || 100)));
+  const activeTodayPage = Math.max(1, Number(url.searchParams.get("activeTodayPage") || 1));
+  const activeTodayPerPage = Math.max(1, Math.min(200, Number(url.searchParams.get("activeTodayPerPage") || 100)));
   const sortBy = normalizeActiveSessionSortBy(url.searchParams.get("sortBy"));
   const sortDir = normalizeSortDir(url.searchParams.get("sortDir"));
+  const startOfTodayUtc = new Date();
+  startOfTodayUtc.setUTCHours(0, 0, 0, 0);
 
   const { data: sessions, error: sessionsError } = await admin
     .from("v_active_sessions_now")
@@ -505,9 +509,28 @@ const listActiveSessions = async (req: Request, admin: ReturnType<typeof createS
   const rows = Array.isArray(sessions) ? sessions : [];
   const { data: admins } = await admin.from("profiles").select("id").eq("role", "admin");
   const adminIds = new Set((admins || []).map((a: any) => a.id));
-  const nonAdminRows = rows.filter((row: any) => !adminIds.has(row?.user_id));
+  const { data: activeTodayRows, error: activeTodayError } = await admin
+    .from("active_sessions")
+    .select("session_key,user_id,email,device_fingerprint,device_name,platform,browser,os,last_seen_at")
+    .gte("last_seen_at", startOfTodayUtc.toISOString())
+    .order("last_seen_at", { ascending: false })
+    .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT * 5);
+  if (activeTodayError) return fail(500, activeTodayError.message);
+  const nonAdminActiveTodayRows = (activeTodayRows || []).filter((row: any) => {
+    const userId = String(row?.user_id || "");
+    return Boolean(userId) && !adminIds.has(userId);
+  });
+  const activeTodayLatestByUser = new Map<string, any>();
+  for (const row of nonAdminActiveTodayRows) {
+    const userId = String(row?.user_id || "");
+    if (!userId) continue;
+    const previous = activeTodayLatestByUser.get(userId);
+    if (!previous || compareNullableDate(previous?.last_seen_at, row?.last_seen_at) < 0) {
+      activeTodayLatestByUser.set(userId, row);
+    }
+  }
   const latestByUser = new Map<string, any>();
-  for (const row of nonAdminRows) {
+  for (const row of rows) {
     const userId = String(row?.user_id || "");
     if (!userId) continue;
     const previous = latestByUser.get(userId);
@@ -546,18 +569,34 @@ const listActiveSessions = async (req: Request, admin: ReturnType<typeof createS
   });
 
   const filteredSessionCount = q
-    ? nonAdminRows.filter((row: any) => {
+    ? rows.filter((row: any) => {
       const matchedUser = latestByUser.get(String(row?.user_id || ""));
       return filtered.includes(matchedUser);
     }).length
-    : nonAdminRows.length;
+    : rows.length;
+  const activeTodayUsers = new Set(
+    nonAdminActiveTodayRows
+      .map((row: any) => String(row?.user_id || ""))
+      .filter(Boolean),
+  ).size;
+  const sortedActiveTodayRows = Array.from(activeTodayLatestByUser.values()).sort((left, right) =>
+    compareNullableDate(right?.last_seen_at, left?.last_seen_at)
+  );
 
   return ok({
-    counts: { activeSessions: filteredSessionCount, activeUsers: filtered.length },
+    counts: {
+      activeSessions: filteredSessionCount,
+      activeUsers: filtered.length,
+      activeTodayUsers,
+    },
     sessions: paginateRows(sorted, page, perPage),
+    activeTodaySessions: paginateRows(sortedActiveTodayRows, activeTodayPage, activeTodayPerPage),
     total: sorted.length,
     page,
     perPage,
+    activeTodayTotal: sortedActiveTodayRows.length,
+    activeTodayPage,
+    activeTodayPerPage,
     sortBy,
     sortDir,
   });
@@ -1553,14 +1592,6 @@ const listAccessByBank = async (req: Request, bankId: string, admin: ReturnType<
 const grantAccessForUser = async (userId: string, body: any, admin: ReturnType<typeof createServiceClient>) => {
   const bankIds = parseUuidList(body?.bankIds);
   if (!bankIds.length) return badRequest("bankIds is required");
-
-  const { data: profile, error: profileError } = await admin
-    .from("profiles")
-    .select("role")
-    .eq("id", userId)
-    .maybeSingle();
-  if (profileError) return fail(500, profileError.message);
-  if (profile?.role === "admin") return fail(400, "Cannot grant bank access to admin user");
 
   const payload = bankIds.map((bankId) => ({ user_id: userId, bank_id: bankId }));
   const { error } = await admin

@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { CopyableValue, copyTextToClipboard } from '@/components/ui/copyable-value';
 import type { AdminAccountRegistrationRequest, DefaultBankRelease, LandingDownloadConfig, LandingPlatformKey, LandingVersionKey } from '@/lib/admin-api';
-import { Check, ChevronDown, ChevronUp, Copy, EyeOff, Loader2, Plus, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
 import type { SamplerAppConfig, SamplerShortcutAction } from './samplerAppConfig';
 import type {
   AdminDialogTheme,
@@ -34,6 +34,7 @@ interface AccountRequestsTabProps {
   historyCount: number;
   onFilterChange: (filter: 'pending' | 'history') => void;
   onSearchChange: (value: string) => void;
+  onRefresh: () => void;
   onPageChange: (page: number) => void;
   onApprove: (id: string) => void;
   onAssist: (id: string) => void;
@@ -94,6 +95,7 @@ interface StoreRequestsTabProps {
   historyCount: number;
   onFilterChange: (filter: 'pending' | 'history') => void;
   onSearchChange: (value: string) => void;
+  onRefresh: () => void;
   onPageChange: (page: number) => void;
   onToggleExpanded: (id: string) => void;
   onApprove: (id: string) => void;
@@ -993,6 +995,7 @@ export function AccountRequestsTab({
   historyCount,
   onFilterChange,
   onSearchChange,
+  onRefresh,
   onPageChange,
   onApprove,
   onAssist,
@@ -1001,14 +1004,18 @@ export function AccountRequestsTab({
 }: AccountRequestsTabProps) {
   return (
     <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
-      <div className="flex flex-wrap gap-2 items-center">
-        <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
-          Pending ({pendingCount})
-        </Button>
-        <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
-          History ({historyCount})
-        </Button>
-        <div className="flex-1" />
+        <div className="flex flex-wrap gap-2 items-center">
+          <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
+            Pending ({pendingCount})
+          </Button>
+          <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
+            History ({historyCount})
+          </Button>
+          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
+            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+          <div className="flex-1" />
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
           <Input
@@ -1193,6 +1200,7 @@ export function StoreRequestsTab({
   historyCount,
   onFilterChange,
   onSearchChange,
+  onRefresh,
   onPageChange,
   onToggleExpanded,
   onApprove,
@@ -1201,14 +1209,18 @@ export function StoreRequestsTab({
 }: StoreRequestsTabProps) {
   return (
     <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
-      <div className="flex flex-wrap gap-2 items-center">
-        <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
-          Pending ({pendingCount})
-        </Button>
-        <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
-          History ({historyCount})
-        </Button>
-        <div className="flex-1" />
+        <div className="flex flex-wrap gap-2 items-center">
+          <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
+            Pending ({pendingCount})
+          </Button>
+          <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
+            History ({historyCount})
+          </Button>
+          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
+            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+          <div className="flex-1" />
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
           <Input

@@ -20,11 +20,16 @@ import {
   YAxis,
 } from 'recharts';
 import { prepareManagedImageUpload } from '@/lib/image-upload';
+import { uploadManagedStoreAsset } from '@/lib/store-asset-upload';
 import type {
   AdminDialogTheme,
   CatalogDraft,
   HomeTrendRows,
 } from './AdminAccessDialog.shared';
+
+const PROOF_SIGNED_URL_TTL_SECONDS = 20 * 60;
+const PROOF_SIGNED_URL_CACHE_TTL_MS = (PROOF_SIGNED_URL_TTL_SECONDS - 60) * 1000;
+const proofSignedUrlCache = new Map<string, { url: string; expiresAt: number }>();
 
 type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string };
 export type PushNoticeInput = Omit<Notice, 'id'>;
@@ -437,15 +442,45 @@ export function ProofImagePreview({ path }: { path: string }) {
   const [url, setUrl] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState(false);
   const [error, setError] = React.useState(false);
+  const [shouldLoad, setShouldLoad] = React.useState(false);
+  const previewRef = React.useRef<HTMLButtonElement | null>(null);
 
   React.useEffect(() => {
+    const node = previewRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      setShouldLoad(true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setShouldLoad(true);
+      observer.disconnect();
+    }, { rootMargin: '160px 0px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  React.useEffect(() => {
+    if (!shouldLoad && !expanded) return;
+    const cached = proofSignedUrlCache.get(path);
+    if (cached && cached.expiresAt > Date.now()) {
+      setUrl(cached.url);
+      setError(false);
+      return;
+    }
     let mounted = true;
     const load = async () => {
       try {
         const { supabase } = await import('@/lib/supabase');
-        const { data, error: signedUrlError } = await supabase.storage.from('payment-proof').createSignedUrl(path, 60 * 60);
+        const { data, error: signedUrlError } = await supabase.storage.from('payment-proof').createSignedUrl(path, PROOF_SIGNED_URL_TTL_SECONDS);
         if (signedUrlError) throw signedUrlError;
-        if (mounted && data?.signedUrl) setUrl(data.signedUrl);
+        if (mounted && data?.signedUrl) {
+          proofSignedUrlCache.set(path, {
+            url: data.signedUrl,
+            expiresAt: Date.now() + PROOF_SIGNED_URL_CACHE_TTL_MS,
+          });
+          setUrl(data.signedUrl);
+        }
       } catch {
         if (mounted) setError(true);
       }
@@ -455,22 +490,41 @@ export function ProofImagePreview({ path }: { path: string }) {
     return () => {
       mounted = false;
     };
-  }, [path]);
+  }, [expanded, path, shouldLoad]);
 
   if (error) return <span className="text-xs text-red-400">Failed to load</span>;
-  if (!url) return <Loader2 className="w-4 h-4 animate-spin inline" />;
+  if (!url) {
+    return (
+      <button
+        ref={previewRef}
+        type="button"
+        onClick={() => setExpanded(true)}
+        className="mt-1 inline-flex h-12 w-12 items-center justify-center rounded border border-dashed text-[10px] opacity-80 hover:opacity-100"
+      >
+        <Loader2 className="w-4 h-4 animate-spin inline" />
+      </button>
+    );
+  }
 
   return (
     <>
-      <img
-        src={url}
-        alt="Proof"
-        className="mt-1 w-12 h-12 object-cover rounded border cursor-pointer hover:opacity-80 transition-opacity"
+      <button
+        ref={previewRef}
+        type="button"
         onClick={() => setExpanded(true)}
-      />
+        className="mt-1 block rounded border overflow-hidden hover:opacity-80 transition-opacity"
+      >
+        <img
+          src={url}
+          alt="Proof"
+          loading="lazy"
+          decoding="async"
+          className="w-12 h-12 object-cover"
+        />
+      </button>
       {expanded && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70" onClick={() => setExpanded(false)}>
-          <img src={url} alt="Proof" className="max-w-[90vw] max-h-[85vh] rounded-lg shadow-2xl" />
+          <img src={url} alt="Proof" decoding="async" className="max-w-[90vw] max-h-[85vh] rounded-lg shadow-2xl" />
         </div>
       )}
     </>
@@ -541,18 +595,25 @@ export function CatalogCard({
 
     setThumbFile(file);
     setThumbUploading(true);
+    let cleanupUploaded: (() => Promise<void>) | null = null;
     try {
-      const { supabase } = await import('@/lib/supabase');
       const preparedFile = await prepareManagedImageUpload(file, 'thumbnail');
-      const ext = preparedFile.name.split('.').pop();
-      const fileName = `thumb-${draft.bank_id}-${Date.now()}.${ext}`;
-      const { error } = await supabase.storage.from('store-assets').upload(fileName, preparedFile, { upsert: true });
-      if (error) throw error;
-      const { data } = supabase.storage.from('store-assets').getPublicUrl(fileName);
-      await supabase.from('bank_catalog_items').update({ thumbnail_path: data.publicUrl }).eq('id', draft.id);
+      const uploaded = await uploadManagedStoreAsset(preparedFile, {
+        kind: 'thumbnail',
+        bankId: draft.bank_id,
+      });
+      cleanupUploaded = uploaded.cleanup;
+      const { supabase } = await import('@/lib/supabase');
+      await supabase.from('bank_catalog_items').update({ thumbnail_path: uploaded.url }).eq('id', draft.id);
+      cleanupUploaded = null;
       pushNotice({ variant: 'success', message: 'Thumbnail updated!' });
       onReload();
     } catch (error: any) {
+      if (cleanupUploaded) {
+        try {
+          await cleanupUploaded();
+        } catch {}
+      }
       pushNotice({ variant: 'error', message: `Thumbnail upload failed: ${error.message}` });
     } finally {
       setThumbUploading(false);
