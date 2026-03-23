@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
-import { adminApi, type AccessEntry, type ActiveSessionRow, type AdminAccountRegistrationRequest, type AdminActivityRow, type AdminBank, type AdminDashboardOverview, type AdminUser, type BankAccessEntry, type DefaultBankRelease, type LandingDownloadConfig, type SortDirection } from '@/lib/admin-api';
+import { adminApi, type AccessEntry, type ActiveSessionRow, type AdminAccountRegistrationRequest, type AdminActivityRow, type AdminBank, type AdminClientCrashReport, type AdminDashboardOverview, type AdminUser, type BankAccessEntry, type DefaultBankRelease, type LandingDownloadConfig, type SortDirection } from '@/lib/admin-api';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { DEFAULT_LANDING_DOWNLOAD_CONFIG, normalizeLandingDownloadConfig } from '@/components/landing/download-config';
 import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig, type SamplerAppConfig } from './samplerAppConfig';
@@ -33,6 +33,11 @@ import {
   type BankSortBy,
   type CatalogDraft,
   type PurchaseRequest,
+  type RequestAutomationFilter,
+  type RequestChannelFilter,
+  type RequestDecisionFilter,
+  type RequestOcrStatusFilter,
+  type RequestStatusFilter,
   type StoreCatalogSort,
   type StoreConfigDraft,
   type StoreMarketingBanner,
@@ -52,6 +57,7 @@ import {
 } from './AdminAccessDialog.widgets';
 import {
   AccountRequestsTab,
+  CrashReportsTab,
   DefaultBankTab,
   LandingDownloadTab,
   SamplerDefaultsTab,
@@ -159,7 +165,12 @@ export function AdminAccessDialog({
     setStorePublishDialog,
     setStoreReqPage,
     setStoreReqSearch,
+    setStoreRequestAutomationFilter,
+    setStoreRequestChannelFilter,
+    setStoreRequestDecisionFilter,
     setStoreRequestFilter,
+    setStoreRequestOcrStatusFilter,
+    setStoreRequestStatusFilter,
     setStoreRequestToReject,
     setStoreQrFile,
     showInactiveBanners,
@@ -184,8 +195,15 @@ export function AdminAccessDialog({
     storePublishDialog,
     storeQrPreviewUrl,
     storeReqPage,
+    storeReqPendingCount,
+    storeReqHistoryCount,
     storeReqSearch,
+    storeRequestAutomationFilter,
+    storeRequestChannelFilter,
+    storeRequestDecisionFilter,
     storeRequestFilter,
+    storeRequestOcrStatusFilter,
+    storeRequestStatusFilter,
     storeRequestToReject,
     storeRequests,
     updateBannerDraft,
@@ -335,8 +353,23 @@ export function AdminAccessDialog({
   const [accountReqPendingCount, setAccountReqPendingCount] = React.useState(0);
   const [accountReqHistoryCount, setAccountReqHistoryCount] = React.useState(0);
   const [accountReqSearch, setAccountReqSearch] = React.useState('');
+  const [accountReqStatusFilter, setAccountReqStatusFilter] = React.useState<RequestStatusFilter>('all');
+  const [accountReqChannelFilter, setAccountReqChannelFilter] = React.useState<RequestChannelFilter>('all');
+  const [accountReqDecisionFilter, setAccountReqDecisionFilter] = React.useState<RequestDecisionFilter>('all');
+  const [accountReqAutomationFilter, setAccountReqAutomationFilter] = React.useState<RequestAutomationFilter>('all');
+  const [accountReqOcrStatusFilter, setAccountReqOcrStatusFilter] = React.useState<RequestOcrStatusFilter>('all');
   const [accountReqToReject, setAccountReqToReject] = React.useState<{ id: string; message: string } | null>(null);
   const [accountReqToAssist, setAccountReqToAssist] = React.useState<{ id: string } | null>(null);
+  const [crashReportsLoading, setCrashReportsLoading] = React.useState(false);
+  const [crashReportsRows, setCrashReportsRows] = React.useState<AdminClientCrashReport[]>([]);
+  const [crashReportsPage, setCrashReportsPage] = React.useState(1);
+  const [crashReportsTotal, setCrashReportsTotal] = React.useState(0);
+  const [crashReportsNewCount, setCrashReportsNewCount] = React.useState(0);
+  const [crashReportsSearch, setCrashReportsSearch] = React.useState('');
+  const [crashReportsStatusFilter, setCrashReportsStatusFilter] = React.useState<'all' | 'new' | 'acknowledged' | 'fixed' | 'ignored'>('all');
+  const [crashReportsDomainFilter, setCrashReportsDomainFilter] = React.useState<'all' | 'bank_store' | 'playback' | 'global_runtime'>('all');
+  const [crashReportsPlatformFilter, setCrashReportsPlatformFilter] = React.useState('all');
+  const [crashReportsAppVersionFilter, setCrashReportsAppVersionFilter] = React.useState('all');
 
   const selectedUser = React.useMemo(
     () => assignmentUsersSource.find((u) => u.id === selectedUserId) || users.find((u) => u.id === selectedUserId) || null,
@@ -937,13 +970,18 @@ export function AdminAccessDialog({
 
   const loadAccountRegistrationRequests = React.useCallback(async () => {
     setAccountReqLoading(true);
-    try {
-      const data = await adminApi.listAccountRegistrationRequests({
-        filter: accountReqFilter,
-        q: accountReqSearch.trim() || undefined,
-        page: accountReqPage,
-        perPage: PAGE_SIZE,
-      });
+      try {
+        const data = await adminApi.listAccountRegistrationRequests({
+          filter: accountReqFilter,
+          q: accountReqSearch.trim() || undefined,
+          page: accountReqPage,
+          perPage: PAGE_SIZE,
+          status: accountReqStatusFilter,
+          paymentChannel: accountReqChannelFilter,
+          decisionSource: accountReqDecisionFilter,
+          automationResult: accountReqAutomationFilter,
+          ocrStatus: accountReqOcrStatusFilter,
+        });
       setAccountReqRows(Array.isArray(data?.requests) ? data.requests : []);
       setAccountReqTotal(Number(data?.total || 0));
       setAccountReqPendingCount(Number(data?.pendingCount || 0));
@@ -957,7 +995,17 @@ export function AdminAccessDialog({
     } finally {
       setAccountReqLoading(false);
     }
-  }, [pushNotice, accountReqFilter, accountReqSearch, accountReqPage]);
+    }, [
+      pushNotice,
+      accountReqAutomationFilter,
+      accountReqChannelFilter,
+      accountReqDecisionFilter,
+      accountReqFilter,
+      accountReqOcrStatusFilter,
+      accountReqPage,
+      accountReqSearch,
+      accountReqStatusFilter,
+    ]);
 
   React.useEffect(() => {
     if (!open || !isAdmin || tab !== 'account_requests') return;
@@ -966,6 +1014,72 @@ export function AdminAccessDialog({
     }, 200);
     return () => window.clearTimeout(timer);
   }, [open, isAdmin, tab, loadAccountRegistrationRequests]);
+
+  const loadClientCrashReports = React.useCallback(async () => {
+    setCrashReportsLoading(true);
+    try {
+      const data = await adminApi.listClientCrashReports({
+        q: crashReportsSearch.trim() || undefined,
+        page: crashReportsPage,
+        perPage: PAGE_SIZE,
+        status: crashReportsStatusFilter,
+        domain: crashReportsDomainFilter,
+        platform: crashReportsPlatformFilter,
+        appVersion: crashReportsAppVersionFilter,
+      });
+      setCrashReportsRows(Array.isArray(data?.reports) ? data.reports : []);
+      setCrashReportsTotal(Number(data?.total || 0));
+      setCrashReportsNewCount(Number(data?.newCount || 0));
+    } catch (err: any) {
+      pushNotice({ variant: 'error', message: err?.message || 'Could not load crash reports.' });
+      setCrashReportsRows([]);
+      setCrashReportsTotal(0);
+      setCrashReportsNewCount(0);
+    } finally {
+      setCrashReportsLoading(false);
+    }
+  }, [
+    crashReportsAppVersionFilter,
+    crashReportsDomainFilter,
+    crashReportsPage,
+    crashReportsPlatformFilter,
+    crashReportsSearch,
+    crashReportsStatusFilter,
+    pushNotice,
+  ]);
+
+  React.useEffect(() => {
+    if (!open || !isAdmin || tab !== 'crash_reports') return;
+    const timer = window.setTimeout(() => {
+      void loadClientCrashReports();
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [isAdmin, loadClientCrashReports, open, tab]);
+
+  const handleClientCrashReportStatusUpdate = React.useCallback(async (
+    id: string,
+    status: AdminClientCrashReport['status'],
+  ) => {
+    try {
+      await adminApi.updateClientCrashReportStatus(id, status);
+      setCrashReportsRows((prev) => prev.map((row) => (
+        row.id === id
+          ? {
+              ...row,
+              status,
+              updated_at: new Date().toISOString(),
+            }
+          : row
+      )));
+      if (status !== 'new') {
+        setCrashReportsNewCount((prev) => Math.max(0, prev - (crashReportsRows.find((row) => row.id === id)?.status === 'new' ? 1 : 0)));
+      }
+      pushNotice({ variant: 'success', message: `Crash report marked ${status.replace(/_/g, ' ')}.` });
+      void loadClientCrashReports();
+    } catch (err: any) {
+      pushNotice({ variant: 'error', message: err?.message || 'Could not update crash report.' });
+    }
+  }, [crashReportsRows, loadClientCrashReports, pushNotice]);
 
   const handleAccountRequestAction = async (
     id: string,
@@ -1033,6 +1147,7 @@ export function AdminAccessDialog({
   const activeTodayTotalPages = Math.max(1, Math.ceil(activeTodayTotal / PAGE_SIZE));
   const storePromotionsTotalPages = Math.max(1, Math.ceil(storePromotions.length / PAGE_SIZE));
   const accountReqTotalPages = Math.max(1, Math.ceil(accountReqTotal / PAGE_SIZE));
+  const crashReportsTotalPages = Math.max(1, Math.ceil(crashReportsTotal / PAGE_SIZE));
   const bankAccessTotalPages = Math.max(1, Math.ceil(bankAccessTotal / PAGE_SIZE));
   const activityTotalPages = Math.max(1, Math.ceil(activityTotal / PAGE_SIZE));
   const otherActivityTotalPages = Math.max(1, Math.ceil(otherActivityTotal / PAGE_SIZE));
@@ -1084,6 +1199,14 @@ export function AdminAccessDialog({
     const end = homeData?.meta?.rangeEndDate || homeToDate || '-';
     return `${start} to ${end}`;
   }, [homeData, homeFromDate, homeToDate]);
+  const crashReportPlatformOptions = React.useMemo(
+    () => Array.from(new Set(crashReportsRows.map((row) => String(row.platform || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [crashReportsRows],
+  );
+  const crashReportAppVersionOptions = React.useMemo(
+    () => Array.from(new Set(crashReportsRows.map((row) => String(row.app_version || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [crashReportsRows],
+  );
   const formatHomeMoney = React.useCallback(
     (value: number) =>
       new Intl.NumberFormat('en-PH', {
@@ -1185,6 +1308,12 @@ export function AdminAccessDialog({
       setStorePromotionsPage(storePromotionsTotalPages);
     }
   }, [storePromotionsPage, storePromotionsTotalPages]);
+
+  React.useEffect(() => {
+    if (crashReportsPage > crashReportsTotalPages) {
+      setCrashReportsPage(crashReportsTotalPages);
+    }
+  }, [crashReportsPage, crashReportsTotalPages]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -1834,6 +1963,11 @@ export function AdminAccessDialog({
                   panelClass={tabPanelToneClass('account_requests')}
                   cardClass={tabCardToneClass('account_requests')}
                   filter={accountReqFilter}
+                  statusFilter={accountReqStatusFilter}
+                  channelFilter={accountReqChannelFilter}
+                  decisionFilter={accountReqDecisionFilter}
+                  automationFilter={accountReqAutomationFilter}
+                  ocrStatusFilter={accountReqOcrStatusFilter}
                   search={accountReqSearch}
                   loading={accountReqLoading}
                   rows={accountReqRows}
@@ -1843,6 +1977,27 @@ export function AdminAccessDialog({
                   historyCount={accountReqHistoryCount}
                   onFilterChange={(nextFilter) => {
                     setAccountReqFilter(nextFilter);
+                    setAccountReqStatusFilter('all');
+                    setAccountReqPage(1);
+                  }}
+                  onStatusFilterChange={(value) => {
+                    setAccountReqStatusFilter(value);
+                    setAccountReqPage(1);
+                  }}
+                  onChannelFilterChange={(value) => {
+                    setAccountReqChannelFilter(value);
+                    setAccountReqPage(1);
+                  }}
+                  onDecisionFilterChange={(value) => {
+                    setAccountReqDecisionFilter(value);
+                    setAccountReqPage(1);
+                  }}
+                  onAutomationFilterChange={(value) => {
+                    setAccountReqAutomationFilter(value);
+                    setAccountReqPage(1);
+                  }}
+                  onOcrStatusFilterChange={(value) => {
+                    setAccountReqOcrStatusFilter(value);
                     setAccountReqPage(1);
                   }}
                     onSearchChange={(value) => {
@@ -1858,25 +2013,100 @@ export function AdminAccessDialog({
                 />
               )}
 
+              {tab === 'crash_reports' && (
+                <CrashReportsTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('crash_reports')}
+                  cardClass={tabCardToneClass('crash_reports')}
+                  loading={crashReportsLoading}
+                  rows={crashReportsRows}
+                  page={crashReportsPage}
+                  totalPages={crashReportsTotalPages}
+                  totalCount={crashReportsTotal}
+                  newCount={crashReportsNewCount}
+                  search={crashReportsSearch}
+                  statusFilter={crashReportsStatusFilter}
+                  domainFilter={crashReportsDomainFilter}
+                  platformFilter={crashReportsPlatformFilter}
+                  appVersionFilter={crashReportsAppVersionFilter}
+                  platformOptions={crashReportPlatformOptions}
+                  appVersionOptions={crashReportAppVersionOptions}
+                  onSearchChange={(value) => {
+                    setCrashReportsSearch(value);
+                    setCrashReportsPage(1);
+                  }}
+                  onStatusFilterChange={(value) => {
+                    setCrashReportsStatusFilter(value);
+                    setCrashReportsPage(1);
+                  }}
+                  onDomainFilterChange={(value) => {
+                    setCrashReportsDomainFilter(value);
+                    setCrashReportsPage(1);
+                  }}
+                  onPlatformFilterChange={(value) => {
+                    setCrashReportsPlatformFilter(value);
+                    setCrashReportsPage(1);
+                  }}
+                  onAppVersionFilterChange={(value) => {
+                    setCrashReportsAppVersionFilter(value);
+                    setCrashReportsPage(1);
+                  }}
+                  onRefresh={() => void loadClientCrashReports()}
+                  onPageChange={setCrashReportsPage}
+                  onStatusUpdate={(id, status) => void handleClientCrashReportStatusUpdate(id, status)}
+                />
+              )}
+
               {tab === 'store_requests' && (
                 <StoreRequestsTab
                   theme={theme}
                   panelClass={tabPanelToneClass('store_requests')}
                   cardClass={tabCardToneClass('store_requests')}
                   filter={storeRequestFilter}
+                  statusFilter={storeRequestStatusFilter}
+                  channelFilter={storeRequestChannelFilter}
+                  decisionFilter={storeRequestDecisionFilter}
+                  automationFilter={storeRequestAutomationFilter}
+                  ocrStatusFilter={storeRequestOcrStatusFilter}
                   search={storeReqSearch}
                   loading={storeLoading}
                   rows={pagedRequests}
                   page={storeReqPage}
                   totalPages={reqTotalPages}
                   expandedId={expandedStoreRequestId}
-                  pendingCount={storeRequests.filter((request) => request.status === 'pending').length}
-                  historyCount={storeRequests.filter((request) => request.status !== 'pending').length}
+                  pendingCount={storeReqPendingCount}
+                  historyCount={storeReqHistoryCount}
                   onFilterChange={(nextFilter) => {
                     setStoreRequestFilter(nextFilter);
+                    setStoreRequestStatusFilter('all');
                     setStoreReqPage(1);
                     setExpandedStoreRequestId(null);
                   }}
+                    onStatusFilterChange={(value) => {
+                      setStoreRequestStatusFilter(value);
+                      setStoreReqPage(1);
+                      setExpandedStoreRequestId(null);
+                    }}
+                    onChannelFilterChange={(value) => {
+                      setStoreRequestChannelFilter(value);
+                      setStoreReqPage(1);
+                      setExpandedStoreRequestId(null);
+                    }}
+                    onDecisionFilterChange={(value) => {
+                      setStoreRequestDecisionFilter(value);
+                      setStoreReqPage(1);
+                      setExpandedStoreRequestId(null);
+                    }}
+                    onAutomationFilterChange={(value) => {
+                      setStoreRequestAutomationFilter(value);
+                      setStoreReqPage(1);
+                      setExpandedStoreRequestId(null);
+                    }}
+                    onOcrStatusFilterChange={(value) => {
+                      setStoreRequestOcrStatusFilter(value);
+                      setStoreReqPage(1);
+                      setExpandedStoreRequestId(null);
+                    }}
                     onSearchChange={(value) => {
                       setStoreReqSearch(value);
                       setStoreReqPage(1);

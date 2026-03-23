@@ -23,6 +23,8 @@ interface BankEditAdminExportDialogProps {
   setAdminAllowExport: (value: boolean) => void;
   adminPublicCatalogAsset: boolean;
   setAdminPublicCatalogAsset: (value: boolean) => void;
+  adminComingSoonOnly: boolean;
+  setAdminComingSoonOnly: (value: boolean) => void;
   adminExportMode: ExportAudioMode;
   setAdminExportMode: (value: ExportAudioMode) => void;
   onExport: () => void;
@@ -43,6 +45,8 @@ export function BankEditAdminExportDialog({
   setAdminAllowExport,
   adminPublicCatalogAsset,
   setAdminPublicCatalogAsset,
+  adminComingSoonOnly,
+  setAdminComingSoonOnly,
   adminExportMode,
   setAdminExportMode,
   onExport,
@@ -128,24 +132,47 @@ export function BankEditAdminExportDialog({
                   setAdminAllowExport(false);
                 } else {
                   setAdminPublicCatalogAsset(false);
+                  setAdminComingSoonOnly(false);
                 }
               }}
             />
           </div>
 
           {adminAddToDatabase && (
-            <div className="flex items-center justify-between">
-              <div>
-                <Label htmlFor="adminPublicCatalogAsset">Unencrypted Output</Label>
-                <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                  Store file is not encrypted. You can still list it as free or paid later, but users can inspect the file contents.
-                </p>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label htmlFor="adminComingSoonOnly">Coming Soon Only</Label>
+                  <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                    Publish only title, description, and thumbnail. No bank archive is uploaded, and users can only see the teaser in Store.
+                  </p>
+                </div>
+                <Switch
+                  id="adminComingSoonOnly"
+                  checked={adminComingSoonOnly}
+                  onCheckedChange={setAdminComingSoonOnly}
+                />
               </div>
-              <Switch
-                id="adminPublicCatalogAsset"
-                checked={adminPublicCatalogAsset}
-                onCheckedChange={setAdminPublicCatalogAsset}
-              />
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label htmlFor="adminPublicCatalogAsset">Unencrypted Output</Label>
+                  <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                    Store file is not encrypted. You can still list it as free or paid later, but users can inspect the file contents.
+                  </p>
+                </div>
+                <Switch
+                  id="adminPublicCatalogAsset"
+                  checked={adminPublicCatalogAsset}
+                  onCheckedChange={setAdminPublicCatalogAsset}
+                  disabled={adminComingSoonOnly}
+                />
+              </div>
+              {adminComingSoonOnly ? (
+                <p className={`text-xs ${theme === 'dark' ? 'text-amber-300' : 'text-amber-700'}`}>
+                  Teaser publish skips audio/image export and immediately publishes a non-buyable Store listing for older clients.
+                </p>
+              ) : null}
             </div>
           )}
 
@@ -172,6 +199,7 @@ export function BankEditAdminExportDialog({
                 type="button"
                 variant={adminExportMode === 'fast' ? 'default' : 'outline'}
                 onClick={() => setAdminExportMode('fast')}
+                disabled={adminComingSoonOnly}
               >
                 Fast
               </Button>
@@ -179,6 +207,7 @@ export function BankEditAdminExportDialog({
                 type="button"
                 variant={adminExportMode === 'compact' ? 'default' : 'outline'}
                 onClick={() => setAdminExportMode('compact')}
+                disabled={adminComingSoonOnly}
               >
                 Compact
               </Button>
@@ -187,13 +216,16 @@ export function BankEditAdminExportDialog({
                   type="button"
                   variant={adminExportMode === 'trim_mp3' ? 'default' : 'outline'}
                   onClick={() => setAdminExportMode('trim_mp3')}
+                  disabled={adminComingSoonOnly}
                 >
                   Trim + MP3
                 </Button>
               ) : null}
             </div>
             <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-              {hasElectronMp3Bridge
+              {adminComingSoonOnly
+                ? 'Coming Soon Only skips archive generation entirely. The Store teaser will show title, description, and thumbnail only.'
+                : hasElectronMp3Bridge
                 ? 'Fast keeps original audio. Compact applies trim windows and may reduce size. Trim + MP3 trims first when applicable and always exports MP3 at 128 kbps.'
                 : 'Fast keeps original audio. Compact applies trim windows and may reduce size.'}
             </p>

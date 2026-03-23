@@ -34,6 +34,7 @@ export type TabKey =
   | 'active'
   | 'activity'
   | 'account_requests'
+  | 'crash_reports'
   | 'store_requests'
   | 'store_catalog'
   | 'store_promotions'
@@ -47,6 +48,33 @@ export type AssignmentBankSortBy = 'title' | 'status' | 'access_count';
 export type ActiveSortBy = 'user_id' | 'email' | 'device_name' | 'platform' | 'last_seen_at';
 export type ActivitySortBy = 'created_at' | 'event_type' | 'status' | 'email' | 'bank_name';
 export type StoreCatalogSort = 'title_asc' | 'title_desc' | 'price_high' | 'price_low' | 'status' | 'pinned_first' | 'newest';
+export type RequestListFilter = 'pending' | 'history';
+export type RequestStatusFilter = 'all' | 'pending' | 'approved' | 'rejected';
+export type RequestChannelFilter = 'all' | 'image_proof' | 'gcash_manual' | 'maya_manual';
+export type RequestDecisionFilter = 'all' | 'manual' | 'automation';
+export type RequestAutomationFilter =
+  | 'all'
+  | 'approved'
+  | 'manual_review_disabled'
+  | 'outside_window'
+  | 'missing_reference'
+  | 'missing_amount'
+  | 'missing_recipient_number'
+  | 'duplicate_reference'
+  | 'wallet_number_mismatch'
+  | 'amount_mismatch'
+  | 'ocr_failed'
+  | 'approval_error'
+  | 'not_image_proof';
+export type RequestOcrStatusFilter =
+  | 'all'
+  | 'detected'
+  | 'missing_reference'
+  | 'missing_amount'
+  | 'missing_recipient_number'
+  | 'failed'
+  | 'unavailable'
+  | 'skipped';
 export type TabTone =
   | 'blue'
   | 'emerald'
@@ -86,6 +114,7 @@ export const TABS: Array<{
   { key: 'activity', label: 'Activity', emoji: '📋', hint: 'Review export/import audit logs', tone: 'amber' },
   { key: 'sampler_defaults', label: 'Sampler Defaults', emoji: 'SD', hint: 'Control first-run sampler defaults and limits', tone: 'violet' },
   { key: 'account_requests', label: 'Account Requests', emoji: '✅', hint: 'Approve or reject account registration', tone: 'rose' },
+  { key: 'crash_reports', label: 'Crash Reports', emoji: 'CR', hint: 'Review client-submitted crash diagnostics', tone: 'amber' },
   { key: 'store_requests', label: 'Store Requests', emoji: '🛒', hint: 'Handle purchase requests', tone: 'orange' },
   { key: 'store_catalog', label: 'Catalog', emoji: '🏷️', hint: 'Prepare and publish store catalog items', tone: 'teal' },
   { key: 'store_banners', label: 'Banners', emoji: '🖼️', hint: 'Manage marketing banners for store homepage', tone: 'teal' },
@@ -332,6 +361,7 @@ export interface CatalogDraft {
   id: string;
   bank_id: string;
   status: 'draft' | 'published' | 'archived';
+  coming_soon?: boolean;
   is_paid: boolean;
   requires_grant: boolean;
   is_pinned: boolean;

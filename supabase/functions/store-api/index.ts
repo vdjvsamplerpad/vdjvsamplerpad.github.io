@@ -11,6 +11,7 @@ import {
   sendDiscordAccountRegistrationEvent,
   sendDiscordAdminActionEvent,
   sendDiscordOcrFailureEvent,
+  sendDiscordStoreCrashReportEvent,
   sendDiscordStoreRequestEvent,
 } from "../_shared/discord.ts";
 
@@ -140,6 +141,9 @@ const ACCOUNT_REG_MAX_PROOF_BYTES = readPositiveInt(Deno.env.get("ACCOUNT_REG_MA
 const RECEIPT_OCR_RATE_LIMIT = readPositiveInt(Deno.env.get("RECEIPT_OCR_RATE_LIMIT"), 40);
 const RECEIPT_OCR_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("RECEIPT_OCR_RATE_WINDOW_SECONDS"), 3600);
 const RECEIPT_OCR_TIMEOUT_MS = readPositiveInt(Deno.env.get("RECEIPT_OCR_TIMEOUT_MS"), 12000);
+const CLIENT_CRASH_REPORT_RATE_LIMIT = readPositiveInt(Deno.env.get("CLIENT_CRASH_REPORT_RATE_LIMIT"), 12);
+const CLIENT_CRASH_REPORT_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("CLIENT_CRASH_REPORT_RATE_WINDOW_SECONDS"), 86400);
+const CLIENT_CRASH_REPORT_MAX_BYTES = readPositiveInt(Deno.env.get("CLIENT_CRASH_REPORT_MAX_BYTES"), 256 * 1024);
 const ACCOUNT_REG_PASSWORD_KEY_VERSION = readPositiveInt(Deno.env.get("ACCOUNT_REG_PASSWORD_KEY_VERSION"), 1);
 const ACCOUNT_REG_MIN_PASSWORD_LENGTH = 8;
 const OCR_SPACE_API_URL = String(Deno.env.get("OCR_SPACE_API_URL") || "https://api.ocr.space/parse/image");
@@ -203,6 +207,25 @@ const formatPhpCurrency = (value: number): string =>
   `PHP ${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const roundMoney = (value: number): number => Math.round(value * 100) / 100;
+
+const matchesAutoApprovalAmount = (expectedAmount: number, detectedAmount: number): boolean => {
+  const expected = roundMoney(expectedAmount);
+  const detected = roundMoney(detectedAmount);
+  if (!Number.isFinite(expected) || !Number.isFinite(detected)) return false;
+  if (expected <= 0 || detected <= 0) return false;
+  if (expected === detected) return true;
+  if (Math.abs(detected - expected) <= 1) return true;
+
+  // Allow small user-friendly upward round-off amounts such as 49->50, 88->90, or 98->100,
+  // but do not allow larger underpayments or broad overpayments.
+  const roundedUpToFive = roundMoney(Math.ceil(expected / 5) * 5);
+  if (roundedUpToFive > expected && roundedUpToFive - expected <= 2 && detected === roundedUpToFive) {
+    return true;
+  }
+
+  return false;
+};
+
 const AUTO_APPROVAL_TIMEZONE = "Asia/Manila";
 type AutomationReason =
   | "approved"
@@ -266,6 +289,23 @@ type ReceiptOcrMetadata = {
   status: OcrStatus;
   errorCode: string | null;
 };
+
+type ClientCrashReportBody = {
+  domain?: string | null;
+  title?: string | null;
+  supportLogText?: string | null;
+  platform?: string | null;
+  appVersion?: string | null;
+  operation?: string | null;
+  phase?: string | null;
+  stage?: string | null;
+  entryCount?: number | null;
+  recentEventPattern?: string | null;
+  detectedAt?: string | number | null;
+  lastUpdatedAt?: string | number | null;
+};
+
+type ClientCrashReportDomain = "bank_store" | "playback" | "global_runtime";
 
 type AutoApprovalMode = "schedule" | "countdown" | "always";
 
@@ -344,42 +384,61 @@ const normalizePhMobileNumber = (value: unknown): string | null => {
   return null;
 };
 
+const extractPhMobileTailDigits = (value: unknown): string | null => {
+  const digits = String(value || "").replace(/[^\d]/g, "");
+  if (digits.length < 4) return null;
+  return digits.slice(-4);
+};
+
+const looksLikeMaskedPhMobileNumber = (value: unknown): boolean => {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+  if (!/(?:\+?63|0)\s*9/i.test(raw)) return false;
+  if (!/[xX*•._-]/.test(raw)) return false;
+  return Boolean(extractPhMobileTailDigits(raw));
+};
+
 const detectReceiptRecipientNumber = (rawText: string): string | null => {
   const lines = rawText.split("\n").map((line) => line.trim()).filter(Boolean);
   const phoneRegex = /(?:\+?63|0)\s*9(?:[\s-]*\d){9}/g;
+  const maskedPhoneRegex = /(?:\+?63|0)\s*9(?:[\sxX*•._-]*[\dxX*•._-]){3,20}\d{4}/g;
   const positiveKeywordRegex = /\b(?:to|recipient|receiver|receive|received by|send to|sent to|account|account number|mobile|mobile number|number|gcash|maya)\b/i;
   const negativeKeywordRegex = /\b(?:from|sender|reference|ref|transaction|amount|total|paid|payment|balance|available)\b/i;
 
-  type Candidate = { value: string; score: number };
+  type Candidate = { value: string; score: number; exact: boolean };
   const scoredCandidates: Candidate[] = [];
 
   for (const line of lines) {
-    const matches = line.match(phoneRegex) || [];
+    const matches = Array.from(
+      new Set([...(line.match(phoneRegex) || []), ...(line.match(maskedPhoneRegex) || [])]),
+    );
     if (matches.length === 0) continue;
     const hasPositive = positiveKeywordRegex.test(line);
     const hasNegative = negativeKeywordRegex.test(line);
     for (const match of matches) {
       const normalized = normalizePhMobileNumber(match);
-      if (!normalized) continue;
+      const masked = !normalized && looksLikeMaskedPhMobileNumber(match);
+      if (!normalized && !masked) continue;
       let score = 0;
       if (hasPositive) score += 5;
       if (/\b(?:gcash|maya)\b/i.test(line)) score += 2;
       if (/account\s*number|mobile\s*number|recipient|receiver|send\s*to|sent\s*to/i.test(line)) score += 2;
       if (hasNegative) score -= 3;
-      scoredCandidates.push({ value: normalized, score });
+      if (masked) score -= 1;
+      scoredCandidates.push({ value: normalized || match.trim(), score, exact: Boolean(normalized) });
     }
   }
 
   const positiveCandidates = scoredCandidates
     .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score || left.value.localeCompare(right.value));
+    .sort((left, right) => Number(right.exact) - Number(left.exact) || right.score - left.score || left.value.localeCompare(right.value));
   if (positiveCandidates.length > 0) return positiveCandidates[0].value;
 
   const fallbackCandidates = Array.from(
     new Set(
       lines
-        .flatMap((line) => line.match(phoneRegex) || [])
-        .map((match) => normalizePhMobileNumber(match))
+        .flatMap((line) => [...(line.match(phoneRegex) || []), ...(line.match(maskedPhoneRegex) || [])])
+        .map((match) => normalizePhMobileNumber(match) || (looksLikeMaskedPhMobileNumber(match) ? match.trim() : null))
         .filter(Boolean) as string[],
     ),
   );
@@ -393,14 +452,30 @@ const matchesConfiguredWalletRecipient = (input: {
   paymentConfig: any;
 }): boolean => {
   const detected = normalizePhMobileNumber(input.detectedRecipientNumber);
-  if (!detected) return false;
+  const detectedTail = extractPhMobileTailDigits(input.detectedRecipientNumber);
   const gcashNumber = normalizePhMobileNumber(input.paymentConfig?.gcash_number);
   const mayaNumber = normalizePhMobileNumber(input.paymentConfig?.maya_number);
+  const gcashTail = extractPhMobileTailDigits(input.paymentConfig?.gcash_number);
+  const mayaTail = extractPhMobileTailDigits(input.paymentConfig?.maya_number);
   const channel = String(input.paymentChannel || "").toLowerCase();
 
-  if (channel === "gcash_manual") return Boolean(gcashNumber && detected === gcashNumber);
-  if (channel === "maya_manual") return Boolean(mayaNumber && detected === mayaNumber);
-  return Boolean((gcashNumber && detected === gcashNumber) || (mayaNumber && detected === mayaNumber));
+  if (detected) {
+    const exactMatch = channel === "gcash_manual"
+      ? Boolean(gcashNumber && detected === gcashNumber)
+      : channel === "maya_manual"
+        ? Boolean(mayaNumber && detected === mayaNumber)
+        : Boolean((gcashNumber && detected === gcashNumber) || (mayaNumber && detected === mayaNumber));
+    if (exactMatch) return true;
+  }
+
+  if (!looksLikeMaskedPhMobileNumber(input.detectedRecipientNumber) || !detectedTail) return false;
+
+  const tailMatch = channel === "gcash_manual"
+    ? Boolean(gcashTail && detectedTail === gcashTail)
+    : channel === "maya_manual"
+      ? Boolean(mayaTail && detectedTail === mayaTail)
+      : Boolean((gcashTail && detectedTail === gcashTail) || (mayaTail && detectedTail === mayaTail));
+  return tailMatch;
 };
 
 const isWithinAutoApprovalWindow = (config: AutoApprovalWindowConfig, now = new Date()): boolean => {
@@ -599,6 +674,76 @@ const base64ToBytes = (value: string): Uint8Array => {
   return bytes;
 };
 
+const bytesToHex = (bytes: Uint8Array): string =>
+  Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+const sha256Hex = async (value: string): Promise<string> => {
+  const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(value));
+  return bytesToHex(new Uint8Array(digest));
+};
+
+const normalizeCrashText = (value: unknown, maxLength = 400): string | null => {
+  const trimmed = asString(value, maxLength * 4);
+  if (!trimmed) return null;
+  const normalized = trimmed
+    .toLowerCase()
+    .replace(/\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?z/g, "<iso>")
+    .replace(/\b\d{13,}\b/g, "<longnum>")
+    .replace(/\b[0-9a-f]{8,}\b/g, "<hex>")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized.slice(0, maxLength) || null;
+};
+
+const shouldNotifyCrashReportRepeat = (repeatCount: number): boolean =>
+  repeatCount <= 2 || repeatCount === 5 || repeatCount === 10 || repeatCount % 25 === 0;
+
+const normalizeClientCrashReportDomain = (value: unknown): ClientCrashReportDomain | null => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "bank_store" || normalized === "playback" || normalized === "global_runtime") {
+    return normalized;
+  }
+  return null;
+};
+
+const getClientCrashReportTitle = (domain: ClientCrashReportDomain, fallbackTitle?: string | null): string => {
+  const explicit = asString(fallbackTitle, 200);
+  if (explicit) return explicit;
+  if (domain === "playback") return "Recovered Playback Crash";
+  if (domain === "global_runtime") return "Recovered Global Runtime Error";
+  return "Recovered Bank Store Crash";
+};
+
+const uploadCrashReportTextToR2 = async (input: {
+  reportId: string;
+  bodyText: string;
+  domain: string;
+}): Promise<{ objectKey: string; sizeBytes: number }> => {
+  if (!R2_BUCKET) throw new Error("R2_NOT_CONFIGURED");
+  const safeReportId = asString(input.reportId, 120) || crypto.randomUUID();
+  const objectKey = `crash-reports/${input.domain}/${safeReportId}/${Date.now()}.log`;
+  const upload = await createPresignedPutUrl(
+    R2_BUCKET,
+    objectKey,
+    R2_UPLOAD_URL_TTL_SECONDS,
+    "text/plain;charset=utf-8",
+  );
+  const payload = textEncoder.encode(input.bodyText);
+  const response = await fetch(upload.url, {
+    method: "PUT",
+    headers: upload.headers,
+    body: payload,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`CRASH_REPORT_UPLOAD_FAILED_${response.status}${text ? `:${text}` : ""}`);
+  }
+  return {
+    objectKey,
+    sizeBytes: payload.byteLength,
+  };
+};
+
 const normalizeEmail = (value: unknown): string | null => {
   const email = asString(value, 320)?.toLowerCase() || null;
   if (!email) return null;
@@ -638,16 +783,54 @@ const normalizeReceiptText = (value: string): string =>
     .filter(Boolean)
     .join("\n");
 
+const receiptReferenceKeywordRegex = /\b(ref(?:erence)?|transaction|txn|trx|trace)\b/i;
+const receiptReferenceContinuationLineRegex = /^[A-Z0-9][A-Z0-9\s-]{1,31}$/i;
+const receiptReferenceStopWordRegex = /\b(?:amount|total|paid|payment|date|time|gcash|maya|sent|received|recipient)\b/i;
+
+const extractReferenceFragments = (value: string): string[] =>
+  String(value || "")
+    .toUpperCase()
+    .match(/[A-Z0-9]+/g)
+    ?.filter((fragment) => {
+      if (!fragment) return false;
+      if (/^(REF|REFERENCE|NO|TRANSACTION|TXN|TRX|TRACE)$/i.test(fragment)) return false;
+      return /\d/.test(fragment);
+    }) || [];
+
+const normalizeReferenceCandidate = (value: string): string | null => {
+  const normalized = String(value || "").toUpperCase().replace(/[^A-Z0-9-]/g, "");
+  if (!normalized || !/\d/.test(normalized) || normalized.length < 6) return null;
+  return normalized;
+};
+
 const detectReferenceNo = (rawText: string): string | null => {
   const lines = rawText.split("\n").map((line) => line.trim()).filter(Boolean);
-  const keywordRegex = /\b(ref(?:erence)?|transaction|txn|trx|trace)\b/i;
   const tokenRegex = /([A-Z0-9][A-Z0-9-]{5,31})/g;
 
-  for (const line of lines) {
-    if (!keywordRegex.test(line)) continue;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!receiptReferenceKeywordRegex.test(line)) continue;
     const matches = line.toUpperCase().match(tokenRegex) || [];
     const picked = matches.find((token) => /\d/.test(token) && token.length >= 6);
     if (picked) return picked;
+
+    const fragments = extractReferenceFragments(line);
+    const mergedSameLine = normalizeReferenceCandidate(fragments.join(""));
+    if (mergedSameLine && mergedSameLine.length >= 8) return mergedSameLine;
+
+    const mergedFragments = [...fragments];
+    for (let offset = 1; offset <= 2; offset += 1) {
+      const nextLine = lines[index + offset];
+      if (!nextLine) break;
+      if (receiptReferenceKeywordRegex.test(nextLine)) break;
+      if (!receiptReferenceContinuationLineRegex.test(nextLine)) break;
+      if (receiptReferenceStopWordRegex.test(nextLine)) break;
+      const nextFragments = extractReferenceFragments(nextLine);
+      if (nextFragments.length === 0) break;
+      mergedFragments.push(...nextFragments);
+      const mergedCandidate = normalizeReferenceCandidate(mergedFragments.join(""));
+      if (mergedCandidate && mergedCandidate.length >= 8) return mergedCandidate;
+    }
   }
 
   const allMatches = rawText.toUpperCase().match(tokenRegex) || [];
@@ -1046,6 +1229,7 @@ const normalizeAdminCatalogItem = (item: any) => {
   return {
     ...item,
     is_pinned: Boolean(item?.is_pinned),
+    coming_soon: Boolean(item?.coming_soon),
     status: item?.is_published ? "published" : "draft",
     price_php: resolveCatalogPrice(item),
     bank: {
@@ -1071,9 +1255,11 @@ const normalizeStoreCatalogItem = (
   if (!bank || bank.deleted_at) return null;
 
   const bankId = asString(item?.bank_id, 80) || "";
+  const isComingSoon = Boolean(item?.coming_soon);
   let status = "buy";
   let rejectionMessage: string | null = null;
-  if (!item?.requires_grant) status = "free_download";
+  if (isComingSoon) status = "pending";
+  else if (!item?.requires_grant) status = "free_download";
   else if (input.isAdmin) status = "granted_download";
   else if (input.userId) {
     if (input.userGrants.has(bankId) || input.approvedRequests.has(bankId)) status = "granted_download";
@@ -1089,15 +1275,16 @@ const normalizeStoreCatalogItem = (
     bank_id: bankId,
     is_paid: Boolean(item?.is_paid),
     requires_grant: Boolean(item?.requires_grant),
+    coming_soon: isComingSoon,
     asset_protection: asString(item?.asset_protection, 40)?.toLowerCase() === "public" ? "public" : "encrypted",
     is_pinned: Boolean(item?.is_pinned),
     is_owned: input.isAdmin || input.userGrants.has(bankId) || input.approvedRequests.has(bankId),
     is_free_download: !item?.requires_grant,
-    is_pending: input.pendingRequests.has(bankId),
+    is_pending: isComingSoon || input.pendingRequests.has(bankId),
     is_rejected: input.rejectedRequests.has(bankId),
     is_downloadable: status === "free_download" || status === "granted_download",
     is_purchased: status === "granted_download",
-    price_php: resolveCatalogPrice(item),
+    price_php: isComingSoon ? null : resolveCatalogPrice(item),
     original_price_php: asPriceNumber(item?.original_price_php),
     discount_amount_php: asPriceNumber(item?.discount_amount_php) || 0,
     promotion_id: asString(item?.promotion_id, 80) || null,
@@ -2561,17 +2748,17 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
         paymentChannel,
         detectedRecipientNumber: ocrMetadata.recipientNumber,
         paymentConfig,
-      })) {
-        automationResult = "wallet_number_mismatch";
-      } else {
-        const expectedAmount = roundMoney(asPriceNumber((paymentConfig as any)?.account_price_php) || 0);
-        const detectedAmount = roundMoney(ocrMetadata.amountPhp);
-        if (expectedAmount !== detectedAmount) {
-          automationResult = "amount_mismatch";
+        })) {
+          automationResult = "wallet_number_mismatch";
         } else {
-          automationResult = "approved";
-          autoApproved = true;
-        }
+          const expectedAmount = roundMoney(asPriceNumber((paymentConfig as any)?.account_price_php) || 0);
+          const detectedAmount = roundMoney(ocrMetadata.amountPhp);
+          if (!matchesAutoApprovalAmount(expectedAmount, detectedAmount)) {
+            automationResult = "amount_mismatch";
+          } else {
+            automationResult = "approved";
+            autoApproved = true;
+          }
       }
     }
   }
@@ -3117,6 +3304,11 @@ const listAdminAccountRegistrationRequests = async (req: Request) => {
   const url = new URL(req.url);
   const filter = String(url.searchParams.get("filter") || "pending").toLowerCase();
   const q = asString(url.searchParams.get("q"), 120);
+  const status = String(url.searchParams.get("status") || "all").toLowerCase();
+  const paymentChannel = String(url.searchParams.get("paymentChannel") || "all").toLowerCase();
+  const decisionSource = String(url.searchParams.get("decisionSource") || "all").toLowerCase();
+  const automationResult = String(url.searchParams.get("automationResult") || "all").toLowerCase();
+  const ocrStatus = String(url.searchParams.get("ocrStatus") || "all").toLowerCase();
   const page = Math.max(1, Number(url.searchParams.get("page") || 1));
   const perPage = Math.max(1, Math.min(100, Number(url.searchParams.get("perPage") || 50)));
   const from = (page - 1) * perPage;
@@ -3132,6 +3324,43 @@ const listAdminAccountRegistrationRequests = async (req: Request) => {
 
   if (filter === "pending") query = query.eq("status", "pending");
   else if (filter === "history") query = query.neq("status", "pending");
+
+  if (status === "pending" || status === "approved" || status === "rejected") {
+    query = query.eq("status", status);
+  }
+  if (paymentChannel === "image_proof" || paymentChannel === "gcash_manual" || paymentChannel === "maya_manual") {
+    query = query.eq("payment_channel", paymentChannel);
+  }
+  if (decisionSource === "manual" || decisionSource === "automation") {
+    query = query.eq("decision_source", decisionSource);
+  }
+  if (
+    automationResult === "approved"
+    || automationResult === "manual_review_disabled"
+    || automationResult === "outside_window"
+    || automationResult === "missing_reference"
+    || automationResult === "missing_amount"
+    || automationResult === "missing_recipient_number"
+    || automationResult === "duplicate_reference"
+    || automationResult === "wallet_number_mismatch"
+    || automationResult === "amount_mismatch"
+    || automationResult === "ocr_failed"
+    || automationResult === "approval_error"
+    || automationResult === "not_image_proof"
+  ) {
+    query = query.eq("automation_result", automationResult);
+  }
+  if (
+    ocrStatus === "detected"
+    || ocrStatus === "missing_reference"
+    || ocrStatus === "missing_amount"
+    || ocrStatus === "missing_recipient_number"
+    || ocrStatus === "failed"
+    || ocrStatus === "unavailable"
+    || ocrStatus === "skipped"
+  ) {
+    query = query.eq("ocr_status", ocrStatus);
+  }
 
   if (q) {
     const escaped = q.replace(/[%_]/g, "");
@@ -3428,12 +3657,12 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
   const catalogItemIds = [...new Set(normalizedItems.map((item) => item.catalogItemId))];
   let catalogQuery: any = await admin
     .from("bank_catalog_items")
-    .select("id, bank_id, is_paid, price_label, price_php, is_published, banks ( title )")
+    .select("id, bank_id, is_paid, price_label, price_php, is_published, coming_soon, banks ( title )")
     .in("id", catalogItemIds);
   if (catalogQuery.error && /price_php/i.test(catalogQuery.error.message || "")) {
     catalogQuery = await admin
       .from("bank_catalog_items")
-      .select("id, bank_id, is_paid, price_label, is_published, banks ( title )")
+      .select("id, bank_id, is_paid, price_label, is_published, coming_soon, banks ( title )")
       .in("id", catalogItemIds);
   }
   if (catalogQuery.error) return fail(500, catalogQuery.error.message);
@@ -3453,6 +3682,7 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
     if (!catalogRow) return fail(400, `Catalog item not found: ${item.catalogItemId}`);
     if (catalogRow.bank_id !== item.bankId) return fail(400, `Catalog item ${item.catalogItemId} does not match bank ${item.bankId}`);
     if (!catalogRow.is_published) return fail(400, `Catalog item is not published: ${item.catalogItemId}`);
+    if (catalogRow.coming_soon) return fail(409, "COMING_SOON");
   }
 
   const requestedBankIds = [...new Set(normalizedItems.map((item) => item.bankId))];
@@ -3598,19 +3828,19 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
         paymentChannel: normalizedPaymentChannel,
         detectedRecipientNumber: ocrMetadata.recipientNumber,
         paymentConfig: paymentSettings,
-      })) {
-        automationResult = "wallet_number_mismatch";
-      } else {
-        const expectedAmount = roundMoney(
-          insertedRows.reduce((sum: number, row: any) => sum + (asPriceNumber(row.price_php_snapshot) || 0), 0),
-        );
-        const detectedAmount = roundMoney(ocrMetadata.amountPhp);
-        if (expectedAmount !== detectedAmount) {
-          automationResult = "amount_mismatch";
+        })) {
+          automationResult = "wallet_number_mismatch";
         } else {
-          automationResult = "approved";
-          autoApproved = true;
-        }
+          const expectedAmount = roundMoney(
+            insertedRows.reduce((sum: number, row: any) => sum + (asPriceNumber(row.price_php_snapshot) || 0), 0),
+          );
+          const detectedAmount = roundMoney(ocrMetadata.amountPhp);
+          if (!matchesAutoApprovalAmount(expectedAmount, detectedAmount)) {
+            automationResult = "amount_mismatch";
+          } else {
+            automationResult = "approved";
+            autoApproved = true;
+          }
       }
     }
   }
@@ -3726,6 +3956,7 @@ const resolveStoreDownloadContext = async (
     .maybeSingle();
   if (catalogError || !catalogItem) return { ok: false, response: fail(404, "CATALOG_NOT_FOUND") };
   if (!catalogItem.is_published) return { ok: false, response: fail(403, "NOT_PUBLISHED") };
+  if (catalogItem.coming_soon) return { ok: false, response: fail(403, "COMING_SOON") };
   const catalogSize = Number(catalogItem.file_size_bytes || 0);
   const maxDownloadBytes = transport === "web" ? STORE_MAX_DOWNLOAD_BYTES : STORE_MAX_NATIVE_DOWNLOAD_BYTES;
   if (Number.isFinite(catalogSize) && catalogSize > maxDownloadBytes) {
@@ -3830,25 +4061,19 @@ const getStoreCatalogItemDecryptKey = async (req: Request, catalogItemId: string
   const { admin, catalogItem, userId } = resolved.context;
 
   const protectionMode = asString(catalogItem.asset_protection, 40)?.toLowerCase() || "";
-  if (protectionMode !== "encrypted") {
-    return ok({
-      catalogItemId,
-      bankId: asString(catalogItem.bank_id, 80) || null,
-      protected: false,
-      derivedKey: null,
-    });
+  let derivedKey: string | null = null;
+  if (protectionMode === "encrypted") {
+    const { data: bankRow, error: bankError } = await admin
+      .from("banks")
+      .select("id, derived_key, deleted_at")
+      .eq("id", catalogItem.bank_id)
+      .maybeSingle();
+    if (bankError) return fail(500, bankError.message);
+    if (!bankRow || bankRow.deleted_at) return fail(410, "BANK_ARCHIVED");
+
+    derivedKey = asString(bankRow.derived_key, 255);
+    if (!derivedKey) return fail(503, "DERIVED_KEY_UNAVAILABLE");
   }
-
-  const { data: bankRow, error: bankError } = await admin
-    .from("banks")
-    .select("id, derived_key, deleted_at")
-    .eq("id", catalogItem.bank_id)
-    .maybeSingle();
-  if (bankError) return fail(500, bankError.message);
-  if (!bankRow || bankRow.deleted_at) return fail(410, "BANK_ARCHIVED");
-
-  const derivedKey = asString(bankRow.derived_key, 255);
-  if (!derivedKey) return fail(503, "DERIVED_KEY_UNAVAILABLE");
 
   let entitlementToken: string | null = null;
   let entitlementTokenKeyId: string | null = null;
@@ -3873,7 +4098,7 @@ const getStoreCatalogItemDecryptKey = async (req: Request, catalogItemId: string
   return ok({
     catalogItemId,
     bankId: asString(catalogItem.bank_id, 80) || null,
-    protected: true,
+    protected: protectionMode === "encrypted",
     derivedKey,
     entitlementToken,
     entitlementTokenKeyId,
@@ -4327,8 +4552,325 @@ const sendStoreDecisionEmailsByUser = async (input: {
   };
 };
 
-const listAdminStoreRequests = async () => {
+const submitClientCrashReport = async (req: Request, body: ClientCrashReportBody) => {
+  const authHeader = req.headers.get("Authorization");
+  const user = await getUserFromAuthHeader(authHeader);
+  if (!user) return fail(401, "NOT_AUTHENTICATED");
+
+  const ip = getRequestIp(req);
+  const rateLimit = await consumeRateLimit({
+    scope: "client_crash_report.submit",
+    subject: `${user.id}:${ip}`,
+    maxHits: CLIENT_CRASH_REPORT_RATE_LIMIT,
+    windowSeconds: CLIENT_CRASH_REPORT_RATE_WINDOW_SECONDS,
+  });
+  if (!rateLimit.allowed) {
+    return fail(429, "RATE_LIMITED", {
+      scope: "client_crash_report.submit",
+      retry_after_seconds: rateLimit.retryAfterSeconds,
+    });
+  }
+
+  const domain = normalizeClientCrashReportDomain(body?.domain || "bank_store");
+  if (!domain) return badRequest("Unsupported crash report domain");
+
+  const rawSupportLogText = typeof body?.supportLogText === "string" ? body.supportLogText.trim() : "";
+  if (!rawSupportLogText) return badRequest("supportLogText is required");
+  const supportLogSizeBytes = textEncoder.encode(rawSupportLogText).byteLength;
+  if (supportLogSizeBytes > CLIENT_CRASH_REPORT_MAX_BYTES) {
+    return fail(413, "CRASH_REPORT_TOO_LARGE", { max_bytes: CLIENT_CRASH_REPORT_MAX_BYTES });
+  }
+
+  const title = getClientCrashReportTitle(domain, body?.title);
+  const platform = asString(body?.platform, 80) || null;
+  const appVersion = asString(body?.appVersion, 80) || null;
+  const operation = asString(body?.operation, 80) || null;
+  const phase = asString(body?.phase, 80) || null;
+  const stage = asString(body?.stage, 120) || null;
+  const recentEventPattern = normalizeCrashText(body?.recentEventPattern, 280);
+  const entryCount = Number.isFinite(Number(body?.entryCount)) ? Math.max(0, Math.floor(Number(body?.entryCount))) : null;
+  const detectedAt = asString(body?.detectedAt, 80) || null;
+  const lastUpdatedAt = asString(body?.lastUpdatedAt, 80) || null;
+  const fingerprintSource = [
+    "v1",
+    domain,
+    user.id,
+    platform || "unknown",
+    appVersion || "unknown",
+    operation || "unknown",
+    phase || "unknown",
+    stage || "unknown",
+    recentEventPattern || normalizeCrashText(rawSupportLogText, 280) || "no-pattern",
+  ].join("|");
+  const fingerprint = await sha256Hex(fingerprintSource);
+  const nowIso = new Date().toISOString();
   const admin = createServiceClient();
+
+  const { data: existingRow, error: existingError } = await admin
+    .from("client_crash_reports")
+    .select("id,status,repeat_count,first_seen_at,report_object_key,report_uploaded_at,report_size_bytes")
+    .eq("user_id", user.id)
+    .eq("domain", domain)
+    .eq("fingerprint", fingerprint)
+    .maybeSingle();
+  if (existingError) return fail(500, existingError.message);
+
+  const existingUploadedAtMs = existingRow?.report_uploaded_at ? new Date(existingRow.report_uploaded_at).getTime() : 0;
+  const shouldUploadFreshReport = !existingRow?.report_object_key
+    || !existingUploadedAtMs
+    || (Date.now() - existingUploadedAtMs) > CLIENT_CRASH_REPORT_RATE_WINDOW_SECONDS * 1000;
+  const reportId = existingRow?.id || crypto.randomUUID();
+  let reportObjectKey = asString(existingRow?.report_object_key, 2000) || null;
+  let reportUploadedAt = asString(existingRow?.report_uploaded_at, 120) || null;
+  let reportSizeBytes = Number.isFinite(Number(existingRow?.report_size_bytes))
+    ? Math.max(0, Math.floor(Number(existingRow?.report_size_bytes)))
+    : null;
+
+  if (shouldUploadFreshReport) {
+    const uploaded = await uploadCrashReportTextToR2({
+      reportId,
+      bodyText: rawSupportLogText,
+      domain,
+    });
+    reportObjectKey = uploaded.objectKey;
+    reportUploadedAt = nowIso;
+    reportSizeBytes = uploaded.sizeBytes;
+  }
+
+  const repeatCount = existingRow ? Math.max(1, Number(existingRow.repeat_count || 0) + 1) : 1;
+  const summary = {
+    title,
+    platform,
+    app_version: appVersion,
+    operation,
+    phase,
+    stage,
+    entry_count: entryCount,
+    detected_at: detectedAt,
+    last_updated_at: lastUpdatedAt,
+    recent_event_pattern: recentEventPattern,
+    report_size_bytes: supportLogSizeBytes,
+  };
+
+  const basePayload = {
+    report_title: title,
+    latest_operation: operation,
+    latest_phase: phase,
+    latest_stage: stage,
+    platform,
+    app_version: appVersion,
+    recent_event_pattern: recentEventPattern,
+    report_object_key: reportObjectKey,
+    report_uploaded_at: reportUploadedAt,
+    report_size_bytes: reportSizeBytes,
+    repeat_count: repeatCount,
+    last_seen_at: nowIso,
+    latest_summary: summary,
+    updated_at: nowIso,
+  };
+
+  if (existingRow) {
+    const { error: updateError } = await admin
+      .from("client_crash_reports")
+      .update(basePayload)
+      .eq("id", existingRow.id);
+    if (updateError) return fail(500, updateError.message);
+  } else {
+    const { error: insertError } = await admin
+      .from("client_crash_reports")
+      .insert({
+        id: reportId,
+        user_id: user.id,
+        domain,
+        fingerprint,
+        fingerprint_version: 1,
+        status: "new",
+        first_seen_at: nowIso,
+        created_at: nowIso,
+        ...basePayload,
+      });
+    if (insertError) return fail(500, insertError.message);
+  }
+
+  const shouldNotify = !existingRow || shouldNotifyCrashReportRepeat(repeatCount);
+  if (shouldNotify) {
+    await swallowDiscordError(() => sendDiscordStoreCrashReportEvent({
+      severity: repeatCount > 1 ? "warning" : "critical",
+      reportId,
+      userId: user.id,
+      email: asString((user as any)?.email, 320) || null,
+      domain,
+      platform,
+      appVersion,
+      operation,
+      phase,
+      stage,
+      repeatCount,
+      fingerprint,
+      extraFields: [
+        ...(reportObjectKey ? [{ name: "R2 Object", value: reportObjectKey, inline: false } satisfies DiscordField] : []),
+      ],
+    }));
+  }
+
+  return ok({
+    reportId,
+    fingerprint,
+    repeatCount,
+    uploaded: shouldUploadFreshReport,
+    deduped: Boolean(existingRow),
+    notified: shouldNotify,
+  });
+};
+
+const listAdminClientCrashReports = async (req: Request) => {
+  const admin = createServiceClient();
+  const url = new URL(req.url);
+  const page = Math.max(1, readPositiveInt(url.searchParams.get("page") || "1", 1));
+  const perPage = Math.max(1, Math.min(50, readPositiveInt(url.searchParams.get("perPage") || "10", 10)));
+  const q = asString(url.searchParams.get("q"), 200)?.trim() || "";
+  const status = asString(url.searchParams.get("status"), 40)?.trim().toLowerCase() || "all";
+  const domain = asString(url.searchParams.get("domain"), 40)?.trim().toLowerCase() || "all";
+  const platform = asString(url.searchParams.get("platform"), 80)?.trim() || "all";
+  const appVersion = asString(url.searchParams.get("appVersion"), 80)?.trim() || "all";
+  const from = (page - 1) * perPage;
+  const to = from + perPage - 1;
+
+  let query = admin
+    .from("client_crash_reports")
+    .select(
+      "id,user_id,domain,status,report_title,latest_operation,latest_phase,latest_stage,platform,app_version,recent_event_pattern,report_object_key,report_uploaded_at,report_size_bytes,repeat_count,first_seen_at,last_seen_at,latest_summary,created_at,updated_at",
+      { count: "exact" },
+    )
+    .order("last_seen_at", { ascending: false })
+    .range(from, to);
+
+  if (status === "new" || status === "acknowledged" || status === "fixed" || status === "ignored") {
+    query = query.eq("status", status);
+  }
+  const normalizedDomain = normalizeClientCrashReportDomain(domain);
+  if (normalizedDomain) {
+    query = query.eq("domain", normalizedDomain);
+  }
+  if (platform !== "all") {
+    query = query.eq("platform", platform);
+  }
+  if (appVersion !== "all") {
+    query = query.eq("app_version", appVersion);
+  }
+  if (q) {
+    const escaped = q.replace(/[%_]/g, "\\$&");
+    query = query.or(
+      `report_title.ilike.%${escaped}%,latest_operation.ilike.%${escaped}%,latest_phase.ilike.%${escaped}%,latest_stage.ilike.%${escaped}%,recent_event_pattern.ilike.%${escaped}%`,
+    );
+  }
+
+  const { data, error, count } = await query;
+  if (error) return fail(500, error.message);
+
+  const [{ count: newCount, error: newCountError }, { count: totalCount, error: totalCountError }] = await Promise.all([
+    admin.from("client_crash_reports").select("id", { count: "exact", head: true }).eq("status", "new"),
+    admin.from("client_crash_reports").select("id", { count: "exact", head: true }),
+  ]);
+  if (newCountError) return fail(500, newCountError.message);
+  if (totalCountError) return fail(500, totalCountError.message);
+
+  const userIds = Array.from(new Set((data || []).map((row: any) => asString(row?.user_id, 80)).filter(Boolean))) as string[];
+  let identities: Record<string, { display_name: string; email: string }> = {};
+  if (userIds.length > 0) {
+    try {
+      identities = await buildUserIdentityMap(admin, userIds);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to resolve crash report identities";
+      return fail(500, message);
+    }
+  }
+
+  const reports = await Promise.all((data || []).map(async (row: any) => {
+    const userId = asString(row?.user_id, 80) || "";
+    const identity = identities[userId] || { display_name: "", email: "" };
+    const objectKey = asString(row?.report_object_key, 2000) || null;
+    const downloadUrl = objectKey && R2_BUCKET
+      ? await createPresignedGetUrl({
+          bucket: R2_BUCKET,
+          objectKey,
+          expiresInSeconds: STORE_R2_SIGNED_DOWNLOAD_TTL_SECONDS,
+        }).catch(() => null)
+      : null;
+    return {
+      id: asString(row?.id, 80) || "",
+      user_id: userId,
+      user_profile: {
+        display_name: identity.display_name || "",
+        email: identity.email || "",
+      },
+      domain: normalizeClientCrashReportDomain(row?.domain) || "bank_store",
+      status: asString(row?.status, 40) || "new",
+      report_title: asString(row?.report_title, 200) || "Crash Report",
+      latest_operation: asString(row?.latest_operation, 120) || null,
+      latest_phase: asString(row?.latest_phase, 120) || null,
+      latest_stage: asString(row?.latest_stage, 160) || null,
+      platform: asString(row?.platform, 120) || null,
+      app_version: asString(row?.app_version, 120) || null,
+      recent_event_pattern: asString(row?.recent_event_pattern, 400) || null,
+      report_object_key: objectKey,
+      report_download_url: downloadUrl,
+      report_uploaded_at: asString(row?.report_uploaded_at, 80) || null,
+      report_size_bytes: Number.isFinite(Number(row?.report_size_bytes))
+        ? Math.max(0, Math.floor(Number(row?.report_size_bytes)))
+        : null,
+      repeat_count: Math.max(1, Math.floor(Number(row?.repeat_count || 1))),
+      first_seen_at: asString(row?.first_seen_at, 80) || null,
+      last_seen_at: asString(row?.last_seen_at, 80) || null,
+      latest_summary: row?.latest_summary && typeof row.latest_summary === "object" ? row.latest_summary : {},
+      created_at: asString(row?.created_at, 80) || null,
+      updated_at: asString(row?.updated_at, 80) || null,
+    };
+  }));
+
+  return ok({
+    reports,
+    page,
+    perPage,
+    total: Number(count || 0),
+    totalCount: Number(totalCount || 0),
+    newCount: Number(newCount || 0),
+  });
+};
+
+const patchAdminClientCrashReport = async (reportId: string, body: any) => {
+  const status = asString(body?.status, 40)?.trim().toLowerCase();
+  if (status !== "new" && status !== "acknowledged" && status !== "fixed" && status !== "ignored") {
+    return badRequest("status must be new, acknowledged, fixed, or ignored");
+  }
+  const admin = createServiceClient();
+  const nowIso = new Date().toISOString();
+  const { data, error } = await admin
+    .from("client_crash_reports")
+    .update({ status, updated_at: nowIso })
+    .eq("id", reportId)
+    .select("id,status,updated_at")
+    .maybeSingle();
+  if (error) return fail(500, error.message);
+  if (!data) return fail(404, "Crash report not found");
+  return ok({
+    report: {
+      id: asString(data?.id, 80) || reportId,
+      status: asString(data?.status, 40) || status,
+      updated_at: asString(data?.updated_at, 80) || nowIso,
+    },
+  });
+};
+
+const listAdminStoreRequests = async (req: Request) => {
+  const admin = createServiceClient();
+  const url = new URL(req.url);
+  const filter = String(url.searchParams.get("filter") || "pending").toLowerCase();
+  const status = String(url.searchParams.get("status") || "all").toLowerCase();
+  const paymentChannel = String(url.searchParams.get("paymentChannel") || "all").toLowerCase();
+  const decisionSource = String(url.searchParams.get("decisionSource") || "all").toLowerCase();
+  const automationResult = String(url.searchParams.get("automationResult") || "all").toLowerCase();
+  const ocrStatus = String(url.searchParams.get("ocrStatus") || "all").toLowerCase();
   const selectWithSnapshots = `
     id,catalog_item_id,user_id,bank_id,batch_id,status,payment_channel,payer_name,reference_no,receipt_reference,notes,proof_path,rejection_message,decision_email_status,decision_email_error,
     is_paid_snapshot,price_label_snapshot,price_php_snapshot,created_at,banks ( title ),
@@ -4338,17 +4880,120 @@ const listAdminStoreRequests = async () => {
     id,catalog_item_id,user_id,bank_id,batch_id,status,payment_channel,payer_name,reference_no,receipt_reference,notes,proof_path,rejection_message,
     created_at,banks ( title ),ocr_reference_no,ocr_payer_name,ocr_amount_php,ocr_recipient_number,ocr_provider,ocr_scanned_at,ocr_status,ocr_error_code,decision_source,automation_result
   `;
-  let requestQuery: any = await admin.from("bank_purchase_requests").select(selectWithSnapshots).order("created_at", { ascending: false });
+  let requestQuery: any = admin
+    .from("bank_purchase_requests")
+    .select(selectWithSnapshots)
+    .order("created_at", { ascending: false });
+  if (filter === "pending") requestQuery = requestQuery.eq("status", "pending");
+  else if (filter === "history") requestQuery = requestQuery.neq("status", "pending");
+
+  if (status === "pending" || status === "approved" || status === "rejected") {
+    requestQuery = requestQuery.eq("status", status);
+  }
+  if (paymentChannel === "image_proof" || paymentChannel === "gcash_manual" || paymentChannel === "maya_manual") {
+    requestQuery = requestQuery.eq("payment_channel", paymentChannel);
+  }
+  if (decisionSource === "manual") {
+    requestQuery = requestQuery.or("decision_source.eq.manual,decision_source.is.null");
+  } else if (decisionSource === "automation") {
+    requestQuery = requestQuery.eq("decision_source", "automation");
+  }
+  if (
+    automationResult === "approved"
+    || automationResult === "manual_review_disabled"
+    || automationResult === "outside_window"
+    || automationResult === "missing_reference"
+    || automationResult === "missing_amount"
+    || automationResult === "missing_recipient_number"
+    || automationResult === "duplicate_reference"
+    || automationResult === "wallet_number_mismatch"
+    || automationResult === "amount_mismatch"
+    || automationResult === "ocr_failed"
+    || automationResult === "approval_error"
+    || automationResult === "not_image_proof"
+  ) {
+    requestQuery = requestQuery.eq("automation_result", automationResult);
+  }
+  if (
+    ocrStatus === "detected"
+    || ocrStatus === "missing_reference"
+    || ocrStatus === "missing_amount"
+    || ocrStatus === "missing_recipient_number"
+    || ocrStatus === "failed"
+    || ocrStatus === "unavailable"
+    || ocrStatus === "skipped"
+  ) {
+    requestQuery = requestQuery.eq("ocr_status", ocrStatus);
+  }
+
+  requestQuery = await requestQuery;
   if (
     requestQuery.error &&
     /is_paid_snapshot|price_label_snapshot|price_php_snapshot|decision_email_status|decision_email_error/i.test(
       requestQuery.error.message || "",
     )
   ) {
-    requestQuery = await admin.from("bank_purchase_requests").select(selectWithoutSnapshots).order("created_at", { ascending: false });
+    requestQuery = admin
+      .from("bank_purchase_requests")
+      .select(selectWithoutSnapshots)
+      .order("created_at", { ascending: false });
+    if (filter === "pending") requestQuery = requestQuery.eq("status", "pending");
+    else if (filter === "history") requestQuery = requestQuery.neq("status", "pending");
+    if (status === "pending" || status === "approved" || status === "rejected") {
+      requestQuery = requestQuery.eq("status", status);
+    }
+    if (paymentChannel === "image_proof" || paymentChannel === "gcash_manual" || paymentChannel === "maya_manual") {
+      requestQuery = requestQuery.eq("payment_channel", paymentChannel);
+    }
+    if (decisionSource === "manual") {
+      requestQuery = requestQuery.or("decision_source.eq.manual,decision_source.is.null");
+    } else if (decisionSource === "automation") {
+      requestQuery = requestQuery.eq("decision_source", "automation");
+    }
+    if (
+      automationResult === "approved"
+      || automationResult === "manual_review_disabled"
+      || automationResult === "outside_window"
+      || automationResult === "missing_reference"
+      || automationResult === "missing_amount"
+      || automationResult === "missing_recipient_number"
+      || automationResult === "duplicate_reference"
+      || automationResult === "wallet_number_mismatch"
+      || automationResult === "amount_mismatch"
+      || automationResult === "ocr_failed"
+      || automationResult === "approval_error"
+      || automationResult === "not_image_proof"
+    ) {
+      requestQuery = requestQuery.eq("automation_result", automationResult);
+    }
+    if (
+      ocrStatus === "detected"
+      || ocrStatus === "missing_reference"
+      || ocrStatus === "missing_amount"
+      || ocrStatus === "missing_recipient_number"
+      || ocrStatus === "failed"
+      || ocrStatus === "unavailable"
+      || ocrStatus === "skipped"
+    ) {
+      requestQuery = requestQuery.eq("ocr_status", ocrStatus);
+    }
+    requestQuery = await requestQuery;
   }
   if (requestQuery.error) return fail(500, requestQuery.error.message);
   const data: any[] = requestQuery.data || [];
+
+  const [{ count: pendingCount, error: pendingCountError }, { count: historyCount, error: historyCountError }] = await Promise.all([
+    admin
+      .from("bank_purchase_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending"),
+    admin
+      .from("bank_purchase_requests")
+      .select("id", { count: "exact", head: true })
+      .neq("status", "pending"),
+  ]);
+  if (pendingCountError) return fail(500, pendingCountError.message);
+  if (historyCountError) return fail(500, historyCountError.message);
 
   const userIds = [...new Set(data.map((r: any) => r.user_id).filter(Boolean))];
   let userProfiles: Record<string, { display_name: string; email: string }> = {};
@@ -4418,7 +5063,13 @@ const listAdminStoreRequests = async () => {
       user_profile: userProfiles[row.user_id] || null,
     };
   });
-  return ok({ requests });
+  return ok({
+    requests,
+    total: requests.length,
+    pendingCount: Number(pendingCount || 0),
+    historyCount: Number(historyCount || 0),
+    filter,
+  });
 };
 
 const adminStoreRequestAction = async (requestId: string, body: any, adminUserId: string) => {
@@ -4559,7 +5210,7 @@ const patchAdminStoreCatalog = async (catalogItemId: string, body: any, adminUse
   const admin = createServiceClient();
   const { data: existing, error: existingError } = await admin
     .from("bank_catalog_items")
-    .select("id,bank_id,is_paid,requires_grant,asset_protection,thumbnail_path")
+    .select("id,bank_id,is_paid,requires_grant,asset_protection,thumbnail_path,coming_soon")
     .eq("id", catalogItemId)
     .maybeSingle();
   if (existingError) return fail(500, existingError.message);
@@ -4576,6 +5227,16 @@ const patchAdminStoreCatalog = async (catalogItemId: string, body: any, adminUse
   if (Object.prototype.hasOwnProperty.call(body, "is_paid")) {
     if (typeof body.is_paid !== "boolean") return badRequest("is_paid must be boolean");
     updates.is_paid = body.is_paid;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "coming_soon")) {
+    if (typeof body.coming_soon !== "boolean") return badRequest("coming_soon must be boolean");
+    updates.coming_soon = body.coming_soon;
+    if (body.coming_soon) {
+      updates.is_paid = false;
+      updates.price_php = null;
+      updates.price_label = null;
+      updates.requires_grant = true;
+    }
   }
   if (Object.prototype.hasOwnProperty.call(body, "requires_grant")) {
     if (typeof body.requires_grant !== "boolean") return badRequest("requires_grant must be boolean");
@@ -5357,6 +6018,10 @@ Deno.serve(async (req) => {
     if (req.method === "POST" && scoped[0] === "receipt-ocr" && scoped.length === 1) {
       return await createReceiptOcr(req);
     }
+    if (req.method === "POST" && scoped[0] === "crash-report" && scoped.length === 1) {
+      const body = await req.json().catch(() => ({}));
+      return await submitClientCrashReport(req, body);
+    }
     if (req.method === "POST" && scoped[0] === "account-registration" && scoped[1] === "proof-upload-url" && scoped.length === 2) {
       const body = await req.json().catch(() => ({}));
       return await createAccountRegistrationProofUploadUrl(req, body);
@@ -5410,7 +6075,16 @@ Deno.serve(async (req) => {
     if (!adminCheck.ok) return adminCheck.response;
     const adminUserId = adminCheck.userId;
 
-    if (req.method === "GET" && scoped[2] === "requests" && scoped.length === 3) return await listAdminStoreRequests();
+    if (req.method === "GET" && scoped[2] === "crash-reports" && scoped.length === 3) {
+      return await listAdminClientCrashReports(req);
+    }
+    if (req.method === "PATCH" && scoped[2] === "crash-reports" && scoped.length === 4) {
+      const reportId = asUuid(scoped[3]);
+      if (!reportId) return badRequest("Invalid crash report id");
+      const body = await req.json().catch(() => ({}));
+      return await patchAdminClientCrashReport(reportId, body);
+    }
+    if (req.method === "GET" && scoped[2] === "requests" && scoped.length === 3) return await listAdminStoreRequests(req);
     if (req.method === "POST" && scoped[2] === "requests" && scoped[4] === "retry-email" && scoped.length === 5) {
       const requestId = asUuid(scoped[3]);
       if (!requestId) return badRequest("Invalid request id");

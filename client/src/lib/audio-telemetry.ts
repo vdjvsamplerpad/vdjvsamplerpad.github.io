@@ -50,6 +50,25 @@ export interface AudioTelemetryUiState {
   recentLines: string[];
 }
 
+const cloneSession = (session: AudioTelemetrySession | null): AudioTelemetrySession | null => {
+  if (!session) return null;
+  return {
+    sessionId: session.sessionId,
+    startedAt: session.startedAt,
+    updatedAt: session.updatedAt,
+    cleanExit: session.cleanExit,
+    platform: session.platform,
+    appVersion: session.appVersion,
+    events: session.events.map((entry) => ({
+      at: entry.at,
+      type: entry.type,
+      level: entry.level,
+      data: entry.data ? { ...entry.data } : undefined,
+    })),
+    counters: { ...session.counters },
+  };
+};
+
 const STORAGE_CURRENT_KEY = 'vdjv_audio_diag_current_session_v1';
 const STORAGE_RECOVERED_KEY = 'vdjv_audio_diag_recovered_session_v1';
 const MAX_EVENTS = 400;
@@ -264,6 +283,14 @@ export class AudioTelemetryStore {
       this.recoveredCrashSession,
       `audio-diag-recovered-${this.recoveredCrashSession.sessionId}.json`
     );
+  }
+
+  getRecoveredSessionSnapshot(): AudioTelemetrySession | null {
+    return cloneSession(this.recoveredCrashSession);
+  }
+
+  getCurrentSessionSnapshot(): AudioTelemetrySession {
+    return cloneSession(this.session)!;
   }
 
   clearRecoveredSession(): void {

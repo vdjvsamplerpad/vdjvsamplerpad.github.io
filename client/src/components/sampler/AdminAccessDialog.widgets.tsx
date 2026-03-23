@@ -548,6 +548,7 @@ export function CatalogCard({
 }) {
   const [isPaid, setIsPaid] = React.useState(draft.is_paid);
   const [isPinned, setIsPinned] = React.useState(Boolean(draft.is_pinned));
+  const [isComingSoon, setIsComingSoon] = React.useState(Boolean(draft.coming_soon));
   const [pricePhp, setPricePhp] = React.useState(draft.price_php === null ? '' : draft.price_php.toString());
   const [thumbFile, setThumbFile] = React.useState<File | null>(null);
   const [thumbUploading, setThumbUploading] = React.useState(false);
@@ -556,6 +557,7 @@ export function CatalogCard({
   React.useEffect(() => {
     setIsPaid(draft.is_paid);
     setIsPinned(Boolean(draft.is_pinned));
+    setIsComingSoon(Boolean(draft.coming_soon));
     setPricePhp(draft.price_php === null ? '' : draft.price_php.toString());
   }, [draft]);
 
@@ -574,14 +576,16 @@ export function CatalogCard({
   const hasChanges =
     isPaid !== draft.is_paid
     || isPinned !== Boolean(draft.is_pinned)
+    || isComingSoon !== Boolean(draft.coming_soon)
     || (pricePhp === '' ? null : Number(pricePhp)) !== draft.price_php;
 
   const handleSave = () => {
     onUpdate(draft.id, {
-      is_paid: isPaid,
+      is_paid: isComingSoon ? false : isPaid,
       is_pinned: isPinned,
-      price_php: isPaid ? (pricePhp === '' ? null : Number(pricePhp)) : null,
-      requires_grant: isPaid,
+      coming_soon: isComingSoon,
+      price_php: !isComingSoon && isPaid ? (pricePhp === '' ? null : Number(pricePhp)) : null,
+      requires_grant: isComingSoon ? true : isPaid,
     });
   };
 
@@ -624,13 +628,26 @@ export function CatalogCard({
 
   const isPublished = draft.status === 'published';
   const currentThumb = thumbPreviewUrl || draft.thumbnail_path;
-  const savedPriceLabel = draft.is_paid
+  const savedPriceLabel = draft.coming_soon
+    ? 'Coming Soon'
+    : draft.is_paid
     ? (draft.price_php !== null ? `PHP ${draft.price_php.toLocaleString()}` : 'Price not set')
     : 'Free';
+  const topBarClass = draft.coming_soon
+    ? 'bg-violet-500/70'
+    : isPublished
+      ? 'bg-emerald-500/70'
+      : 'bg-amber-500/70';
+  const statusBadgeClass = draft.coming_soon
+    ? 'bg-violet-500/20 text-violet-600 dark:text-violet-300'
+    : isPublished
+      ? 'bg-green-500/20 text-green-600 dark:text-green-400'
+      : 'bg-amber-500/20 text-amber-600 dark:text-amber-400';
+  const statusLabel = draft.coming_soon ? 'Coming Soon' : (isPublished ? 'Live' : 'Draft');
 
   return (
     <div className={`rounded-xl border overflow-hidden transition-all ${isDark ? 'bg-gray-800/60 border-gray-700 hover:border-gray-600' : 'bg-white border-gray-200 shadow-sm hover:shadow-md'}`}>
-      <div className={`h-1 w-full ${isPublished ? 'bg-emerald-500/70' : 'bg-amber-500/70'}`} />
+      <div className={`h-1 w-full ${topBarClass}`} />
       <div className="flex gap-3 p-3.5">
         <label className="shrink-0 cursor-pointer group relative">
           {currentThumb ? <img src={currentThumb} alt="" className="w-16 h-16 rounded-lg object-cover border" /> : <div className={`w-16 h-16 rounded-lg border-2 border-dashed flex items-center justify-center ${isDark ? 'border-gray-600 text-gray-600' : 'border-gray-300 text-gray-400'}`}><ImageIcon className="w-5 h-5" /></div>}
@@ -641,17 +658,23 @@ export function CatalogCard({
           <div className="flex items-center gap-2">
             <h4 className={`font-semibold text-sm truncate ${isDark ? 'text-white' : 'text-gray-900'}`} title={draft.bank?.title}>{draft.bank?.title || 'Unknown Bank'}</h4>
             {draft.is_pinned && <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase rounded bg-amber-500/20 text-amber-700 dark:text-amber-300">Pinned</span>}
-            <span className={`shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase rounded ${isPublished ? 'bg-green-500/20 text-green-600 dark:text-green-400' : 'bg-amber-500/20 text-amber-600 dark:text-amber-400'}`}>{isPublished ? 'Live' : 'Draft'}</span>
+            <span className={`shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase rounded ${statusBadgeClass}`}>{statusLabel}</span>
           </div>
           <div className={`text-[11px] mt-0.5 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{savedPriceLabel}</div>
           <div className={`text-[10px] mt-1 font-mono truncate ${isDark ? 'text-gray-500' : 'text-gray-500'}`} title={draft.expected_asset_name}>{draft.expected_asset_name}</div>
           <div className="flex flex-wrap items-center gap-2 mt-2">
-            <label className="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" checked={isPaid} onChange={(event) => setIsPaid(event.target.checked)} className="w-3.5 h-3.5 rounded accent-indigo-600" /><span className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Paid</span></label>
+            <label className="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" checked={isComingSoon} onChange={(event) => { const checked = event.target.checked; setIsComingSoon(checked); if (checked) { setIsPaid(false); setPricePhp(''); } }} className="w-3.5 h-3.5 rounded accent-indigo-600" /><span className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Coming Soon</span></label>
+            <label className="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" checked={isPaid} onChange={(event) => setIsPaid(event.target.checked)} className="w-3.5 h-3.5 rounded accent-indigo-600" disabled={isComingSoon} /><span className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'} ${isComingSoon ? 'opacity-50' : ''}`}>Paid</span></label>
             <label className="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" checked={isPinned} onChange={(event) => setIsPinned(event.target.checked)} className="w-3.5 h-3.5 rounded accent-indigo-600" /><span className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Pinned</span></label>
-            {isPaid && <div className="flex items-center gap-1"><span className={`text-[10px] ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>PHP</span><input type="number" value={pricePhp} onChange={(event) => setPricePhp(event.target.value)} className={`w-20 rounded border px-1.5 py-0.5 text-xs outline-none focus:ring-1 focus:ring-indigo-500/50 ${isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300'}`} placeholder="0.00" /></div>}
+            {isPaid && !isComingSoon && <div className="flex items-center gap-1"><span className={`text-[10px] ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>PHP</span><input type="number" value={pricePhp} onChange={(event) => setPricePhp(event.target.value)} className={`w-20 rounded border px-1.5 py-0.5 text-xs outline-none focus:ring-1 focus:ring-indigo-500/50 ${isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300'}`} placeholder="0.00" /></div>}
           </div>
+          {draft.coming_soon ? (
+            <div className={`mt-2 text-[11px] ${isDark ? 'text-violet-300/90' : 'text-violet-700'}`}>
+              Teaser listing only. Users can see it in Store, but buy/download stays blocked until you upload and publish a live bank asset.
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-1.5 mt-2">
-            {!isPublished && <Button size="sm" onClick={() => onPublish(draft)} className="h-6 px-2 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px]"><Globe className="w-3 h-3 mr-1" /> Publish</Button>}
+            {!isPublished && <Button size="sm" onClick={() => onPublish(draft)} className="h-6 px-2 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px]"><Globe className="w-3 h-3 mr-1" />{draft.coming_soon ? 'Publish Teaser' : 'Publish'}</Button>}
             {isPublished && <Button size="sm" variant="outline" onClick={handleUnpublish} className={`h-6 px-2 text-[11px] ${isDark ? 'border-gray-600 hover:bg-gray-700' : ''}`}><EyeOff className="w-3 h-3 mr-1" /> Unpublish</Button>}
             {hasChanges && <Button size="sm" onClick={handleSave} className="h-6 px-2 bg-blue-600 hover:bg-blue-500 text-white text-[11px]"><Save className="w-3 h-3 mr-1" /> Save</Button>}
           </div>

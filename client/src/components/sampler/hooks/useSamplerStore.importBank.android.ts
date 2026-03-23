@@ -7,6 +7,7 @@ import {
 } from '@/lib/bank-utils';
 import { verifySignedAdminExportToken } from '@/lib/admin-export-token';
 import { verifySignedEntitlementToken } from '@/lib/entitlement-token';
+import { fetchStoreDownloadAccessMaterial } from '@/lib/store-download-access';
 import { checkAdmission } from '@/lib/audio-engine/AudioAdmission';
 import { applyBankContentPolicy } from './useSamplerStore.provenance';
 import {
@@ -422,7 +423,26 @@ export const runNativeAndroidImportPipeline = async (
       metadataBankId &&
       (metadata?.catalogItemId || options?.preferredDerivedKey)
     );
-    if (requiresSignedEntitlement && !signedEntitlementToken) {
+    if (requiresSignedEntitlement && !signedEntitlementToken && metadata?.catalogItemId && effectiveUser?.id) {
+      const accessMaterial = await fetchStoreDownloadAccessMaterial(metadata.catalogItemId).catch(() => null);
+      if (accessMaterial?.entitlementToken) {
+        metadata = {
+          ...(metadata || { password: false, transferable: true }),
+          entitlementToken: accessMaterial.entitlementToken,
+          entitlementTokenKid: accessMaterial.entitlementTokenKid || metadata?.entitlementTokenKid,
+          entitlementTokenIssuedAt: accessMaterial.entitlementTokenIssuedAt || metadata?.entitlementTokenIssuedAt,
+          entitlementTokenExpiresAt: accessMaterial.entitlementTokenExpiresAt || metadata?.entitlementTokenExpiresAt,
+        };
+        reportImportStage('Resolved Store entitlement for shared import.', 24, 'entitlement-token-resolved', {
+          source: 'download-key',
+          hasCatalogItemId: true,
+        });
+      }
+    }
+    const resolvedSignedEntitlementToken = (typeof options?.entitlementToken === 'string' && options.entitlementToken.trim())
+      || (typeof metadata?.entitlementToken === 'string' && metadata.entitlementToken.trim())
+      || '';
+    if (requiresSignedEntitlement && !resolvedSignedEntitlementToken) {
       reportImportStage('Missing entitlement token. Import blocked.', 24, 'entitlement-token-missing', {
         reason: 'missing_token',
         tokenSource: typeof options?.entitlementToken === 'string' && options.entitlementToken.trim()
@@ -433,9 +453,9 @@ export const runNativeAndroidImportPipeline = async (
       });
       throw new Error('This bank requires a signed entitlement token. Please re-download it from Store.');
     }
-    if (signedEntitlementToken && effectiveUser?.id && metadataBankId) {
+    if (resolvedSignedEntitlementToken && effectiveUser?.id && metadataBankId) {
       const entitlementVerification = await verifySignedEntitlementToken({
-        token: signedEntitlementToken,
+        token: resolvedSignedEntitlementToken,
         expectedUserId: effectiveUser.id,
         expectedBankId: metadataBankId,
         expectedCatalogItemId: metadata?.catalogItemId || null,
@@ -444,7 +464,7 @@ export const runNativeAndroidImportPipeline = async (
         hasVerifiedEntitlementToken = true;
         metadata = {
           ...(metadata || { password: false, transferable: true }),
-          entitlementToken: signedEntitlementToken,
+          entitlementToken: resolvedSignedEntitlementToken,
           entitlementTokenKid: entitlementVerification.payload?.kid || metadata?.entitlementTokenKid,
           entitlementTokenVerified: true,
         };

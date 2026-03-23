@@ -218,11 +218,17 @@ export function OnlineBankStoreDialog({
         downloadDebugEntries,
         downloadDebugText,
         downloadSupportLogText,
+        recoveredDownloadCrash,
+        sendingRecoveredReport,
         pushDownloadDebugLog,
         copyDownloadDebugLog,
         copyDownloadSupportLog,
         exportDownloadDebugLog,
         exportDownloadSupportLog,
+        copyRecoveredSupportLog,
+        exportRecoveredSupportLog,
+        sendRecoveredCrashReport,
+        dismissRecoveredDownloadCrash,
         clearDownloadDebugLog,
     } = useOnlineStoreDebugLog({
         open,
@@ -983,6 +989,10 @@ export function OnlineBankStoreDialog({
                                                             <div className="text-sm font-semibold min-w-0 flex-1 mr-2 text-white">
                                                                 {renderCatalogPrice(item)}
                                                             </div>
+                                                        ) : item.coming_soon ? (
+                                                            <span className="inline-flex items-center h-6 px-2 text-[10px] rounded-md font-bold uppercase tracking-wide bg-violet-600/20 text-violet-100 border border-violet-300/30">
+                                                                COMING SOON
+                                                            </span>
                                                         ) : hasImportedCopy ? (
                                                             <span
                                                                 className={`inline-flex items-center h-6 px-2 text-[10px] rounded-md font-bold uppercase tracking-wide border ${
@@ -1109,9 +1119,15 @@ export function OnlineBankStoreDialog({
                                                                     </Button>
                                                                 )
                                                             ) : item.status === 'pending' ? (
-                                                                <span className={`inline-flex items-center h-8 px-3 text-xs rounded-full font-medium border backdrop-blur-sm ${isDark ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 'bg-orange-50 text-orange-600 border-orange-200'}`}>
-                                                                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Under Review
-                                                                </span>
+                                                                item.coming_soon ? (
+                                                                    <span className={`inline-flex items-center h-8 px-3 text-xs rounded-full font-medium border backdrop-blur-sm ${isDark ? 'bg-violet-500/10 text-violet-300 border-violet-500/20' : 'bg-violet-50 text-violet-700 border-violet-200'}`}>
+                                                                        Coming Soon
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className={`inline-flex items-center h-8 px-3 text-xs rounded-full font-medium border backdrop-blur-sm ${isDark ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 'bg-orange-50 text-orange-600 border-orange-200'}`}>
+                                                                        <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Under Review
+                                                                    </span>
+                                                                )
                                                             ) : item.status === 'rejected' ? (
                                                                 <Button
                                                                     size="sm"
@@ -1219,6 +1235,75 @@ export function OnlineBankStoreDialog({
                             </div>
                         </div>
                     )}
+
+                    <Dialog
+                        open={Boolean(recoveredDownloadCrash)}
+                        onOpenChange={(nextOpen) => {
+                            if (!nextOpen) dismissRecoveredDownloadCrash();
+                        }}
+                        useHistory={false}
+                    >
+                        <DialogContent
+                            overlayClassName="z-[149]"
+                            className="z-[150] sm:max-w-lg"
+                            aria-describedby={undefined}
+                        >
+                            <DialogHeader>
+                                <DialogTitle className="flex items-center gap-2">
+                                    <AlertCircle className="h-5 w-5 text-amber-500" />
+                                    Previous download was interrupted
+                                </DialogTitle>
+                                <DialogDescription>
+                                    The previous Bank Store download or import session appears to have ended unexpectedly. You can copy or export the recovered report for support.
+                                </DialogDescription>
+                            </DialogHeader>
+                            {recoveredDownloadCrash && (
+                                <div className="space-y-4 text-sm">
+                                    <div className={`rounded-xl border p-3 ${isDark ? 'border-white/10 bg-white/5 text-gray-200' : 'border-gray-200 bg-gray-50 text-gray-700'}`}>
+                                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                            <div>
+                                                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Operation</div>
+                                                <div className="font-medium">{recoveredDownloadCrash.lastOperation || 'Unknown'}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Last Stage</div>
+                                                <div className="font-medium">{recoveredDownloadCrash.lastStage || recoveredDownloadCrash.lastPhase || 'Unknown'}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Last Activity</div>
+                                                <div className="font-medium">{new Date(recoveredDownloadCrash.lastUpdatedAt).toLocaleString()}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Recovered Entries</div>
+                                                <div className="font-medium">{recoveredDownloadCrash.entryCount}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        <Button type="button" onClick={() => void sendRecoveredCrashReport()} disabled={sendingRecoveredReport}>
+                                            {sendingRecoveredReport ? (
+                                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                            ) : (
+                                                <AlertCircle className="mr-2 h-4 w-4" />
+                                            )}
+                                            Send Report
+                                        </Button>
+                                        <Button type="button" onClick={() => void copyRecoveredSupportLog()}>
+                                            <Copy className="mr-2 h-4 w-4" />
+                                            Copy Report
+                                        </Button>
+                                        <Button type="button" variant="outline" onClick={exportRecoveredSupportLog} disabled={sendingRecoveredReport}>
+                                            <Download className="mr-2 h-4 w-4" />
+                                            Export Report
+                                        </Button>
+                                        <Button type="button" variant="ghost" onClick={dismissRecoveredDownloadCrash} disabled={sendingRecoveredReport}>
+                                            Dismiss
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+                        </DialogContent>
+                    </Dialog>
 
                     <Dialog
                         open={Boolean(refreshAssetsItem)}

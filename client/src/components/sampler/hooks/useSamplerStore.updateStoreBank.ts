@@ -806,6 +806,7 @@ export const runUpdateStoreBankPipeline = async (
             description,
             color: bankSnapshot.defaultColor,
             thumbnail_path: durableThumbnailPath || null,
+            coming_soon: false,
           },
         });
         metadataSynced = true;

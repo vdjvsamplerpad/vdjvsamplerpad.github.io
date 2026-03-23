@@ -577,6 +577,59 @@ export const sendDiscordStoreRequestEvent = async (input: {
   });
 };
 
+export const sendDiscordStoreCrashReportEvent = async (input: {
+  webhook?: string | null;
+  severity?: DiscordSeverity;
+  reportId: string;
+  userId?: string | null;
+  email?: string | null;
+  domain?: "bank_store" | "playback" | "global_runtime" | null;
+  platform?: string | null;
+  appVersion?: string | null;
+  operation?: string | null;
+  phase?: string | null;
+  stage?: string | null;
+  repeatCount?: number | null;
+  fingerprint?: string | null;
+  extraFields?: DiscordField[];
+}) => {
+  const domain = input.domain || "bank_store";
+  const titleBase = domain === "playback"
+    ? "Playback Crash Report"
+    : domain === "global_runtime"
+      ? "Runtime Crash Report"
+      : "Store Crash Report";
+  const description = domain === "playback"
+    ? "A user submitted a recovered playback or audio stress crash report."
+    : domain === "global_runtime"
+      ? "A user submitted a recovered global runtime error report."
+      : "A user submitted a recovered Bank Store crash report.";
+  await sendDiscordNotification({
+    webhook: input.webhook || DISCORD_WEBHOOK_STORE || null,
+    preferExplicitWebhook: true,
+    severity: input.severity || "warning",
+    title: (input.repeatCount || 1) > 1 ? `Repeated ${titleBase}` : titleBase,
+    description,
+    fields: [
+      ...(input.email ? [{ name: "Email", value: input.email, inline: true }] : []),
+      { name: "Domain", value: domain, inline: true },
+      ...(input.platform ? [{ name: "Platform", value: input.platform, inline: true }] : []),
+      ...(input.appVersion ? [{ name: "App Version", value: input.appVersion, inline: true }] : []),
+      ...(input.operation ? [{ name: "Operation", value: input.operation, inline: true }] : []),
+      ...(input.phase ? [{ name: "Phase", value: input.phase, inline: true }] : []),
+      ...(input.stage ? [{ name: "Stage", value: input.stage, inline: true }] : []),
+      ...(input.repeatCount ? [{ name: "Repeat Count", value: String(input.repeatCount), inline: true }] : []),
+      ...(input.fingerprint ? [{ name: "Fingerprint", value: suffixTraceValue(input.fingerprint, 12) || input.fingerprint, inline: true }] : []),
+      { name: "Report ID", value: suffixTraceValue(input.reportId, 12) || input.reportId, inline: true },
+      ...buildDiscordTraceFields({
+        requestId: input.reportId,
+        userId: input.userId,
+      }),
+      ...(input.extraFields || []),
+    ],
+  });
+};
+
 export const sendDiscordOcrFailureEvent = async (input: {
   webhook?: string | null;
   severity?: DiscordSeverity;

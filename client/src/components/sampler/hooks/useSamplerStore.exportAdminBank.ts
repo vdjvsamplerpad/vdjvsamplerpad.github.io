@@ -91,6 +91,7 @@ export interface RunExportAdminBankInput {
   addToDatabase: boolean;
   allowExport: boolean;
   publicCatalogAsset: boolean;
+  comingSoonOnly?: boolean;
   exportMode: ExportAudioMode;
   thumbnailPath?: string;
   onProgress?: (progress: number) => void;
@@ -210,6 +211,7 @@ export const runExportAdminBankPipeline = async (
     addToDatabase,
     allowExport,
     publicCatalogAsset,
+    comingSoonOnly = false,
     exportMode,
     thumbnailPath,
     onProgress,
@@ -274,6 +276,7 @@ export const runExportAdminBankPipeline = async (
       addToDatabase,
       allowExport,
       publicCatalogAsset,
+      comingSoonOnly,
       exportMode,
     }),
   });
@@ -284,6 +287,7 @@ export const runExportAdminBankPipeline = async (
     addToDatabase,
     allowExport,
     publicCatalogAsset,
+    comingSoonOnly,
     transferable: true,
     exportMode,
   });
@@ -304,9 +308,122 @@ export const runExportAdminBankPipeline = async (
     onProgress?.(5);
     await ensureExportPermission();
 
+    if (comingSoonOnly) {
+      if (!addToDatabase) throw new Error('Coming Soon publish requires Add to Database.');
+      addOperationStage(diagnostics, 'coming-soon-start', {
+        bankId: bank.id,
+        bankName: bank.name,
+      });
+      const normalizedTitle = (title || bank.name || 'Bank').trim();
+      let durableThumbnailPath: string | undefined = isHttpUrl(thumbnailPath) ? thumbnailPath : undefined;
+      const { createAdminBankWithDerivedKey } = await import('@/lib/admin-bank-utils');
+      const adminBank = await createAdminBankWithDerivedKey(title, description, user.id, bank.defaultColor);
+      if (!adminBank) throw new Error('Failed to create admin bank metadata entry.');
+      const teaserFileName = `${normalizedTitle.replace(/[^a-z0-9]/gi, '_')}_${adminBank.id}.bank`;
+      onProgress?.(25);
+
+      if (thumbnailPath) {
+        const managedThumbnail = await ensureManagedStoreThumbnail({
+          bankId: adminBank.id,
+          thumbnailPath,
+          inferImageExtFromPath,
+        });
+        durableThumbnailPath = managedThumbnail.url;
+        managedThumbnailCleanup = managedThumbnail.uploaded ? managedThumbnail.cleanup : null;
+        addOperationStage(diagnostics, 'thumbnail-uploaded-for-store', {
+          bankId: adminBank.id,
+          uploaded: managedThumbnail.uploaded,
+          comingSoonOnly: true,
+        });
+      }
+
+      const { supabase } = await import('@/lib/supabase');
+      await supabase
+        .from('user_bank_access')
+        .upsert({ user_id: user.id, bank_id: adminBank.id }, { onConflict: 'user_id,bank_id' as any });
+      onProgress?.(45);
+
+      const storeDraftResponse = await supabase.functions.invoke(`admin-api/store/banks/${adminBank.id}/draft`, {
+        method: 'POST',
+        body: {
+          expected_asset_name: teaserFileName,
+          thumbnail_path: durableThumbnailPath,
+          asset_protection: publicCatalogAsset ? 'public' : 'encrypted',
+          coming_soon: true,
+        },
+      });
+      if (storeDraftResponse.error) {
+        throw new Error(storeDraftResponse.error.message || 'Failed to create Store teaser draft.');
+      }
+      const catalogDraftId = (storeDraftResponse as any)?.data?.item?.id;
+      if (typeof catalogDraftId !== 'string' || !catalogDraftId.trim()) {
+        throw new Error('Store teaser draft did not return a catalog item id.');
+      }
+      addOperationStage(diagnostics, 'store-draft-created', {
+        catalogItemId: catalogDraftId,
+        comingSoonOnly: true,
+      });
+      onProgress?.(70);
+
+      const publishResponse = await supabase.functions.invoke(`admin-api/store/catalog/${catalogDraftId}/publish`, {
+        method: 'POST',
+        body: {
+          asset_name: teaserFileName,
+          coming_soon: true,
+        },
+      });
+      if (publishResponse.error) {
+        throw new Error(publishResponse.error.message || 'Failed to publish Coming Soon teaser.');
+      }
+      addOperationStage(diagnostics, 'store-teaser-published', {
+        catalogItemId: catalogDraftId,
+        bankId: adminBank.id,
+      });
+      preflightCompletedAt = getNowMs();
+      mediaCompletedAt = preflightCompletedAt;
+      archiveCompletedAt = preflightCompletedAt;
+      saveCompletedAt = preflightCompletedAt;
+      const timing = {
+        totalMs: Math.round(saveCompletedAt - exportStartedAt),
+        preflightMs: Math.round(preflightCompletedAt - exportStartedAt),
+        mediaPrepareMs: 0,
+        archiveMs: 0,
+        saveMs: 0,
+        archiveBytes: 0,
+      };
+      diagnostics.metrics.exportTotalMs = timing.totalMs;
+      diagnostics.metrics.exportPreflightMs = timing.preflightMs;
+      diagnostics.metrics.exportMediaPrepareMs = timing.mediaPrepareMs;
+      diagnostics.metrics.exportArchiveMs = timing.archiveMs;
+      diagnostics.metrics.exportSaveMs = timing.saveMs;
+      diagnostics.metrics.archiveBytes = 0;
+      addOperationStage(diagnostics, 'timings', timing);
+      finishOperationDiagnostics(diagnostics, {
+        bankId: adminBank.id,
+        bankName: normalizedTitle,
+        archiveBytes: 0,
+        addToDatabase,
+        allowExport,
+        publicCatalogAsset,
+        comingSoonOnly: true,
+      });
+      onProgress?.(100);
+      return {
+        message: 'Coming Soon teaser published successfully.',
+        linkedStoreBank: {
+          bankId: adminBank.id,
+          catalogItemId: catalogDraftId,
+          title: normalizedTitle,
+          description,
+          thumbnailUrl: durableThumbnailPath,
+          assetProtection: publicCatalogAsset ? 'public' : 'encrypted',
+        },
+      };
+    }
+
     const estimatedBytes = await estimateBankMediaBytes(bank);
     diagnostics.metrics.estimatedBytes = estimatedBytes;
-    addOperationStage(diagnostics, 'preflight', { estimatedBytes });
+    addOperationStage(diagnostics, 'preflight', { estimatedBytes, comingSoonOnly: false });
 
     if (isNativeCapacitorPlatform() && estimatedBytes > maxNativeBankExportBytes) {
       throw new Error(

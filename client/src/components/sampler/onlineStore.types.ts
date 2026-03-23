@@ -4,6 +4,7 @@ export interface StoreItem {
     snapshot_target_bank_id?: string | null;
     is_paid: boolean;
     requires_grant: boolean;
+    coming_soon?: boolean;
     asset_protection?: 'encrypted' | 'public';
     is_pinned?: boolean;
     is_owned?: boolean;

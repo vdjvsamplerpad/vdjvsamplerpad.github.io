@@ -6,13 +6,18 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { CopyableValue, copyTextToClipboard } from '@/components/ui/copyable-value';
-import type { AdminAccountRegistrationRequest, DefaultBankRelease, LandingDownloadConfig, LandingPlatformKey, LandingVersionKey } from '@/lib/admin-api';
+import type { AdminAccountRegistrationRequest, AdminClientCrashReport, DefaultBankRelease, LandingDownloadConfig, LandingPlatformKey, LandingVersionKey } from '@/lib/admin-api';
 import { Check, ChevronDown, ChevronUp, Copy, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
 import type { SamplerAppConfig, SamplerShortcutAction } from './samplerAppConfig';
 import type {
   AdminDialogTheme,
   CatalogDraft,
   DefaultBankSourceOption,
+  RequestAutomationFilter,
+  RequestChannelFilter,
+  RequestDecisionFilter,
+  RequestOcrStatusFilter,
+  RequestStatusFilter,
   StoreConfigDraft,
   StoreMarketingBanner,
   StorePromotion,
@@ -25,6 +30,11 @@ interface AccountRequestsTabProps {
   panelClass: string;
   cardClass: string;
   filter: 'pending' | 'history';
+  statusFilter: RequestStatusFilter;
+  channelFilter: RequestChannelFilter;
+  decisionFilter: RequestDecisionFilter;
+  automationFilter: RequestAutomationFilter;
+  ocrStatusFilter: RequestOcrStatusFilter;
   search: string;
   loading: boolean;
   rows: AdminAccountRegistrationRequest[];
@@ -33,6 +43,11 @@ interface AccountRequestsTabProps {
   pendingCount: number;
   historyCount: number;
   onFilterChange: (filter: 'pending' | 'history') => void;
+  onStatusFilterChange: (value: RequestStatusFilter) => void;
+  onChannelFilterChange: (value: RequestChannelFilter) => void;
+  onDecisionFilterChange: (value: RequestDecisionFilter) => void;
+  onAutomationFilterChange: (value: RequestAutomationFilter) => void;
+  onOcrStatusFilterChange: (value: RequestOcrStatusFilter) => void;
   onSearchChange: (value: string) => void;
   onRefresh: () => void;
   onPageChange: (page: number) => void;
@@ -85,6 +100,11 @@ interface StoreRequestsTabProps {
   panelClass: string;
   cardClass: string;
   filter: 'pending' | 'history';
+  statusFilter: RequestStatusFilter;
+  channelFilter: RequestChannelFilter;
+  decisionFilter: RequestDecisionFilter;
+  automationFilter: RequestAutomationFilter;
+  ocrStatusFilter: RequestOcrStatusFilter;
   search: string;
   loading: boolean;
   rows: StoreRequestGroup[];
@@ -94,6 +114,11 @@ interface StoreRequestsTabProps {
   pendingCount: number;
   historyCount: number;
   onFilterChange: (filter: 'pending' | 'history') => void;
+  onStatusFilterChange: (value: RequestStatusFilter) => void;
+  onChannelFilterChange: (value: RequestChannelFilter) => void;
+  onDecisionFilterChange: (value: RequestDecisionFilter) => void;
+  onAutomationFilterChange: (value: RequestAutomationFilter) => void;
+  onOcrStatusFilterChange: (value: RequestOcrStatusFilter) => void;
   onSearchChange: (value: string) => void;
   onRefresh: () => void;
   onPageChange: (page: number) => void;
@@ -103,10 +128,38 @@ interface StoreRequestsTabProps {
   onRetryEmail: (id: string) => void;
 }
 
+interface CrashReportsTabProps {
+  theme: AdminDialogTheme;
+  panelClass: string;
+  cardClass: string;
+  loading: boolean;
+  rows: AdminClientCrashReport[];
+  page: number;
+  totalPages: number;
+  totalCount: number;
+  newCount: number;
+  search: string;
+  statusFilter: 'all' | 'new' | 'acknowledged' | 'fixed' | 'ignored';
+  domainFilter: 'all' | 'bank_store' | 'playback' | 'global_runtime';
+  platformFilter: string;
+  appVersionFilter: string;
+  platformOptions: string[];
+  appVersionOptions: string[];
+  onSearchChange: (value: string) => void;
+  onStatusFilterChange: (value: 'all' | 'new' | 'acknowledged' | 'fixed' | 'ignored') => void;
+  onDomainFilterChange: (value: 'all' | 'bank_store' | 'playback' | 'global_runtime') => void;
+  onPlatformFilterChange: (value: string) => void;
+  onAppVersionFilterChange: (value: string) => void;
+  onRefresh: () => void;
+  onPageChange: (page: number) => void;
+  onStatusUpdate: (id: string, status: 'new' | 'acknowledged' | 'fixed' | 'ignored') => void;
+}
+
 interface StoreCatalogStats {
   total: number;
   published: number;
   draft: number;
+  comingSoon: number;
   paid: number;
   pinned: number;
 }
@@ -122,7 +175,7 @@ interface StoreCatalogTabProps {
   totalPages: number;
   search: string;
   bankFilter: string;
-  statusFilter: 'all' | 'published' | 'draft';
+  statusFilter: 'all' | 'published' | 'draft' | 'coming_soon';
   paidFilter: 'all' | 'paid' | 'free';
   pinnedFilter: 'all' | 'pinned' | 'unpinned';
   sort: StoreCatalogSort;
@@ -132,7 +185,7 @@ interface StoreCatalogTabProps {
   hasFilters: boolean;
   onSearchChange: (value: string) => void;
   onBankFilterChange: (value: string) => void;
-  onStatusFilterChange: (value: 'all' | 'published' | 'draft') => void;
+  onStatusFilterChange: (value: 'all' | 'published' | 'draft' | 'coming_soon') => void;
   onPaidFilterChange: (value: 'all' | 'paid' | 'free') => void;
   onPinnedFilterChange: (value: 'all' | 'pinned' | 'unpinned') => void;
   onSortChange: (value: StoreCatalogSort) => void;
@@ -333,6 +386,110 @@ const formatHourLabel = (value: string): string => {
   const normalized = Number.isFinite(parsed) ? Math.max(0, Math.min(23, Math.floor(parsed))) : 0;
   return `${String(normalized).padStart(2, '0')}:00`;
 };
+
+const REQUEST_CHANNEL_OPTIONS: Array<{ value: RequestChannelFilter; label: string }> = [
+  { value: 'all', label: 'All Channels' },
+  { value: 'image_proof', label: 'Image Proof' },
+  { value: 'gcash_manual', label: 'GCash Manual' },
+  { value: 'maya_manual', label: 'Maya Manual' },
+];
+
+const REQUEST_DECISION_OPTIONS: Array<{ value: RequestDecisionFilter; label: string }> = [
+  { value: 'all', label: 'All Decisions' },
+  { value: 'manual', label: 'Manual' },
+  { value: 'automation', label: 'Auto Approve' },
+];
+
+const REQUEST_AUTOMATION_OPTIONS: Array<{ value: RequestAutomationFilter; label: string }> = [
+  { value: 'all', label: 'All Auto Checks' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'manual_review_disabled', label: 'Manual Review Disabled' },
+  { value: 'outside_window', label: 'Outside Window' },
+  { value: 'missing_reference', label: 'Missing Reference' },
+  { value: 'missing_amount', label: 'Missing Amount' },
+  { value: 'missing_recipient_number', label: 'Missing Recipient' },
+  { value: 'duplicate_reference', label: 'Duplicate Reference' },
+  { value: 'wallet_number_mismatch', label: 'Wallet Mismatch' },
+  { value: 'amount_mismatch', label: 'Amount Mismatch' },
+  { value: 'ocr_failed', label: 'OCR Failed' },
+  { value: 'approval_error', label: 'Approval Error' },
+  { value: 'not_image_proof', label: 'Not Image Proof' },
+];
+
+const REQUEST_OCR_STATUS_OPTIONS: Array<{ value: RequestOcrStatusFilter; label: string }> = [
+  { value: 'all', label: 'All OCR Status' },
+  { value: 'detected', label: 'Detected' },
+  { value: 'missing_reference', label: 'Missing Reference' },
+  { value: 'missing_amount', label: 'Missing Amount' },
+  { value: 'missing_recipient_number', label: 'Missing Recipient' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'unavailable', label: 'Unavailable' },
+  { value: 'skipped', label: 'Skipped' },
+];
+
+const getRequestStatusOptions = (scope: 'pending' | 'history'): Array<{ value: RequestStatusFilter; label: string }> => (
+  scope === 'pending'
+    ? [
+      { value: 'all', label: 'All Status' },
+      { value: 'pending', label: 'Pending' },
+    ]
+    : [
+      { value: 'all', label: 'All Status' },
+      { value: 'approved', label: 'Approved' },
+      { value: 'rejected', label: 'Rejected' },
+    ]
+);
+
+function RequestFilterBar({
+  theme,
+  scope,
+  statusFilter,
+  channelFilter,
+  decisionFilter,
+  automationFilter,
+  ocrStatusFilter,
+  onStatusFilterChange,
+  onChannelFilterChange,
+  onDecisionFilterChange,
+  onAutomationFilterChange,
+  onOcrStatusFilterChange,
+}: {
+  theme: AdminDialogTheme;
+  scope: 'pending' | 'history';
+  statusFilter: RequestStatusFilter;
+  channelFilter: RequestChannelFilter;
+  decisionFilter: RequestDecisionFilter;
+  automationFilter: RequestAutomationFilter;
+  ocrStatusFilter: RequestOcrStatusFilter;
+  onStatusFilterChange: (value: RequestStatusFilter) => void;
+  onChannelFilterChange: (value: RequestChannelFilter) => void;
+  onDecisionFilterChange: (value: RequestDecisionFilter) => void;
+  onAutomationFilterChange: (value: RequestAutomationFilter) => void;
+  onOcrStatusFilterChange: (value: RequestOcrStatusFilter) => void;
+}) {
+  const selectClass = `h-9 w-full rounded-md border px-3 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`;
+  const statusOptions = getRequestStatusOptions(scope);
+
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
+      <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as RequestStatusFilter)} className={selectClass}>
+        {statusOptions.map((option) => <option key={`status-${option.value}`} value={option.value}>{option.label}</option>)}
+      </select>
+      <select value={channelFilter} onChange={(event) => onChannelFilterChange(event.target.value as RequestChannelFilter)} className={selectClass}>
+        {REQUEST_CHANNEL_OPTIONS.map((option) => <option key={`channel-${option.value}`} value={option.value}>{option.label}</option>)}
+      </select>
+      <select value={decisionFilter} onChange={(event) => onDecisionFilterChange(event.target.value as RequestDecisionFilter)} className={selectClass}>
+        {REQUEST_DECISION_OPTIONS.map((option) => <option key={`decision-${option.value}`} value={option.value}>{option.label}</option>)}
+      </select>
+      <select value={automationFilter} onChange={(event) => onAutomationFilterChange(event.target.value as RequestAutomationFilter)} className={selectClass}>
+        {REQUEST_AUTOMATION_OPTIONS.map((option) => <option key={`automation-${option.value}`} value={option.value}>{option.label}</option>)}
+      </select>
+      <select value={ocrStatusFilter} onChange={(event) => onOcrStatusFilterChange(event.target.value as RequestOcrStatusFilter)} className={selectClass}>
+        {REQUEST_OCR_STATUS_OPTIONS.map((option) => <option key={`ocr-${option.value}`} value={option.value}>{option.label}</option>)}
+      </select>
+    </div>
+  );
+}
 
 const formatCountdownRemaining = (expiresAt: string | null | undefined, nowMs: number): string => {
   if (!expiresAt) return 'No active countdown';
@@ -986,6 +1143,11 @@ export function AccountRequestsTab({
   panelClass,
   cardClass,
   filter,
+  statusFilter,
+  channelFilter,
+  decisionFilter,
+  automationFilter,
+  ocrStatusFilter,
   search,
   loading,
   rows,
@@ -994,6 +1156,11 @@ export function AccountRequestsTab({
   pendingCount,
   historyCount,
   onFilterChange,
+  onStatusFilterChange,
+  onChannelFilterChange,
+  onDecisionFilterChange,
+  onAutomationFilterChange,
+  onOcrStatusFilterChange,
   onSearchChange,
   onRefresh,
   onPageChange,
@@ -1003,7 +1170,7 @@ export function AccountRequestsTab({
   onRetryEmail,
 }: AccountRequestsTabProps) {
   return (
-    <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
+      <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
         <div className="flex flex-wrap gap-2 items-center">
           <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
             Pending ({pendingCount})
@@ -1026,6 +1193,20 @@ export function AccountRequestsTab({
           />
         </div>
       </div>
+      <RequestFilterBar
+        theme={theme}
+        scope={filter}
+        statusFilter={statusFilter}
+        channelFilter={channelFilter}
+        decisionFilter={decisionFilter}
+        automationFilter={automationFilter}
+        ocrStatusFilter={ocrStatusFilter}
+        onStatusFilterChange={onStatusFilterChange}
+        onChannelFilterChange={onChannelFilterChange}
+        onDecisionFilterChange={onDecisionFilterChange}
+        onAutomationFilterChange={onAutomationFilterChange}
+        onOcrStatusFilterChange={onOcrStatusFilterChange}
+      />
 
       {loading ? (
         <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div>
@@ -1190,6 +1371,11 @@ export function StoreRequestsTab({
   panelClass,
   cardClass,
   filter,
+  statusFilter,
+  channelFilter,
+  decisionFilter,
+  automationFilter,
+  ocrStatusFilter,
   search,
   loading,
   rows,
@@ -1199,6 +1385,11 @@ export function StoreRequestsTab({
   pendingCount,
   historyCount,
   onFilterChange,
+  onStatusFilterChange,
+  onChannelFilterChange,
+  onDecisionFilterChange,
+  onAutomationFilterChange,
+  onOcrStatusFilterChange,
   onSearchChange,
   onRefresh,
   onPageChange,
@@ -1231,6 +1422,20 @@ export function StoreRequestsTab({
           />
         </div>
       </div>
+      <RequestFilterBar
+        theme={theme}
+        scope={filter}
+        statusFilter={statusFilter}
+        channelFilter={channelFilter}
+        decisionFilter={decisionFilter}
+        automationFilter={automationFilter}
+        ocrStatusFilter={ocrStatusFilter}
+        onStatusFilterChange={onStatusFilterChange}
+        onChannelFilterChange={onChannelFilterChange}
+        onDecisionFilterChange={onDecisionFilterChange}
+        onAutomationFilterChange={onAutomationFilterChange}
+        onOcrStatusFilterChange={onOcrStatusFilterChange}
+      />
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <>
           <div className="space-y-2">
@@ -1396,6 +1601,202 @@ export function StoreRequestsTab({
   );
 }
 
+const CRASH_REPORT_STATUS_OPTIONS: Array<{ value: 'all' | 'new' | 'acknowledged' | 'fixed' | 'ignored'; label: string }> = [
+  { value: 'all', label: 'All Status' },
+  { value: 'new', label: 'New' },
+  { value: 'acknowledged', label: 'Acknowledged' },
+  { value: 'fixed', label: 'Fixed' },
+  { value: 'ignored', label: 'Ignored' },
+];
+
+const CRASH_REPORT_DOMAIN_OPTIONS: Array<{ value: 'all' | 'bank_store' | 'playback' | 'global_runtime'; label: string }> = [
+  { value: 'all', label: 'All Domains' },
+  { value: 'bank_store', label: 'Bank Store' },
+  { value: 'playback', label: 'Playback' },
+  { value: 'global_runtime', label: 'Global Runtime' },
+];
+
+const formatCrashReportDomainLabel = (value: string): string => {
+  if (value === 'bank_store') return 'Bank Store';
+  if (value === 'playback') return 'Playback';
+  if (value === 'global_runtime') return 'Global Runtime';
+  return formatAutomationLabel(value);
+};
+
+const formatCrashReportStatusLabel = (value: string): string => {
+  if (!value) return '-';
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+};
+
+const formatCrashReportSize = (value: number | null | undefined): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+};
+
+export function CrashReportsTab({
+  theme,
+  panelClass,
+  cardClass,
+  loading,
+  rows,
+  page,
+  totalPages,
+  totalCount,
+  newCount,
+  search,
+  statusFilter,
+  domainFilter,
+  platformFilter,
+  appVersionFilter,
+  platformOptions,
+  appVersionOptions,
+  onSearchChange,
+  onStatusFilterChange,
+  onDomainFilterChange,
+  onPlatformFilterChange,
+  onAppVersionFilterChange,
+  onRefresh,
+  onPageChange,
+  onStatusUpdate,
+}: CrashReportsTabProps) {
+  const selectClass = `h-9 w-full rounded-md border px-3 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`;
+
+  return (
+    <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
+      <div className={`rounded-lg border p-3 space-y-3 ${cardClass}`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="text-sm font-semibold">Client Crash Reports</div>
+          <span className={`px-2 py-0.5 rounded border text-[11px] ${theme === 'dark' ? 'border-amber-700/60 text-amber-300' : 'border-amber-300 text-amber-700'}`}>
+            New {newCount}
+          </span>
+          <span className={`px-2 py-0.5 rounded border text-[11px] ${theme === 'dark' ? 'border-gray-700 text-gray-300' : 'border-gray-300 text-gray-700'}`}>
+            Total {totalCount}
+          </span>
+          <div className="flex-1" />
+          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
+            Refresh
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-5">
+          <div className="lg:col-span-2">
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-50" />
+              <Input
+                value={search}
+                onChange={(event) => onSearchChange(event.target.value)}
+                placeholder="Search title or stage..."
+                className={`h-9 pl-8 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
+              />
+            </div>
+          </div>
+          <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as CrashReportsTabProps['statusFilter'])} className={selectClass}>
+            {CRASH_REPORT_STATUS_OPTIONS.map((option) => <option key={`crash-status-${option.value}`} value={option.value}>{option.label}</option>)}
+          </select>
+          <select value={domainFilter} onChange={(event) => onDomainFilterChange(event.target.value as CrashReportsTabProps['domainFilter'])} className={selectClass}>
+            {CRASH_REPORT_DOMAIN_OPTIONS.map((option) => <option key={`crash-domain-${option.value}`} value={option.value}>{option.label}</option>)}
+          </select>
+          <select value={platformFilter} onChange={(event) => onPlatformFilterChange(event.target.value)} className={selectClass}>
+            <option value="all">All Platforms</option>
+            {platformOptions.map((option) => <option key={`crash-platform-${option}`} value={option}>{option}</option>)}
+          </select>
+        </div>
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-5">
+          <select value={appVersionFilter} onChange={(event) => onAppVersionFilterChange(event.target.value)} className={selectClass}>
+            <option value="all">All Versions</option>
+            {appVersionOptions.map((option) => <option key={`crash-version-${option}`} value={option}>{option}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-8">
+          <Loader2 className="w-6 h-6 animate-spin" />
+        </div>
+      ) : rows.length === 0 ? (
+        <div className={`rounded-lg border p-8 text-center text-sm ${theme === 'dark' ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-500'}`}>
+          No crash reports match the current filters.
+        </div>
+      ) : (
+        <>
+          <div className="space-y-3">
+            {rows.map((row) => (
+              <div key={row.id} className={`rounded-lg border p-3 space-y-3 ${cardClass}`}>
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="font-semibold truncate">{row.report_title}</div>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                        row.status === 'new'
+                          ? 'bg-red-500/15 text-red-500'
+                          : row.status === 'fixed'
+                            ? 'bg-emerald-500/15 text-emerald-500'
+                            : row.status === 'ignored'
+                              ? 'bg-gray-500/15 text-gray-500'
+                              : 'bg-amber-500/15 text-amber-500'
+                      }`}>
+                        {formatCrashReportStatusLabel(row.status)}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${theme === 'dark' ? 'bg-slate-800 text-slate-200' : 'bg-slate-100 text-slate-700'}`}>
+                        {formatCrashReportDomainLabel(row.domain)}
+                      </span>
+                    </div>
+                    <div className={`text-xs break-all ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                      {row.user_profile?.display_name || 'Unknown User'} • {row.user_profile?.email || 'No email'}
+                    </div>
+                    <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                      {row.platform || 'unknown platform'} • {row.app_version || 'unknown version'} • repeats {row.repeat_count}
+                    </div>
+                    <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Last seen {row.last_seen_at ? new Date(row.last_seen_at).toLocaleString() : '-'} • size {formatCrashReportSize(row.report_size_bytes)}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={row.status}
+                      onChange={(event) => onStatusUpdate(row.id, event.target.value as AdminClientCrashReport['status'])}
+                      className={selectClass}
+                    >
+                      {CRASH_REPORT_STATUS_OPTIONS.filter((option) => option.value !== 'all').map((option) => (
+                        <option key={`${row.id}-${option.value}`} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                    {row.report_download_url ? (
+                      <Button size="sm" variant="outline" asChild>
+                        <a href={row.report_download_url} target="_blank" rel="noreferrer">Open Log</a>
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className={`grid grid-cols-1 gap-2 md:grid-cols-3 text-xs ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <div className={`rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
+                    <div className="font-semibold">Operation</div>
+                    <div>{row.latest_operation || '-'}</div>
+                    <div className="opacity-75">{row.latest_phase || '-'}</div>
+                  </div>
+                  <div className={`rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
+                    <div className="font-semibold">Stage</div>
+                    <div className="break-all">{row.latest_stage || '-'}</div>
+                  </div>
+                  <div className={`rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
+                    <div className="font-semibold">Pattern</div>
+                    <div className="break-all">{row.recent_event_pattern || '-'}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <Pagination page={page} totalPages={totalPages} onPageChange={onPageChange} />
+        </>
+      )}
+    </div>
+  );
+}
+
 export function StoreCatalogTab({
   theme,
   panelClass,
@@ -1504,9 +1905,10 @@ export function StoreCatalogTab({
             </div>
             <div>
               <div className="text-[10px] uppercase tracking-wide opacity-70 mb-1">Status</div>
-              <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as 'all' | 'published' | 'draft')} className={`h-9 w-full rounded-md border px-2 text-sm outline-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
+              <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as 'all' | 'published' | 'draft' | 'coming_soon')} className={`h-9 w-full rounded-md border px-2 text-sm outline-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
                 <option value="all">All status</option>
                 <option value="published">Published</option>
+                <option value="coming_soon">Coming Soon</option>
                 <option value="draft">Draft</option>
               </select>
             </div>
@@ -1551,6 +1953,7 @@ export function StoreCatalogTab({
         <div className="flex flex-wrap gap-1.5 text-[11px]">
           <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-gray-700 text-gray-300' : 'border-gray-300 text-gray-700'}`}>Total {stats.total}</span>
           <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-emerald-700/60 text-emerald-300' : 'border-emerald-300 text-emerald-700'}`}>Published {stats.published}</span>
+          <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-violet-700/60 text-violet-300' : 'border-violet-300 text-violet-700'}`}>Coming Soon {stats.comingSoon}</span>
           <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-amber-700/60 text-amber-300' : 'border-amber-300 text-amber-700'}`}>Draft {stats.draft}</span>
           <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-blue-700/60 text-blue-300' : 'border-blue-300 text-blue-700'}`}>Paid {stats.paid}</span>
           <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-fuchsia-700/60 text-fuchsia-300' : 'border-fuchsia-300 text-fuchsia-700'}`}>Pinned {stats.pinned}</span>

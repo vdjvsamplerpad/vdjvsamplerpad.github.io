@@ -60,6 +60,7 @@ interface BankEditDialogProps {
     addToDatabase: boolean,
     allowExport: boolean,
     publicCatalogAsset: boolean,
+    comingSoonOnly: boolean,
     exportMode: ExportAudioMode,
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
@@ -126,6 +127,7 @@ export function BankEditDialog({
   const [adminAddToDatabase, setAdminAddToDatabase] = React.useState(false);
   const [adminAllowExport, setAdminAllowExport] = React.useState(false);
   const [adminPublicCatalogAsset, setAdminPublicCatalogAsset] = React.useState(false);
+  const [adminComingSoonOnly, setAdminComingSoonOnly] = React.useState(false);
   const [adminExportMode, setAdminExportMode] = React.useState<ExportAudioMode>('fast');
   const [showAdminExportProgress, setShowAdminExportProgress] = React.useState(false);
   const [adminExportProgress, setAdminExportProgress] = React.useState(0);
@@ -250,6 +252,7 @@ export function BankEditDialog({
       setAdminAddToDatabase(false);
       setAdminAllowExport(true); // Default to true when Add to Database is disabled
       setAdminPublicCatalogAsset(false);
+      setAdminComingSoonOnly(false);
       setAdminExportMode('fast');
       setShowStoreUpdateDialog(false);
       setShowStoreLinkDialog(false);
@@ -577,6 +580,7 @@ export function BankEditDialog({
         adminAddToDatabase,
         adminAllowExport,
         adminPublicCatalogAsset,
+        adminComingSoonOnly,
         adminExportMode,
         bank.bankMetadata?.thumbnailUrl || undefined,
         (progress) => {
@@ -1137,6 +1141,8 @@ export function BankEditDialog({
         setAdminAllowExport={setAdminAllowExport}
         adminPublicCatalogAsset={adminPublicCatalogAsset}
         setAdminPublicCatalogAsset={setAdminPublicCatalogAsset}
+        adminComingSoonOnly={adminComingSoonOnly}
+        setAdminComingSoonOnly={setAdminComingSoonOnly}
         adminExportMode={adminExportMode}
         setAdminExportMode={setAdminExportMode}
         onExport={handleAdminExport}

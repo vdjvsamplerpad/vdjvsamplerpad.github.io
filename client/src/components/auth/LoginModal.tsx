@@ -706,7 +706,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       return
     }
     if (!normalizedResetCode) {
-      pushNotice?.({ variant: 'error', message: 'Enter the reset code from your email.' })
+      pushNotice?.({ variant: 'error', message: 'Enter the reset code from your email or spam folder.' })
       return
     }
     if (password.length < 8) {
@@ -1040,7 +1040,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
             <div className={`rounded-lg border p-3 text-sm ${isDark ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-100' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`}>
               {resetCodeVerified
                 ? 'Reset code verified. You can now keep trying a different new password without requesting another code.'
-                : 'Enter the reset code from your email, then choose a new password.'}
+                : 'Enter the reset code from your email or spam folder, then choose a new password.'}
             </div>
             {resetCodeBlockedSeconds > 0 && (
               <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">

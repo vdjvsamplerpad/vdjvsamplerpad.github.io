@@ -313,8 +313,17 @@ export function AdminAccessDialogModals({
           <DialogHeader>
             <DialogTitle>Publish to Store</DialogTitle>
           </DialogHeader>
-          <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>This will publish the latest uploaded R2 object for this catalog item.</p>
-          <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>We will verify that <span className="font-mono bg-black/10 px-1 rounded">{storePublish.draft?.expected_asset_name}</span> exists in storage before publish.</p>
+          {storePublish.draft?.coming_soon ? (
+            <>
+              <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>This will publish a Coming Soon teaser for this catalog item.</p>
+              <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>No archive upload is required. Users will only see the title, description, and thumbnail until a live bank asset is uploaded later.</p>
+            </>
+          ) : (
+            <>
+              <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>This will publish the latest uploaded R2 object for this catalog item.</p>
+              <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>We will verify that <span className="font-mono bg-black/10 px-1 rounded">{storePublish.draft?.expected_asset_name}</span> exists in storage before publish.</p>
+            </>
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => storePublish.onOpenChange(false)}>Cancel</Button>
             <Button onClick={storePublish.onConfirm} disabled={storePublish.loading} className="bg-indigo-600 hover:bg-indigo-500 text-white">Confirm Publish</Button>

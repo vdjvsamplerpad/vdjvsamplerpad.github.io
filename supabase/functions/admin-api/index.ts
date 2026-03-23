@@ -1639,6 +1639,7 @@ const createStoreDraft = async (bankId: string, body: any, admin: ReturnType<typ
   if (!expectedAssetName) return badRequest("expected_asset_name is required");
   const thumbnailPath = asString(body?.thumbnail_path, 1000) || null;
   const assetProtection = normalizeCatalogAssetProtection(body?.asset_protection, "encrypted");
+  const comingSoon = Boolean(body?.coming_soon);
 
   const { data: bankData, error: bankError } = await admin
     .from("banks")
@@ -1649,31 +1650,37 @@ const createStoreDraft = async (bankId: string, body: any, admin: ReturnType<typ
   if (bankData.deleted_at) return fail(400, "Cannot create draft for archived bank");
 
   const { data: existingDraft } = await admin.from("bank_catalog_items").select("id").eq("bank_id", bankId).maybeSingle();
+  const draftBaseUpdate: Record<string, unknown> = {
+    expected_asset_name: expectedAssetName,
+    thumbnail_path: thumbnailPath,
+    asset_protection: assetProtection,
+    coming_soon: comingSoon,
+    is_published: false,
+    storage_provider: "r2",
+    storage_bucket: "",
+    storage_key: "",
+    storage_etag: null,
+    storage_uploaded_at: null,
+    file_size_bytes: null,
+    sha256: null,
+  };
+  if (comingSoon) {
+    draftBaseUpdate.is_paid = false;
+    draftBaseUpdate.requires_grant = true;
+    draftBaseUpdate.price_php = null;
+    draftBaseUpdate.price_label = null;
+  }
 
   if (existingDraft?.id) {
-    const { data: updated, error: updateError } = await admin.from("bank_catalog_items").update({
-      expected_asset_name: expectedAssetName,
-      thumbnail_path: thumbnailPath,
-      asset_protection: assetProtection,
-      is_published: false,
-      storage_provider: "r2",
-      storage_bucket: "",
-      storage_key: "",
-      storage_etag: null,
-      storage_uploaded_at: null,
-      file_size_bytes: null,
-      sha256: null,
-    }).eq("id", existingDraft.id).select("*").single();
+    const { data: updated, error: updateError } = await admin.from("bank_catalog_items").update(draftBaseUpdate)
+      .eq("id", existingDraft.id).select("*").single();
     if (updateError) return fail(500, updateError.message);
     return ok({ item: updated });
   }
 
   const { data: newDraft, error: insertError } = await admin.from("bank_catalog_items").insert({
     bank_id: bankId,
-    expected_asset_name: expectedAssetName,
-    thumbnail_path: thumbnailPath,
-    asset_protection: assetProtection,
-    is_published: false
+    ...draftBaseUpdate,
   }).select("*").single();
   if (insertError) return fail(500, insertError.message);
   return ok({ item: newDraft });
@@ -1681,7 +1688,7 @@ const createStoreDraft = async (bankId: string, body: any, admin: ReturnType<typ
 
 const publishCatalogItem = async (
   catalogItemId: string,
-  _body: any,
+  body: any,
   admin: ReturnType<typeof createServiceClient>,
   adminUserId: string,
 ) => {
@@ -1700,14 +1707,15 @@ const publishCatalogItem = async (
 
   const { data: item, error: itemError } = await admin.from("bank_catalog_items").select("*").eq("id", catalogItemId).single();
   if (itemError || !item) return fail(404, "Catalog item not found");
+  const publishAsComingSoon = Boolean(body?.coming_soon) || Boolean(item?.coming_soon);
   const isPaid = Boolean(item?.is_paid);
   const requiresGrant = Boolean(item?.requires_grant);
   const parsedPrice = Number(item?.price_php);
   const hasPositivePrice = Number.isFinite(parsedPrice) && parsedPrice > 0;
-  if (isPaid && !hasPositivePrice) {
+  if (!publishAsComingSoon && isPaid && !hasPositivePrice) {
     return badRequest("Paid catalog items must have price set before publish");
   }
-  if (isPaid && !requiresGrant) {
+  if (!publishAsComingSoon && isPaid && !requiresGrant) {
     return badRequest("Paid catalog items must require grant");
   }
 
@@ -1723,38 +1731,66 @@ const publishCatalogItem = async (
   const storageProvider = asString(item?.storage_provider, 40);
   const storageBucket = asString(item?.storage_bucket, 300);
   const storageKey = asString(item?.storage_key, 2000);
-  if (storageProvider !== "r2" || !storageBucket || !storageKey) {
-    return fail(400, "CATALOG_ASSET_NOT_UPLOADED");
-  }
+  let updated: any = null;
+  let updateError: any = null;
+  if (publishAsComingSoon) {
+    const result = await admin.from("bank_catalog_items").update({
+      is_published: true,
+      coming_soon: true,
+      is_paid: false,
+      requires_grant: true,
+      price_php: null,
+      price_label: null,
+      file_size_bytes: null,
+      sha256: null,
+      storage_provider: "r2",
+      storage_bucket: "",
+      storage_key: "",
+      storage_etag: null,
+      storage_uploaded_at: null,
+    }).eq("id", catalogItemId).select("*").single();
+    updated = result.data;
+    updateError = result.error;
+  } else {
+    if (storageProvider !== "r2" || !storageBucket || !storageKey) {
+      return fail(400, "CATALOG_ASSET_NOT_UPLOADED");
+    }
 
-  let objectInfo: Awaited<ReturnType<typeof headObject>>;
-  try {
-    objectInfo = await headObject(storageBucket, storageKey);
-  } catch (error) {
-    return fail(502, error instanceof Error ? error.message : "R2_VERIFY_FAILED");
-  }
-  if (!objectInfo) return fail(404, "ASSET_NOT_FOUND");
+    let objectInfo: Awaited<ReturnType<typeof headObject>>;
+    try {
+      objectInfo = await headObject(storageBucket, storageKey);
+    } catch (error) {
+      return fail(502, error instanceof Error ? error.message : "R2_VERIFY_FAILED");
+    }
+    if (!objectInfo) return fail(404, "ASSET_NOT_FOUND");
 
-  const { data: updated, error: updateError } = await admin.from("bank_catalog_items").update({
-    is_published: true,
-    file_size_bytes: objectInfo.sizeBytes,
-    storage_provider: "r2",
-    storage_bucket: storageBucket,
-    storage_key: storageKey,
-    storage_etag: objectInfo.etag,
-    storage_uploaded_at: new Date().toISOString(),
-  }).eq("id", catalogItemId).select("*").single();
+    const result = await admin.from("bank_catalog_items").update({
+      is_published: true,
+      coming_soon: false,
+      file_size_bytes: objectInfo.sizeBytes,
+      storage_provider: "r2",
+      storage_bucket: storageBucket,
+      storage_key: storageKey,
+      storage_etag: objectInfo.etag,
+      storage_uploaded_at: new Date().toISOString(),
+    }).eq("id", catalogItemId).select("*").single();
+    updated = result.data;
+    updateError = result.error;
+  }
   if (updateError) return fail(500, updateError.message);
   await swallowDiscordError(() => sendDiscordAdminActionEvent({
     severity: "info",
-    title: "Store Bank Publish Completed",
-    description: "Catalog item was published and is now live for entitled buyers.",
+    title: publishAsComingSoon ? "Store Bank Coming Soon Published" : "Store Bank Publish Completed",
+    description: publishAsComingSoon
+      ? "Catalog item was published as a teaser without an archive asset."
+      : "Catalog item was published and is now live for entitled buyers.",
     actorUserId: adminUserId,
     bankId: asString(item.bank_id, 80) || null,
     catalogItemId,
     extraFields: [
       { name: "Protection", value: String(updated.asset_protection || item.asset_protection || "encrypted"), inline: true },
-      { name: "Storage Key", value: String(updated.storage_key || storageKey), inline: false },
+      { name: "Mode", value: publishAsComingSoon ? "coming_soon" : "live", inline: true },
+      { name: "Storage Key", value: String(updated.storage_key || storageKey || "-"), inline: false },
     ],
   }));
   return ok({ item: updated });

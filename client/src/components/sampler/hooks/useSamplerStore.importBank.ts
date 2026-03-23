@@ -9,6 +9,7 @@ import {
 } from '@/lib/bank-utils';
 import { verifySignedAdminExportToken } from '@/lib/admin-export-token';
 import { verifySignedEntitlementToken } from '@/lib/entitlement-token';
+import { fetchStoreDownloadAccessMaterial } from '@/lib/store-download-access';
 import { checkAdmission, extractMetadataFromBlob } from '@/lib/audio-engine/AudioAdmission';
 import {
   getBankDuplicateSignature,
@@ -588,18 +589,41 @@ export const runImportBankPipeline = async (
         metadataBankId &&
         (metadata?.catalogItemId || options?.preferredDerivedKey)
       );
-      if (requiresSignedEntitlement && !signedEntitlementToken) {
+      if (requiresSignedEntitlement && !signedEntitlementToken && metadata?.catalogItemId && userForAccess?.id) {
+        const accessMaterial = await fetchStoreDownloadAccessMaterial(metadata.catalogItemId).catch(() => null);
+        if (accessMaterial?.entitlementToken) {
+          metadata = {
+            ...(metadata || {
+              password: false,
+              transferable: true,
+            }),
+            entitlementToken: accessMaterial.entitlementToken,
+            entitlementTokenKid: accessMaterial.entitlementTokenKid || metadata?.entitlementTokenKid,
+            entitlementTokenIssuedAt: accessMaterial.entitlementTokenIssuedAt || metadata?.entitlementTokenIssuedAt,
+            entitlementTokenExpiresAt: accessMaterial.entitlementTokenExpiresAt || metadata?.entitlementTokenExpiresAt,
+          };
+          reportImportStage('Resolved Store entitlement for shared import.', 24, 'entitlement-token-resolved', {
+            source: 'download-key',
+            hasCatalogItemId: true,
+          });
+        }
+      }
+      const resolvedEntitlementTokenFromMetadata = typeof metadata?.entitlementToken === 'string'
+        ? metadata.entitlementToken.trim()
+        : '';
+      const resolvedSignedEntitlementToken = entitlementTokenFromOption || resolvedEntitlementTokenFromMetadata;
+      if (requiresSignedEntitlement && !resolvedSignedEntitlementToken) {
         reportImportStage('Missing entitlement token. Import blocked.', 24, 'entitlement-token-missing', {
           reason: 'missing_token',
-          tokenSource: entitlementTokenFromOption ? 'option' : (entitlementTokenFromMetadata ? 'metadata' : 'none'),
+          tokenSource: entitlementTokenFromOption ? 'option' : (resolvedEntitlementTokenFromMetadata ? 'metadata' : 'none'),
           hasCatalogItemId: Boolean(metadata?.catalogItemId),
           hasPreferredDerivedKey: Boolean(options?.preferredDerivedKey),
         });
         throw new Error('This bank requires a signed entitlement token. Please re-download it from Store.');
       }
-      if (signedEntitlementToken && userForAccess?.id && metadataBankId) {
+      if (resolvedSignedEntitlementToken && userForAccess?.id && metadataBankId) {
         const entitlementVerification = await verifySignedEntitlementToken({
-          token: signedEntitlementToken,
+          token: resolvedSignedEntitlementToken,
           expectedUserId: userForAccess.id,
           expectedBankId: metadataBankId,
           expectedCatalogItemId: metadata?.catalogItemId || null,
@@ -611,7 +635,7 @@ export const runImportBankPipeline = async (
               password: false,
               transferable: true,
             }),
-            entitlementToken: signedEntitlementToken,
+            entitlementToken: resolvedSignedEntitlementToken,
             entitlementTokenKid: entitlementVerification.payload?.kid || metadata?.entitlementTokenKid,
             entitlementTokenIssuedAt: metadata?.entitlementTokenIssuedAt,
             entitlementTokenExpiresAt: metadata?.entitlementTokenExpiresAt,
@@ -622,7 +646,7 @@ export const runImportBankPipeline = async (
           entitlementVerificationReason = entitlementVerification.reason;
           reportImportStage('Entitlement token invalid. Import blocked.', 24, 'entitlement-token-invalid', {
             reason: entitlementVerification.reason,
-            tokenSource: entitlementTokenFromOption ? 'option' : (entitlementTokenFromMetadata ? 'metadata' : 'unknown'),
+            tokenSource: entitlementTokenFromOption ? 'option' : (resolvedEntitlementTokenFromMetadata ? 'metadata' : 'unknown'),
             hasCatalogItemId: Boolean(metadata?.catalogItemId),
             expectedCatalogItemId: metadata?.catalogItemId || null,
           });

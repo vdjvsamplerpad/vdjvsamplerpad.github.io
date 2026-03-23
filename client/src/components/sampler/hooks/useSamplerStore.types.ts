@@ -114,6 +114,7 @@ export interface SamplerStore {
     addToDatabase: boolean,
     allowExport: boolean,
     publicCatalogAsset: boolean,
+    comingSoonOnly: boolean,
     exportMode: ExportAudioMode,
     thumbnailPath?: string,
     onProgress?: (progress: number) => void

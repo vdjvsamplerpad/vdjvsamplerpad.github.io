@@ -2621,6 +2621,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     addToDatabase: boolean,
     allowExport: boolean,
     publicCatalogAsset: boolean,
+    comingSoonOnly: boolean,
     exportMode: ExportAudioMode,
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
@@ -2635,6 +2636,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         addToDatabase,
         allowExport,
         publicCatalogAsset,
+        comingSoonOnly,
         exportMode,
         thumbnailPath,
         onProgress,

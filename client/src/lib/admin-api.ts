@@ -211,6 +211,7 @@ export interface AdminStoreCatalogItem {
   id: string;
   bank_id: string;
   status: 'published' | 'draft';
+  coming_soon?: boolean;
   asset_protection?: 'encrypted' | 'public' | null;
   thumbnail_path?: string | null;
   sha256?: string | null;
@@ -221,6 +222,34 @@ export interface AdminStoreCatalogItem {
     description: string;
     color: string;
   };
+}
+
+export interface AdminClientCrashReport {
+  id: string;
+  user_id: string;
+  user_profile: {
+    display_name: string;
+    email: string;
+  };
+  domain: 'bank_store' | 'playback' | 'global_runtime';
+  status: 'new' | 'acknowledged' | 'fixed' | 'ignored';
+  report_title: string;
+  latest_operation?: string | null;
+  latest_phase?: string | null;
+  latest_stage?: string | null;
+  platform?: string | null;
+  app_version?: string | null;
+  recent_event_pattern?: string | null;
+  report_object_key?: string | null;
+  report_download_url?: string | null;
+  report_uploaded_at?: string | null;
+  report_size_bytes?: number | null;
+  repeat_count: number;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  latest_summary?: Record<string, unknown>;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export type LandingVersionKey = 'V1' | 'V2' | 'V3';
@@ -269,7 +298,7 @@ const callAdmin = async <T>(method: 'GET' | 'POST', route: string, body?: unknow
   return ((payload?.data ?? payload) as T);
 };
 
-const callStoreApi = async <T>(method: 'GET' | 'POST', route: string, body?: unknown): Promise<T> => {
+const callStoreApi = async <T>(method: 'GET' | 'POST' | 'PATCH', route: string, body?: unknown): Promise<T> => {
   const headers = await getAuthHeaders(true);
   const resp = await fetch(edgeFunctionUrl('store-api', route), {
     method,
@@ -505,12 +534,22 @@ export const adminApi = {
     q?: string;
     page?: number;
     perPage?: number;
+    status?: 'all' | 'pending' | 'approved' | 'rejected';
+    paymentChannel?: 'all' | 'image_proof' | 'gcash_manual' | 'maya_manual';
+    decisionSource?: 'all' | 'manual' | 'automation';
+    automationResult?: 'all' | 'approved' | 'manual_review_disabled' | 'outside_window' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'duplicate_reference' | 'wallet_number_mismatch' | 'amount_mismatch' | 'ocr_failed' | 'approval_error' | 'not_image_proof';
+    ocrStatus?: 'all' | 'detected' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'failed' | 'unavailable' | 'skipped';
   }) {
     const query = toQueryString({
       filter: input.filter ?? 'pending',
       q: input.q,
       page: input.page ?? 1,
       perPage: input.perPage ?? 10,
+      status: input.status ?? 'all',
+      paymentChannel: input.paymentChannel ?? 'all',
+      decisionSource: input.decisionSource ?? 'all',
+      automationResult: input.automationResult ?? 'all',
+      ocrStatus: input.ocrStatus ?? 'all',
     });
     return callStoreApi<{
       requests: AdminAccountRegistrationRequest[];
@@ -578,5 +617,42 @@ export const adminApi = {
       items: AdminStoreCatalogItem[];
       banners: Array<Record<string, unknown>>;
     }>('GET', 'admin/store/catalog');
+  },
+
+  async listClientCrashReports(input: {
+    q?: string;
+    page?: number;
+    perPage?: number;
+    status?: 'all' | 'new' | 'acknowledged' | 'fixed' | 'ignored';
+    domain?: 'all' | 'bank_store' | 'playback' | 'global_runtime';
+    platform?: string;
+    appVersion?: string;
+  }) {
+    const query = toQueryString({
+      q: input.q,
+      page: input.page ?? 1,
+      perPage: input.perPage ?? 10,
+      status: input.status ?? 'all',
+      domain: input.domain ?? 'all',
+      platform: input.platform ?? 'all',
+      appVersion: input.appVersion ?? 'all',
+    });
+    return callStoreApi<{
+      reports: AdminClientCrashReport[];
+      total: number;
+      totalCount: number;
+      newCount: number;
+      page: number;
+      perPage: number;
+    }>('GET', `admin/store/crash-reports${query}`);
+  },
+
+  async updateClientCrashReportStatus(
+    reportId: string,
+    status: 'new' | 'acknowledged' | 'fixed' | 'ignored',
+  ) {
+    return callStoreApi<{
+      report: { id: string; status: 'new' | 'acknowledged' | 'fixed' | 'ignored'; updated_at: string };
+    }>('PATCH', `admin/store/crash-reports/${reportId}`, { status });
   },
 };

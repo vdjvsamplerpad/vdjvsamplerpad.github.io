@@ -7,6 +7,11 @@ import {
   isValidHttpUrl,
   type CatalogDraft,
   type PurchaseRequest,
+  type RequestAutomationFilter,
+  type RequestChannelFilter,
+  type RequestDecisionFilter,
+  type RequestOcrStatusFilter,
+  type RequestStatusFilter,
   type StoreCatalogSort,
   type StoreConfigDraft,
   type StoreMarketingBanner,
@@ -152,6 +157,11 @@ export function useAdminAccessStoreManager({
   pushNotice,
 }: UseAdminAccessStoreManagerParams) {
   const [storeRequestFilter, setStoreRequestFilter] = React.useState<'pending' | 'history'>('pending');
+  const [storeRequestStatusFilter, setStoreRequestStatusFilter] = React.useState<RequestStatusFilter>('all');
+  const [storeRequestChannelFilter, setStoreRequestChannelFilter] = React.useState<RequestChannelFilter>('all');
+  const [storeRequestDecisionFilter, setStoreRequestDecisionFilter] = React.useState<RequestDecisionFilter>('all');
+  const [storeRequestAutomationFilter, setStoreRequestAutomationFilter] = React.useState<RequestAutomationFilter>('all');
+  const [storeRequestOcrStatusFilter, setStoreRequestOcrStatusFilter] = React.useState<RequestOcrStatusFilter>('all');
   const [storeLoading, setStoreLoading] = React.useState(false);
   const [storeRequests, setStoreRequests] = React.useState<PurchaseRequest[]>([]);
   const [storeDrafts, setStoreDrafts] = React.useState<CatalogDraft[]>([]);
@@ -177,10 +187,12 @@ export function useAdminAccessStoreManager({
   const [expandedStoreRequestId, setExpandedStoreRequestId] = React.useState<string | null>(null);
   const [storeReqPage, setStoreReqPage] = React.useState(1);
   const [storeReqSearch, setStoreReqSearch] = React.useState('');
+  const [storeReqPendingCount, setStoreReqPendingCount] = React.useState(0);
+  const [storeReqHistoryCount, setStoreReqHistoryCount] = React.useState(0);
   const [storeCatalogPage, setStoreCatalogPage] = React.useState(1);
   const [storeCatalogSearch, setStoreCatalogSearch] = React.useState('');
   const [storeCatalogBankFilter, setStoreCatalogBankFilter] = React.useState('all');
-  const [storeCatalogStatusFilter, setStoreCatalogStatusFilter] = React.useState<'all' | 'published' | 'draft'>('all');
+  const [storeCatalogStatusFilter, setStoreCatalogStatusFilter] = React.useState<'all' | 'published' | 'draft' | 'coming_soon'>('all');
   const [storeCatalogPaidFilter, setStoreCatalogPaidFilter] = React.useState<'all' | 'paid' | 'free'>('all');
   const [storeCatalogPinnedFilter, setStoreCatalogPinnedFilter] = React.useState<'all' | 'pinned' | 'unpinned'>('all');
   const [storeCatalogSort, setStoreCatalogSort] = React.useState<StoreCatalogSort>('pinned_first');
@@ -220,17 +232,41 @@ export function useAdminAccessStoreManager({
   const loadStoreRequests = React.useCallback(async () => {
     setStoreLoading(true);
     try {
-      const res = await storeAuthFetch('/api/admin/store/requests');
+      const params = new URLSearchParams();
+      params.set('filter', storeRequestFilter);
+      if (storeRequestStatusFilter !== 'all') params.set('status', storeRequestStatusFilter);
+      if (storeRequestChannelFilter !== 'all') params.set('paymentChannel', storeRequestChannelFilter);
+      if (storeRequestDecisionFilter !== 'all') params.set('decisionSource', storeRequestDecisionFilter);
+      if (storeRequestAutomationFilter !== 'all') params.set('automationResult', storeRequestAutomationFilter);
+      if (storeRequestOcrStatusFilter !== 'all') params.set('ocrStatus', storeRequestOcrStatusFilter);
+      const requestUrl = params.size > 0
+        ? `/api/admin/store/requests?${params.toString()}`
+        : '/api/admin/store/requests';
+      const res = await storeAuthFetch(requestUrl);
       if (res.ok) {
         const data = await res.json();
         setStoreRequests(data.requests || []);
+        setStoreReqPendingCount(Number(data.pendingCount || 0));
+        setStoreReqHistoryCount(Number(data.historyCount || 0));
         setExpandedStoreRequestId(null);
       }
     } catch {
       pushNotice({ variant: 'error', message: 'Could not load requests. Check your connection and try again.' });
+      setStoreRequests([]);
+      setStoreReqPendingCount(0);
+      setStoreReqHistoryCount(0);
     }
     setStoreLoading(false);
-  }, [pushNotice, storeAuthFetch]);
+  }, [
+    pushNotice,
+    storeAuthFetch,
+    storeRequestAutomationFilter,
+    storeRequestChannelFilter,
+    storeRequestDecisionFilter,
+    storeRequestFilter,
+    storeRequestOcrStatusFilter,
+    storeRequestStatusFilter,
+  ]);
 
   const loadStoreCatalog = React.useCallback(async () => {
     setStoreLoading(true);
@@ -1046,11 +1082,10 @@ export function useAdminAccessStoreManager({
   }, [persistStoreAutomationConfig, storeConfig]);
 
   const groupedRequests = React.useMemo(() => {
-    const filtered = storeRequests.filter((request) => storeRequestFilter === 'pending' ? request.status === 'pending' : request.status !== 'pending');
     const batchMap = new Map<string, PurchaseRequest[]>();
     const noBatchList: PurchaseRequest[] = [];
 
-    filtered.forEach((request) => {
+    storeRequests.forEach((request) => {
       if (request.batch_id) {
         const list = batchMap.get(request.batch_id) || [];
         list.push(request);
@@ -1148,22 +1183,24 @@ export function useAdminAccessStoreManager({
         totalAmountPhp: item.isPaid ? (item.pricePhp ?? 0) : 0,
         hasTbdAmount: item.isPaid && item.pricePhp === null,
       });
-    });
+      });
 
-    result.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
-    if (storeReqSearch) {
-      const query = storeReqSearch.toLowerCase();
-      return result.filter((request) =>
-        request.bankNames.some((name) => name.toLowerCase().includes(query))
-        || request.payer_name.toLowerCase().includes(query)
-        || request.reference_no.toLowerCase().includes(query)
-        || (request.ocr_reference_no || '').toLowerCase().includes(query)
-        || (request.ocr_recipient_number || '').toLowerCase().includes(query)
-        || (request.user_profile?.display_name || '').toLowerCase().includes(query)
-        || (request.user_profile?.email || '').toLowerCase().includes(query));
-    }
-    return result;
-  }, [storeReqSearch, storeRequestFilter, storeRequests]);
+      result.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+      return result.filter((request) => {
+        if (!storeReqSearch) return true;
+        const query = storeReqSearch.toLowerCase();
+        return request.bankNames.some((name) => name.toLowerCase().includes(query))
+          || request.payer_name.toLowerCase().includes(query)
+          || request.reference_no.toLowerCase().includes(query)
+          || (request.ocr_reference_no || '').toLowerCase().includes(query)
+          || (request.ocr_recipient_number || '').toLowerCase().includes(query)
+          || (request.user_profile?.display_name || '').toLowerCase().includes(query)
+          || (request.user_profile?.email || '').toLowerCase().includes(query);
+      });
+    }, [
+      storeReqSearch,
+      storeRequests,
+    ]);
 
   const reqTotalPages = Math.max(1, Math.ceil(groupedRequests.length / PAGE_SIZE));
   const pagedRequests = groupedRequests.slice((storeReqPage - 1) * PAGE_SIZE, storeReqPage * PAGE_SIZE);
@@ -1192,7 +1229,9 @@ export function useAdminAccessStoreManager({
           if (!title.includes(query) && !asset.includes(query)) return false;
         }
         if (storeCatalogBankFilter !== 'all' && String(draft.bank?.title || '') !== storeCatalogBankFilter) return false;
-        if (storeCatalogStatusFilter !== 'all' && draft.status !== storeCatalogStatusFilter) return false;
+        if (storeCatalogStatusFilter === 'coming_soon' && !draft.coming_soon) return false;
+        if (storeCatalogStatusFilter === 'published' && (draft.status !== 'published' || draft.coming_soon)) return false;
+        if (storeCatalogStatusFilter === 'draft' && draft.status !== 'draft') return false;
         if (storeCatalogPaidFilter === 'paid' && !draft.is_paid) return false;
         if (storeCatalogPaidFilter === 'free' && draft.is_paid) return false;
         if (storeCatalogPinnedFilter === 'pinned' && !draft.is_pinned) return false;
@@ -1205,7 +1244,9 @@ export function useAdminAccessStoreManager({
         if (storeCatalogSort === 'price_high') return Number(right.price_php || 0) - Number(left.price_php || 0);
         if (storeCatalogSort === 'price_low') return Number(left.price_php || 0) - Number(right.price_php || 0);
         if (storeCatalogSort === 'status') {
-          const byStatus = statusRank(left.status) - statusRank(right.status);
+          const leftStatusRank = left.coming_soon ? 1 : statusRank(left.status);
+          const rightStatusRank = right.coming_soon ? 1 : statusRank(right.status);
+          const byStatus = leftStatusRank - rightStatusRank;
           if (byStatus !== 0) return byStatus;
           return String(left.bank?.title || '').localeCompare(String(right.bank?.title || ''));
         }
@@ -1232,11 +1273,12 @@ export function useAdminAccessStoreManager({
   const pagedDrafts = filteredDrafts.slice((storeCatalogPage - 1) * PAGE_SIZE, storeCatalogPage * PAGE_SIZE);
   const storeCatalogStats = React.useMemo(() => {
     const total = storeDrafts.length;
-    const published = storeDrafts.filter((draft) => draft.status === 'published').length;
+    const published = storeDrafts.filter((draft) => draft.status === 'published' && !draft.coming_soon).length;
+    const comingSoon = storeDrafts.filter((draft) => Boolean(draft.coming_soon)).length;
     const draft = storeDrafts.filter((draftItem) => draftItem.status !== 'published').length;
     const pinned = storeDrafts.filter((draftItem) => draftItem.is_pinned).length;
     const paid = storeDrafts.filter((draftItem) => draftItem.is_paid).length;
-    return { total, published, draft, pinned, paid };
+    return { total, published, draft, comingSoon, pinned, paid };
   }, [storeDrafts]);
 
   const hasStoreCatalogFilters = React.useMemo(
@@ -1383,7 +1425,12 @@ export function useAdminAccessStoreManager({
     setStorePublishDialog,
     setStoreReqPage,
     setStoreReqSearch,
+    setStoreRequestAutomationFilter,
+    setStoreRequestChannelFilter,
+    setStoreRequestDecisionFilter,
     setStoreRequestFilter,
+    setStoreRequestOcrStatusFilter,
+    setStoreRequestStatusFilter,
     setStoreRequestToReject,
     setStoreQrFile,
     showInactiveBanners,
@@ -1407,8 +1454,15 @@ export function useAdminAccessStoreManager({
     storePublishDialog,
     storeQrPreviewUrl,
     storeReqPage,
+    storeReqPendingCount,
+    storeReqHistoryCount,
     storeReqSearch,
+    storeRequestAutomationFilter,
+    storeRequestChannelFilter,
+    storeRequestDecisionFilter,
     storeRequestFilter,
+    storeRequestOcrStatusFilter,
+    storeRequestStatusFilter,
     storeRequestToReject,
     storeRequests,
     setStorePromotionForm,
