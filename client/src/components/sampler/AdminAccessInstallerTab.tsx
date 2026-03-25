@@ -275,6 +275,12 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     };
   }, [packagesByVersion]);
 
+  const isAutoManagedCatalogProduct = React.useCallback((item: InstallerBuyProduct) => (
+    item.skuCode === `${item.version}_PRO_MAX` || packageMap.has(item.skuCode)
+  ), [packageMap]);
+
+  const catalogDraftAutoManaged = catalogDialog.mode === 'edit' && isAutoManagedCatalogProduct(catalogDialog.draft);
+
   const loadPackages = React.useCallback(async () => {
     setPackagesLoading(true);
     try {
@@ -778,11 +784,11 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-base font-semibold">{version} Buy Catalog</div>
-            <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Public SKUs shown on the buy page for {version}.</div>
+            <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Public SKUs shown on the buy page for {version}. Package rows are auto-generated here.</div>
           </div>
           <Button type="button" size="sm" onClick={() => openCreateCatalogDialog(version)}>
             <Plus className="mr-2 h-4 w-4" />
-            Add SKU
+            Add Custom SKU
           </Button>
         </div>
         <Table containerClassName={`rounded-xl border ${cardShell(theme)}`}>
@@ -802,7 +808,10 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
             {items.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-sm opacity-70">No buy products yet.</TableCell></TableRow>}
             {items.map((item) => (
               <TableRow key={`${item.version}:${item.skuCode}`}>
-                <TableCell className="font-medium">{item.skuCode}</TableCell>
+                <TableCell className="font-medium">
+                  <div>{item.skuCode}</div>
+                  <div className="text-xs opacity-60">{isAutoManagedCatalogProduct(item) ? 'Auto from Packages' : 'Custom SKU'}</div>
+                </TableCell>
                 <TableCell><div>{item.displayName}</div><div className="text-xs opacity-60">{item.description || '-'}</div></TableCell>
                 <TableCell>{item.productType}</TableCell>
                 <TableCell>{item.pricePhp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</TableCell>
@@ -812,23 +821,25 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
                 <TableCell>
                   <div className="flex flex-wrap gap-2">
                     <Button type="button" size="sm" variant="outline" onClick={() => openEditCatalogDialog(item)}>Edit</Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={catalogActionKey === `delete:${item.version}:${item.skuCode}`}
-                      onClick={() => setConfirmDialog({
-                        open: true,
-                        title: 'Delete Buy SKU',
-                        description: `Delete SKU ${item.skuCode}?`,
-                        confirmText: 'Delete SKU',
-                        variant: 'destructive',
-                        action: async () => { await handleDeleteCatalogProduct(item); },
-                      })}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete
-                    </Button>
+                    {!isAutoManagedCatalogProduct(item) ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={catalogActionKey === `delete:${item.version}:${item.skuCode}`}
+                        onClick={() => setConfirmDialog({
+                          open: true,
+                          title: 'Delete Buy SKU',
+                          description: `Delete SKU ${item.skuCode}?`,
+                          confirmText: 'Delete SKU',
+                          variant: 'destructive',
+                          action: async () => { await handleDeleteCatalogProduct(item); },
+                        })}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete
+                      </Button>
+                    ) : null}
                   </div>
                 </TableCell>
               </TableRow>
@@ -1102,15 +1113,20 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
           </DialogHeader>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1"><Label className="text-xs">Version</Label><select value={catalogDialog.draft.version} disabled={catalogDialog.mode === 'edit'} className={selectClass(theme)} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, version: event.target.value as InstallerVersionKey, skuCode: `${event.target.value}_STANDARD`, grantedEntitlements: [] } }))}>{VERSIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
-            <div className="space-y-1"><Label className="text-xs">SKU Code</Label><Input className={inputClass(theme)} value={catalogDialog.draft.skuCode} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, skuCode: event.target.value.toUpperCase() } }))} /></div>
-            <div className="space-y-1"><Label className="text-xs">Display Name</Label><Input className={inputClass(theme)} value={catalogDialog.draft.displayName} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, displayName: event.target.value } }))} /></div>
-            <div className="space-y-1"><Label className="text-xs">Product Type</Label><select className={selectClass(theme)} value={catalogDialog.draft.productType} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, productType: event.target.value as InstallerBuyProduct['productType'] } }))}><option value="standard">Standard</option><option value="update">Update</option><option value="promax">PRO MAX</option></select></div>
+            <div className="space-y-1"><Label className="text-xs">SKU Code</Label><Input className={inputClass(theme)} value={catalogDialog.draft.skuCode} disabled={catalogDraftAutoManaged} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, skuCode: event.target.value.toUpperCase() } }))} /></div>
+            <div className="space-y-1"><Label className="text-xs">Display Name</Label><Input className={inputClass(theme)} value={catalogDialog.draft.displayName} disabled={catalogDraftAutoManaged} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, displayName: event.target.value } }))} /></div>
+            <div className="space-y-1"><Label className="text-xs">Product Type</Label><select className={selectClass(theme)} value={catalogDialog.draft.productType} disabled={catalogDraftAutoManaged} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, productType: event.target.value as InstallerBuyProduct['productType'] } }))}><option value="standard">Standard</option><option value="update">Update</option><option value="promax">PRO MAX</option></select></div>
             <div className="space-y-1"><Label className="text-xs">Price (PHP)</Label><Input className={inputClass(theme)} type="number" min="0" step="0.01" value={catalogDialog.draft.pricePhp} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, pricePhp: Number(event.target.value || 0) } }))} /></div>
-            <div className="space-y-1"><Label className="text-xs">Sort Order</Label><Input className={inputClass(theme)} type="number" min="0" value={catalogDialog.draft.sortOrder} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, sortOrder: Number(event.target.value || 0) } }))} /></div>
+            <div className="space-y-1"><Label className="text-xs">Sort Order</Label><Input className={inputClass(theme)} type="number" min="0" value={catalogDialog.draft.sortOrder} disabled={catalogDraftAutoManaged} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, sortOrder: Number(event.target.value || 0) } }))} /></div>
             <div className="space-y-1 md:col-span-2"><Label className="text-xs">Description</Label><Input className={inputClass(theme)} value={catalogDialog.draft.description} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, description: event.target.value } }))} /></div>
             <div className="space-y-1"><Label className="text-xs">Hero Image URL</Label><Input className={inputClass(theme)} value={catalogDialog.draft.heroImageUrl} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, heroImageUrl: event.target.value } }))} /></div>
             <div className="space-y-1"><Label className="text-xs">Download Link Override</Label><Input className={inputClass(theme)} value={catalogDialog.draft.downloadLinkOverride} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, downloadLinkOverride: event.target.value } }))} /></div>
           </div>
+          {catalogDraftAutoManaged ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              This SKU is auto-managed from Packages. Price and buyer-facing fields can be edited here, while code, type, order, and entitlements stay synced from the manifest.
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 text-sm"><Checkbox checked={catalogDialog.draft.allowAutoApprove} onCheckedChange={(checked) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, allowAutoApprove: Boolean(checked) } }))} /><span>Allow auto approval</span></label>
             <label className="flex items-center gap-2 text-sm"><Checkbox checked={catalogDialog.draft.enabled} onCheckedChange={(checked) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, enabled: Boolean(checked) } }))} /><span>Enabled</span></label>
@@ -1120,7 +1136,7 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
             <div className="flex flex-wrap gap-2">
               {(packagesByVersion[catalogDialog.draft.version] || []).map((pkg) => (
                 <label key={pkg.productCode} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${cardShell(theme)}`}>
-                  <Checkbox checked={catalogDialog.draft.grantedEntitlements.includes(pkg.productCode)} onCheckedChange={(checked) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, grantedEntitlements: toggleValue(current.draft.grantedEntitlements, pkg.productCode, Boolean(checked)) } }))} />
+                  <Checkbox disabled={catalogDraftAutoManaged} checked={catalogDialog.draft.grantedEntitlements.includes(pkg.productCode)} onCheckedChange={(checked) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, grantedEntitlements: toggleValue(current.draft.grantedEntitlements, pkg.productCode, Boolean(checked)) } }))} />
                   <span>{pkg.displayName}</span>
                   <span className="opacity-60">{pkg.productCode}</span>
                 </label>

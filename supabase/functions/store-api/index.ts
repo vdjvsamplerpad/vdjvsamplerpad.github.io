@@ -2498,6 +2498,25 @@ const normalizeInstallerBuyProductType = (value: unknown): InstallerBuyProductTy
   return null;
 };
 
+type InstallerManifestPackageKind = "standard" | "update";
+type InstallerManifestPackage = {
+  version: InstallerBuyVersionKey;
+  productCode: string;
+  displayName: string;
+  installOrder: number;
+  packageKind: InstallerManifestPackageKind;
+  includeInProMax: boolean;
+  enabled: boolean;
+};
+
+const normalizeInstallerManifestPackageKind = (value: unknown): InstallerManifestPackageKind | null => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "standard" || normalized === "update") return normalized;
+  return null;
+};
+
+const buildInstallerProMaxSku = (version: InstallerBuyVersionKey): string => `${version}_PRO_MAX`;
+
 const sanitizeInstallerBuyEntitlements = (value: unknown, version: InstallerBuyVersionKey): string[] => {
   const items = Array.isArray(value) ? value : [];
   const prefix = `${version}_`;
@@ -2527,16 +2546,139 @@ const mapInstallerBuyProductRow = (row: any) => {
   };
 };
 
-const listEnabledInstallerBuyProducts = async (admin: ReturnType<typeof createServiceClient>) => {
+const mapInstallerManifestPackage = (row: any, version: InstallerBuyVersionKey): InstallerManifestPackage | null => {
+  const productCode = asString(row?.productCode ?? row?.product_code, 120)?.trim().toUpperCase() || "";
+  const packageKind = normalizeInstallerManifestPackageKind(row?.packageKind ?? row?.package_kind);
+  if (!productCode || !packageKind) return null;
+  return {
+    version,
+    productCode,
+    displayName: asString(row?.displayName ?? row?.display_name, 200) || productCode,
+    installOrder: Math.max(0, Math.floor(Number(row?.installOrder ?? row?.install_order ?? 0))),
+    packageKind,
+    includeInProMax: Boolean(row?.includeInProMax ?? row?.include_in_pro_max),
+    enabled: Boolean(row?.enabled),
+  };
+};
+
+const listInstallerManifestPackages = async (version: InstallerBuyVersionKey): Promise<InstallerManifestPackage[]> => {
+  const payload = await callInstallerAdmin<Record<string, unknown>>("GET", `/admin/packages?version=${encodeURIComponent(version)}`);
+  const rows = Array.isArray((payload as any)?.items) ? (payload as any).items : [];
+  return rows
+    .map((row: any) => mapInstallerManifestPackage(row, version))
+    .filter((row: InstallerManifestPackage | null): row is InstallerManifestPackage => Boolean(row))
+    .sort((left, right) => left.installOrder - right.installOrder || left.productCode.localeCompare(right.productCode));
+};
+
+const isAutoManagedInstallerBuyRow = (row: any, version: InstallerBuyVersionKey): boolean => {
+  const skuCode = asString(row?.sku_code, 120)?.trim().toUpperCase() || "";
+  const productType = normalizeInstallerBuyProductType(row?.product_type);
+  const entitlements = sanitizeInstallerBuyEntitlements(row?.granted_entitlements, version);
+  if (!skuCode || !productType) return false;
+  if (skuCode === buildInstallerProMaxSku(version) && productType === "promax") return true;
+  return productType !== "promax" && entitlements.length === 1 && entitlements[0] === skuCode;
+};
+
+const buildAutoInstallerBuyRows = (version: InstallerBuyVersionKey, packages: InstallerManifestPackage[]) => {
+  const rows = packages.map((pkg) => ({
+    version,
+    sku_code: pkg.productCode,
+    product_type: pkg.packageKind === "standard" ? "standard" as const : "update" as const,
+    display_name: pkg.displayName,
+    sort_order: pkg.installOrder,
+    enabled: pkg.enabled,
+    granted_entitlements: [pkg.productCode],
+  }));
+
+  if (packages.length > 0) {
+    const proMaxEntitlements = packages
+      .filter((pkg) => pkg.includeInProMax)
+      .map((pkg) => pkg.productCode);
+    rows.push({
+      version,
+      sku_code: buildInstallerProMaxSku(version),
+      product_type: "promax" as const,
+      display_name: `${version} PRO MAX`,
+      sort_order: Math.max(...packages.map((pkg) => pkg.installOrder), 0) + 100,
+      enabled: proMaxEntitlements.length > 0,
+      granted_entitlements: proMaxEntitlements,
+    });
+  }
+
+  return rows;
+};
+
+const syncInstallerBuyCatalogForVersion = async (
+  admin: ReturnType<typeof createServiceClient>,
+  version: InstallerBuyVersionKey,
+) => {
+  const packages = await listInstallerManifestPackages(version);
+  const desiredRows = buildAutoInstallerBuyRows(version, packages);
+  const desiredSkuCodes = new Set(desiredRows.map((row) => row.sku_code));
+
+  const { data: existingRows, error: existingError } = await admin
+    .from("installer_buy_products")
+    .select("*")
+    .eq("version", version);
+  if (existingError) throw new Error(existingError.message);
+
+  const existingMap = new Map((existingRows || []).map((row: any) => [String(row?.sku_code || "").toUpperCase(), row]));
+
+  if (desiredRows.length > 0) {
+    const upsertRows = desiredRows.map((row) => {
+      const existing = existingMap.get(row.sku_code);
+      return {
+        version: row.version,
+        sku_code: row.sku_code,
+        product_type: row.product_type,
+        display_name: row.display_name,
+        description: asString(existing?.description, 5000) || "",
+        price_php: asPriceNumber(existing?.price_php) ?? 0,
+        enabled: row.enabled,
+        sort_order: row.sort_order,
+        allow_auto_approve: typeof existing?.allow_auto_approve === "boolean" ? existing.allow_auto_approve : true,
+        hero_image_url: asString(existing?.hero_image_url, 2000) || null,
+        download_link_override: asString(existing?.download_link_override, 2000) || null,
+        granted_entitlements: row.granted_entitlements,
+      };
+    });
+
+    const { error: upsertError } = await admin
+      .from("installer_buy_products")
+      .upsert(upsertRows, { onConflict: "version,sku_code" });
+    if (upsertError) throw new Error(upsertError.message);
+  }
+
+  const staleAutoSkuCodes = (existingRows || [])
+    .filter((row: any) => isAutoManagedInstallerBuyRow(row, version))
+    .map((row: any) => String(row?.sku_code || "").toUpperCase())
+    .filter((skuCode: string) => !desiredSkuCodes.has(skuCode));
+
+  if (staleAutoSkuCodes.length > 0) {
+    const { error: deleteError } = await admin
+      .from("installer_buy_products")
+      .delete()
+      .eq("version", version)
+      .in("sku_code", staleAutoSkuCodes);
+    if (deleteError) throw new Error(deleteError.message);
+  }
+
   const { data, error } = await admin
     .from("installer_buy_products")
     .select("*")
-    .eq("enabled", true)
-    .order("version", { ascending: true })
+    .eq("version", version)
     .order("sort_order", { ascending: true })
     .order("display_name", { ascending: true });
   if (error) throw new Error(error.message);
   return (data || []).map(mapInstallerBuyProductRow);
+};
+
+const listEnabledInstallerBuyProducts = async (admin: ReturnType<typeof createServiceClient>) => {
+  const synced = await Promise.all(INSTALLER_BUY_VERSION_KEYS.map((version) => syncInstallerBuyCatalogForVersion(admin, version)));
+  return synced
+    .flat()
+    .filter((item) => item.enabled)
+    .sort((left, right) => left.version.localeCompare(right.version) || left.sortOrder - right.sortOrder || left.displayName.localeCompare(right.displayName));
 };
 
 const getPublicBuyConfig = async () => {
@@ -3136,18 +3278,14 @@ const listAdminInstallerBuyProducts = async (req: Request) => {
   const admin = createServiceClient();
   const url = new URL(req.url);
   const version = normalizeInstallerBuyVersion(url.searchParams.get("version"));
-
-  let query = admin
-    .from("installer_buy_products")
-    .select("*")
-    .order("version", { ascending: true })
-    .order("sort_order", { ascending: true })
-    .order("display_name", { ascending: true });
-  if (version) query = query.eq("version", version);
-
-  const { data, error } = await query;
-  if (error) return fail(500, error.message);
-  return ok({ items: (data || []).map(mapInstallerBuyProductRow) });
+  try {
+    const items = version
+      ? await syncInstallerBuyCatalogForVersion(admin, version)
+      : (await Promise.all(INSTALLER_BUY_VERSION_KEYS.map((entry) => syncInstallerBuyCatalogForVersion(admin, entry)))).flat();
+    return ok({ items });
+  } catch (error) {
+    return fail(500, error instanceof Error ? error.message : "Failed to load buy catalog");
+  }
 };
 
 const saveAdminInstallerBuyProduct = async (body: any, adminUserId: string) => {
@@ -3213,7 +3351,13 @@ const saveAdminInstallerBuyProduct = async (body: any, adminUserId: string) => {
     .select("*")
     .single();
   if (error) return fail(500, error.message);
-  return ok({ item: mapInstallerBuyProductRow(data) });
+  try {
+    const syncedItems = await syncInstallerBuyCatalogForVersion(admin, version);
+    const syncedItem = syncedItems.find((item) => item.skuCode === skuCode) || mapInstallerBuyProductRow(data);
+    return ok({ item: syncedItem });
+  } catch (syncError) {
+    return fail(500, syncError instanceof Error ? syncError.message : "Failed to sync buy catalog");
+  }
 };
 
 const deleteAdminInstallerBuyProduct = async (body: any) => {
@@ -3229,6 +3373,11 @@ const deleteAdminInstallerBuyProduct = async (body: any) => {
     .eq("version", version)
     .eq("sku_code", skuCode);
   if (error) return fail(500, error.message);
+  try {
+    await syncInstallerBuyCatalogForVersion(admin, version);
+  } catch (syncError) {
+    return fail(500, syncError instanceof Error ? syncError.message : "Failed to sync buy catalog");
+  }
   return ok({ deleted: true, version, skuCode });
 };
 
@@ -7159,11 +7308,27 @@ Deno.serve(async (req) => {
     if (req.method === "POST" && scoped[2] === "installer" && scoped[3] === "packages" && scoped[4] === "save" && scoped.length === 5) {
       const body = await req.json().catch(() => ({}));
       const payload = await callInstallerAdmin<Record<string, unknown>>("POST", "/admin/packages/save", body);
+      const version = normalizeInstallerBuyVersion((payload as any)?.item?.version ?? body?.version);
+      if (version) {
+        try {
+          await syncInstallerBuyCatalogForVersion(createServiceClient(), version);
+        } catch (error) {
+          return fail(500, error instanceof Error ? error.message : "Failed to sync buy catalog");
+        }
+      }
       return ok(payload);
     }
     if (req.method === "POST" && scoped[2] === "installer" && scoped[3] === "packages" && scoped[4] === "delete" && scoped.length === 5) {
       const body = await req.json().catch(() => ({}));
       const payload = await callInstallerAdmin<Record<string, unknown>>("POST", "/admin/packages/delete", body);
+      const version = normalizeInstallerBuyVersion(body?.version);
+      if (version) {
+        try {
+          await syncInstallerBuyCatalogForVersion(createServiceClient(), version);
+        } catch (error) {
+          return fail(500, error instanceof Error ? error.message : "Failed to sync buy catalog");
+        }
+      }
       return ok(payload);
     }
     if (req.method === "GET" && scoped[2] === "installer" && scoped[3] === "licenses" && scoped.length === 4) {
