@@ -2786,6 +2786,27 @@ const getInstallerBuyProductByVersionAndSku = async (
   return data ? mapInstallerBuyProductRow(data) : null;
 };
 
+const getInstallerBuyProductsByVersionAndSkus = async (
+  admin: ReturnType<typeof createServiceClient>,
+  version: InstallerBuyVersionKey,
+  skuCodes: string[],
+) => {
+  if (skuCodes.length === 0) return [];
+  const normalizedCodes = Array.from(new Set(
+    skuCodes.map((entry) => asString(entry, 120)?.trim().toUpperCase() || "").filter(Boolean),
+  ));
+  if (normalizedCodes.length === 0) return [];
+  const { data, error } = await admin
+    .from("installer_buy_products")
+    .select("*")
+    .eq("version", version)
+    .in("sku_code", normalizedCodes);
+  if (error) throw new Error(error.message);
+  const mapped = (data || []).map(mapInstallerBuyProductRow);
+  const orderLookup = new Map(mapped.map((item) => [item.skuCode, item]));
+  return normalizedCodes.map((code) => orderLookup.get(code)).filter(Boolean);
+};
+
 const resolveInstallerDownloadLink = (
   landingConfig: ReturnType<typeof normalizeLandingDownloadConfig>,
   row: {
@@ -2799,6 +2820,70 @@ const resolveInstallerDownloadLink = (
   if (explicit) return explicit;
   const version = normalizeInstallerBuyVersion(row?.version) || "V2";
   return landingConfig.buySections[version]?.defaultInstallerDownloadLink || "";
+};
+
+const loadInstallerPurchaseBatchRows = async (
+  admin: ReturnType<typeof createServiceClient>,
+  row: { receipt_reference?: unknown; email?: unknown; version?: unknown },
+) => {
+  const receiptReference = asString(row?.receipt_reference, 160) || "";
+  const email = normalizeEmail(row?.email);
+  const version = normalizeInstallerBuyVersion(row?.version);
+  if (!receiptReference || !email || !version) return [];
+  const { data, error } = await admin
+    .from("installer_purchase_requests")
+    .select("*")
+    .eq("receipt_reference", receiptReference)
+    .eq("email_normalized", email)
+    .eq("version", version)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(error.message);
+  return data || [];
+};
+
+const dedupeStringList = (values: Array<unknown>): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = String(value || "").trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+};
+
+const buildInstallerPurchaseBatchSummary = (rows: any[]) => {
+  const sortedRows = [...rows].sort((left, right) => {
+    const leftTime = Date.parse(asString(left?.created_at, 80) || "") || 0;
+    const rightTime = Date.parse(asString(right?.created_at, 80) || "") || 0;
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return String(left?.id || "").localeCompare(String(right?.id || ""));
+  });
+  const firstRow = sortedRows[0] || null;
+  const titles = dedupeStringList(sortedRows.map((row) => asString(row?.display_name_snapshot, 200) || ""));
+  const skuCodes = dedupeStringList(sortedRows.map((row) => asString(row?.sku_code, 120) || ""));
+  const entitlements = dedupeStringList(sortedRows.flatMap((row) => Array.isArray(row?.granted_entitlements_snapshot) ? row.granted_entitlements_snapshot : []));
+  const totalAmount = sortedRows.reduce((sum, row) => sum + (asPriceNumber(row?.price_php_snapshot) || 0), 0);
+  const purchaseLabel = titles.length === 0
+    ? "VDJV Purchase"
+    : titles.length === 1
+      ? titles[0]
+      : `${titles.length} items: ${titles.join(", ")}`;
+  return {
+    rows: sortedRows,
+    firstRow,
+    version: normalizeInstallerBuyVersion(firstRow?.version) || "V2",
+    email: normalizeEmail(firstRow?.email) || "",
+    receiptReference: asString(firstRow?.receipt_reference, 160) || "",
+    paymentReference: asString(firstRow?.reference_no, 160) || "",
+    paymentChannel: asString(firstRow?.payment_channel, 80) || "",
+    titles,
+    skuCodes,
+    entitlements,
+    totalAmount,
+    purchaseLabel,
+  };
 };
 
 const mapInstallerPurchaseRequestRow = (row: any) => ({
@@ -2843,7 +2928,9 @@ const mapInstallerPurchaseRequestRow = (row: any) => ({
 const sendInstallerPendingSubmissionEmail = async (input: {
   requestRow: any;
 }): Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }> => {
-  const targetEmail = normalizeEmail(input.requestRow?.email);
+  const batchRows = await loadInstallerPurchaseBatchRows(createServiceClient(), input.requestRow);
+  const summary = buildInstallerPurchaseBatchSummary(batchRows.length > 0 ? batchRows : [input.requestRow]);
+  const targetEmail = summary.email || normalizeEmail(input.requestRow?.email);
   if (!targetEmail) return { status: "skipped", error: "No valid recipient email" };
   if (!RESEND_API_KEY || !STORE_EMAIL_FROM) {
     return {
@@ -2852,13 +2939,13 @@ const sendInstallerPendingSubmissionEmail = async (input: {
     };
   }
 
-  const version = normalizeInstallerBuyVersion(input.requestRow?.version) || "V2";
-  const title = asString(input.requestRow?.display_name_snapshot, 200) || `${version} Purchase`;
-  const amount = asPriceNumber(input.requestRow?.price_php_snapshot);
-  const receiptReference = asString(input.requestRow?.receipt_reference, 160) || "-";
-  const referenceNo = asString(input.requestRow?.reference_no, 160) || "-";
-  const paymentChannel = asString(input.requestRow?.payment_channel, 80) || "-";
-  const submittedAt = new Date(asString(input.requestRow?.created_at, 80) || new Date().toISOString()).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
+  const version = summary.version;
+  const title = summary.purchaseLabel || `${version} Purchase`;
+  const amount = summary.totalAmount > 0 ? summary.totalAmount : asPriceNumber(input.requestRow?.price_php_snapshot);
+  const receiptReference = summary.receiptReference || asString(input.requestRow?.receipt_reference, 160) || "-";
+  const referenceNo = summary.paymentReference || asString(input.requestRow?.reference_no, 160) || "-";
+  const paymentChannel = summary.paymentChannel || asString(input.requestRow?.payment_channel, 80) || "-";
+  const submittedAt = new Date(asString(summary.firstRow?.created_at, 80) || asString(input.requestRow?.created_at, 80) || new Date().toISOString()).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
 
   const textBody = [
     `We received your ${title} payment submission.`,
@@ -2908,7 +2995,9 @@ const sendInstallerDecisionEmail = async (input: {
   issuedLicenseCode?: string | null;
   installerDownloadLink?: string | null;
 }): Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }> => {
-  const targetEmail = normalizeEmail(input.requestRow?.email);
+  const batchRows = await loadInstallerPurchaseBatchRows(input.admin, input.requestRow);
+  const summary = buildInstallerPurchaseBatchSummary(batchRows.length > 0 ? batchRows : [input.requestRow]);
+  const targetEmail = summary.email || normalizeEmail(input.requestRow?.email);
   if (!targetEmail) return { status: "skipped", error: "No valid recipient email" };
   if (!RESEND_API_KEY || !STORE_EMAIL_FROM) {
     return {
@@ -2917,11 +3006,11 @@ const sendInstallerDecisionEmail = async (input: {
     };
   }
 
-  const version = normalizeInstallerBuyVersion(input.requestRow?.version) || "V2";
-  const title = asString(input.requestRow?.display_name_snapshot, 200) || `${version} Purchase`;
-  const receiptReference = asString(input.requestRow?.receipt_reference, 160) || "-";
-  const paymentReference = asString(input.requestRow?.reference_no, 160) || "-";
-  const paymentChannel = asString(input.requestRow?.payment_channel, 80) || "-";
+  const version = summary.version;
+  const title = summary.purchaseLabel || `${version} Purchase`;
+  const receiptReference = summary.receiptReference || asString(input.requestRow?.receipt_reference, 160) || "-";
+  const paymentReference = summary.paymentReference || asString(input.requestRow?.reference_no, 160) || "-";
+  const paymentChannel = summary.paymentChannel || asString(input.requestRow?.payment_channel, 80) || "-";
   const reviewedAt = new Date(input.reviewedAtIso).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
 
   const subject = input.nextStatus === "approved"
@@ -2989,28 +3078,32 @@ const executeInstallerPurchaseApproval = async (input: {
   decisionSource: "manual" | "automation";
   automationResult?: string | null;
 }) => {
-  const version = normalizeInstallerBuyVersion(input.requestRow?.version);
+  const batchRows = await loadInstallerPurchaseBatchRows(input.admin, input.requestRow);
+  const summary = buildInstallerPurchaseBatchSummary(batchRows.length > 0 ? batchRows : [input.requestRow]);
+  const version = summary.version;
   if (!version) return fail(400, "INVALID_VERSION");
 
   const landingConfig = await getNormalizedLandingConfigRecord(input.admin);
-  let issuedLicenseId = Number.isFinite(Number(input.requestRow?.issued_license_id))
-    ? Number(input.requestRow.issued_license_id)
-    : null;
-  let issuedLicenseCode = asString(input.requestRow?.issued_license_code, 120) || null;
+  const existingIssuedRow = summary.rows.find((row) => Number.isFinite(Number(row?.issued_license_id)) && asString(row?.issued_license_code, 120));
+  let issuedLicenseId = Number.isFinite(Number(existingIssuedRow?.issued_license_id))
+    ? Number(existingIssuedRow?.issued_license_id)
+    : Number.isFinite(Number(input.requestRow?.issued_license_id))
+      ? Number(input.requestRow.issued_license_id)
+      : null;
+  let issuedLicenseCode = asString(existingIssuedRow?.issued_license_code, 120) || asString(input.requestRow?.issued_license_code, 120) || null;
 
   if (!issuedLicenseId || !issuedLicenseCode) {
     const createPayload = await callInstallerAdmin<Record<string, unknown>>("POST", "/admin/licenses/create", {
       version,
-      customerName: asString(input.requestRow?.email, 320) || asString(input.requestRow?.display_name_snapshot, 200) || `${version} Buyer`,
+      customerName: summary.email || asString(input.requestRow?.display_name_snapshot, 200) || `${version} Buyer`,
       notes: [
         `installer_purchase_request:${asString(input.requestRow?.id, 80) || ""}`,
-        `sku:${asString(input.requestRow?.sku_code, 120) || ""}`,
-        `email:${asString(input.requestRow?.email, 320) || ""}`,
+        `receipt:${summary.receiptReference}`,
+        `sku:${summary.skuCodes.join(",")}`,
+        `email:${summary.email}`,
       ].join(" | "),
       unlimited: false,
-      entitlements: Array.isArray(input.requestRow?.granted_entitlements_snapshot)
-        ? input.requestRow.granted_entitlements_snapshot
-        : [],
+      entitlements: summary.entitlements,
     });
 
     issuedLicenseCode = asString((createPayload as any)?.rawCode, 120) || null;
@@ -3022,10 +3115,10 @@ const executeInstallerPurchaseApproval = async (input: {
     }
   }
 
-  const installerDownloadLink = resolveInstallerDownloadLink(landingConfig, input.requestRow);
+  const installerDownloadLink = resolveInstallerDownloadLink(landingConfig, summary.firstRow || input.requestRow);
   const decisionEmail = await sendInstallerDecisionEmail({
     admin: input.admin,
-    requestRow: input.requestRow,
+    requestRow: summary.firstRow || input.requestRow,
     nextStatus: "approved",
     reviewedAtIso: input.reviewedAtIso,
     issuedLicenseCode,
@@ -3047,16 +3140,19 @@ const executeInstallerPurchaseApproval = async (input: {
       decision_source: input.decisionSource,
       automation_result: input.automationResult || null,
     })
-    .eq("id", input.requestRow.id)
+    .eq("receipt_reference", summary.receiptReference)
+    .eq("email_normalized", summary.email)
+    .eq("version", version)
     .eq("status", "pending");
   if (error) return fail(500, error.message);
 
   return ok({
-    requestId: input.requestRow.id,
+    requestId: asString(summary.firstRow?.id, 80) || asString(input.requestRow?.id, 80) || "",
     status: "approved",
     issued_license_id: issuedLicenseId,
     issued_license_code: issuedLicenseCode,
     installer_download_link: installerDownloadLink || null,
+    purchase_label: summary.purchaseLabel,
     decision_email_status: decisionEmail.status,
     decision_email_error: decisionEmail.error,
   });
@@ -3066,7 +3162,11 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
   const admin = createServiceClient();
   const email = normalizeEmail(body?.email);
   const version = normalizeInstallerBuyVersion(body?.version);
-  const skuCode = asString(body?.skuCode, 120)?.trim() || "";
+  const skuCodes = dedupeStringList(
+    Array.isArray(body?.skuCodes)
+      ? body.skuCodes
+      : [body?.skuCode],
+  ).map((entry) => entry.toUpperCase());
   const paymentChannel = asString(body?.paymentChannel, 40);
   let payerName = asString(body?.payerName, 120);
   let referenceNo = asString(body?.referenceNo, 120);
@@ -3075,7 +3175,7 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
 
   if (!email) return badRequest("A valid email is required");
   if (!version) return badRequest("A valid version is required");
-  if (!skuCode) return badRequest("skuCode is required");
+  if (skuCodes.length === 0) return badRequest("skuCodes is required");
   if (!paymentChannel || !PAYMENT_CHANNEL_VALUES.has(paymentChannel)) return badRequest("Invalid paymentChannel");
   if (!proofPath && paymentChannel === "image_proof") return badRequest("proofPath is required for image_proof");
   if (proofPath) {
@@ -3102,17 +3202,22 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
     if (signedError) return fail(400, "INVALID_PROOF_PATH");
   }
 
-  const product = await getInstallerBuyProductByVersionAndSku(admin, version, skuCode);
-  if (!product || !product.enabled) return fail(404, "INSTALLER_BUY_PRODUCT_NOT_FOUND");
+  const products = await getInstallerBuyProductsByVersionAndSkus(admin, version, skuCodes);
+  if (products.length !== skuCodes.length || products.some((product) => !product.enabled)) {
+    return fail(404, "INSTALLER_BUY_PRODUCT_NOT_FOUND");
+  }
+  if (products.length > 1 && products.some((product) => product.productType !== "update")) {
+    return badRequest("Multiple selection is only supported for update purchases");
+  }
 
   const { data: existingPending, error: existingPendingError } = await admin
     .from("installer_purchase_requests")
-    .select("id")
+    .select("id,sku_code")
     .eq("email_normalized", email)
     .eq("version", version)
-    .eq("sku_code", skuCode)
+    .in("sku_code", skuCodes)
     .eq("status", "pending")
-    .limit(1);
+    .limit(Math.max(1, skuCodes.length));
   if (existingPendingError) return fail(500, existingPendingError.message);
   if ((existingPending || []).length > 0) return fail(409, "INSTALLER_PURCHASE_PENDING");
 
@@ -3151,7 +3256,7 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
   if (paymentSettingsError) return fail(500, paymentSettingsError.message);
 
   const receiptReference = buildInstallerReceiptReference(version);
-  const insertPayload = {
+  const insertPayload = products.map((product) => ({
     email,
     version,
     sku_code: product.skuCode,
@@ -3175,15 +3280,16 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
     ocr_scanned_at: ocrMetadata.scannedAt,
     ocr_status: ocrMetadata.status,
     ocr_error_code: ocrMetadata.errorCode,
-  };
+  }));
 
   const { data, error } = await admin
     .from("installer_purchase_requests")
     .insert(insertPayload)
-    .select("*")
-    .single();
+    .select("*");
   if (error) return fail(500, error.message);
-  const requestRow = data as any;
+  const requestRows = Array.isArray(data) ? data : [];
+  const requestRow = requestRows[0] as any;
+  const summary = buildInstallerPurchaseBatchSummary(requestRows);
 
   let automationResult: AutomationReason = "not_image_proof";
   let autoApproved = false;
@@ -3218,7 +3324,7 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
       })) {
         automationResult = "wallet_number_mismatch";
       } else {
-        const expectedAmount = roundMoney(product.pricePhp || 0);
+        const expectedAmount = roundMoney(summary.totalAmount || 0);
         const detectedAmount = roundMoney(ocrMetadata.amountPhp);
         if (!matchesAutoApprovalAmount(expectedAmount, detectedAmount)) {
           automationResult = "amount_mismatch";
@@ -3248,7 +3354,9 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
   await admin
     .from("installer_purchase_requests")
     .update({ automation_result: automationResult })
-    .eq("id", requestRow.id);
+    .eq("receipt_reference", receiptReference)
+    .eq("email_normalized", email)
+    .eq("version", version);
 
   const pendingEmailResult = await sendInstallerPendingSubmissionEmail({ requestRow });
   if (pendingEmailResult.status !== "skipped") {
@@ -3258,7 +3366,9 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
         decision_email_status: pendingEmailResult.status,
         decision_email_error: pendingEmailResult.error,
       })
-      .eq("id", requestRow.id);
+      .eq("receipt_reference", receiptReference)
+      .eq("email_normalized", email)
+      .eq("version", version);
   }
 
   return ok({
@@ -3268,6 +3378,7 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
     payer_name: payerName || null,
     reference_no: ocrMetadata.referenceNo || referenceNo || null,
     receipt_reference: receiptReference,
+    purchase_label: summary.purchaseLabel,
     decision_email_status: pendingEmailResult.status,
     decision_email_error: pendingEmailResult.error,
     wait_message: "Your purchase request is under confirmation. Please check your email or message us on Facebook with the receipt reference for status.",
@@ -3470,7 +3581,9 @@ const adminInstallerPurchaseRequestAction = async (requestId: string, body: any,
       decision_source: "manual",
       automation_result: asString(requestRow?.automation_result, 120) || null,
     })
-    .eq("id", requestId)
+    .eq("receipt_reference", asString(requestRow?.receipt_reference, 160) || "")
+    .eq("email_normalized", normalizeEmail(requestRow?.email) || "")
+    .eq("version", normalizeInstallerBuyVersion(requestRow?.version) || "V2")
     .eq("status", "pending");
   if (error) return fail(500, error.message);
 

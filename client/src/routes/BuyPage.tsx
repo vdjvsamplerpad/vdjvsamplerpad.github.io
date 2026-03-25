@@ -65,6 +65,7 @@ type SubmitResult =
     receiptReference: string;
     paymentReference: string;
     message: string;
+    purchaseLabel: string;
     licenseCode?: string;
     installerDownloadLink?: string;
   };
@@ -159,7 +160,7 @@ export default function BuyPage() {
   const [referenceNo, setReferenceNo] = React.useState('');
   const [notes, setNotes] = React.useState('');
   const [proofFile, setProofFile] = React.useState<File | null>(null);
-  const [selectedSku, setSelectedSku] = React.useState('');
+  const [selectedSkus, setSelectedSkus] = React.useState<string[]>([]);
   const [result, setResult] = React.useState<SubmitResult | null>(null);
   const [versionDescriptionExpanded, setVersionDescriptionExpanded] = React.useState(false);
 
@@ -178,9 +179,14 @@ export default function BuyPage() {
     () => config.v2v3Products.filter((item) => item.version === selectedVersion),
     [config.v2v3Products, selectedVersion],
   );
-  const selectedProduct = React.useMemo(
-    () => versionProducts.find((item) => item.skuCode === selectedSku) || null,
-    [selectedSku, versionProducts],
+  const selectedProducts = React.useMemo(
+    () => versionProducts.filter((item) => selectedSkus.includes(item.skuCode)),
+    [selectedSkus, versionProducts],
+  );
+  const selectedPrimaryProduct = selectedProducts[0] || null;
+  const selectedUpdatesOnly = React.useMemo(
+    () => selectedProducts.filter((item) => item.productType === 'update'),
+    [selectedProducts],
   );
   const activeBuySection = config.config.buySections[selectedVersion];
   const activeVersionDescription = config.config.versionDescriptions[selectedVersion];
@@ -223,12 +229,30 @@ export default function BuyPage() {
 
   React.useEffect(() => {
     if (selectedVersion === 'V1') {
-      setSelectedSku('');
+      setSelectedSkus([]);
       return;
     }
-    const first = config.v2v3Products.find((item) => item.version === selectedVersion);
-    setSelectedSku((current) => (current && versionProducts.some((item) => item.skuCode === current)) ? current : (first?.skuCode || ''));
+    setSelectedSkus((current) => current.filter((skuCode) => versionProducts.some((item) => item.skuCode === skuCode)));
   }, [config.v2v3Products, selectedVersion, versionProducts]);
+
+  const handleProductToggle = React.useCallback((product: BuyConfigResponse['v2v3Products'][number]) => {
+    setSelectedSkus((current) => {
+      if (product.productType === 'update') {
+        const currentUpdates = current.filter((skuCode) => (
+          versionProducts.some((item) => item.skuCode === skuCode && item.productType === 'update')
+        ));
+        if (currentUpdates.includes(product.skuCode)) {
+          return currentUpdates.filter((skuCode) => skuCode !== product.skuCode);
+        }
+        return [...currentUpdates, product.skuCode].sort((left, right) => {
+          const leftOrder = versionProducts.find((item) => item.skuCode === left)?.sortOrder ?? 0;
+          const rightOrder = versionProducts.find((item) => item.skuCode === right)?.sortOrder ?? 0;
+          return leftOrder - rightOrder;
+        });
+      }
+      return [product.skuCode];
+    });
+  }, [versionProducts]);
 
   const postPublicStoreApi = React.useCallback(async (route: string, body: Record<string, unknown>) => {
     const res = await fetch(edgeFunctionUrl('store-api', route), {
@@ -315,7 +339,7 @@ export default function BuyPage() {
         setError('Passwords do not match.');
         return;
       }
-    } else if (!selectedProduct) {
+    } else if (selectedProducts.length === 0) {
       setError('Select what you want to buy first.');
       return;
     }
@@ -352,7 +376,7 @@ export default function BuyPage() {
         const submitRes = await postPublicStoreApi('installer-request/submit', {
           email: normalizedEmail,
           version: selectedVersion,
-          skuCode: selectedProduct?.skuCode,
+          skuCodes: selectedProducts.map((product) => product.skuCode),
           paymentChannel,
           payerName: normalizedPayerName || null,
           referenceNo: normalizedReferenceNo || null,
@@ -372,8 +396,20 @@ export default function BuyPage() {
           message: isApproved
             ? 'Your payment passed verification and your license is ready below. A copy was also sent to your email.'
             : `${String(submitRes.data?.wait_message || 'Your purchase request is waiting for admin review.')} If needed, send the receipt reference to Facebook Messenger for status.`,
+          purchaseLabel: String(
+            submitRes.data?.purchase_label
+            || (selectedProducts.length === 1
+              ? selectedProducts[0]?.displayName
+              : `${selectedProducts.length} ${selectedVersion} updates`)
+            || activeBuySection.title,
+          ),
           licenseCode: String(submitRes.data?.issued_license_code || ''),
-          installerDownloadLink: String(submitRes.data?.installer_download_link || selectedProduct?.downloadLinkOverride || activeBuySection.defaultInstallerDownloadLink || ''),
+          installerDownloadLink: String(
+            submitRes.data?.installer_download_link
+            || selectedPrimaryProduct?.downloadLinkOverride
+            || activeBuySection.defaultInstallerDownloadLink
+            || '',
+          ),
         });
       }
       resetForm();
@@ -386,9 +422,9 @@ export default function BuyPage() {
 
   const selectedPriceText = selectedVersion === 'V1'
     ? formatPhp(config.paymentConfig.account_price_php ?? null)
-    : formatPhp(selectedProduct?.pricePhp ?? null);
+    : formatPhp(selectedProducts.reduce((total, product) => total + (Number(product.pricePhp) || 0), 0) || null);
   const hasPublishedProducts = selectedVersion === 'V1' || versionProducts.length > 0;
-  const submitDisabled = submitting || (selectedVersion !== 'V1' && !selectedProduct);
+  const submitDisabled = submitting || (selectedVersion !== 'V1' && selectedProducts.length === 0);
   const versionDescriptionNeedsToggle = activeVersionDescription.desc.length > 280;
   const visibleVersionDescription = versionDescriptionNeedsToggle && !versionDescriptionExpanded
     ? `${activeVersionDescription.desc.slice(0, 280).trimEnd()}...`
@@ -456,12 +492,12 @@ export default function BuyPage() {
               ) : (
                 <div className="grid gap-3">
                   {versionProducts.map((product) => {
-                    const active = selectedSku === product.skuCode;
+                    const active = selectedSkus.includes(product.skuCode);
                     return (
                       <button
                         key={product.skuCode}
                         type="button"
-                        onClick={() => setSelectedSku(product.skuCode)}
+                        onClick={() => handleProductToggle(product)}
                         className={`rounded-2xl border p-4 text-left transition ${
                           active
                             ? 'border-amber-400 bg-amber-50 shadow'
@@ -471,7 +507,6 @@ export default function BuyPage() {
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div>
                             <div className="text-sm font-semibold">{product.displayName}</div>
-                            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{product.skuCode}</div>
                           </div>
                           <div className="text-right">
                             <div className="text-sm font-bold text-slate-950">{formatPhp(product.pricePhp)}</div>
@@ -502,7 +537,7 @@ export default function BuyPage() {
                   title={result.status === 'approved' ? 'Approved' : 'Pending Approval'}
                   subtitle={result.message}
                   amountLabel="Purchase"
-                  amountValue={selectedVersion === 'V1' ? 'VDJV V1' : (selectedProduct?.displayName || activeBuySection.title)}
+                  amountValue={result.version === 'V1' ? 'VDJV V1' : result.purchaseLabel}
                   status={result.status === 'approved' ? 'success' : 'pending'}
                   statusLabel={result.status === 'approved' ? 'Approved' : 'Pending Approval'}
                   lineItems={[
@@ -564,7 +599,11 @@ export default function BuyPage() {
               <form className="space-y-4" onSubmit={handleSubmit}>
                 <div>
                   <div className="text-lg font-semibold">Registration</div>
-                  
+                  {selectedVersion !== 'V1' && selectedUpdatesOnly.length > 1 ? (
+                    <div className="mt-2 text-sm text-slate-600">
+                      Buying {selectedUpdatesOnly.length} updates in one transaction.
+                    </div>
+                  ) : null}
                 </div>
 
                 {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
