@@ -59,6 +59,7 @@ import {
   AccountRequestsTab,
   CrashReportsTab,
   DefaultBankTab,
+  InstallerRequestsTab,
   LandingDownloadTab,
   SamplerDefaultsTab,
   StoreBannersTab,
@@ -78,6 +79,7 @@ const ADMIN_NAV_ORDER: TabKey[] = [
   'home',
   'account_requests',
   'store_requests',
+  'installer_requests',
   'assignments',
   'banks',
   'store_catalog',
@@ -1191,9 +1193,11 @@ export function AdminAccessDialog({
         importTotal: 0,
         storeRevenueApproved: 0,
         accountRevenueApproved: 0,
+        installerRevenueApproved: 0,
         totalRevenueApproved: 0,
         storeBuyersApproved: 0,
         accountBuyersApproved: 0,
+        installerSalesApproved: 0,
         importRequests: 0,
       });
     }
@@ -2277,13 +2281,22 @@ export function AdminAccessDialog({
                 />
               )}
 
-              {tab === 'installer' && (
-                <AdminAccessInstallerTab
-                  theme={theme}
-                  panelClass={tabPanelToneClass('installer')}
-                  pushNotice={pushNotice}
-                />
-              )}
+        {tab === 'installer' && (
+          <AdminAccessInstallerTab
+            theme={theme}
+            panelClass={tabPanelToneClass('installer')}
+            pushNotice={pushNotice}
+          />
+        )}
+
+        {tab === 'installer_requests' && (
+          <InstallerRequestsTab
+            theme={theme}
+            panelClass={tabPanelToneClass('installer_requests')}
+            cardClass={theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}
+            pushNotice={pushNotice}
+          />
+        )}
             </div>
           </div>
           {isNavOpen && (

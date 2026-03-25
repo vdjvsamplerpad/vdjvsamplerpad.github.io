@@ -36,6 +36,7 @@ export type TabKey =
   | 'account_requests'
   | 'crash_reports'
   | 'store_requests'
+  | 'installer_requests'
   | 'store_catalog'
   | 'store_promotions'
   | 'store_banners'
@@ -117,6 +118,7 @@ export const TABS: Array<{
   { key: 'account_requests', label: 'Account Requests', emoji: '✅', hint: 'Approve or reject account registration', tone: 'rose' },
   { key: 'crash_reports', label: 'Crash Reports', emoji: 'CR', hint: 'Review client-submitted crash diagnostics', tone: 'amber' },
   { key: 'store_requests', label: 'Store Requests', emoji: '🛒', hint: 'Handle purchase requests', tone: 'orange' },
+  { key: 'installer_requests', label: 'Installer Requests', emoji: 'IR', hint: 'Review bundled installer purchase requests', tone: 'orange' },
   { key: 'store_catalog', label: 'Catalog', emoji: '🏷️', hint: 'Prepare and publish store catalog items', tone: 'teal' },
   { key: 'store_banners', label: 'Banners', emoji: '🖼️', hint: 'Manage marketing banners for store homepage', tone: 'teal' },
   { key: 'store_promotions', label: 'Promotions', emoji: 'SALE', hint: 'Schedule discounts and flash sales', tone: 'teal' },

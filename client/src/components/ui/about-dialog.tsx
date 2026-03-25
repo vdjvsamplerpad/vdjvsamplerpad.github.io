@@ -314,7 +314,7 @@ export function AboutDialog({
     | { type: 'masterVolume' }
     | null
   >(null);
-  const showAppUpdateSection = appUpdatePlatform !== 'web';
+  const showAppUpdateSection = appUpdatePlatform !== 'web' || appUpdateEnabled || appUpdateCanCheck || appUpdateCanInstall;
   const effectiveAppUpdateBusy = appUpdateBusy || appUpdateActionBusy;
   const rawAppUpdateError = appUpdateActionError || appUpdateError;
   const summarizedAppUpdateError = summarizeAppUpdateError(rawAppUpdateError, appUpdatePlatform);

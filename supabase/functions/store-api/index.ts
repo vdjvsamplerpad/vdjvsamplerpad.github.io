@@ -544,6 +544,7 @@ const buildReceiptStyleEmailHtml = (input: {
   details: Array<{ label: string; value: string }>;
   bodyText: string;
   receiptImageUrl?: string;
+  actionLinks?: Array<{ label: string; url: string }>;
 }): string => {
   const isApproved = input.variant === "approved";
   const isPending = input.variant === "pending";
@@ -595,6 +596,28 @@ const buildReceiptStyleEmailHtml = (input: {
     `
     : "";
 
+  const actionLinksSection = Array.isArray(input.actionLinks) && input.actionLinks.length > 0
+    ? `
+      <tr>
+        <td style="padding:0 24px 20px;">
+          <div style="margin-bottom:10px;font-size:12px;font-weight:700;color:#f9fafb;">Download Links</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;">
+            ${input.actionLinks.map((entry) => `
+              <a
+                href="${escapeHtml(entry.url)}"
+                target="_blank"
+                rel="noreferrer"
+                style="display:inline-block;padding:10px 14px;border-radius:9999px;background:${accent};color:#ffffff;font-size:12px;font-weight:700;text-decoration:none;"
+              >
+                ${escapeHtml(entry.label)}
+              </a>
+            `).join("")}
+          </div>
+        </td>
+      </tr>
+    `
+    : "";
+
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0;padding:0;background:#0b1220;">
       <tr>
@@ -629,6 +652,7 @@ const buildReceiptStyleEmailHtml = (input: {
               </td>
             </tr>
             ${messageBlock}
+            ${actionLinksSection}
             ${receiptSection}
           </table>
         </td>
@@ -2807,6 +2831,22 @@ const getInstallerBuyProductsByVersionAndSkus = async (
   return normalizedCodes.map((code) => orderLookup.get(code)).filter(Boolean);
 };
 
+const getInstallerPlatformDownloadLinks = (
+  landingConfig: ReturnType<typeof normalizeLandingDownloadConfig>,
+  row: {
+    version?: unknown;
+  },
+): Record<string, string> => {
+  const version = normalizeInstallerBuyVersion(row?.version) || "V2";
+  const versionLinks = landingConfig.downloadLinks[version] || {};
+  return {
+    android: asString(versionLinks.android, 2000) || "",
+    ios: asString(versionLinks.ios, 2000) || "",
+    windows: asString(versionLinks.windows, 2000) || "",
+    macos: asString(versionLinks.macos, 2000) || "",
+  };
+};
+
 const resolveInstallerDownloadLink = (
   landingConfig: ReturnType<typeof normalizeLandingDownloadConfig>,
   row: {
@@ -2818,8 +2858,8 @@ const resolveInstallerDownloadLink = (
   const explicit = asString(row?.installer_download_link, 2000)
     || asString(row?.download_link_override, 2000);
   if (explicit) return explicit;
-  const version = normalizeInstallerBuyVersion(row?.version) || "V2";
-  return landingConfig.buySections[version]?.defaultInstallerDownloadLink || "";
+  const links = getInstallerPlatformDownloadLinks(landingConfig, row);
+  return links.windows || links.android || links.ios || links.macos || "";
 };
 
 const loadInstallerPurchaseBatchRows = async (
@@ -2925,6 +2965,73 @@ const mapInstallerPurchaseRequestRow = (row: any) => ({
   createdAt: asString(row?.created_at, 80) || new Date().toISOString(),
 });
 
+const buildInstallerRequestBundleKey = (row: any): string => {
+  const receiptReference = asString(row?.receipt_reference, 160) || "";
+  const email = normalizeEmail(row?.email) || "";
+  const version = normalizeInstallerBuyVersion(row?.version) || "V2";
+  if (receiptReference) return `${receiptReference}::${email}::${version}`;
+  return `${asString(row?.id, 80) || crypto.randomUUID()}::${email}::${version}`;
+};
+
+const groupInstallerPurchaseRequestRows = (rows: any[]) => {
+  const grouped = new Map<string, any[]>();
+  for (const row of rows) {
+    const key = buildInstallerRequestBundleKey(row);
+    const existing = grouped.get(key);
+    if (existing) existing.push(row);
+    else grouped.set(key, [row]);
+  }
+
+  return Array.from(grouped.entries()).map(([bundleKey, bundleRows]) => {
+    const mappedItems = bundleRows.map(mapInstallerPurchaseRequestRow);
+    const primary = mappedItems[0];
+    const totalValues = mappedItems
+      .map((item) => item.pricePhpSnapshot)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    const totalAmountPhp = totalValues.length === mappedItems.length
+      ? totalValues.reduce((sum, value) => sum + value, 0)
+      : null;
+    const issuedLicense = mappedItems.find((item) => item.issuedLicenseCode) || primary;
+    const downloadLink = mappedItems.find((item) => item.installerDownloadLink) || primary;
+    return {
+      id: primary.id,
+      bundleKey,
+      email: primary.email,
+      versions: Array.from(new Set(mappedItems.map((item) => item.version))),
+      status: primary.status,
+      paymentChannel: primary.paymentChannel,
+      payerName: primary.payerName,
+      referenceNo: primary.referenceNo,
+      receiptReference: primary.receiptReference,
+      notes: primary.notes,
+      proofPath: primary.proofPath,
+      rejectionMessage: primary.rejectionMessage,
+      decisionEmailStatus: primary.decisionEmailStatus,
+      decisionEmailError: primary.decisionEmailError,
+      reviewedBy: primary.reviewedBy,
+      reviewedAt: primary.reviewedAt,
+      issuedLicenseId: issuedLicense.issuedLicenseId,
+      issuedLicenseCode: issuedLicense.issuedLicenseCode,
+      installerDownloadLink: downloadLink.installerDownloadLink,
+      ocrReferenceNo: primary.ocrReferenceNo,
+      ocrPayerName: primary.ocrPayerName,
+      ocrAmountPhp: primary.ocrAmountPhp,
+      ocrRecipientNumber: primary.ocrRecipientNumber,
+      ocrProvider: primary.ocrProvider,
+      ocrScannedAt: primary.ocrScannedAt,
+      ocrStatus: primary.ocrStatus,
+      ocrErrorCode: primary.ocrErrorCode,
+      decisionSource: primary.decisionSource,
+      automationResult: primary.automationResult,
+      createdAt: primary.createdAt,
+      itemCount: mappedItems.length,
+      totalAmountPhp,
+      hasTbdAmount: totalAmountPhp === null,
+      items: mappedItems,
+    };
+  }).sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+};
+
 const sendInstallerPendingSubmissionEmail = async (input: {
   requestRow: any;
 }): Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }> => {
@@ -2994,6 +3101,7 @@ const sendInstallerDecisionEmail = async (input: {
   rejectionMessage?: string | null;
   issuedLicenseCode?: string | null;
   installerDownloadLink?: string | null;
+  installerDownloadLinks?: Record<string, string>;
 }): Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }> => {
   const batchRows = await loadInstallerPurchaseBatchRows(input.admin, input.requestRow);
   const summary = buildInstallerPurchaseBatchSummary(batchRows.length > 0 ? batchRows : [input.requestRow]);
@@ -3016,6 +3124,12 @@ const sendInstallerDecisionEmail = async (input: {
   const subject = input.nextStatus === "approved"
     ? `License Ready - ${receiptReference}`
     : `Purchase Update - ${receiptReference}`;
+  const downloadLinks = Object.entries(input.installerDownloadLinks || {})
+    .filter(([, value]) => Boolean(asString(value, 2000)))
+    .map(([platform, value]) => ({
+      label: `${platform.toUpperCase()} Download`,
+      value: asString(value, 2000) || "",
+    }));
 
   const textBody = input.nextStatus === "approved"
     ? [
@@ -3023,6 +3137,7 @@ const sendInstallerDecisionEmail = async (input: {
       "",
       `License Code: ${input.issuedLicenseCode || "-"}`,
       `Installer Download: ${input.installerDownloadLink || "-"}`,
+      ...downloadLinks.map((entry) => `${entry.label}: ${entry.value}`),
       "",
       "Keep this email for future reinstall and support reference.",
     ].join("\n")
@@ -3051,10 +3166,14 @@ const sendInstallerDecisionEmail = async (input: {
         ? [
           { label: "License Code", value: asString(input.issuedLicenseCode, 120) || "-" },
           { label: "Download Link", value: asString(input.installerDownloadLink, 2000) || "-" },
+          ...downloadLinks,
         ]
         : [{ label: "Reason", value: asString(input.rejectionMessage, 1000) || "-" }]),
     ],
     bodyText: textBody,
+    actionLinks: input.nextStatus === "approved"
+      ? downloadLinks.map((entry) => ({ label: entry.label, url: entry.value }))
+      : [],
   });
 
   try {
@@ -3115,6 +3234,7 @@ const executeInstallerPurchaseApproval = async (input: {
     }
   }
 
+  const installerDownloadLinks = getInstallerPlatformDownloadLinks(landingConfig, summary.firstRow || input.requestRow);
   const installerDownloadLink = resolveInstallerDownloadLink(landingConfig, summary.firstRow || input.requestRow);
   const decisionEmail = await sendInstallerDecisionEmail({
     admin: input.admin,
@@ -3123,6 +3243,7 @@ const executeInstallerPurchaseApproval = async (input: {
     reviewedAtIso: input.reviewedAtIso,
     issuedLicenseCode,
     installerDownloadLink,
+    installerDownloadLinks,
   });
 
   const { error } = await input.admin
@@ -3152,6 +3273,7 @@ const executeInstallerPurchaseApproval = async (input: {
     issued_license_id: issuedLicenseId,
     issued_license_code: issuedLicenseCode,
     installer_download_link: installerDownloadLink || null,
+    installer_download_links: installerDownloadLinks,
     purchase_label: summary.purchaseLabel,
     decision_email_status: decisionEmail.status,
     decision_email_error: decisionEmail.error,
@@ -3402,9 +3524,18 @@ const listAdminInstallerBuyProducts = async (req: Request) => {
   const url = new URL(req.url);
   const version = normalizeInstallerBuyVersion(url.searchParams.get("version"));
   try {
-    const items = version
-      ? await syncInstallerBuyCatalogForVersion(admin, version)
-      : (await Promise.all(INSTALLER_BUY_VERSION_KEYS.map((entry) => syncInstallerBuyCatalogForVersion(admin, entry)))).flat();
+    let query = admin
+      .from("installer_buy_products")
+      .select("*")
+      .order("version", { ascending: true })
+      .order("sort_order", { ascending: true })
+      .order("display_name", { ascending: true });
+    if (version) {
+      query = query.eq("version", version);
+    }
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    const items = (data || []).map(mapInstallerBuyProductRow);
     return ok({ items });
   } catch (error) {
     return fail(500, error instanceof Error ? error.message : "Failed to load buy catalog");
@@ -3542,6 +3673,75 @@ const listAdminInstallerPurchaseRequests = async (req: Request) => {
     total: Number(count || 0),
     page,
     perPage,
+  });
+};
+
+const listAdminInstallerPurchaseRequestGroups = async (req: Request) => {
+  const admin = createServiceClient();
+  const url = new URL(req.url);
+  const scope = String(url.searchParams.get("scope") || "pending").toLowerCase();
+  const status = String(url.searchParams.get("status") || "all").toLowerCase();
+  const channel = String(url.searchParams.get("channel") || "all").toLowerCase();
+  const decision = String(url.searchParams.get("decision") || "all").toLowerCase();
+  const automation = String(url.searchParams.get("automation") || "all").toLowerCase();
+  const ocrStatus = String(url.searchParams.get("ocrStatus") || "all").toLowerCase();
+  const page = Math.max(1, Number(url.searchParams.get("page") || 1));
+  const perPage = Math.max(1, Math.min(100, Number(url.searchParams.get("perPage") || 20)));
+  const q = asString(url.searchParams.get("q"), 120)?.trim();
+
+  let query: any = admin
+    .from("installer_purchase_requests")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (channel === "image_proof" || channel === "gcash_manual" || channel === "maya_manual") {
+    query = query.eq("payment_channel", channel);
+  }
+  if (decision === "manual" || decision === "automation") {
+    query = query.eq("decision_source", decision);
+  }
+  if (automation && automation !== "all") {
+    query = query.eq("automation_result", automation);
+  }
+  if (ocrStatus && ocrStatus !== "all") {
+    query = query.eq("ocr_status", ocrStatus);
+  }
+  if (q) {
+    const escaped = q.replace(/[%_]/g, "");
+    query = query.or([
+      `email.ilike.%${escaped}%`,
+      `sku_code.ilike.%${escaped}%`,
+      `display_name_snapshot.ilike.%${escaped}%`,
+      `reference_no.ilike.%${escaped}%`,
+      `ocr_reference_no.ilike.%${escaped}%`,
+      `receipt_reference.ilike.%${escaped}%`,
+      `issued_license_code.ilike.%${escaped}%`,
+    ].join(","));
+  }
+
+  const { data, error } = await query;
+  if (error) return fail(500, error.message);
+
+  const grouped = groupInstallerPurchaseRequestRows(data || []);
+  const pendingCount = grouped.filter((item) => item.status === "pending").length;
+  const historyCount = grouped.filter((item) => item.status !== "pending").length;
+
+  let filtered = grouped.filter((item) => scope === "history" ? item.status !== "pending" : item.status === "pending");
+  if (status === "pending" || status === "approved" || status === "rejected") {
+    filtered = filtered.filter((item) => item.status === status);
+  }
+
+  const total = filtered.length;
+  const from = (page - 1) * perPage;
+  const items = filtered.slice(from, from + perPage);
+
+  return ok({
+    items,
+    total,
+    page,
+    perPage,
+    pendingCount,
+    historyCount,
   });
 };
 
@@ -7523,6 +7723,9 @@ Deno.serve(async (req) => {
     }
     if (req.method === "GET" && scoped[2] === "installer-buy" && scoped[3] === "requests" && scoped.length === 4) {
       return await listAdminInstallerPurchaseRequests(req);
+    }
+    if (req.method === "GET" && scoped[2] === "installer-buy" && scoped[3] === "request-groups" && scoped.length === 4) {
+      return await listAdminInstallerPurchaseRequestGroups(req);
     }
     if (req.method === "POST" && scoped[2] === "installer-buy" && scoped[3] === "requests" && scoped.length === 5) {
       const requestId = asUuid(scoped[4]);

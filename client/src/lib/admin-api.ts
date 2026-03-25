@@ -126,9 +126,11 @@ export interface AdminDashboardTrendPoint {
   importTotal: number;
   storeRevenueApproved: number;
   accountRevenueApproved: number;
+  installerRevenueApproved: number;
   totalRevenueApproved: number;
   storeBuyersApproved: number;
   accountBuyersApproved: number;
+  installerSalesApproved: number;
   importRequests: number;
 }
 
@@ -138,8 +140,10 @@ export interface AdminDashboardOverview {
   counts: {
     activeUsers: number;
     activeSessions: number;
+    activeTodayUsers: number;
     pendingAccountRequests: number;
     pendingStoreRequests: number;
+    pendingInstallerRequests: number;
     exports24h: number;
     exportFailures24h: number;
     duplicateNoChange24h: number;
@@ -147,12 +151,15 @@ export interface AdminDashboardOverview {
     imports24h: number;
     storeRevenueApprovedTotal: number;
     accountRevenueApprovedTotal: number;
+    installerRevenueApprovedTotal: number;
     totalRevenueApproved: number;
     storeRevenue24h: number;
     accountRevenue24h: number;
+    installerRevenue24h: number;
     totalRevenue24h: number;
     storeBuyersApprovedTotal: number;
     accountBuyersApprovedTotal: number;
+    installerSalesApprovedTotal: number;
     publishedCatalog: number;
     draftCatalog: number;
   };
@@ -388,6 +395,43 @@ export interface AdminInstallerPurchaseRequest {
   decisionSource?: 'manual' | 'automation' | null;
   automationResult?: string | null;
   createdAt: string;
+}
+
+export interface AdminInstallerPurchaseRequestGroup {
+  id: string;
+  bundleKey: string;
+  email: string;
+  versions: InstallerVersionKey[];
+  status: 'pending' | 'approved' | 'rejected';
+  paymentChannel: 'image_proof' | 'gcash_manual' | 'maya_manual';
+  payerName?: string | null;
+  referenceNo?: string | null;
+  receiptReference?: string | null;
+  notes?: string | null;
+  proofPath?: string | null;
+  rejectionMessage?: string | null;
+  decisionEmailStatus?: 'pending' | 'sent' | 'failed' | 'skipped' | null;
+  decisionEmailError?: string | null;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  issuedLicenseId?: number | null;
+  issuedLicenseCode?: string | null;
+  installerDownloadLink?: string | null;
+  ocrReferenceNo?: string | null;
+  ocrPayerName?: string | null;
+  ocrAmountPhp?: number | null;
+  ocrRecipientNumber?: string | null;
+  ocrProvider?: string | null;
+  ocrScannedAt?: string | null;
+  ocrStatus?: 'detected' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'failed' | 'unavailable' | 'skipped' | null;
+  ocrErrorCode?: string | null;
+  decisionSource?: 'manual' | 'automation' | null;
+  automationResult?: string | null;
+  createdAt: string;
+  itemCount: number;
+  totalAmountPhp: number | null;
+  hasTbdAmount: boolean;
+  items: AdminInstallerPurchaseRequest[];
 }
 
 export interface BuyConfig {
@@ -943,6 +987,38 @@ export const adminApi = {
       page: number;
       perPage: number;
     }>('GET', `admin/store/installer-buy/requests${query}`);
+  },
+
+  async listInstallerPurchaseRequestGroups(input: {
+    scope?: 'pending' | 'history';
+    q?: string;
+    status?: 'all' | 'pending' | 'approved' | 'rejected';
+    channel?: 'all' | 'image_proof' | 'gcash_manual' | 'maya_manual';
+    decision?: 'all' | 'manual' | 'automation';
+    automation?: 'all' | 'approved' | 'manual_review_disabled' | 'outside_window' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'duplicate_reference' | 'wallet_number_mismatch' | 'amount_mismatch' | 'ocr_failed' | 'approval_error' | 'not_image_proof';
+    ocrStatus?: 'all' | 'detected' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'failed' | 'unavailable' | 'skipped';
+    page?: number;
+    perPage?: number;
+  }) {
+    const query = toQueryString({
+      scope: input.scope ?? 'pending',
+      q: input.q,
+      status: input.status ?? 'all',
+      channel: input.channel ?? 'all',
+      decision: input.decision ?? 'all',
+      automation: input.automation ?? 'all',
+      ocrStatus: input.ocrStatus ?? 'all',
+      page: input.page ?? 1,
+      perPage: input.perPage ?? 20,
+    });
+    return callStoreApi<{
+      items: AdminInstallerPurchaseRequestGroup[];
+      total: number;
+      page: number;
+      perPage: number;
+      pendingCount: number;
+      historyCount: number;
+    }>('GET', `admin/store/installer-buy/request-groups${query}`);
   },
 
   async installerPurchaseRequestAction(

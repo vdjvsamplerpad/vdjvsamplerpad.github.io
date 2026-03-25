@@ -374,7 +374,17 @@ export function PaymentReceiptCard({
             {secondaryAction.label}
           </Button>
         ) : null}
-        <Button type="button" variant="outline" className="w-full" onClick={() => void downloadReceipt()} disabled={downloading}>
+        <Button
+          type="button"
+          variant="outline"
+          className={`w-full ${
+            isPending
+              ? (isDark ? 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20' : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100')
+              : (isDark ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20' : 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100')
+          }`}
+          onClick={() => void downloadReceipt()}
+          disabled={downloading}
+        >
           <Download className="h-4 w-4 mr-2" />
           {downloading ? 'Preparing...' : 'Download Receipt'}
         </Button>

@@ -253,9 +253,11 @@ function HomeTab({
     return homeTrends.reduce((acc, point) => {
       acc.storeRevenue += Number(point.storeRevenueApproved || 0);
       acc.accountRevenue += Number(point.accountRevenueApproved || 0);
+      acc.installerRevenue += Number(point.installerRevenueApproved || 0);
       acc.totalRevenue += Number(point.totalRevenueApproved || 0);
       acc.storeBuyers += Number(point.storeBuyersApproved || 0);
       acc.accountBuyers += Number(point.accountBuyersApproved || 0);
+      acc.installerSales += Number(point.installerSalesApproved || 0);
       acc.importRequests += Number(point.importRequests || 0);
       acc.exportSuccess += Number(point.exportSuccess || 0);
       acc.exportFailed += Number(point.exportFailed || 0);
@@ -266,9 +268,11 @@ function HomeTab({
     }, {
       storeRevenue: 0,
       accountRevenue: 0,
+      installerRevenue: 0,
       totalRevenue: 0,
       storeBuyers: 0,
       accountBuyers: 0,
+      installerSales: 0,
       importRequests: 0,
       exportSuccess: 0,
       exportFailed: 0,
@@ -281,10 +285,10 @@ function HomeTab({
   const liveSnapshotCards = [
     { label: 'Pending Account Requests', value: Number(homeData?.counts?.pendingAccountRequests || 0), tone: 'text-rose-500' },
     { label: 'Pending Store Requests', value: Number(homeData?.counts?.pendingStoreRequests || 0), tone: 'text-orange-500' },
+    { label: 'Pending Installer Requests', value: Number(homeData?.counts?.pendingInstallerRequests || 0), tone: 'text-amber-500' },
     { label: 'Active Users', value: Number(homeData?.counts?.activeUsers || 0), tone: 'text-cyan-500' },
-    { label: 'Active Sessions', value: Number(homeData?.counts?.activeSessions || 0), tone: 'text-sky-500' },
+    { label: 'Active Today', value: Number(homeData?.counts?.activeTodayUsers || 0), tone: 'text-sky-500' },
     { label: 'Published Catalog', value: Number(homeData?.counts?.publishedCatalog || 0), tone: 'text-emerald-500' },
-    { label: 'Draft Catalog', value: Number(homeData?.counts?.draftCatalog || 0), tone: 'text-slate-500' },
   ];
 
   const rolling24hCards = [
@@ -349,11 +353,11 @@ function HomeTab({
               { label: 'Revenue', value: formatMoney(selectedRangeStats.totalRevenue), tone: 'text-emerald-500' },
               { label: 'Store Revenue', value: formatMoney(selectedRangeStats.storeRevenue), tone: 'text-green-500' },
               { label: 'Account Revenue', value: formatMoney(selectedRangeStats.accountRevenue), tone: 'text-lime-500' },
+              { label: 'Installer Revenue', value: formatMoney(selectedRangeStats.installerRevenue), tone: 'text-yellow-500' },
               { label: 'Store Buyers', value: selectedRangeStats.storeBuyers, tone: 'text-cyan-500' },
               { label: 'Account Buyers', value: selectedRangeStats.accountBuyers, tone: 'text-sky-500' },
+              { label: 'Installer Sales', value: selectedRangeStats.installerSales, tone: 'text-amber-500' },
               { label: 'Purchase Requests', value: selectedRangeStats.importRequests, tone: 'text-orange-500' },
-              { label: 'Exports', value: selectedRangeStats.exportSuccess, tone: 'text-blue-500' },
-              { label: 'Export Failures', value: selectedRangeStats.exportFailed, tone: 'text-red-500' },
             ].map((card) => (
               <div key={card.label} className={`border rounded p-3 ${cardClass}`}>
                 <div className="text-[11px] opacity-75">{card.label}</div>

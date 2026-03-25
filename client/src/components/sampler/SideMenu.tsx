@@ -14,7 +14,8 @@ import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { createPortal } from 'react-dom';
 import { normalizeStoredShortcutKey } from '@/lib/keyboard-shortcuts';
 import type { PerformanceTier } from '@/lib/performance-monitor';
-import { fetchStorePreviewBanks, useGuestStorePreviewBanks, type GuestStorePreviewBank } from './hooks/useGuestStorePreviewBanks';
+import { type GuestStorePreviewBank } from './hooks/useGuestStorePreviewBanks';
+import { useStorePreviewBadge } from './hooks/useStorePreviewBadge';
 import { isCanonicalDefaultBankIdentity, isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { useOnlineStoreDownloadTransfer } from './hooks/useOnlineStoreDownloadTransfer';
 import { deriveSnapshotRestoreStatus } from './hooks/useSamplerStore.snapshotMetadata';
@@ -41,8 +42,6 @@ const STORE_BUTTON_CONFETTI = [
   { key: 'c4', className: '-top-2 left-8 bg-emerald-300', delay: '160ms', duration: '2.3s', drift: '7px', rotate: '-20deg' },
   { key: 'c5', className: '-top-3 right-8 bg-fuchsia-300', delay: '420ms', duration: '2.5s', drift: '-10px', rotate: '28deg' },
 ];
-const STORE_PREVIEW_SEEN_KEY_PREFIX = 'vdjv-store-preview-seen-v1:';
-
 const withAlpha = (hex: string, alphaHex: string): string => {
   const normalized = hex.trim().replace('#', '');
   if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return hex;
@@ -61,13 +60,6 @@ const appendProgressLogLine = (
     return next.length > MAX_PROGRESS_LOG_LINES ? next.slice(-MAX_PROGRESS_LOG_LINES) : next;
   });
 };
-
-const buildStorePreviewSignature = (items: GuestStorePreviewBank[]): string => (
-  items
-    .slice(0, 10)
-    .map((item) => `${item.bankId}:${item.catalogItemId}:${item.order}`)
-    .join('|')
-);
 
 type StoreRecoveryResolution = {
   catalogItemId: string;
@@ -396,65 +388,15 @@ export function SideMenu({
     window.dispatchEvent(new Event('vdjv-open-about'));
   }, []);
   const effectiveUser = user || getCachedUser();
-  const { previewBanks } = useGuestStorePreviewBanks(effectiveUser);
-  const [signedInPreviewBanks, setSignedInPreviewBanks] = React.useState<GuestStorePreviewBank[]>([]);
-  const storePreviewItems = effectiveUser ? signedInPreviewBanks : previewBanks;
-  const storePreviewSignature = React.useMemo(
-    () => buildStorePreviewSignature(storePreviewItems),
-    [storePreviewItems]
-  );
-  const storePreviewSeenKey = React.useMemo(
-    () => `${STORE_PREVIEW_SEEN_KEY_PREFIX}${profile?.id || effectiveUser?.id || 'guest'}`,
-    [effectiveUser?.id, profile?.id]
-  );
-  const [seenStorePreviewSignature, setSeenStorePreviewSignature] = React.useState('');
+  const { storePreviewItems, showStoreNewBadge, markStorePreviewSeen } = useStorePreviewBadge({
+    effectiveUser,
+    profileId: profile?.id,
+  });
   const displayName = profile?.display_name?.trim() || effectiveUser?.email?.split('@')[0] || 'Guest';
   const isLowestGraphics = graphicsTier === 'lowest';
   const requestStoreLogin = React.useCallback((reason?: string) => {
     requestLoginPrompt(reason || 'Please sign in to download this bank.');
   }, [requestLoginPrompt]);
-  const showStoreNewBadge = Boolean(storePreviewSignature) && storePreviewSignature !== seenStorePreviewSignature;
-
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      setSeenStorePreviewSignature(window.localStorage.getItem(storePreviewSeenKey) || '');
-    } catch {
-      setSeenStorePreviewSignature('');
-    }
-  }, [storePreviewSeenKey]);
-
-  React.useEffect(() => {
-    if (!effectiveUser) {
-      setSignedInPreviewBanks([]);
-      return;
-    }
-    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const fetched = await fetchStorePreviewBanks();
-        if (cancelled || fetched.maintenanceEnabled) return;
-        setSignedInPreviewBanks(fetched.items);
-      } catch {
-      }
-    };
-
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [effectiveUser]);
-
-  const markStorePreviewSeen = React.useCallback(() => {
-    if (!storePreviewSignature || typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(storePreviewSeenKey, storePreviewSignature);
-    } catch {
-    }
-    setSeenStorePreviewSignature(storePreviewSignature);
-  }, [storePreviewSeenKey, storePreviewSignature]);
 
   React.useEffect(() => {
     if (!showStoreDialog) return;
@@ -789,9 +731,9 @@ export function SideMenu({
 
   const bankListEntries = React.useMemo<BankListEntry[]>(() => {
     const realEntries: BankListEntry[] = sortedBanks.map((bank) => ({ kind: 'real', bank }));
-    if (previewBanks.length === 0) return realEntries;
+    if (storePreviewItems.length === 0) return realEntries;
 
-    const previewEntries: BankListEntry[] = previewBanks.map((preview) => ({ kind: 'preview', preview }));
+    const previewEntries: BankListEntry[] = storePreviewItems.map((preview) => ({ kind: 'preview', preview }));
     const defaultBankIndex = realEntries.findIndex(
       (entry) => entry.kind === 'real' && isCanonicalDefaultBankIdentity(entry.bank, banks)
     );
@@ -805,7 +747,7 @@ export function SideMenu({
       ...previewEntries,
       ...realEntries.slice(defaultBankIndex + 1),
     ];
-  }, [previewBanks, sortedBanks]);
+  }, [banks, sortedBanks, storePreviewItems]);
 
   const snapshotActionBank = React.useMemo(
     () => (snapshotBankAction ? banks.find((bank) => bank.id === snapshotBankAction.bankId) || null : null),
@@ -1111,7 +1053,7 @@ export function SideMenu({
         </div>
 
         {renderContent && (
-          <div className="flex-1 min-h-0 overflow-y-auto p-2 pb-6">
+          <div className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto p-2 pb-6">
             <div className="grid grid-cols-2 gap-2 mb-2">
               <Button
                 onClick={() => setShowCreateDialog(true)}
@@ -1123,12 +1065,17 @@ export function SideMenu({
                 <Plus className="w-4 h-4 mr-1.5 shrink-0" />
                 <span className="truncate">New Bank</span>
               </Button>
-              <div className={`relative min-w-0 ${showEnhancedStoreButton ? 'overflow-visible' : ''}`}>
+              <div
+                className={`relative min-w-0 overflow-visible ${showEnhancedStoreButton ? 'isolate rounded-xl' : ''}`}
+              >
                 {showEnhancedStoreButton && (
-                  <>
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl"
+                    style={{ contain: 'paint' }}
+                  >
                     <div
-                      aria-hidden="true"
-                      className={`pointer-events-none absolute inset-0 -z-10 rounded-xl blur-md opacity-65 animate-pulse ${theme === 'dark'
+                      className={`pointer-events-none absolute inset-0 -z-10 rounded-xl opacity-65 animate-pulse ${theme === 'dark'
                         ? 'bg-gradient-to-r from-fuchsia-500/55 via-indigo-400/55 to-cyan-400/55'
                         : 'bg-gradient-to-r from-fuchsia-300/65 via-indigo-300/65 to-cyan-300/65'
                         }`}
@@ -1147,14 +1094,26 @@ export function SideMenu({
                         }}
                       />
                     ))}
-                  </>
+                  </div>
+                )}
+                {showStoreNewBadge && (
+                  <span
+                    className={`pointer-events-none absolute -top-2 -right-2 z-[3] inline-flex h-5 min-w-[2.1rem] items-center justify-center rounded-full border px-1.5 text-[10px] font-bold uppercase tracking-[0.14em] shadow-sm ${
+                      theme === 'dark'
+                        ? 'border-rose-300/70 bg-rose-500 text-white'
+                        : 'border-rose-200 bg-rose-500 text-white'
+                    }`}
+                    title="There are newly published banks in the store."
+                  >
+                    New
+                  </span>
                 )}
                 <Button
                   onClick={() => {
                     markStorePreviewSeen();
                     setShowStoreDialog(true);
                   }}
-                  className={`relative min-w-0 w-full px-2 sm:px-3 text-[13px] sm:text-sm gap-0 transition-all duration-200 ${showEnhancedStoreButton ? 'shadow-[0_0_14px_rgba(99,102,241,0.26)]' : ''} ${theme === 'dark'
+                  className={`relative min-w-0 w-full overflow-hidden px-2 sm:px-3 text-[13px] sm:text-sm gap-0 transition-colors duration-200 ${showEnhancedStoreButton ? 'shadow-[0_0_14px_rgba(99,102,241,0.26)]' : ''} ${theme === 'dark'
                     ? 'bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500'
                     : 'bg-indigo-50 border-indigo-300 text-indigo-700 hover:bg-indigo-100'
                     }`}
@@ -1178,18 +1137,6 @@ export function SideMenu({
                         style={{ animation: 'vdjv-store-shimmer 2.2s ease-in-out infinite' }}
                       />
                     </>
-                  )}
-                  {showStoreNewBadge && (
-                    <span
-                      className={`absolute -top-2 -right-2 z-[2] inline-flex h-5 min-w-[2.1rem] items-center justify-center rounded-full border px-1.5 text-[10px] font-bold uppercase tracking-[0.14em] shadow-sm ${
-                        theme === 'dark'
-                          ? 'border-rose-300/70 bg-rose-500 text-white'
-                          : 'border-rose-200 bg-rose-500 text-white'
-                      }`}
-                      title="There are newly published banks in the store."
-                    >
-                      New
-                    </span>
                   )}
                   <ShoppingCart className="relative z-[1] w-4 h-4 mr-1.5 shrink-0" style={storeIconMotionStyle} />
                   <span className="relative z-[1] truncate">Bank Store</span>

@@ -3,6 +3,7 @@ import { ArrowRight, Download, ExternalLink, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CopyableValue } from '@/components/ui/copyable-value';
 import { LoadingSpinner } from '@/components/ui/loading';
+import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links';
 import {
     PaymentChannel,
     PaymentConfig,
@@ -162,6 +163,7 @@ export function OnlineStorePurchasePane({
                                 <CopyableValue
                                     value={paymentConfig.maya_number}
                                     label="Maya number"
+                                    onCopied={() => openWalletAppAfterCopy('maya')}
                                     wrap
                                     className="max-w-full justify-center"
                                     valueClassName={`font-mono text-lg font-medium break-all whitespace-normal text-center ${isDark ? 'text-white' : 'text-gray-900'}`}

@@ -29,6 +29,27 @@ const renameWithExtension = (fileName: string, nextExtension: string): string =>
   return `${base}.${nextExtension}`
 }
 
+const RECEIPT_PROMO_LINE_REGEX = /\b(?:lazada|shopee|shop\s*now|free\s*shipping|free\s*gift|up\s*to\s*\d+%|voucher|promo|discount|cashback|register\s+and\s+get|score\s+the\s+best\s+deals|gco2e|carbon\s+footprint|transportation,\s*paper,\s*and\s*plastic|eth(?:yl)?\s+alcohol|jilidd)\b/i
+const RECEIPT_TAIL_ANCHOR_REGEX = /\b(?:ref(?:erence)?(?:\s*no\.?)?|transaction(?:\s+date|\s+date\s*&\s*time|\s+time)?|processing\s*time|sent\s+via|total\s+amount|total\s+amount\s+sent|transfer\s+method|transfer\s+amount)\b/i
+
+const getRelevantReceiptLines = (rawText: string): string[] => {
+  const lines = rawText.split('\n').map((line) => line.trim()).filter(Boolean)
+  if (lines.length === 0) return lines
+
+  const filtered: string[] = []
+  let seenTailAnchor = false
+  for (const line of lines) {
+    if (RECEIPT_TAIL_ANCHOR_REGEX.test(line)) {
+      seenTailAnchor = true
+    }
+    if (seenTailAnchor && RECEIPT_PROMO_LINE_REGEX.test(line)) {
+      break
+    }
+    filtered.push(line)
+  }
+  return filtered.length > 0 ? filtered : lines
+}
+
 const canvasToBlob = (canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob | null> =>
   new Promise((resolve) => {
     canvas.toBlob((blob) => resolve(blob), type, quality)
@@ -228,8 +249,9 @@ const detectReceiptRecipientNumber = (rawText: string): string | null => {
 }
 
 const detectReceiptAmount = (rawText: string): number | null => {
-  const lines = rawText.split('\n').map((line) => line.trim()).filter(Boolean)
-  const positiveKeywordRegex = /\b(amount|total|paid|payment|grand\s*total|total\s*amount|amount\s*paid|payment\s*amount)\b/i
+  const lines = getRelevantReceiptLines(rawText)
+  const positiveKeywordRegex = /\b(amount|total|paid|payment|grand\s*total|total\s*amount|amount\s*paid|payment\s*amount|transfer\s*amount|total\s*amount\s*sent|transferred)\b/i
+  const strongPositiveKeywordRegex = /\b(total\s*amount\s*sent|transfer\s*amount|total\s*amount|amount\s*paid|transferred)\b/i
   const negativeKeywordRegex = /\b(balance|available|fee|service\s*fee|charge|discount|cashback|change|before|after)\b/i
   const amountTokenRegex = /(?:PHP|P|\u20b1)?\s*([0-9]{1,3}(?:[,\s][0-9]{3})*(?:\.[0-9]{2})|[0-9]+(?:\.[0-9]{2})?)/gi
   const standaloneAmountLineRegex = /^-?\s*(?:PHP|P|\u20b1)\s*[0-9]{1,3}(?:[,\s][0-9]{3})*(?:\.[0-9]{2})\s*$/i
@@ -252,32 +274,37 @@ const detectReceiptAmount = (rawText: string): number | null => {
     return candidates
   }
 
-  type Candidate = { value: number; score: number }
+  type Candidate = { value: number; score: number; lineIndex: number }
   const scoredCandidates: Candidate[] = []
-  for (const line of lines) {
+  lines.forEach((line, lineIndex) => {
     const candidates = getLineCandidates(line)
-    if (candidates.length === 0) continue
+    if (candidates.length === 0) return
     const hasPositive = positiveKeywordRegex.test(line)
+    const hasStrongPositive = strongPositiveKeywordRegex.test(line)
     const hasNegative = negativeKeywordRegex.test(line)
+    const hasPromo = RECEIPT_PROMO_LINE_REGEX.test(line)
     const isStandaloneAmountLine = standaloneAmountLineRegex.test(line)
     const isDebitStyleAmountLine = /^-\s*(?:PHP|P|\u20b1)/i.test(line)
     const letterlessAmountLine = line.replace(/(?:PHP|P|\u20b1|[\d,\s.\-])/gi, '').trim().length === 0
     for (const value of candidates) {
       let score = 0
       if (hasPositive) score += 5
+      if (hasStrongPositive) score += 4
       if (/grand\s*total|total\s*amount|amount\s*paid/i.test(line)) score += 2
       if (/(php|\u20b1|\bpaid\b)/i.test(line)) score += 1
       if (isStandaloneAmountLine) score += 5
       if (isDebitStyleAmountLine) score += 2
       if (letterlessAmountLine) score += 2
       if (hasNegative) score -= 4
-      scoredCandidates.push({ value, score })
+      if (hasPromo) score -= 8
+      if (lineIndex > Math.floor(lines.length * 0.6) && !hasPositive) score -= 2
+      scoredCandidates.push({ value, score, lineIndex })
     }
-  }
+  })
 
   const positiveCandidates = scoredCandidates
     .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score || right.value - left.value)
+    .sort((left, right) => right.score - left.score || left.lineIndex - right.lineIndex || right.value - left.value)
   if (positiveCandidates.length > 0) return positiveCandidates[0].value
 
   const fallbackCandidates = lines
@@ -288,27 +315,108 @@ const detectReceiptAmount = (rawText: string): number | null => {
   return null
 }
 
+const createFocusedReceiptCropFile = async (file: File): Promise<File | null> => {
+  if (typeof document === 'undefined') return null
+  if (!file || !String(file.type || '').toLowerCase().startsWith('image/')) return null
+
+  let source: HTMLImageElement
+  try {
+    source = await loadImageElement(file)
+  } catch {
+    return null
+  }
+
+  const sourceWidth = Math.max(1, source.naturalWidth || source.width || 1)
+  const sourceHeight = Math.max(1, source.naturalHeight || source.height || 1)
+  if (sourceHeight <= sourceWidth * 1.4) return null
+
+  const cropX = Math.round(sourceWidth * 0.02)
+  const cropY = Math.round(sourceHeight * 0.04)
+  const cropWidth = Math.max(1, Math.round(sourceWidth * 0.96))
+  const cropHeight = Math.max(1, Math.round(sourceHeight * 0.72))
+
+  const canvas = document.createElement('canvas')
+  canvas.width = cropWidth
+  canvas.height = cropHeight
+  const context = canvas.getContext('2d', { alpha: false })
+  if (!context) return null
+
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, cropWidth, cropHeight)
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
+  context.drawImage(source, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
+
+  for (const quality of RECEIPT_PROOF_QUALITY_STEPS) {
+    const blob = await canvasToBlob(canvas, 'image/jpeg', quality)
+    if (!blob) continue
+    return new File([blob], renameWithExtension(file.name, 'jpg'), {
+      type: 'image/jpeg',
+      lastModified: Date.now(),
+    })
+  }
+  return null
+}
+
+const mergeReceiptOcrResults = (primary: ReceiptOcrResult, secondary: ReceiptOcrResult): ReceiptOcrResult => {
+  const primaryDetected = primary.detected
+  const secondaryDetected = secondary.detected
+  const mergedRawText = [primaryDetected.rawText, secondaryDetected.rawText].filter(Boolean).join('\n')
+  const merged: ReceiptOcrResult = {
+    ok: primary.ok || secondary.ok,
+    detected: {
+      referenceNo: primaryDetected.referenceNo || secondaryDetected.referenceNo || null,
+      payerName: primaryDetected.payerName || secondaryDetected.payerName || null,
+      amountPhp: primaryDetected.amountPhp ?? secondaryDetected.amountPhp ?? null,
+      recipientNumber: primaryDetected.recipientNumber || secondaryDetected.recipientNumber || null,
+      rawText: normalizeReceiptText(mergedRawText),
+      confidence: primaryDetected.confidence ?? secondaryDetected.confidence ?? null,
+    },
+    provider: primary.provider || secondary.provider,
+    elapsedMs: Math.max(primary.elapsedMs || 0, secondary.elapsedMs || 0),
+    errorCode: primary.ok || secondary.ok ? undefined : (primary.errorCode || secondary.errorCode),
+  }
+
+  const primaryFieldCount = Number(Boolean(primaryDetected.referenceNo)) + Number(Boolean(primaryDetected.amountPhp !== null)) + Number(Boolean(primaryDetected.recipientNumber))
+  const secondaryFieldCount = Number(Boolean(secondaryDetected.referenceNo)) + Number(Boolean(secondaryDetected.amountPhp !== null)) + Number(Boolean(secondaryDetected.recipientNumber))
+  if (secondaryFieldCount > primaryFieldCount && secondaryDetected.amountPhp !== null) {
+    merged.detected.amountPhp = secondaryDetected.amountPhp
+  }
+  return merged
+}
+
 const runClientReceiptOcr = async (file: File): Promise<ReceiptOcrResult> => {
   const startedAt = Date.now()
   try {
     const { createWorker } = await import('tesseract.js')
     const worker = await createWorker('eng')
     try {
-      const output = await worker.recognize(file)
-      const rawText = normalizeReceiptText(String(output?.data?.text || ''))
-      const confidenceRaw = Number(output?.data?.confidence)
-      return {
-        ok: rawText.length > 0,
-        detected: {
-          referenceNo: detectReferenceNo(rawText),
-          payerName: detectPayerName(rawText),
-          amountPhp: detectReceiptAmount(rawText),
-          recipientNumber: detectReceiptRecipientNumber(rawText),
-          rawText,
-          confidence: Number.isFinite(confidenceRaw) ? confidenceRaw : null,
-        },
-        elapsedMs: Date.now() - startedAt,
+      const runWorkerPass = async (candidateFile: File): Promise<ReceiptOcrResult> => {
+        const output = await worker.recognize(candidateFile)
+        const rawText = normalizeReceiptText(String(output?.data?.text || ''))
+        const confidenceRaw = Number(output?.data?.confidence)
+        return {
+          ok: rawText.length > 0,
+          detected: {
+            referenceNo: detectReferenceNo(rawText),
+            payerName: detectPayerName(rawText),
+            amountPhp: detectReceiptAmount(rawText),
+            recipientNumber: detectReceiptRecipientNumber(rawText),
+            rawText,
+            confidence: Number.isFinite(confidenceRaw) ? confidenceRaw : null,
+          },
+          elapsedMs: Date.now() - startedAt,
+        }
       }
+
+      const primaryResult = await runWorkerPass(file)
+      const focusedCropFile = await createFocusedReceiptCropFile(file).catch(() => null)
+      if (!focusedCropFile) {
+        return primaryResult
+      }
+
+      const focusedResult = await runWorkerPass(focusedCropFile)
+      return mergeReceiptOcrResults(primaryResult, focusedResult)
     } finally {
       await worker.terminate()
     }

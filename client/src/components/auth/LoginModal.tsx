@@ -9,6 +9,7 @@ import { PaymentReceiptCard } from '@/components/ui/payment-receipt-card'
 import { isPasswordRecoveryMode, setPasswordRecoveryMode, useAuthActions, useAuthState } from '@/hooks/useAuth'
 import { ensureActivityRuntime, logActivityEvent } from '@/lib/activityLogger'
 import { edgeFunctionUrl } from '@/lib/edge-api'
+import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links'
 import { optimizeReceiptProofFile, runReceiptOcr } from '@/lib/receipt-ocr'
 import { supabase } from '@/lib/supabase'
 import { ArrowRight, Download, Eye, EyeOff, ExternalLink, Loader2, X } from 'lucide-react'
@@ -1524,6 +1525,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                                 <CopyableValue
                                   value={paymentConfig.maya_number}
                                   label="Maya number"
+                                  onCopied={() => openWalletAppAfterCopy('maya')}
                                   wrap
                                   className="max-w-full justify-center"
                                   valueClassName={`font-mono text-sm font-medium break-all whitespace-normal text-center ${isDark ? 'text-white' : 'text-gray-900'}`}

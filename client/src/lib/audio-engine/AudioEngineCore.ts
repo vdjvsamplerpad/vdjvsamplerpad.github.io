@@ -42,13 +42,19 @@ const MIN_FADE_MS = 8;
 const PLAY_FINALIZE_SLACK_MS = 10;
 const MAX_LOADED_TRANSPORTS_CAP_IOS = 16;
 const MAX_LOADED_TRANSPORTS_CAP_ANDROID = 28;
-const MAX_LOADED_TRANSPORTS_IOS_WEB = 18;
+const MAX_LOADED_TRANSPORTS_IOS_WEB = 14;
+const MAX_LOADED_TRANSPORTS_IOS_WEB_PRESSURE = 10;
 const MAX_LOADED_TRANSPORTS_ANDROID_WEB = 40;
 const MAX_LOADED_TRANSPORTS_DESKTOP = 96;
-const TOTAL_TRANSPORT_CAP_IOS = 24;
+const TOTAL_TRANSPORT_CAP_IOS_NATIVE = 24;
+const TOTAL_TRANSPORT_CAP_IOS_WEB = 18;
+const TOTAL_TRANSPORT_CAP_IOS_WEB_PRESSURE = 14;
 const TOTAL_TRANSPORT_CAP_ANDROID = 64;
 const TOTAL_TRANSPORT_CAP_DESKTOP = 192;
 const HOT_TRANSPORT_PADS_CHANGED_EVENT = 'vdjv-audio-transport-hot-pads-changed';
+const IOS_WEB_PRESSURE_WINDOW_MS = 12_000;
+const IOS_WEB_PRESSURE_MIN_EVICTIONS = 3;
+const IOS_WEB_PRESSURE_COOLDOWN_MS = 45_000;
 
 interface ManagedTransport {
     state: TransportState;
@@ -88,6 +94,8 @@ export class AudioEngineCore implements LifecycleDelegate {
     private transportEvictions = 0;
     private lastEvictedPadId: string | null = null;
     private lastEvictedAt: number | null = null;
+    private recentEvictionTimestamps: number[] = [];
+    private pressureModeUntil = 0;
     private forceMediaPads = new Set<string>();
     private preservePitchFallbackPads = new Set<string>();
     private hotTransportPadIds = new Set<string>();
@@ -139,15 +147,44 @@ export class AudioEngineCore implements LifecycleDelegate {
         if (IS_CAPACITOR_NATIVE) {
             return IS_IOS ? MAX_LOADED_TRANSPORTS_CAP_IOS : MAX_LOADED_TRANSPORTS_CAP_ANDROID;
         }
-        if (IS_IOS) return MAX_LOADED_TRANSPORTS_IOS_WEB;
+        if (IS_IOS) {
+            return this.isPressureModeActive()
+                ? MAX_LOADED_TRANSPORTS_IOS_WEB_PRESSURE
+                : MAX_LOADED_TRANSPORTS_IOS_WEB;
+        }
         if (IS_ANDROID) return MAX_LOADED_TRANSPORTS_ANDROID_WEB;
         return MAX_LOADED_TRANSPORTS_DESKTOP;
     }
 
     private getTotalTransportCap(): number {
-        if (IS_IOS) return TOTAL_TRANSPORT_CAP_IOS;
+        if (IS_IOS) {
+            if (IS_CAPACITOR_NATIVE) return TOTAL_TRANSPORT_CAP_IOS_NATIVE;
+            return this.isPressureModeActive()
+                ? TOTAL_TRANSPORT_CAP_IOS_WEB_PRESSURE
+                : TOTAL_TRANSPORT_CAP_IOS_WEB;
+        }
         if (IS_ANDROID) return TOTAL_TRANSPORT_CAP_ANDROID;
         return TOTAL_TRANSPORT_CAP_DESKTOP;
+    }
+
+    private isPressureModeActive(): boolean {
+        return !IS_CAPACITOR_NATIVE && IS_IOS && this.pressureModeUntil > Date.now();
+    }
+
+    private pruneRecentEvictions(now: number): void {
+        this.recentEvictionTimestamps = this.recentEvictionTimestamps.filter(
+            (timestamp) => now - timestamp <= IOS_WEB_PRESSURE_WINDOW_MS
+        );
+    }
+
+    private registerTransportEviction(now: number): void {
+        if (!IS_IOS || IS_CAPACITOR_NATIVE) return;
+        this.recentEvictionTimestamps.push(now);
+        this.pruneRecentEvictions(now);
+        if (this.recentEvictionTimestamps.length >= IOS_WEB_PRESSURE_MIN_EVICTIONS) {
+            this.pressureModeUntil = Math.max(this.pressureModeUntil, now + IOS_WEB_PRESSURE_COOLDOWN_MS);
+            BufferBackend.trimIdleCache();
+        }
     }
 
     private touchTransport(transport: ManagedTransport): void {
@@ -199,6 +236,7 @@ export class AudioEngineCore implements LifecycleDelegate {
             this.transportEvictions += 1;
             this.lastEvictedPadId = padId;
             this.lastEvictedAt = Date.now();
+            this.registerTransportEviction(this.lastEvictedAt);
             this.disposeTransport(padId);
             if (typeof window !== 'undefined') {
                 window.dispatchEvent(new CustomEvent('vdjv-audio-transport-evict', {
@@ -210,6 +248,10 @@ export class AudioEngineCore implements LifecycleDelegate {
                 }));
             }
             loadedCount -= 1;
+        }
+
+        if (this.isPressureModeActive()) {
+            BufferBackend.trimIdleCache();
         }
 
         if (loadedCount > budget && typeof window !== 'undefined') {

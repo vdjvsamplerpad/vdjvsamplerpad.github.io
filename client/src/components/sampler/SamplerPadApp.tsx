@@ -4056,6 +4056,7 @@ export function SamplerPadApp() {
     globalMuted,
     sideMenuOpen: settings.sideMenuOpen,
     mixerOpen: settings.mixerOpen,
+    hasActiveDeckPlayback,
     searchOpen,
     channelLoadArmed: armedLoadChannelId !== null,
     adminPadColorPaintActive: Boolean(adminPadColorPaint),

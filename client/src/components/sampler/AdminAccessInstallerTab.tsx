@@ -1101,9 +1101,8 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
           <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'packages', theme)} onClick={() => setView('packages')}>Packages</Button>
           <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'licenses', theme)} onClick={() => setView('licenses')}>Licenses</Button>
           <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'catalog', theme)} onClick={() => setView('catalog')}>Catalog</Button>
-          <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'requests', theme)} onClick={() => setView('requests')}>Requests</Button>
           <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'events', theme)} onClick={() => setView('events')}>Events</Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => { if (view === 'packages') void reloadPackages(); if (view === 'licenses') void loadLicenses(); if (view === 'catalog') void loadCatalog(); if (view === 'requests') void loadRequests(); if (view === 'events') void loadEvents(); }}>
+          <Button type="button" variant="outline" size="sm" onClick={() => { if (view === 'packages') void reloadPackages(); if (view === 'licenses') void loadLicenses(); if (view === 'catalog') void loadCatalog(); if (view === 'events') void loadEvents(); }}>
             <RefreshCw className={`mr-2 h-4 w-4 ${currentViewLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>

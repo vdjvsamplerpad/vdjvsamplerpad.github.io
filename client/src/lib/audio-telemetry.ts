@@ -273,6 +273,14 @@ export class AudioTelemetryStore {
     this.persistNow();
   }
 
+  markSessionActive(reason: string): void {
+    if (!this.session.cleanExit) return;
+    this.session.cleanExit = false;
+    this.session.updatedAt = safeNow();
+    this.log('session_resume', { reason }, 'info', true);
+    this.persistNow();
+  }
+
   exportCurrentSession(): boolean {
     return this.exportSessionBlob(this.session, `audio-diag-${this.session.sessionId}.json`);
   }
@@ -437,9 +445,41 @@ export class AudioTelemetryStore {
     if (this.initializedGlobalHooks || typeof window === 'undefined') return;
     this.initializedGlobalHooks = true;
 
+    const handleCleanExit = (reason: string) => {
+      this.markCleanExit(reason);
+    };
+
+    const handleResume = (reason: string) => {
+      this.markSessionActive(reason);
+    };
+
     window.addEventListener('beforeunload', () => {
-      this.markCleanExit('beforeunload');
+      handleCleanExit('beforeunload');
     });
+
+    window.addEventListener('pagehide', () => {
+      handleCleanExit('pagehide');
+    });
+
+    window.addEventListener('pageshow', () => {
+      handleResume('pageshow');
+    });
+
+    window.addEventListener('focus', () => {
+      handleResume('focus');
+    });
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          handleCleanExit('visibility_hidden');
+          return;
+        }
+        if (document.visibilityState === 'visible') {
+          handleResume('visibility_visible');
+        }
+      });
+    }
 
     window.addEventListener('error', (event) => {
       this.log(

@@ -444,26 +444,8 @@ export function ProofImagePreview({ path }: { path: string }) {
   const [url, setUrl] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState(false);
   const [error, setError] = React.useState(false);
-  const [shouldLoad, setShouldLoad] = React.useState(false);
-  const previewRef = React.useRef<HTMLButtonElement | null>(null);
 
   React.useEffect(() => {
-    const node = previewRef.current;
-    if (!node || typeof IntersectionObserver === 'undefined') {
-      setShouldLoad(true);
-      return;
-    }
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      setShouldLoad(true);
-      observer.disconnect();
-    }, { rootMargin: '160px 0px' });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-
-  React.useEffect(() => {
-    if (!shouldLoad && !expanded) return;
     const cached = proofSignedUrlCache.get(path);
     if (cached && cached.expiresAt > Date.now()) {
       setUrl(cached.url);
@@ -492,16 +474,15 @@ export function ProofImagePreview({ path }: { path: string }) {
     return () => {
       mounted = false;
     };
-  }, [expanded, path, shouldLoad]);
+  }, [path]);
 
   if (error) return <span className="text-xs text-red-400">Failed to load</span>;
   if (!url) {
     return (
       <button
-        ref={previewRef}
         type="button"
         onClick={() => setExpanded(true)}
-        className="mt-1 inline-flex h-12 w-12 items-center justify-center rounded border border-dashed text-[10px] opacity-80 hover:opacity-100"
+        className="mt-1 inline-flex h-12 w-full items-center justify-center rounded border border-dashed text-[10px] opacity-80 hover:opacity-100"
       >
         <Loader2 className="w-4 h-4 animate-spin inline" />
       </button>
@@ -511,22 +492,21 @@ export function ProofImagePreview({ path }: { path: string }) {
   return (
     <>
       <button
-        ref={previewRef}
         type="button"
         onClick={() => setExpanded(true)}
-        className="mt-1 block rounded border overflow-hidden hover:opacity-80 transition-opacity"
+        className="mt-1 block w-full rounded border overflow-hidden hover:opacity-80 transition-opacity"
       >
         <img
           src={url}
           alt="Proof"
           loading="lazy"
           decoding="async"
-          className="w-12 h-12 object-cover"
+          className="w-full max-h-[420px] object-contain bg-black/5"
         />
       </button>
       {expanded && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70" onClick={() => setExpanded(false)}>
-          <img src={url} alt="Proof" decoding="async" className="max-w-[90vw] max-h-[85vh] rounded-lg shadow-2xl" />
+          <img src={url} alt="Proof" decoding="async" className="max-w-[94vw] max-h-[88vh] object-contain rounded-lg shadow-2xl" />
         </div>
       )}
     </>
@@ -550,16 +530,19 @@ export function CatalogCard({
   const [isPinned, setIsPinned] = React.useState(Boolean(draft.is_pinned));
   const [isComingSoon, setIsComingSoon] = React.useState(Boolean(draft.coming_soon));
   const [pricePhp, setPricePhp] = React.useState(draft.price_php === null ? '' : draft.price_php.toString());
+  const [lastPaidPrice, setLastPaidPrice] = React.useState(draft.price_php === null ? '' : draft.price_php.toString());
   const [thumbFile, setThumbFile] = React.useState<File | null>(null);
   const [thumbUploading, setThumbUploading] = React.useState(false);
   const [thumbPreviewUrl, setThumbPreviewUrl] = React.useState<string | null>(null);
   const [editorOpen, setEditorOpen] = React.useState(false);
+  const thumbInputRef = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
     setIsFree(!draft.is_paid && !draft.coming_soon);
     setIsPinned(Boolean(draft.is_pinned));
     setIsComingSoon(Boolean(draft.coming_soon));
     setPricePhp(draft.price_php === null ? '' : draft.price_php.toString());
+    setLastPaidPrice(draft.price_php === null ? '' : draft.price_php.toString());
   }, [draft]);
 
   React.useEffect(() => {
@@ -576,6 +559,11 @@ export function CatalogCard({
 
   const normalizedPrice = String(pricePhp || '').trim();
   const parsedPrice = normalizedPrice === '' ? null : Number(normalizedPrice);
+  React.useEffect(() => {
+    if (!isFree && !isComingSoon && normalizedPrice !== '') {
+      setLastPaidPrice(normalizedPrice);
+    }
+  }, [isComingSoon, isFree, normalizedPrice]);
   const requiresPrice = !isComingSoon && !isFree;
   const hasValidPrice = !requiresPrice || (parsedPrice !== null && Number.isFinite(parsedPrice) && parsedPrice > 0);
   const buildDraftUpdates = React.useCallback(() => ({
@@ -596,6 +584,7 @@ export function CatalogCard({
     setIsPinned(Boolean(draft.is_pinned));
     setIsComingSoon(Boolean(draft.coming_soon));
     setPricePhp(draft.price_php === null ? '' : draft.price_php.toString());
+    setLastPaidPrice(draft.price_php === null ? '' : draft.price_php.toString());
   }, [draft]);
 
   const openEditor = React.useCallback(() => {
@@ -677,14 +666,13 @@ export function CatalogCard({
     <div className={`rounded-xl border overflow-hidden transition-all ${isDark ? 'bg-gray-800/60 border-gray-700 hover:border-gray-600' : 'bg-white border-gray-200 shadow-sm hover:shadow-md'}`}>
       <div className={`h-1 w-full ${topBarClass}`} />
       <div className="flex gap-3 p-3.5">
-        <label className="shrink-0 cursor-pointer group relative">
+        <div className="shrink-0 relative">
           {currentThumb ? <img src={currentThumb} alt="" className="w-16 h-16 rounded-lg object-cover border" /> : <div className={`w-16 h-16 rounded-lg border-2 border-dashed flex items-center justify-center ${isDark ? 'border-gray-600 text-gray-600' : 'border-gray-300 text-gray-400'}`}><ImageIcon className="w-5 h-5" /></div>}
-          <div className="absolute inset-0 bg-black/50 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">{thumbUploading ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <Upload className="w-4 h-4 text-white" />}</div>
-          <input type="file" accept="image/*" className="hidden" onChange={handleThumbUpload} disabled={thumbUploading} />
-        </label>
+        </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-start gap-2">
             <h4 className={`min-w-0 flex-1 font-semibold text-sm truncate ${isDark ? 'text-white' : 'text-gray-900'}`} title={draft.bank?.title}>{draft.bank?.title || 'Unknown Bank'}</h4>
+            {draft.is_pinned && <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase rounded bg-amber-500/20 text-amber-700 dark:text-amber-300">Pinned</span>}
             <span className={`shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase rounded ${statusBadgeClass}`}>{statusLabel}</span>
           </div>
           <div className="mt-1 flex items-center justify-between gap-3">
@@ -713,6 +701,38 @@ export function CatalogCard({
                 {draft.expected_asset_name}
               </div>
             </div>
+            <div className={`rounded-lg border px-3 py-2.5 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+              <div className="flex items-start gap-3">
+                <div className="shrink-0">
+                  {currentThumb ? <img src={currentThumb} alt="" className="w-16 h-16 rounded-lg object-cover border" /> : <div className={`w-16 h-16 rounded-lg border-2 border-dashed flex items-center justify-center ${isDark ? 'border-gray-600 text-gray-600' : 'border-gray-300 text-gray-400'}`}><ImageIcon className="w-5 h-5" /></div>}
+                </div>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="text-sm font-medium">Thumbnail</div>
+                  <div className="text-[11px] opacity-70">Change the Bank Store thumbnail from here instead of directly on the card.</div>
+                  <div className="pt-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => thumbInputRef.current?.click()}
+                      disabled={thumbUploading}
+                      className="h-8"
+                    >
+                      {thumbUploading ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-2" />}
+                      Replace Thumbnail
+                    </Button>
+                    <input
+                      ref={thumbInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleThumbUpload}
+                      disabled={thumbUploading}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className={`rounded-lg border px-3 py-2.5 space-y-2 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
                 <div className="flex items-center justify-between gap-3">
@@ -725,8 +745,11 @@ export function CatalogCard({
                     onCheckedChange={(checked) => {
                       setIsComingSoon(checked);
                       if (checked) {
+                        if (normalizedPrice !== '') setLastPaidPrice(normalizedPrice);
                         setIsFree(false);
                         setPricePhp('');
+                      } else if (!isFree && lastPaidPrice && pricePhp === '') {
+                        setPricePhp(lastPaidPrice);
                       }
                     }}
                   />
@@ -744,7 +767,10 @@ export function CatalogCard({
                     onCheckedChange={(checked) => {
                       setIsFree(checked);
                       if (checked) {
+                        if (normalizedPrice !== '') setLastPaidPrice(normalizedPrice);
                         setPricePhp('');
+                      } else if (lastPaidPrice && pricePhp === '') {
+                        setPricePhp(lastPaidPrice);
                       }
                     }}
                   />

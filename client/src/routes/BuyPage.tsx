@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ExternalLink, Loader2 } from 'lucide-react';
+import { ArrowLeft, Download, ExternalLink, Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { CopyableValue } from '@/components/ui/copyable-value';
@@ -16,6 +16,7 @@ import {
 } from '@/components/landing/download-config';
 import { VersionSelector } from '@/components/landing/VersionSelector';
 import { edgeFunctionUrl } from '@/lib/edge-api';
+import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links';
 import { getLandingPagePath } from '@/lib/runtime-routes';
 import { supabase } from '@/lib/supabase';
 
@@ -68,6 +69,7 @@ type SubmitResult =
     purchaseLabel: string;
     licenseCode?: string;
     installerDownloadLink?: string;
+    installerDownloadLinks?: Partial<Record<PlatformKey, string>>;
   };
 
 const PAYMENT_CHANNEL_OPTIONS: Array<{ value: PaymentChannel; label: string }> = [
@@ -160,6 +162,7 @@ export default function BuyPage() {
   const [referenceNo, setReferenceNo] = React.useState('');
   const [notes, setNotes] = React.useState('');
   const [proofFile, setProofFile] = React.useState<File | null>(null);
+  const [expandedQrUrl, setExpandedQrUrl] = React.useState<string | null>(null);
   const [selectedSkus, setSelectedSkus] = React.useState<string[]>([]);
   const [result, setResult] = React.useState<SubmitResult | null>(null);
   const [versionDescriptionExpanded, setVersionDescriptionExpanded] = React.useState(false);
@@ -280,6 +283,29 @@ export default function BuyPage() {
     const data = payload?.data ?? payload;
     const code = String(payload?.error || data?.error || '');
     return { res, payload, data, code };
+  }, []);
+
+  const downloadQrImage = React.useCallback(async (url: string) => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP_${response.status}`);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = 'vdjv-payment-qr';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      return;
+    } catch {
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.click();
+    }
   }, []);
 
   const resetForm = () => {
@@ -423,9 +449,20 @@ export default function BuyPage() {
           installerDownloadLink: String(
             submitRes.data?.installer_download_link
             || selectedPrimaryProduct?.downloadLinkOverride
-            || activeBuySection.defaultInstallerDownloadLink
+            || config.config.downloadLinks[selectedVersion as InstallerVersion].windows
             || '',
           ),
+          installerDownloadLinks: Object.fromEntries(
+            (['android', 'ios', 'windows', 'macos'] as PlatformKey[])
+              .map((platform) => [
+                platform,
+                String(
+                  submitRes.data?.installer_download_links?.[platform]
+                  || config.config.downloadLinks[selectedVersion as InstallerVersion][platform]
+                  || '',
+                ),
+              ]),
+          ) as Partial<Record<PlatformKey, string>>,
         });
       }
       resetForm();
@@ -601,13 +638,25 @@ export default function BuyPage() {
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                     <div className="mb-2 text-sm font-semibold">License Ready</div>
                     {result.licenseCode ? <CopyableValue value={result.licenseCode} label="license code" wrap /> : null}
-                    {result.installerDownloadLink ? (
-                      <div className="mt-4">
-                        <Button type="button" className="w-full" onClick={() => window.open(result.installerDownloadLink, '_blank', 'noopener,noreferrer')}>
-                          Download Installer
-                        </Button>
-                      </div>
-                    ) : null}
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      {(['android', 'ios', 'windows', 'macos'] as PlatformKey[])
+                        .filter((platform) => Boolean(result.installerDownloadLinks?.[platform] || config.config.downloadLinks[result.version][platform]))
+                        .map((platform) => {
+                          const link = String(result.installerDownloadLinks?.[platform] || config.config.downloadLinks[result.version][platform] || '');
+                          return (
+                            <Button
+                              key={`installer-${platform}`}
+                              type="button"
+                              variant="outline"
+                              className="justify-between"
+                              onClick={() => window.open(link, '_blank', 'noopener,noreferrer')}
+                            >
+                              <span>{platformButtonLabel[platform]}</span>
+                              <ExternalLink className="h-4 w-4" />
+                            </Button>
+                          );
+                        })}
+                    </div>
                   </div>
                 )}
               </div>
@@ -653,21 +702,61 @@ export default function BuyPage() {
                   <p className="mb-4 text-sm text-slate-600">{config.paymentConfig.instructions || 'Follow the payment details below and submit your proof.'}</p>
                   <div className="grid gap-3 md:grid-cols-2">
                     {config.paymentConfig.gcash_number ? (
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">GCash</div>
-                        <div className="mt-2"><CopyableValue value={config.paymentConfig.gcash_number} label="GCash number" wrap /></div>
+                      <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 flex flex-col gap-1 items-center justify-center text-center">
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-500">GCash</div>
+                        <div className="mt-2">
+                          <CopyableValue
+                            value={config.paymentConfig.gcash_number}
+                            label="GCash number"
+                            wrap
+                            className="max-w-full justify-center"
+                            valueClassName="font-mono text-lg font-medium break-all whitespace-normal text-center text-gray-900"
+                            buttonClassName="text-blue-700 hover:bg-blue-100"
+                          />
+                        </div>
                       </div>
                     ) : null}
                     {config.paymentConfig.maya_number ? (
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Maya</div>
-                        <div className="mt-2"><CopyableValue value={config.paymentConfig.maya_number} label="Maya number" wrap /></div>
+                      <div className="rounded-xl border border-green-100 bg-green-50 p-3 flex flex-col gap-1 items-center justify-center text-center">
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-green-500">Maya</div>
+                        <div className="mt-2">
+                          <CopyableValue
+                            value={config.paymentConfig.maya_number}
+                            label="Maya number"
+                            wrap
+                            onCopied={() => openWalletAppAfterCopy('maya')}
+                            className="max-w-full justify-center"
+                            valueClassName="font-mono text-lg font-medium break-all whitespace-normal text-center text-gray-900"
+                            buttonClassName="text-green-700 hover:bg-green-100"
+                          />
+                        </div>
                       </div>
                     ) : null}
                   </div>
                   {config.paymentConfig.qr_image_path ? (
-                    <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                      <img src={config.paymentConfig.qr_image_path} alt="Payment QR" className="max-h-72 w-full object-contain bg-white p-3" />
+                    <div className="mt-4 flex flex-col items-center justify-center pt-4 border-t border-gray-100">
+                      <span className="text-sm font-medium tracking-wide text-slate-600">Scan to Pay</span>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedQrUrl(config.paymentConfig.qr_image_path || null)}
+                        className="mt-3 flex max-w-[min(70vw,220px)] max-h-[260px] items-center justify-center rounded-xl border bg-white p-2 hover:opacity-90 transition-opacity"
+                      >
+                        <img
+                          src={config.paymentConfig.qr_image_path}
+                          alt="Payment QR"
+                          className="block max-w-[min(64vw,200px)] max-h-[240px] h-auto w-auto rounded-lg object-contain"
+                        />
+                      </button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 h-8 border-slate-900 bg-slate-900 px-3 text-xs text-white hover:bg-slate-800 hover:text-white"
+                        onClick={() => void downloadQrImage(config.paymentConfig.qr_image_path!)}
+                      >
+                        <Download className="w-3.5 h-3.5 mr-1" />
+                        Download QR
+                      </Button>
                     </div>
                   ) : null}
                 </div>
@@ -694,7 +783,12 @@ export default function BuyPage() {
 
                 <div className="space-y-1">
                   <Label>Upload Receipt / Proof</Label>
-                  <Input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif" onChange={(event) => setProofFile(event.target.files?.[0] || null)} />
+                  <Input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif"
+                    onChange={(event) => setProofFile(event.target.files?.[0] || null)}
+                    className="file:mr-3 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-800 text-slate-700"
+                  />
                   {proofFile ? <div className="text-xs text-slate-500">{proofFile.name}</div> : null}
                 </div>
 
@@ -727,6 +821,34 @@ export default function BuyPage() {
           </div>
         </div>
       </section>
+      {expandedQrUrl && (
+        <div className="fixed inset-0 z-[220] bg-black/75 flex items-center justify-center p-4" onClick={() => setExpandedQrUrl(null)}>
+          <div className="relative flex max-w-[95vw] max-h-[90vh] flex-col items-center" onClick={(e) => e.stopPropagation()}>
+            <div className="flex max-w-[min(92vw,40rem)] max-h-[82vh] items-center justify-center rounded-xl border bg-white p-3 shadow-2xl">
+              <img
+                src={expandedQrUrl}
+                alt="Expanded payment QR"
+                className="block max-w-[min(88vw,36rem)] max-h-[76vh] h-auto w-auto object-contain"
+              />
+            </div>
+            <div className="mt-2 flex justify-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="border-slate-900 bg-slate-900 text-white hover:bg-slate-800 hover:text-white"
+                onClick={() => void downloadQrImage(expandedQrUrl)}
+              >
+                <Download className="w-3.5 h-3.5 mr-1" />
+                Download QR
+              </Button>
+              <Button type="button" size="sm" onClick={() => setExpandedQrUrl(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

@@ -1004,6 +1004,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   const now = new Date();
   const nowIso = now.toISOString();
   const since24hIso = new Date(now.getTime() - (24 * 60 * 60 * 1000)).toISOString();
+  const startOfTodayUtc = startOfUtcDay(now);
   const fromDateParam = parseDateOnlyParam(url.searchParams.get("fromDate"));
   const toDateParam = parseDateOnlyParam(url.searchParams.get("toDate"));
 
@@ -1054,8 +1055,10 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   const uniqueActiveUsers = new Set(nonAdminActiveRows.map((row: any) => String(row.user_id))).size;
 
   const [
+    activeTodayRowsResp,
     pendingAccountCountResp,
     pendingStoreCountResp,
+    pendingInstallerCountResp,
     publishedCatalogCountResp,
     draftCatalogCountResp,
     exports24hResp,
@@ -1065,14 +1068,26 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     imports24hResp,
     storeRevenue24hResp,
     accountRevenue24hResp,
+    installerRevenue24hResp,
     revenueTotalsResp,
+    installerRevenueTotalsResp,
   ] = await Promise.all([
+    admin
+      .from("active_sessions")
+      .select("user_id")
+      .gte("last_seen_at", startOfTodayUtc.toISOString())
+      .order("last_seen_at", { ascending: false })
+      .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT * 5),
     admin
       .from("account_registration_requests")
       .select("id", { head: true, count: "exact" })
       .eq("status", "pending"),
     admin
       .from("bank_purchase_requests")
+      .select("id", { head: true, count: "exact" })
+      .eq("status", "pending"),
+    admin
+      .from("installer_purchase_requests")
       .select("id", { head: true, count: "exact" })
       .eq("status", "pending"),
     admin
@@ -1124,14 +1139,27 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .gte("created_at", since24hIso)
       .limit(5000),
     admin
+      .from("installer_purchase_requests")
+      .select("receipt_reference, price_php_snapshot")
+      .eq("status", "approved")
+      .gte("created_at", since24hIso)
+      .limit(10000),
+    admin
       .from("v_admin_dashboard_revenue_totals")
       .select("store_revenue_approved_total,account_revenue_approved_total,store_buyers_approved_total,account_buyers_approved_total")
       .limit(1)
       .maybeSingle(),
+    admin
+      .from("installer_purchase_requests")
+      .select("receipt_reference, price_php_snapshot")
+      .eq("status", "approved")
+      .limit(10000),
   ]);
 
+  if (activeTodayRowsResp.error) return fail(500, activeTodayRowsResp.error.message);
   if (pendingAccountCountResp.error) return fail(500, pendingAccountCountResp.error.message);
   if (pendingStoreCountResp.error) return fail(500, pendingStoreCountResp.error.message);
+  if (pendingInstallerCountResp.error) return fail(500, pendingInstallerCountResp.error.message);
   if (publishedCatalogCountResp.error) return fail(500, publishedCatalogCountResp.error.message);
   if (draftCatalogCountResp.error) return fail(500, draftCatalogCountResp.error.message);
   if (exports24hResp.error) return fail(500, exports24hResp.error.message);
@@ -1141,13 +1169,16 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   if (imports24hResp.error) return fail(500, imports24hResp.error.message);
   if (storeRevenue24hResp.error) return fail(500, storeRevenue24hResp.error.message);
   if (accountRevenue24hResp.error) return fail(500, accountRevenue24hResp.error.message);
+  if (installerRevenue24hResp.error) return fail(500, installerRevenue24hResp.error.message);
   if (revenueTotalsResp.error) return fail(500, revenueTotalsResp.error.message);
+  if (installerRevenueTotalsResp.error) return fail(500, installerRevenueTotalsResp.error.message);
 
   const [
     accountQueueResp,
     storeQueueResp,
     trendRowsResp,
     revenueDailyResp,
+    installerRevenueDailyResp,
   ] = await Promise.all([
     admin
       .from("account_registration_requests")
@@ -1175,12 +1206,21 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .lte("date_utc", windowEndDate)
       .order("date_utc", { ascending: true })
       .limit(Math.max(30, Math.min(365, windowDays + 32))),
+    admin
+      .from("installer_purchase_requests")
+      .select("created_at, receipt_reference, price_php_snapshot")
+      .eq("status", "approved")
+      .gte("created_at", windowStartIso)
+      .lte("created_at", windowEndIso)
+      .order("created_at", { ascending: true })
+      .limit(10000),
   ]);
 
   if (accountQueueResp.error) return fail(500, accountQueueResp.error.message);
   if (storeQueueResp.error) return fail(500, storeQueueResp.error.message);
   if (trendRowsResp.error) return fail(500, trendRowsResp.error.message);
   if (revenueDailyResp.error) return fail(500, revenueDailyResp.error.message);
+  if (installerRevenueDailyResp.error) return fail(500, installerRevenueDailyResp.error.message);
 
   const storeQueueRows = storeQueueResp.data || [];
   const storeQueueUserIds = Array.from(
@@ -1207,9 +1247,11 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     importTotal: number;
     storeRevenueApproved: number;
     accountRevenueApproved: number;
+    installerRevenueApproved: number;
     totalRevenueApproved: number;
     storeBuyersApproved: number;
     accountBuyersApproved: number;
+    installerSalesApproved: number;
     importRequests: number;
   }>();
   for (let offset = 0; offset < windowDays; offset += 1) {
@@ -1224,9 +1266,11 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       importTotal: 0,
       storeRevenueApproved: 0,
       accountRevenueApproved: 0,
+      installerRevenueApproved: 0,
       totalRevenueApproved: 0,
       storeBuyersApproved: 0,
       accountBuyersApproved: 0,
+      installerSalesApproved: 0,
       importRequests: 0,
     });
   }
@@ -1242,10 +1286,29 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     const accountRevenue = asFiniteNumber((row as any).account_revenue_approved);
     bucket.storeRevenueApproved = storeRevenue;
     bucket.accountRevenueApproved = accountRevenue;
-    bucket.totalRevenueApproved = storeRevenue + accountRevenue;
+    bucket.totalRevenueApproved = storeRevenue + accountRevenue + bucket.installerRevenueApproved;
     bucket.storeBuyersApproved = Math.max(0, Math.floor(asFiniteNumber((row as any).store_buyers_approved)));
     bucket.accountBuyersApproved = Math.max(0, Math.floor(asFiniteNumber((row as any).account_buyers_approved)));
     bucket.importRequests = Math.max(0, Math.floor(asFiniteNumber((row as any).store_requests_total)));
+  }
+
+  const installerRevenueDailyMap = new Map<string, { revenue: number; receiptRefs: Set<string> }>();
+  for (const row of installerRevenueDailyResp.data || []) {
+    const createdAt = new Date(String((row as any).created_at || ""));
+    if (Number.isNaN(createdAt.getTime())) continue;
+    const date = toUtcDateKey(createdAt);
+    const daily = installerRevenueDailyMap.get(date) || { revenue: 0, receiptRefs: new Set<string>() };
+    daily.revenue += asFiniteNumber((row as any).price_php_snapshot);
+    const receiptReference = asString((row as any).receipt_reference, 160) || "";
+    if (receiptReference) daily.receiptRefs.add(receiptReference);
+    installerRevenueDailyMap.set(date, daily);
+  }
+  for (const [date, daily] of installerRevenueDailyMap.entries()) {
+    const bucket = trendSeed.get(date);
+    if (!bucket) continue;
+    bucket.installerRevenueApproved = daily.revenue;
+    bucket.installerSalesApproved = daily.receiptRefs.size;
+    bucket.totalRevenueApproved = bucket.storeRevenueApproved + bucket.accountRevenueApproved + daily.revenue;
   }
 
   const trendRows = trendRowsResp.data || [];
@@ -1303,14 +1366,34 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   const accountRevenue24h = (accountRevenue24hResp.data || []).reduce((acc: number, row: any) => {
     return acc + asFiniteNumber(row?.account_price_php_snapshot);
   }, 0);
-  const totalRevenue24h = storeRevenue24h + accountRevenue24h;
+  const installerRevenue24hSeenReceipts = new Set<string>();
+  const installerRevenue24h = (installerRevenue24hResp.data || []).reduce((acc: number, row: any) => {
+    const receiptReference = asString((row as any)?.receipt_reference, 160) || "";
+    if (!receiptReference || installerRevenue24hSeenReceipts.has(receiptReference)) return acc;
+    installerRevenue24hSeenReceipts.add(receiptReference);
+    return acc + asFiniteNumber((row as any)?.price_php_snapshot);
+  }, 0);
+  const totalRevenue24h = storeRevenue24h + accountRevenue24h + installerRevenue24h;
 
   const totalRevenueRow = revenueTotalsResp.data || {};
   const storeRevenueApprovedTotal = asFiniteNumber((totalRevenueRow as any).store_revenue_approved_total);
   const accountRevenueApprovedTotal = asFiniteNumber((totalRevenueRow as any).account_revenue_approved_total);
-  const totalRevenueApproved = storeRevenueApprovedTotal + accountRevenueApprovedTotal;
+  const installerRevenueApprovedSeenReceipts = new Set<string>();
+  const installerRevenueApprovedTotal = (installerRevenueTotalsResp.data || []).reduce((acc: number, row: any) => {
+    const receiptReference = asString((row as any)?.receipt_reference, 160) || "";
+    if (!receiptReference || installerRevenueApprovedSeenReceipts.has(receiptReference)) return acc;
+    installerRevenueApprovedSeenReceipts.add(receiptReference);
+    return acc + asFiniteNumber((row as any)?.price_php_snapshot);
+  }, 0);
+  const installerSalesApprovedTotal = installerRevenueApprovedSeenReceipts.size;
+  const totalRevenueApproved = storeRevenueApprovedTotal + accountRevenueApprovedTotal + installerRevenueApprovedTotal;
   const storeBuyersApprovedTotal = Math.max(0, Math.floor(asFiniteNumber((totalRevenueRow as any).store_buyers_approved_total)));
   const accountBuyersApprovedTotal = Math.max(0, Math.floor(asFiniteNumber((totalRevenueRow as any).account_buyers_approved_total)));
+  const activeTodayUsers = new Set(
+    (activeTodayRowsResp.data || [])
+      .map((row: any) => String(row?.user_id || ""))
+      .filter((userId) => Boolean(userId) && !adminIds.has(userId)),
+  ).size;
 
   return ok({
     refreshedAt: nowIso,
@@ -1318,8 +1401,10 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     counts: {
       activeUsers: uniqueActiveUsers,
       activeSessions: nonAdminActiveRows.length,
+      activeTodayUsers,
       pendingAccountRequests: Number(pendingAccountCountResp.count || 0),
       pendingStoreRequests: Number(pendingStoreCountResp.count || 0),
+      pendingInstallerRequests: Number(pendingInstallerCountResp.count || 0),
       exports24h: Number(exports24hResp.count || 0),
       exportFailures24h: Number(exportFailures24hResp.count || 0),
       duplicateNoChange24h: Number(duplicateNoChange24hResp.count || 0),
@@ -1327,12 +1412,15 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       imports24h: Number(imports24hResp.count || 0),
       storeRevenueApprovedTotal,
       accountRevenueApprovedTotal,
+      installerRevenueApprovedTotal,
       totalRevenueApproved,
       storeRevenue24h,
       accountRevenue24h,
+      installerRevenue24h,
       totalRevenue24h,
       storeBuyersApprovedTotal,
       accountBuyersApprovedTotal,
+      installerSalesApprovedTotal,
       publishedCatalog: Number(publishedCatalogCountResp.count || 0),
       draftCatalog: Number(draftCatalogCountResp.count || 0),
     },

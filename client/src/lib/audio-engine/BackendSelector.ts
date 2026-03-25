@@ -20,10 +20,13 @@ import {
 const IS_CAPACITOR_NATIVE =
     typeof window !== 'undefined' &&
     Boolean((window as any).Capacitor?.isNativePlatform?.());
+const IS_IOS_WEB = IS_IOS && !IS_CAPACITOR_NATIVE;
 const CAPACITOR_MEDIA_DURATION_THRESHOLD_MS_DEFAULT = 90_000;
 const CAPACITOR_MEDIA_SIZE_THRESHOLD_BYTES_DEFAULT = 8 * 1024 * 1024;
 const CAPACITOR_MEDIA_DURATION_THRESHOLD_MS_IOS = 240_000;
 const CAPACITOR_MEDIA_SIZE_THRESHOLD_BYTES_IOS = 10 * 1024 * 1024;
+const IOS_WEB_MEDIA_DURATION_THRESHOLD_MS = 120_000;
+const IOS_WEB_MEDIA_SIZE_THRESHOLD_BYTES = 6 * 1024 * 1024;
 
 export interface BackendSelectionInput {
     audioDurationMs?: number | null;
@@ -91,7 +94,17 @@ export function selectBackend(input: BackendSelectionInput): AudioBackendType {
         }
     }
 
-    if (IS_IOS) {
+    if (IS_IOS_WEB) {
+        if (!hasDuration && !hasSize) {
+            if (canPreferLowLatencyUnknownMetadata) {
+                return 'buffer';
+            }
+            return 'media';
+        }
+        if (duration > IOS_WEB_MEDIA_DURATION_THRESHOLD_MS || size > IOS_WEB_MEDIA_SIZE_THRESHOLD_BYTES) {
+            return 'media';
+        }
+    } else if (IS_IOS) {
         if (duration > IOS_MEDIA_DURATION_THRESHOLD_MS || size > IOS_MEDIA_SIZE_THRESHOLD_BYTES) {
             return 'media';
         }

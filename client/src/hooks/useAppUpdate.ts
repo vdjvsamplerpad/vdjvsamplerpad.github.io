@@ -7,6 +7,7 @@ import {
   onNativeAppUpdateState,
   type NativeAppUpdateState,
 } from '@/lib/native-app-update';
+import { forceFreshAppReload } from '@/lib/chunk-load-recovery';
 
 export type AppUpdatePlatform = 'web' | 'electron' | 'android';
 
@@ -42,6 +43,23 @@ const createBaseState = (): AppUpdateViewState => ({
   busy: false,
 });
 
+const createWebState = (patch: Partial<AppUpdateViewState> = {}): AppUpdateViewState => ({
+  platform: 'web',
+  supported: true,
+  enabled: true,
+  status: 'idle',
+  message: 'Web app is ready. Check here when you want to refresh to the latest deployed version.',
+  currentVersion: (import.meta as any).env?.VITE_APP_VERSION ?? null,
+  nextVersion: null,
+  downloadPercent: null,
+  lastCheckedAt: null,
+  lastError: null,
+  canCheck: true,
+  canInstall: false,
+  busy: false,
+  ...patch,
+});
+
 const normalizeState = (
   platform: AppUpdatePlatform,
   patch: Partial<NativeAppUpdateState & { enabled: boolean }>
@@ -73,6 +91,8 @@ const normalizeState = (
 
 export function useAppUpdate() {
   const [state, setState] = React.useState<AppUpdateViewState>(() => createBaseState());
+  const webUpdateRegistrationRef = React.useRef<ServiceWorkerRegistration | null>(null);
+  const webUpdateReadyRef = React.useRef(false);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -177,11 +197,117 @@ export function useAppUpdate() {
       return true;
     };
 
+    const attachWeb = async () => {
+      const canUseServiceWorker = 'serviceWorker' in navigator;
+      const isSecureContext = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+      const includeLanding = typeof __VDJV_INCLUDE_LANDING__ !== 'undefined' ? __VDJV_INCLUDE_LANDING__ : true;
+      if (!canUseServiceWorker || !isSecureContext || !includeLanding) {
+        return false;
+      }
+
+      let registration: ServiceWorkerRegistration | null = null;
+      try {
+        registration = await navigator.serviceWorker.getRegistration('/');
+        if (!registration) {
+          registration = await navigator.serviceWorker.getRegistration();
+        }
+      } catch {
+        registration = null;
+      }
+
+      if (!registration) {
+        setSafeState(createWebState({
+          status: 'disabled',
+          message: 'Web update check is unavailable until the service worker is ready.',
+          enabled: false,
+          supported: false,
+          canCheck: false,
+        }));
+        return true;
+      }
+
+      webUpdateRegistrationRef.current = registration;
+
+      const setWebState = (patch: Partial<AppUpdateViewState>) => {
+        setSafeState(createWebState(patch));
+      };
+
+      const markReady = (message?: string) => {
+        webUpdateReadyRef.current = true;
+        setWebState({
+          status: 'downloaded',
+          message: message || 'A newer web app version is ready. Reload from Settings to apply it.',
+          canInstall: true,
+        });
+      };
+
+      const markIdle = (message?: string) => {
+        webUpdateReadyRef.current = false;
+        setWebState({
+          status: 'idle',
+          message: message || 'Web app is up to date.',
+          canInstall: false,
+        });
+      };
+
+      const watchInstallingWorker = (worker: ServiceWorker | null) => {
+        if (!worker) return;
+        const handleStateChange = () => {
+          if (worker.state === 'installed') {
+            if (navigator.serviceWorker.controller) {
+              markReady();
+            } else {
+              markIdle('Latest web app version is installed.');
+            }
+          } else if (worker.state === 'redundant') {
+            setWebState({
+              status: 'error',
+              message: 'Web update became invalid before it finished.',
+              canInstall: false,
+            });
+          }
+        };
+        worker.addEventListener('statechange', handleStateChange);
+        cleanups.push(() => worker.removeEventListener('statechange', handleStateChange));
+      };
+
+      if (registration.waiting) {
+        markReady();
+      } else {
+        markIdle('Web app is up to date. Use Check for Updates when you want to refresh from the server.');
+      }
+
+      watchInstallingWorker(registration.installing);
+
+      const handleUpdateFound = () => {
+        setWebState({
+          status: 'checking',
+          message: 'Downloading the latest web app files...',
+          busy: true,
+          canCheck: false,
+        });
+        watchInstallingWorker(registration?.installing ?? null);
+      };
+      registration.addEventListener('updatefound', handleUpdateFound);
+      cleanups.push(() => registration?.removeEventListener('updatefound', handleUpdateFound));
+
+      const handleControllerChange = () => {
+        markIdle('Latest web app version is active.');
+      };
+      navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
+      cleanups.push(() => navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange));
+
+      return true;
+    };
+
     void (async () => {
       if (await attachElectron()) {
         return;
       }
       if (await attachAndroid()) {
+        return;
+      }
+      if (await attachWeb()) {
         return;
       }
       setSafeState(createBaseState());
@@ -212,6 +338,54 @@ export function useAppUpdate() {
     if (state.platform === 'android') {
       const next = await checkNativeAppUpdate({ autoStart: true });
       setState(normalizeState('android', next));
+      return;
+    }
+    if (state.platform === 'web') {
+      const registration = webUpdateRegistrationRef.current;
+      if (!registration) return;
+      setState((prev) => createWebState({
+        ...prev,
+        status: 'checking',
+        message: 'Checking for the latest web app files...',
+        busy: true,
+        canCheck: false,
+        lastCheckedAt: new Date().toISOString(),
+      }));
+      try {
+        await registration.update();
+        if (registration.waiting || webUpdateReadyRef.current) {
+          setState((prev) => createWebState({
+            ...prev,
+            status: 'downloaded',
+            message: 'A newer web app version is ready. Reload from Settings to apply it.',
+            canInstall: true,
+            busy: false,
+            canCheck: true,
+            lastCheckedAt: new Date().toISOString(),
+          }));
+        } else {
+          setState((prev) => createWebState({
+            ...prev,
+            status: 'idle',
+            message: 'Web app is already up to date.',
+            canInstall: false,
+            busy: false,
+            canCheck: true,
+            lastCheckedAt: new Date().toISOString(),
+          }));
+        }
+      } catch (error) {
+        setState((prev) => createWebState({
+          ...prev,
+          status: 'error',
+          message: 'Could not check for the latest web app version.',
+          lastError: error instanceof Error ? error.message : String(error),
+          busy: false,
+          canCheck: true,
+          canInstall: false,
+          lastCheckedAt: new Date().toISOString(),
+        }));
+      }
     }
   }, [state.platform]);
 
@@ -223,6 +397,16 @@ export function useAppUpdate() {
     if (state.platform === 'android') {
       const next = await completeNativeAppUpdate();
       setState(normalizeState('android', next));
+      return;
+    }
+    if (state.platform === 'web') {
+      const registration = webUpdateRegistrationRef.current;
+      if (registration?.waiting) {
+        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+      } else {
+        await registration?.update().catch(() => undefined);
+      }
+      await forceFreshAppReload();
     }
   }, [state.platform]);
 

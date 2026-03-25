@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { CopyableValue, copyTextToClipboard } from '@/components/ui/copyable-value';
-import type { AdminAccountRegistrationRequest, AdminClientCrashReport, DefaultBankRelease, LandingDownloadConfig, LandingPlatformKey, LandingVersionKey } from '@/lib/admin-api';
+import { adminApi, type AdminAccountRegistrationRequest, type AdminClientCrashReport, type AdminInstallerPurchaseRequestGroup, type DefaultBankRelease, type LandingDownloadConfig, type LandingPlatformKey, type LandingVersionKey } from '@/lib/admin-api';
 import { Check, ChevronDown, ChevronUp, Copy, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
 import type { SamplerAppConfig, SamplerShortcutAction } from './samplerAppConfig';
 import type {
@@ -126,6 +126,13 @@ interface StoreRequestsTabProps {
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onRetryEmail: (id: string) => void;
+}
+
+interface InstallerRequestsTabProps {
+  theme: AdminDialogTheme;
+  panelClass: string;
+  cardClass: string;
+  pushNotice: (notice: { variant: 'success' | 'error' | 'info'; message: string }) => void;
 }
 
 interface CrashReportsTabProps {
@@ -535,6 +542,81 @@ function InlineCopyButton({
   );
 }
 
+const requestSummaryChipClass = (
+  theme: AdminDialogTheme,
+  tone: 'default' | 'decision' | 'auto' | 'ocr' | 'status' | 'danger'
+): string => {
+  if (tone === 'decision') {
+    return theme === 'dark'
+      ? 'border border-blue-700/50 bg-blue-500/10 text-blue-300'
+      : 'border border-blue-200 bg-blue-50 text-blue-700';
+  }
+  if (tone === 'auto') {
+    return theme === 'dark'
+      ? 'border border-fuchsia-700/50 bg-fuchsia-500/10 text-fuchsia-300'
+      : 'border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700';
+  }
+  if (tone === 'ocr') {
+    return theme === 'dark'
+      ? 'border border-amber-700/50 bg-amber-500/10 text-amber-300'
+      : 'border border-amber-200 bg-amber-50 text-amber-700';
+  }
+  if (tone === 'status') {
+    return theme === 'dark'
+      ? 'border border-emerald-700/50 bg-emerald-500/10 text-emerald-300'
+      : 'border border-emerald-200 bg-emerald-50 text-emerald-700';
+  }
+  if (tone === 'danger') {
+    return theme === 'dark'
+      ? 'border border-red-700/50 bg-red-500/10 text-red-300'
+      : 'border border-red-200 bg-red-50 text-red-700';
+  }
+  return theme === 'dark'
+    ? 'border border-gray-700 bg-gray-800/70 text-gray-300'
+    : 'border border-gray-200 bg-gray-50 text-gray-700';
+};
+
+function RequestSummaryChip({
+  theme,
+  label,
+  value,
+  tone = 'default',
+}: {
+  theme: AdminDialogTheme;
+  label: string;
+  value: string;
+  tone?: 'default' | 'decision' | 'auto' | 'ocr' | 'status' | 'danger';
+}) {
+  if (!String(value || '').trim()) return null;
+  const normalizedValue = String(value || '').trim().toLowerCase();
+  const effectiveTone = tone === 'status'
+    ? (
+      normalizedValue === 'rejected'
+        ? 'danger'
+        : normalizedValue === 'approved'
+          ? 'status'
+          : 'default'
+    )
+    : tone;
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${requestSummaryChipClass(theme, effectiveTone)}`}>
+      <span className="opacity-70">{label}</span>
+      <span>{value}</span>
+    </span>
+  );
+}
+
+const useDebouncedValue = <T,>(value: T, delayMs: number) => {
+  const [debounced, setDebounced] = React.useState(value);
+
+  React.useEffect(() => {
+    const timeout = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timeout);
+  }, [delayMs, value]);
+
+  return debounced;
+};
+
 const LANDING_VERSION_OPTIONS: LandingVersionKey[] = ['V1', 'V2', 'V3'];
 const LANDING_PLATFORM_OPTIONS: LandingPlatformKey[] = ['android', 'ios', 'windows', 'macos'];
 
@@ -715,23 +797,7 @@ export function LandingDownloadTab({
                       className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
                     />
                   </div>
-                  <div className="space-y-1">
-                    <Label>{version} Default Installer Link</Label>
-                    <Input
-                      value={config.buySections[version].defaultInstallerDownloadLink}
-                      onChange={(event) => onConfigChange({
-                        ...config,
-                        buySections: {
-                          ...config.buySections,
-                          [version]: {
-                            ...config.buySections[version],
-                            defaultInstallerDownloadLink: event.target.value,
-                          },
-                        },
-                      })}
-                      className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
-                    />
-                  </div>
+
                 </div>
               </div>
               <div className="space-y-3">
@@ -1238,6 +1304,7 @@ export function AccountRequestsTab({
   onReject,
   onRetryEmail,
 }: AccountRequestsTabProps) {
+  const [selectedRequest, setSelectedRequest] = React.useState<AdminAccountRegistrationRequest | null>(null);
   return (
       <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
         <div className="flex flex-wrap gap-2 items-center">
@@ -1281,147 +1348,53 @@ export function AccountRequestsTab({
         <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div>
       ) : (
         <>
-          <div className="space-y-2">
-            {rows.length === 0 ? (
+        <div className="space-y-2">
+          {rows.length === 0 ? (
               <p className="text-center py-8 opacity-50 text-sm">No {filter} account registration requests.</p>
             ) : rows.map((req) => {
               const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
+              const amountLabel = typeof req.ocr_amount_php === 'number'
+                ? formatOcrAmount(req.ocr_amount_php)
+                : '-';
               return (
               <div key={req.id} className={`p-3 rounded-lg border ${cardClass}`}>
-                <div className="flex justify-between items-start gap-2">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="font-bold text-sm truncate">{req.display_name || 'No Name'}</h4>
+                <div className="flex justify-between items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h4 className="font-bold text-sm truncate">{req.display_name || 'No Name'}</h4>
+                        <div className={`mt-0.5 flex items-center gap-1 text-[11px] ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>
+                          <CopyableValue
+                            value={req.email || '-'}
+                            label="account request email"
+                            className="min-w-0 max-w-full"
+                            valueClassName="text-inherit"
+                            buttonClassName="h-5 w-5"
+                          />
+                        </div>
+                      </div>
+                      <div className={`shrink-0 text-sm font-semibold ${theme === 'dark' ? 'text-gray-100' : 'text-gray-900'}`}>{amountLabel}</div>
                     </div>
-                    <div className={`mt-0.5 flex items-center gap-1 text-[11px] ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>
-                      <span className="shrink-0">{req.display_name || 'No Name'} -</span>
-                      <CopyableValue
-                        value={req.email || '-'}
-                        label="account request email"
-                        className="min-w-0 max-w-full"
-                        valueClassName="text-inherit"
-                        buttonClassName="h-5 w-5"
-                      />
-                    </div>
-                    <div className={`text-xs mt-1 grid grid-cols-2 gap-x-6 gap-y-0.5 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+                    <div className={`mt-1 grid grid-cols-1 gap-y-0.5 text-xs sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
                       <div><span className="opacity-70">Channel:</span> <span className="uppercase font-medium">{req.payment_channel}</span></div>
-                      <div><span className="opacity-70">Name:</span> {req.payer_name || '-'}</div>
-                      <div>
-                        <span className="opacity-70">Ref:</span>{' '}
-                        <CopyableValue
-                          value={req.reference_no || '-'}
-                          label="account request reference"
-                          valueClassName="font-mono text-inherit"
-                          buttonClassName="h-5 w-5"
-                        />
-                      </div>
                       <div><span className="opacity-70">Date:</span> {new Date(req.created_at).toLocaleString()}</div>
-                      <div className="col-span-2">
-                        <span className="opacity-70">Request ID:</span>{' '}
-                        <CopyableValue
-                          value={req.id}
-                          label="account request id"
-                          valueClassName="font-mono text-inherit"
-                          buttonClassName="h-5 w-5"
-                        />
-                      </div>
-                      {req.reviewed_at && (
-                        <div className="col-span-2">
-                          <span className="opacity-70">Reviewed:</span> {new Date(req.reviewed_at).toLocaleString()}
-                          {req.reviewed_by ? ` by ${req.reviewed_by.slice(0, 8)}...` : ''}
-                        </div>
-                      )}
-                      {req.approved_auth_user_id && (
-                        <div className="col-span-2">
-                          <span className="opacity-70">Approved User:</span>{' '}
-                          <CopyableValue
-                            value={req.approved_auth_user_id}
-                            label="approved user id"
-                            valueClassName="font-mono text-inherit"
-                            buttonClassName="h-5 w-5"
-                          />
-                        </div>
-                      )}
-                      {req.decision_source && (
-                        <div><span className="opacity-70">Decision:</span> {formatAutomationLabel(req.decision_source)}</div>
-                      )}
-                      {req.automation_result && !suppressOcrDetails && (
-                        <div><span className="opacity-70">Auto Check:</span> {formatAutomationLabel(req.automation_result)}</div>
-                      )}
-                      {suppressOcrDetails && (
-                        <div className="col-span-2">
-                          <span className="opacity-70">Manual Review:</span> Uses the entered payer name and reference number only.
-                        </div>
-                      )}
-                      {req.ocr_reference_no && !suppressOcrDetails && (
-                        <div>
-                          <span className="opacity-70">OCR Ref:</span>{' '}
-                          <CopyableValue
-                            value={req.ocr_reference_no}
-                            label="ocr reference"
-                            valueClassName="font-mono text-inherit"
-                            buttonClassName="h-5 w-5"
-                          />
-                        </div>
-                      )}
-                      {req.ocr_recipient_number && !suppressOcrDetails && (
-                        <div>
-                          <span className="opacity-70">OCR Wallet:</span>{' '}
-                          <CopyableValue
-                            value={req.ocr_recipient_number}
-                            label="ocr wallet number"
-                            valueClassName="font-mono text-inherit"
-                            buttonClassName="h-5 w-5"
-                          />
-                        </div>
-                      )}
-                      {typeof req.ocr_amount_php === 'number' && !suppressOcrDetails && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
-                      {req.ocr_status && !suppressOcrDetails && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
-                      {req.ocr_provider && !suppressOcrDetails && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
-                      {req.ocr_error_code && !suppressOcrDetails && (
-                        <div className="col-span-2">
-                          <span className="opacity-70">OCR Error:</span> {formatOcrErrorLabel(req.ocr_error_code)}
-                          <span className="opacity-60 font-mono text-[11px]"> ({req.ocr_error_code})</span>
-                        </div>
-                      )}
-                      {req.notes && <div className="col-span-2"><span className="opacity-70">Notes:</span> {req.notes}</div>}
-                      {req.decision_email_error && <div className="col-span-2"><span className="opacity-70">Email Error:</span> {req.decision_email_error}</div>}
-                      {req.proof_path && <div className="col-span-2"><span className="opacity-70">Proof:</span> <ProofImagePreview path={req.proof_path} /></div>}
                     </div>
-                  </div>
-                  <div className="flex gap-1 items-center shrink-0">
-                    {req.status === 'pending' ? (
-                      <>
-                        <Button size="sm" onClick={() => onApprove(req.id)} className="h-6 px-2 bg-green-600 hover:bg-green-700 text-white text-[11px]">
-                          <Check className="w-3 h-3 mr-1" /> Approve
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => onAssist(req.id)} className="h-6 px-2 text-[11px]">
-                          No Email
-                        </Button>
-                        <Button size="sm" variant="destructive" onClick={() => onReject(req.id)} className="h-6 px-2 text-[11px]">
-                          <X className="w-3 h-3 mr-1" /> Reject
-                        </Button>
-                      </>
-                    ) : (
-                      <div className="flex flex-col items-end gap-0.5">
-                        <span className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase ${req.status === 'approved' ? 'bg-green-500/20 text-green-600 dark:text-green-400' : 'bg-red-500/20 text-red-600 dark:text-red-400'}`}>{req.status}</span>
-                        {req.decision_email_status && (
-                          <span className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase ${req.decision_email_status === 'sent' ? 'bg-blue-500/20 text-blue-600 dark:text-blue-400' : req.decision_email_status === 'failed' ? 'bg-red-500/20 text-red-600 dark:text-red-400' : 'bg-gray-500/20 text-gray-600 dark:text-gray-300'}`}>
-                            Email: {req.decision_email_status}
-                          </span>
-                        )}
-                        {req.decision_email_status !== 'sent' && (
-                          <Button size="sm" variant="outline" onClick={() => onRetryEmail(req.id)} className="h-6 px-2 text-[11px]">
-                            Retry Email
-                          </Button>
-                        )}
-                        {req.status === 'rejected' && req.rejection_message && (
-                          <span className={`text-[10px] max-w-[180px] truncate ${theme === 'dark' ? 'text-red-400/70' : 'text-red-500/70'}`} title={req.rejection_message}>
-                            "{req.rejection_message}"
-                          </span>
-                        )}
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <RequestSummaryChip theme={theme} label="Decision" value={req.decision_source ? formatAutomationLabel(req.decision_source) : 'Pending'} tone="decision" />
+                      {!suppressOcrDetails && req.automation_result && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automation_result)} tone="auto" />}
+                      {!suppressOcrDetails && req.ocr_status && req.ocr_status !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocr_status)} tone="ocr" />}
+                      {req.status !== 'pending' && <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />}
+                    </div>
+                    {req.status === 'rejected' && req.rejection_message && (
+                      <div className={`mt-2 text-[11px] ${theme === 'dark' ? 'text-red-300/80' : 'text-red-600'}`} title={req.rejection_message}>
+                        Reject reason: {req.rejection_message}
                       </div>
                     )}
+                  </div>
+                  <div className="shrink-0">
+                    <Button size="sm" variant={req.status === 'pending' ? 'default' : 'outline'} onClick={() => setSelectedRequest(req)} className="h-7 px-2.5 text-[11px]">
+                      {req.status === 'pending' ? 'Review' : 'View Details'}
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -1429,6 +1402,128 @@ export function AccountRequestsTab({
             })}
           </div>
           <Pagination page={page} totalPages={totalPages} onPageChange={onPageChange} />
+          <Dialog open={selectedRequest !== null} onOpenChange={(open) => { if (!open) setSelectedRequest(null); }} useHistory={false}>
+            <DialogContent className={`${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : ''} sm:max-w-3xl`}>
+              {selectedRequest ? (
+                (() => {
+                  const req = selectedRequest;
+                  const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
+                  return (
+                    <>
+                      <DialogHeader>
+                        <DialogTitle>{req.status === 'pending' ? 'Review Account Request' : 'Account Request Details'}</DialogTitle>
+                        <DialogDescription>
+                          Review payment proof, OCR details, request metadata, and decision history.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+                        <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold">{req.display_name || 'No Name'}</div>
+                              <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.email || '-'}</div>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              <RequestSummaryChip theme={theme} label="Decision" value={req.decision_source ? formatAutomationLabel(req.decision_source) : 'Pending'} tone="decision" />
+                              {!suppressOcrDetails && req.automation_result && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automation_result)} tone="auto" />}
+                              {!suppressOcrDetails && req.ocr_status && req.ocr_status !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocr_status)} tone="ocr" />}
+                              <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_280px]">
+                          <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                            <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Request Details</div>
+                            <div className={`grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                              <div><span className="opacity-70">Channel:</span> {req.payment_channel}</div>
+                              <div><span className="opacity-70">Amount:</span> {typeof req.ocr_amount_php === 'number' ? formatOcrAmount(req.ocr_amount_php) : '-'}</div>
+                              <div><span className="opacity-70">Payer:</span> {req.payer_name || '-'}</div>
+                              <div><span className="opacity-70">Submitted:</span> {new Date(req.created_at).toLocaleString()}</div>
+                              <div className="sm:col-span-2">
+                                <span className="opacity-70">Reference:</span>{' '}
+                                <CopyableValue value={req.reference_no || '-'} label="account request reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                              </div>
+                              <div className="sm:col-span-2">
+                                <span className="opacity-70">Request ID:</span>{' '}
+                                <CopyableValue value={req.id} label="account request id" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                              </div>
+                              {req.reviewed_at && <div className="sm:col-span-2"><span className="opacity-70">Reviewed:</span> {new Date(req.reviewed_at).toLocaleString()}{req.reviewed_by ? ` by ${req.reviewed_by.slice(0, 8)}...` : ''}</div>}
+                              {req.approved_auth_user_id && (
+                                <div className="sm:col-span-2">
+                                  <span className="opacity-70">Approved User:</span>{' '}
+                                  <CopyableValue value={req.approved_auth_user_id} label="approved user id" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                                </div>
+                              )}
+                              {req.notes && <div className="sm:col-span-2"><span className="opacity-70">Notes:</span> {req.notes}</div>}
+                              {req.status === 'rejected' && req.rejection_message && <div className="sm:col-span-2"><span className="opacity-70">Reject Reason:</span> {req.rejection_message}</div>}
+                              {req.decision_email_status && <div><span className="opacity-70">Email:</span> {req.decision_email_status}</div>}
+                              {req.decision_email_error && <div className="sm:col-span-2"><span className="opacity-70">Email Error:</span> {req.decision_email_error}</div>}
+                            </div>
+                          </div>
+                          <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                            <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Proof</div>
+                            {req.proof_path ? <ProofImagePreview path={req.proof_path} /> : <div className="text-sm opacity-60">No proof image</div>}
+                          </div>
+                        </div>
+                        <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                          <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">OCR</div>
+                          {suppressOcrDetails ? (
+                            <div className="text-sm opacity-70">Manual wallet channel. Review uses the entered payer name and reference only.</div>
+                          ) : (
+                            <div className={`grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                              {req.ocr_reference_no && (
+                                <div>
+                                  <span className="opacity-70">OCR Ref:</span>{' '}
+                                  <CopyableValue value={req.ocr_reference_no} label="ocr reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                                </div>
+                              )}
+                              {req.ocr_recipient_number && (
+                                <div>
+                                  <span className="opacity-70">OCR Wallet:</span>{' '}
+                                  <CopyableValue value={req.ocr_recipient_number} label="ocr wallet number" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                                </div>
+                              )}
+                              {typeof req.ocr_amount_php === 'number' && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
+                              {req.ocr_provider && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
+                              {req.ocr_status && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
+                              {req.ocr_error_code && <div className="sm:col-span-2"><span className="opacity-70">OCR Error:</span> {formatOcrErrorLabel(req.ocr_error_code)} <span className="opacity-60 font-mono text-[11px]">({req.ocr_error_code})</span></div>}
+                              {req.ocr_scanned_at && <div className="sm:col-span-2"><span className="opacity-70">OCR Scanned:</span> {new Date(req.ocr_scanned_at).toLocaleString()}</div>}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <DialogFooter className="gap-2">
+                        {req.status === 'pending' ? (
+                          <>
+                            <Button variant="outline" onClick={() => { onAssist(req.id); setSelectedRequest(null); }}>
+                              No Email
+                            </Button>
+                            <Button variant="destructive" onClick={() => { onReject(req.id); setSelectedRequest(null); }}>
+                              <X className="w-4 h-4 mr-2" /> Reject
+                            </Button>
+                            <Button onClick={() => { onApprove(req.id); setSelectedRequest(null); }} className="bg-green-600 hover:bg-green-700 text-white">
+                              <Check className="w-4 h-4 mr-2" /> Approve
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            {req.decision_email_status !== 'sent' && (
+                              <Button variant="outline" onClick={() => onRetryEmail(req.id)}>
+                                Retry Email
+                              </Button>
+                            )}
+                            <Button variant="outline" onClick={() => setSelectedRequest(null)}>
+                              Close
+                            </Button>
+                          </>
+                        )}
+                      </DialogFooter>
+                    </>
+                  );
+                })()
+              ) : null}
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>
@@ -1467,6 +1562,7 @@ export function StoreRequestsTab({
   onReject,
   onRetryEmail,
 }: StoreRequestsTabProps) {
+  const [selectedRequest, setSelectedRequest] = React.useState<StoreRequestGroup | null>(null);
   return (
     <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
         <div className="flex flex-wrap gap-2 items-center">
@@ -1507,156 +1603,55 @@ export function StoreRequestsTab({
       />
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <>
-          <div className="space-y-2">
+        <div className="space-y-2">
             {rows.length === 0 ? (
               <p className="text-center py-8 opacity-50 text-sm">No {filter} purchase requests.</p>
             ) : rows.map((req) => {
               const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
               return (
               <div key={req.id} className={`p-3 rounded-lg border ${cardClass}`}>
-                <div className="flex justify-between items-start gap-2">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="font-bold text-sm truncate">{req.count > 1 ? `${req.bankNames[0]} +${req.count - 1} more` : req.bankNames[0]}</h4>
-                      {req.count > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => onToggleExpanded(req.id)}
-                          className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold transition-colors ${theme === 'dark' ? 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'}`}
-                        >
-                          {req.count} banks
-                        </button>
-                      )}
-                    </div>
-                    {req.user_profile && (
-                      <div className={`mt-0.5 flex items-center gap-1 text-[11px] ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>
-                        <span className="shrink-0">{req.user_profile.display_name || 'No Name'} -</span>
-                        <CopyableValue
-                          value={req.user_profile.email || '-'}
-                          label="store request email"
-                          className="min-w-0 max-w-full"
-                          valueClassName="text-inherit"
-                          buttonClassName="h-5 w-5"
-                        />
-                      </div>
-                    )}
-                    <div className={`text-xs mt-1 grid grid-cols-2 gap-x-6 gap-y-0.5 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
-                      <div><span className="opacity-70">Channel:</span> <span className="uppercase font-medium">{req.payment_channel}</span></div>
-                      <div><span className="opacity-70">Name:</span> {req.payer_name}</div>
-                      <div>
-                        <span className="opacity-70">Ref:</span>{' '}
-                        <CopyableValue
-                          value={req.reference_no}
-                          label="store request reference"
-                          valueClassName="font-mono text-inherit"
-                          buttonClassName="h-5 w-5"
-                        />
-                      </div>
-                      <div><span className="opacity-70">Date:</span> {new Date(req.created_at).toLocaleDateString()}</div>
-                      <div className="col-span-2">
-                        <span className="opacity-70">Request ID:</span>{' '}
-                        <CopyableValue
-                          value={req.id}
-                          label="store request id"
-                          valueClassName="font-mono text-inherit"
-                          buttonClassName="h-5 w-5"
-                        />
-                        {req.batch_id ? (
-                          <>
-                            <span className="mx-1 opacity-50">|</span>
-                            <span className="opacity-70">Batch:</span>{' '}
+                <div className="flex justify-between items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h4 className="font-bold text-sm truncate">{req.count > 1 ? `${req.bankNames[0]} +${req.count - 1} more` : req.bankNames[0]}</h4>
+                        {req.user_profile && (
+                          <div className={`mt-0.5 flex items-center gap-1 text-[11px] ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>
+                            <span className="shrink-0">{req.user_profile.display_name || 'No Name'} -</span>
                             <CopyableValue
-                              value={req.batch_id}
-                              label="store request batch id"
-                              valueClassName="font-mono text-inherit"
+                              value={req.user_profile.email || '-'}
+                              label="store request email"
+                              className="min-w-0 max-w-full"
+                              valueClassName="text-inherit"
                               buttonClassName="h-5 w-5"
                             />
-                          </>
-                        ) : null}
-                      </div>
-                      <div className="col-span-2"><span className="opacity-70">Amount:</span> {req.hasTbdAmount ? 'TBD' : `PHP ${req.totalAmountPhp.toLocaleString()}`}</div>
-                      {req.decision_source && <div><span className="opacity-70">Decision:</span> {formatAutomationLabel(req.decision_source)}</div>}
-                      {req.automation_result && !suppressOcrDetails && <div><span className="opacity-70">Auto Check:</span> {formatAutomationLabel(req.automation_result)}</div>}
-                      {suppressOcrDetails && (
-                        <div className="col-span-2">
-                          <span className="opacity-70">Manual Review:</span> Uses the entered payer name and reference number only.
-                        </div>
-                      )}
-                      {req.ocr_reference_no && !suppressOcrDetails && (
-                        <div>
-                          <span className="opacity-70">OCR Ref:</span>{' '}
-                          <CopyableValue
-                            value={req.ocr_reference_no}
-                            label="ocr reference"
-                            valueClassName="font-mono text-inherit"
-                            buttonClassName="h-5 w-5"
-                          />
-                        </div>
-                      )}
-                      {req.ocr_recipient_number && !suppressOcrDetails && (
-                        <div>
-                          <span className="opacity-70">OCR Wallet:</span>{' '}
-                          <CopyableValue
-                            value={req.ocr_recipient_number}
-                            label="ocr wallet number"
-                            valueClassName="font-mono text-inherit"
-                            buttonClassName="h-5 w-5"
-                          />
-                        </div>
-                      )}
-                      {typeof req.ocr_amount_php === 'number' && !suppressOcrDetails && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
-                      {req.ocr_status && !suppressOcrDetails && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
-                      {req.ocr_provider && !suppressOcrDetails && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
-                      {req.ocr_error_code && !suppressOcrDetails && (
-                        <div className="col-span-2">
-                          <span className="opacity-70">OCR Error:</span> {formatOcrErrorLabel(req.ocr_error_code)}
-                          <span className="opacity-60 font-mono text-[11px]"> ({req.ocr_error_code})</span>
-                        </div>
-                      )}
-                      {req.notes && <div className="col-span-2"><span className="opacity-70">Notes:</span> {req.notes}</div>}
-                      {req.proof_path && <div className="col-span-2"><span className="opacity-70">Proof:</span> <ProofImagePreview path={req.proof_path} /></div>}
-                      {req.decision_email_error && <div className="col-span-2"><span className="opacity-70">Email Error:</span> {req.decision_email_error}</div>}
-                    </div>
-                    {expandedId === req.id && req.bankItems.length > 0 && (
-                      <div className={`mt-2 rounded border p-2 space-y-1 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/60' : 'border-gray-200 bg-white'}`}>
-                        <div className="text-[10px] uppercase tracking-wide opacity-70 font-semibold">Requested Banks</div>
-                        {req.bankItems.map((item, index) => (
-                          <div key={`${req.id}-bank-${index}`} className={`flex items-center justify-between text-xs ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
-                            <span className="truncate pr-2">{item.title}</span>
-                            <span className="shrink-0 font-medium">
-                              {item.isPaid ? (item.pricePhp !== null ? `PHP ${item.pricePhp.toLocaleString()}` : 'TBD') : 'FREE'}
-                            </span>
                           </div>
-                        ))}
+                        )}
+                      </div>
+                      <div className={`shrink-0 text-sm font-semibold ${theme === 'dark' ? 'text-gray-100' : 'text-gray-900'}`}>
+                        {req.hasTbdAmount ? 'TBD' : `PHP ${req.totalAmountPhp.toLocaleString()}`}
+                      </div>
+                    </div>
+                    <div className={`mt-1 grid grid-cols-1 gap-y-0.5 text-xs sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+                      <div><span className="opacity-70">Channel:</span> <span className="uppercase font-medium">{req.payment_channel}</span></div>
+                      <div><span className="opacity-70">Date:</span> {new Date(req.created_at).toLocaleString()}</div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <RequestSummaryChip theme={theme} label="Decision" value={req.decision_source ? formatAutomationLabel(req.decision_source) : 'Pending'} tone="decision" />
+                      {!suppressOcrDetails && req.automation_result && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automation_result)} tone="auto" />}
+                      {!suppressOcrDetails && req.ocr_status && req.ocr_status !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocr_status)} tone="ocr" />}
+                      {req.status !== 'pending' && <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />}
+                    </div>
+                    {req.status === 'rejected' && req.rejection_message && (
+                      <div className={`mt-2 text-[11px] ${theme === 'dark' ? 'text-red-300/80' : 'text-red-600'}`} title={req.rejection_message}>
+                        Reject reason: {req.rejection_message}
                       </div>
                     )}
                   </div>
-                  <div className="flex gap-1 items-center shrink-0">
-                    {req.status === 'pending' ? (
-                      <>
-                        <Button size="sm" onClick={() => onApprove(req.id)} className="h-6 px-2 bg-green-600 hover:bg-green-700 text-white text-[11px]"><Check className="w-3 h-3 mr-1" /> Approve</Button>
-                        <Button size="sm" variant="destructive" onClick={() => onReject(req.id)} className="h-6 px-2 text-[11px]"><X className="w-3 h-3 mr-1" /> Reject</Button>
-                      </>
-                    ) : (
-                      <div className="flex flex-col items-end gap-0.5">
-                        <span className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase ${req.status === 'approved' ? 'bg-green-500/20 text-green-600 dark:text-green-400' : 'bg-red-500/20 text-red-600 dark:text-red-400'}`}>{req.status}</span>
-                        {req.decision_email_status && (
-                          <span className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase ${req.decision_email_status === 'sent' ? 'bg-blue-500/20 text-blue-600 dark:text-blue-400' : req.decision_email_status === 'failed' ? 'bg-red-500/20 text-red-600 dark:text-red-400' : 'bg-gray-500/20 text-gray-600 dark:text-gray-300'}`}>
-                            Email: {req.decision_email_status}
-                          </span>
-                        )}
-                        {req.decision_email_status !== 'sent' && (
-                          <Button size="sm" variant="outline" onClick={() => onRetryEmail(req.id)} className="h-6 px-2 text-[11px]">
-                            Retry Email
-                          </Button>
-                        )}
-                        {req.status === 'rejected' && req.rejection_message && (
-                          <span className={`text-[10px] max-w-[180px] truncate ${theme === 'dark' ? 'text-red-400/70' : 'text-red-500/70'}`} title={req.rejection_message}>
-                            "{req.rejection_message}"
-                          </span>
-                        )}
-                      </div>
-                    )}
+                  <div className="shrink-0">
+                    <Button size="sm" variant={req.status === 'pending' ? 'default' : 'outline'} onClick={() => setSelectedRequest(req)} className="h-7 px-2.5 text-[11px]">
+                      {req.status === 'pending' ? 'Review' : 'View Details'}
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -1664,8 +1659,474 @@ export function StoreRequestsTab({
             })}
           </div>
           <Pagination page={page} totalPages={totalPages} onPageChange={onPageChange} />
+          <Dialog open={selectedRequest !== null} onOpenChange={(open) => { if (!open) setSelectedRequest(null); }} useHistory={false}>
+            <DialogContent className={`${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : ''} sm:max-w-4xl`}>
+              {selectedRequest ? (
+                (() => {
+                  const req = selectedRequest;
+                  const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
+                  return (
+                    <>
+                      <DialogHeader>
+                        <DialogTitle>{req.status === 'pending' ? 'Review Store Request' : 'Store Request Details'}</DialogTitle>
+                        <DialogDescription>
+                          Review proof image, OCR details, bank list, and request metadata.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+                        <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold">{req.count > 1 ? `${req.bankNames[0]} +${req.count - 1} more` : req.bankNames[0]}</div>
+                              {req.user_profile && <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.user_profile.display_name || 'No Name'} • {req.user_profile.email || '-'}</div>}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              <RequestSummaryChip theme={theme} label="Decision" value={req.decision_source ? formatAutomationLabel(req.decision_source) : 'Pending'} tone="decision" />
+                              {!suppressOcrDetails && req.automation_result && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automation_result)} tone="auto" />}
+                              {!suppressOcrDetails && req.ocr_status && req.ocr_status !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocr_status)} tone="ocr" />}
+                              <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_280px]">
+                          <div className="space-y-3">
+                            <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                              <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Request Details</div>
+                              <div className={`grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                                <div><span className="opacity-70">Channel:</span> {req.payment_channel}</div>
+                                <div><span className="opacity-70">Amount:</span> {req.hasTbdAmount ? 'TBD' : `PHP ${req.totalAmountPhp.toLocaleString()}`}</div>
+                                <div><span className="opacity-70">Payer:</span> {req.payer_name || '-'}</div>
+                                <div><span className="opacity-70">Submitted:</span> {new Date(req.created_at).toLocaleString()}</div>
+                                <div className="sm:col-span-2">
+                                  <span className="opacity-70">Reference:</span>{' '}
+                                  <CopyableValue value={req.reference_no} label="store request reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                                </div>
+                                <div className="sm:col-span-2">
+                                  <span className="opacity-70">Request ID:</span>{' '}
+                                  <CopyableValue value={req.id} label="store request id" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                                  {req.batch_id ? (
+                                    <>
+                                      <span className="mx-1 opacity-50">|</span>
+                                      <span className="opacity-70">Batch:</span>{' '}
+                                      <CopyableValue value={req.batch_id} label="store request batch id" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                                    </>
+                                  ) : null}
+                                </div>
+                                {req.notes && <div className="sm:col-span-2"><span className="opacity-70">Notes:</span> {req.notes}</div>}
+                                {req.status === 'rejected' && req.rejection_message && <div className="sm:col-span-2"><span className="opacity-70">Reject Reason:</span> {req.rejection_message}</div>}
+                                {req.decision_email_status && <div><span className="opacity-70">Email:</span> {req.decision_email_status}</div>}
+                                {req.decision_email_error && <div className="sm:col-span-2"><span className="opacity-70">Email Error:</span> {req.decision_email_error}</div>}
+                              </div>
+                            </div>
+                            <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                              <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Banks</div>
+                              <div className="space-y-1.5">
+                                {req.bankItems.map((item, index) => (
+                                  <div key={`${req.id}-bank-dialog-${index}`} className={`flex items-center justify-between gap-3 text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                                    <span className="truncate">{item.title}</span>
+                                    <span className="shrink-0 font-medium">{item.isPaid ? (item.pricePhp !== null ? `PHP ${item.pricePhp.toLocaleString()}` : 'TBD') : 'FREE'}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                            <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                              <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">OCR</div>
+                              {suppressOcrDetails ? (
+                                <div className="text-sm opacity-70">Manual wallet channel. Review uses the entered payer name and reference only.</div>
+                              ) : (
+                                <div className={`grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                                  {req.ocr_reference_no && (
+                                    <div>
+                                      <span className="opacity-70">OCR Ref:</span>{' '}
+                                      <CopyableValue value={req.ocr_reference_no} label="ocr reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                                    </div>
+                                  )}
+                                  {req.ocr_recipient_number && (
+                                    <div>
+                                      <span className="opacity-70">OCR Wallet:</span>{' '}
+                                      <CopyableValue value={req.ocr_recipient_number} label="ocr wallet number" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                                    </div>
+                                  )}
+                                  {typeof req.ocr_amount_php === 'number' && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
+                                  {req.ocr_provider && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
+                                  {req.ocr_status && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
+                                  {req.ocr_error_code && <div className="sm:col-span-2"><span className="opacity-70">OCR Error:</span> {formatOcrErrorLabel(req.ocr_error_code)} <span className="opacity-60 font-mono text-[11px]">({req.ocr_error_code})</span></div>}
+                                  {req.ocr_scanned_at && <div className="sm:col-span-2"><span className="opacity-70">OCR Scanned:</span> {new Date(req.ocr_scanned_at).toLocaleString()}</div>}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                            <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Proof</div>
+                            {req.proof_path ? <ProofImagePreview path={req.proof_path} /> : <div className="text-sm opacity-60">No proof image</div>}
+                          </div>
+                        </div>
+                      </div>
+                      <DialogFooter className="gap-2">
+                        {req.status === 'pending' ? (
+                          <>
+                            <Button variant="destructive" onClick={() => { onReject(req.id); setSelectedRequest(null); }}>
+                              <X className="w-4 h-4 mr-2" /> Reject
+                            </Button>
+                            <Button onClick={() => { onApprove(req.id); setSelectedRequest(null); }} className="bg-green-600 hover:bg-green-700 text-white">
+                              <Check className="w-4 h-4 mr-2" /> Approve
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            {req.decision_email_status !== 'sent' && (
+                              <Button variant="outline" onClick={() => onRetryEmail(req.id)}>
+                                Retry Email
+                              </Button>
+                            )}
+                            <Button variant="outline" onClick={() => setSelectedRequest(null)}>
+                              Close
+                            </Button>
+                          </>
+                        )}
+                      </DialogFooter>
+                    </>
+                  );
+                })()
+              ) : null}
+            </DialogContent>
+          </Dialog>
         </>
       )}
+    </div>
+  );
+}
+
+export function InstallerRequestsTab({
+  theme,
+  panelClass,
+  cardClass,
+  pushNotice,
+}: InstallerRequestsTabProps) {
+  const [filter, setFilter] = React.useState<'pending' | 'history'>('pending');
+  const [statusFilter, setStatusFilter] = React.useState<RequestStatusFilter>('all');
+  const [channelFilter, setChannelFilter] = React.useState<RequestChannelFilter>('all');
+  const [decisionFilter, setDecisionFilter] = React.useState<RequestDecisionFilter>('all');
+  const [automationFilter, setAutomationFilter] = React.useState<RequestAutomationFilter>('all');
+  const [ocrStatusFilter, setOcrStatusFilter] = React.useState<RequestOcrStatusFilter>('all');
+  const [search, setSearch] = React.useState('');
+  const [page, setPage] = React.useState(1);
+  const [loading, setLoading] = React.useState(false);
+  const [rows, setRows] = React.useState<AdminInstallerPurchaseRequestGroup[]>([]);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [pendingCount, setPendingCount] = React.useState(0);
+  const [historyCount, setHistoryCount] = React.useState(0);
+  const [selectedRequest, setSelectedRequest] = React.useState<AdminInstallerPurchaseRequestGroup | null>(null);
+  const [actionKey, setActionKey] = React.useState('');
+  const [rejectDialog, setRejectDialog] = React.useState<{ open: boolean; item: AdminInstallerPurchaseRequestGroup | null; reason: string }>({
+    open: false,
+    item: null,
+    reason: '',
+  });
+  const debouncedSearch = useDebouncedValue(search, 350);
+
+  React.useEffect(() => {
+    setStatusFilter('all');
+    setPage(1);
+  }, [filter]);
+
+  const loadRequests = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await adminApi.listInstallerPurchaseRequestGroups({
+        scope: filter,
+        q: debouncedSearch || undefined,
+        status: statusFilter,
+        channel: channelFilter,
+        decision: decisionFilter,
+        automation: automationFilter,
+        ocrStatus: ocrStatusFilter,
+        page,
+        perPage: 10,
+      });
+      setRows(response.items || []);
+      setTotalPages(Math.max(1, Math.ceil(Number(response.total || 0) / Number(response.perPage || 10))));
+      setPendingCount(Number(response.pendingCount || 0));
+      setHistoryCount(Number(response.historyCount || 0));
+    } catch (error) {
+      pushNotice({ variant: 'error', message: error instanceof Error ? error.message : 'Failed to load installer requests.' });
+    } finally {
+      setLoading(false);
+    }
+  }, [automationFilter, channelFilter, debouncedSearch, decisionFilter, filter, ocrStatusFilter, page, pushNotice, statusFilter]);
+
+  React.useEffect(() => {
+    void loadRequests();
+  }, [loadRequests]);
+
+  const handleApprove = React.useCallback(async (item: AdminInstallerPurchaseRequestGroup) => {
+    setActionKey(`approve:${item.id}`);
+    try {
+      await adminApi.installerPurchaseRequestAction(item.id, { action: 'approve' });
+      pushNotice({ variant: 'success', message: `${item.receiptReference || item.email} approved.` });
+      setSelectedRequest((current) => current?.id === item.id ? null : current);
+      await loadRequests();
+    } catch (error) {
+      pushNotice({ variant: 'error', message: error instanceof Error ? error.message : 'Failed to approve installer request.' });
+    } finally {
+      setActionKey('');
+    }
+  }, [loadRequests, pushNotice]);
+
+  const handleReject = React.useCallback(async (item: AdminInstallerPurchaseRequestGroup, reason: string) => {
+    setActionKey(`reject:${item.id}`);
+    try {
+      await adminApi.installerPurchaseRequestAction(item.id, { action: 'reject', rejection_message: reason.trim() });
+      pushNotice({ variant: 'success', message: `${item.receiptReference || item.email} rejected.` });
+      setRejectDialog({ open: false, item: null, reason: '' });
+      setSelectedRequest((current) => current?.id === item.id ? null : current);
+      await loadRequests();
+    } catch (error) {
+      pushNotice({ variant: 'error', message: error instanceof Error ? error.message : 'Failed to reject installer request.' });
+    } finally {
+      setActionKey('');
+    }
+  }, [loadRequests, pushNotice]);
+
+  return (
+    <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
+      <div className="flex flex-wrap gap-2 items-center">
+        <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => setFilter('pending')}>
+          Pending ({pendingCount})
+        </Button>
+        <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => setFilter('history')}>
+          History ({historyCount})
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => void loadRequests()} disabled={loading}>
+          <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
+        <div className="flex-1" />
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
+          <Input
+            value={search}
+            onChange={(event) => { setSearch(event.target.value); setPage(1); }}
+            placeholder="Search email, SKU, receipt, or license..."
+            className={`h-9 w-full pl-8 text-sm sm:w-64 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
+          />
+        </div>
+      </div>
+      <RequestFilterBar
+        theme={theme}
+        scope={filter}
+        statusFilter={statusFilter}
+        channelFilter={channelFilter}
+        decisionFilter={decisionFilter}
+        automationFilter={automationFilter}
+        ocrStatusFilter={ocrStatusFilter}
+        onStatusFilterChange={(value) => { setStatusFilter(value); setPage(1); }}
+        onChannelFilterChange={(value) => { setChannelFilter(value); setPage(1); }}
+        onDecisionFilterChange={(value) => { setDecisionFilter(value); setPage(1); }}
+        onAutomationFilterChange={(value) => { setAutomationFilter(value); setPage(1); }}
+        onOcrStatusFilterChange={(value) => { setOcrStatusFilter(value); setPage(1); }}
+      />
+      {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
+        <>
+          <div className="space-y-2">
+            {rows.length === 0 ? (
+              <p className="text-center py-8 opacity-50 text-sm">No {filter} installer requests.</p>
+            ) : rows.map((req) => {
+              const suppressOcrDetails = isManualWalletPaymentChannel(req.paymentChannel);
+              const firstItem = req.items[0];
+              return (
+                <div key={req.bundleKey} className={`p-3 rounded-lg border ${cardClass}`}>
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h4 className="font-bold text-sm truncate">{req.itemCount > 1 ? `${firstItem?.displayNameSnapshot || req.versions.join('/')} +${req.itemCount - 1} more` : (firstItem?.displayNameSnapshot || req.versions.join('/'))}</h4>
+                          <div className={`mt-0.5 flex items-center gap-1 text-[11px] ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>
+                            <span className="shrink-0">{req.versions.join(' / ')}</span>
+                            <span>-</span>
+                            <CopyableValue value={req.email || '-'} label="installer request email" className="min-w-0 max-w-full" valueClassName="text-inherit" buttonClassName="h-5 w-5" />
+                          </div>
+                        </div>
+                        <div className={`shrink-0 text-sm font-semibold ${theme === 'dark' ? 'text-gray-100' : 'text-gray-900'}`}>
+                          {req.hasTbdAmount ? 'TBD' : `PHP ${Number(req.totalAmountPhp || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                        </div>
+                      </div>
+                      <div className={`mt-1 grid grid-cols-1 gap-y-0.5 text-xs sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+                        <div><span className="opacity-70">Channel:</span> <span className="uppercase font-medium">{req.paymentChannel}</span></div>
+                        <div><span className="opacity-70">Date:</span> {new Date(req.createdAt).toLocaleString()}</div>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <RequestSummaryChip theme={theme} label="Decision" value={req.decisionSource ? formatAutomationLabel(req.decisionSource) : 'Pending'} tone="decision" />
+                        {!suppressOcrDetails && req.automationResult && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automationResult)} tone="auto" />}
+                        {!suppressOcrDetails && req.ocrStatus && req.ocrStatus !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocrStatus)} tone="ocr" />}
+                        {req.status !== 'pending' && <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />}
+                      </div>
+                      {req.status === 'rejected' && req.rejectionMessage && (
+                        <div className={`mt-2 text-[11px] ${theme === 'dark' ? 'text-red-300/80' : 'text-red-600'}`} title={req.rejectionMessage}>
+                          Reject reason: {req.rejectionMessage}
+                        </div>
+                      )}
+                    </div>
+                    <div className="shrink-0">
+                      <Button size="sm" variant={req.status === 'pending' ? 'default' : 'outline'} onClick={() => setSelectedRequest(req)} className="h-7 px-2.5 text-[11px]">
+                        {req.status === 'pending' ? 'Review' : 'View Details'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+        </>
+      )}
+      <Dialog open={selectedRequest !== null} onOpenChange={(open) => { if (!open) setSelectedRequest(null); }} useHistory={false}>
+        <DialogContent className={`${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : ''} sm:max-w-4xl`}>
+          {selectedRequest ? (
+            (() => {
+              const req = selectedRequest;
+              const suppressOcrDetails = isManualWalletPaymentChannel(req.paymentChannel);
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>{req.status === 'pending' ? 'Review Installer Request' : 'Installer Request Details'}</DialogTitle>
+                    <DialogDescription>
+                      Review the shared proof, OCR details, bundle items, and issued installer license.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+                    <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold">{req.itemCount > 1 ? `${req.items[0]?.displayNameSnapshot || req.versions.join('/')} +${req.itemCount - 1} more` : (req.items[0]?.displayNameSnapshot || req.versions.join('/'))}</div>
+                          <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.versions.join(' / ')} • {req.email || '-'}</div>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          <RequestSummaryChip theme={theme} label="Decision" value={req.decisionSource ? formatAutomationLabel(req.decisionSource) : 'Pending'} tone="decision" />
+                          {!suppressOcrDetails && req.automationResult && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automationResult)} tone="auto" />}
+                          {!suppressOcrDetails && req.ocrStatus && req.ocrStatus !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocrStatus)} tone="ocr" />}
+                          <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_280px]">
+                      <div className="space-y-3">
+                        <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                          <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Request Details</div>
+                          <div className={`grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                            <div><span className="opacity-70">Channel:</span> {req.paymentChannel}</div>
+                            <div><span className="opacity-70">Amount:</span> {req.hasTbdAmount ? 'TBD' : `PHP ${Number(req.totalAmountPhp || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</div>
+                            <div><span className="opacity-70">Payer:</span> {req.payerName || '-'}</div>
+                            <div><span className="opacity-70">Submitted:</span> {new Date(req.createdAt).toLocaleString()}</div>
+                            <div className="sm:col-span-2"><span className="opacity-70">Receipt Ref:</span> <CopyableValue value={req.receiptReference} label="installer receipt reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" /></div>
+                            <div className="sm:col-span-2"><span className="opacity-70">Payment Ref:</span> <CopyableValue value={req.referenceNo || req.ocrReferenceNo} label="installer payment reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" /></div>
+                            <div className="sm:col-span-2"><span className="opacity-70">Request ID:</span> <CopyableValue value={req.id} label="installer request id" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" /></div>
+                            {req.notes && <div className="sm:col-span-2"><span className="opacity-70">Notes:</span> {req.notes}</div>}
+                            {req.status === 'rejected' && req.rejectionMessage && <div className="sm:col-span-2"><span className="opacity-70">Reject Reason:</span> {req.rejectionMessage}</div>}
+                            {req.decisionEmailStatus && <div><span className="opacity-70">Email:</span> {req.decisionEmailStatus}</div>}
+                            {req.decisionEmailError && <div className="sm:col-span-2"><span className="opacity-70">Email Error:</span> {req.decisionEmailError}</div>}
+                          </div>
+                        </div>
+                        <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                          <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Bundle Items</div>
+                          <div className="space-y-1.5">
+                            {req.items.map((item) => (
+                              <div key={item.id} className={`flex items-center justify-between gap-3 text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                                <div className="min-w-0">
+                                  <div className="truncate font-medium">{item.displayNameSnapshot}</div>
+                                  <div className="text-[11px] opacity-70">{item.version} • {item.skuCode}</div>
+                                </div>
+                                <span className="shrink-0 font-medium">{typeof item.pricePhpSnapshot === 'number' ? `PHP ${item.pricePhpSnapshot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'TBD'}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                          <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Installer License</div>
+                          <div className={`grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                            <div className="sm:col-span-2">
+                              <span className="opacity-70">Issued License:</span>{' '}
+                              {req.issuedLicenseCode ? (
+                                <CopyableValue value={req.issuedLicenseCode} label="installer issued license" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                              ) : 'Not issued'}
+                            </div>
+                            {req.installerDownloadLink && <div className="sm:col-span-2"><span className="opacity-70">Download Link:</span> <a href={req.installerDownloadLink} target="_blank" rel="noreferrer" className="underline break-all">{req.installerDownloadLink}</a></div>}
+                          </div>
+                        </div>
+                        <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                          <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">OCR</div>
+                          {suppressOcrDetails ? (
+                            <div className="text-sm opacity-70">Manual wallet channel. Review uses the entered payer name and reference only.</div>
+                          ) : (
+                            <div className={`grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                              {req.ocrReferenceNo && <div><span className="opacity-70">OCR Ref:</span> <CopyableValue value={req.ocrReferenceNo} label="installer ocr reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" /></div>}
+                              {req.ocrRecipientNumber && <div><span className="opacity-70">OCR Wallet:</span> <CopyableValue value={req.ocrRecipientNumber} label="installer ocr wallet" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" /></div>}
+                              {typeof req.ocrAmountPhp === 'number' && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocrAmountPhp)}</div>}
+                              {req.ocrProvider && <div><span className="opacity-70">OCR Provider:</span> {req.ocrProvider}</div>}
+                              {req.ocrStatus && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocrStatus)}</div>}
+                              {req.ocrErrorCode && <div className="sm:col-span-2"><span className="opacity-70">OCR Error:</span> {formatOcrErrorLabel(req.ocrErrorCode)} <span className="opacity-60 font-mono text-[11px]">({req.ocrErrorCode})</span></div>}
+                              {req.ocrScannedAt && <div className="sm:col-span-2"><span className="opacity-70">OCR Scanned:</span> {new Date(req.ocrScannedAt).toLocaleString()}</div>}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                        <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Proof</div>
+                        {req.proofPath ? <ProofImagePreview path={req.proofPath} /> : <div className="text-sm opacity-60">No proof image</div>}
+                      </div>
+                    </div>
+                  </div>
+                  <DialogFooter className="gap-2">
+                    {req.status === 'pending' ? (
+                      <>
+                        <Button variant="destructive" disabled={actionKey === `reject:${req.id}`} onClick={() => setRejectDialog({ open: true, item: req, reason: '' })}>
+                          <X className="w-4 h-4 mr-2" /> Reject
+                        </Button>
+                        <Button disabled={actionKey === `approve:${req.id}`} onClick={() => void handleApprove(req)} className="bg-green-600 hover:bg-green-700 text-white">
+                          <Check className="w-4 h-4 mr-2" /> Approve
+                        </Button>
+                      </>
+                    ) : (
+                      <Button variant="outline" onClick={() => setSelectedRequest(null)}>
+                        Close
+                      </Button>
+                    )}
+                  </DialogFooter>
+                </>
+              );
+            })()
+          ) : null}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={rejectDialog.open} onOpenChange={(open) => setRejectDialog((current) => ({ ...current, open }))} useHistory={false}>
+        <DialogContent className={theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : ''}>
+          <DialogHeader>
+            <DialogTitle>Reject Installer Request</DialogTitle>
+            <DialogDescription>Provide the reason that will appear in the rejection email.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="installer-reject-reason">Reason</Label>
+            <Input
+              id="installer-reject-reason"
+              value={rejectDialog.reason}
+              onChange={(event) => setRejectDialog((current) => ({ ...current, reason: event.target.value }))}
+              placeholder="Explain why this request is rejected"
+              className={theme === 'dark' ? 'bg-gray-950 border-gray-700 text-gray-100' : ''}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectDialog({ open: false, item: null, reason: '' })}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={!rejectDialog.item || !rejectDialog.reason.trim() || actionKey === `reject:${rejectDialog.item?.id || ''}`}
+              onClick={() => { if (rejectDialog.item) void handleReject(rejectDialog.item, rejectDialog.reason); }}
+            >
+              {actionKey === `reject:${rejectDialog.item?.id || ''}` ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <X className="w-4 h-4 mr-2" />}
+              Reject
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

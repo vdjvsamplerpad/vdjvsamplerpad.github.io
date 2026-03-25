@@ -16,6 +16,7 @@ import type { AboutDialog as AboutDialogType } from '@/components/ui/about-dialo
 import type { HeaderAdminDebugPanel as HeaderAdminDebugPanelType } from './HeaderAdminDebugPanel';
 import { EXTRA_PAD_COLORS, PRIMARY_PAD_COLORS, getPadColorOptionLabel } from './padColorPalette';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
+import { useStorePreviewBadge } from './hooks/useStorePreviewBadge';
 
 const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then((module) => ({ default: module.LoginModal }))) as unknown as typeof LoginModalType;
 const AboutDialog = React.lazy(() => import('@/components/ui/about-dialog').then((module) => ({ default: module.AboutDialog }))) as unknown as typeof AboutDialogType;
@@ -33,6 +34,7 @@ interface HeaderControlsProps {
   globalMuted: boolean;
   sideMenuOpen: boolean;
   mixerOpen: boolean;
+  hasActiveDeckPlayback: boolean;
   searchOpen: boolean;
   channelLoadArmed: boolean;
   adminPadColorPaintActive: boolean;
@@ -261,6 +263,7 @@ export function HeaderControls({
   globalMuted,
   sideMenuOpen,
   mixerOpen,
+  hasActiveDeckPlayback,
   searchOpen,
   channelLoadArmed,
   adminPadColorPaintActive,
@@ -599,6 +602,10 @@ export function HeaderControls({
 
   const isMobileScreen = windowWidth < 1160;
   const effectiveAuthUser = user || getCachedUser();
+  const { showStoreNewBadge } = useStorePreviewBadge({
+    effectiveUser: effectiveAuthUser,
+    profileId: profile?.id,
+  });
   const isAuthenticated = Boolean(effectiveAuthUser);
   const isSigningIn = authTransition.status === 'signing_in';
   const isSigningOut = authTransition.status === 'signing_out';
@@ -672,6 +679,12 @@ export function HeaderControls({
     onUndoAdminPadColorPaint();
     pushNotice({ variant: 'info', message: 'Undid the last painted pad color.' });
   }, [onUndoAdminPadColorPaint, pushNotice]);
+  const headerBadgeClass = theme === 'dark'
+    ? 'border-red-400/60 bg-red-500/20 text-red-100'
+    : 'border-red-300 bg-red-50 text-red-700';
+  const mixerBadgeClass = theme === 'dark'
+    ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-100'
+    : 'border-emerald-300 bg-emerald-50 text-emerald-700';
 
   return (
     <>
@@ -730,7 +743,7 @@ export function HeaderControls({
             onClick={onToggleSideMenu}
             variant="outline"
             size={isMobileScreen ? "sm" : "default"}
-            className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${sideMenuOpen
+            className={`relative ${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${sideMenuOpen
               ? theme === 'dark'
                 ? 'bg-indigo-500 border-indigo-400 text-indigo-300'
                 : 'bg-indigo-50 border-indigo-300 text-indigo-600'
@@ -741,6 +754,18 @@ export function HeaderControls({
           >
             <Menu className="w-4 h-4" />
             {!isMobileScreen && (isMobileScreen ? '' : 'Banks')}
+            {showStoreNewBadge && (
+              isMobileScreen ? (
+                <span
+                  aria-hidden="true"
+                  className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_0_2px_rgba(255,255,255,0.85)] dark:shadow-[0_0_0_2px_rgba(17,24,39,0.9)]"
+                />
+              ) : (
+                <span className={`absolute -right-1.5 -top-1.5 rounded-full border px-1.5 py-0.5 text-[9px] font-bold leading-none ${headerBadgeClass}`}>
+                  NEW
+                </span>
+              )
+            )}
           </Button>
 
           {/* Upload Button */}
@@ -876,7 +901,7 @@ export function HeaderControls({
             onClick={channelLoadArmed ? onCancelChannelLoad : onToggleMixer}
             variant="outline"
             size={isMobileScreen ? "sm" : "default"}
-            className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${channelLoadArmed
+            className={`relative ${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${channelLoadArmed
               ? theme === 'dark'
                 ? 'bg-red-500/20 border-red-400 text-red-300 hover:bg-red-500/40'
                 : 'bg-red-50 border-red-300 text-red-600 hover:bg-red-100'
@@ -891,6 +916,18 @@ export function HeaderControls({
           >
             {channelLoadArmed ? <X className="w-4 h-4" /> : <Sliders className="w-4 h-4" />}
             {!isMobileScreen && (isMobileScreen ? '' : channelLoadArmed ? 'Cancel' : 'Mixer')}
+            {!channelLoadArmed && hasActiveDeckPlayback && (
+              isMobileScreen ? (
+                <span
+                  aria-hidden="true"
+                  className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(255,255,255,0.85)] dark:shadow-[0_0_0_2px_rgba(17,24,39,0.9)]"
+                />
+              ) : (
+                <span className={`absolute -right-1.5 -top-1.5 rounded-full border px-1.5 py-0.5 text-[9px] font-bold leading-none ${mixerBadgeClass}`}>
+                  PLAYING
+                </span>
+              )
+            )}
           </Button>
 
           {/* Login Button (only shown when not logged in) */}
