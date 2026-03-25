@@ -278,6 +278,16 @@ export type InstallerVersionKey = 'V2' | 'V3';
 export type InstallerPackageKind = 'standard' | 'update';
 export type InstallerBuyProductType = 'standard' | 'update' | 'promax';
 
+export interface InstallerPackagePart {
+  partIndex: number;
+  archiveName: string;
+  downloadUrl: string;
+  downloadSize: number;
+  sha256: string;
+  zipPassword: string;
+  enabled: boolean;
+}
+
 export interface InstallerPackage {
   version: InstallerVersionKey;
   productCode: string;
@@ -291,6 +301,8 @@ export interface InstallerPackage {
   packageKind: InstallerPackageKind;
   includeInProMax: boolean;
   enabled: boolean;
+  partCount?: number;
+  parts: InstallerPackagePart[];
 }
 
 export interface AdminInstallerLicense {

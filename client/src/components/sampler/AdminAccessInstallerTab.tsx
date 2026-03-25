@@ -84,6 +84,16 @@ type RejectDialogState = {
 
 const VERSIONS: InstallerVersionKey[] = ['V2', 'V3'];
 
+const blankPackagePart = (partIndex: number) => ({
+  partIndex,
+  archiveName: '',
+  downloadUrl: '',
+  downloadSize: 0,
+  sha256: '',
+  zipPassword: '',
+  enabled: true,
+});
+
 const blankPackage = (version: InstallerVersionKey): InstallerPackage => ({
   version,
   productCode: `${version}_`,
@@ -97,6 +107,8 @@ const blankPackage = (version: InstallerVersionKey): InstallerPackage => ({
   packageKind: 'update',
   includeInProMax: false,
   enabled: true,
+  partCount: 1,
+  parts: [blankPackagePart(1)],
 });
 
 const blankLicenseDraft = () => ({
@@ -169,6 +181,35 @@ const toggleValue = (values: string[], value: string, enabled: boolean) => {
   return Array.from(next).sort();
 };
 
+const normalizePackageParts = (parts: InstallerPackage['parts']) =>
+  [...parts]
+    .map((part, index) => ({
+      ...part,
+      partIndex: Number.isFinite(part.partIndex) && part.partIndex > 0 ? Math.floor(part.partIndex) : index + 1,
+      archiveName: String(part.archiveName || ''),
+      downloadUrl: String(part.downloadUrl || ''),
+      downloadSize: Number.isFinite(part.downloadSize) ? Math.max(0, Math.floor(part.downloadSize)) : 0,
+      sha256: String(part.sha256 || ''),
+      zipPassword: String(part.zipPassword || ''),
+      enabled: Boolean(part.enabled),
+    }))
+    .sort((left, right) => left.partIndex - right.partIndex);
+
+const withDerivedPackageSummary = (draft: InstallerPackage): InstallerPackage => {
+  const parts = normalizePackageParts(draft.parts?.length ? draft.parts : [blankPackagePart(1)]);
+  const primaryPart = parts[0];
+  return {
+    ...draft,
+    archiveName: primaryPart?.archiveName || '',
+    downloadUrl: primaryPart?.downloadUrl || '',
+    downloadSize: primaryPart?.downloadSize || 0,
+    sha256: primaryPart?.sha256 || '',
+    zipPassword: primaryPart?.zipPassword || '',
+    partCount: parts.length,
+    parts,
+  };
+};
+
 const isHttpUrl = (value: string): boolean => {
   try {
     const parsed = new URL(value);
@@ -191,6 +232,17 @@ const packageNameList = (productCodes: string[], packageMap: Map<string, Install
 };
 
 const totalPages = (total: number, perPage: number) => Math.max(1, Math.ceil(total / perPage));
+
+const useDebouncedValue = <T,>(value: T, delayMs: number) => {
+  const [debounced, setDebounced] = React.useState(value);
+
+  React.useEffect(() => {
+    const timeout = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timeout);
+  }, [delayMs, value]);
+
+  return debounced;
+};
 
 export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props) {
   const [view, setView] = React.useState<ViewKey>('packages');
@@ -256,6 +308,11 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
   const [eventTotals, setEventTotals] = React.useState<Record<InstallerVersionKey, number>>({ V2: 0, V3: 0 });
   const [eventsLoading, setEventsLoading] = React.useState(false);
 
+  const debouncedLicenseQuery = useDebouncedValue(licenseQuery, 400);
+  const debouncedRequestQuery = useDebouncedValue(requestQuery, 400);
+  const debouncedEventQuery = useDebouncedValue(eventQuery, 400);
+  const hasLoadedPackagesRef = React.useRef(false);
+
   const licensePerPage = 10;
   const requestPerPage = 10;
   const eventPerPage = 10;
@@ -282,10 +339,25 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
   const catalogDraftAutoManaged = catalogDialog.mode === 'edit' && isAutoManagedCatalogProduct(catalogDialog.draft);
 
   const loadPackages = React.useCallback(async () => {
+    if (hasLoadedPackagesRef.current) return;
     setPackagesLoading(true);
     try {
       const [v2, v3] = await Promise.all([adminApi.listInstallerPackages('V2'), adminApi.listInstallerPackages('V3')]);
       setPackagesByVersion({ V2: v2.items || [], V3: v3.items || [] });
+      hasLoadedPackagesRef.current = true;
+    } catch (error) {
+      showMessage('error', error instanceof Error ? error.message : 'Failed to load installer packages.');
+    } finally {
+      setPackagesLoading(false);
+    }
+  }, [showMessage]);
+
+  const reloadPackages = React.useCallback(async () => {
+    setPackagesLoading(true);
+    try {
+      const [v2, v3] = await Promise.all([adminApi.listInstallerPackages('V2'), adminApi.listInstallerPackages('V3')]);
+      setPackagesByVersion({ V2: v2.items || [], V3: v3.items || [] });
+      hasLoadedPackagesRef.current = true;
     } catch (error) {
       showMessage('error', error instanceof Error ? error.message : 'Failed to load installer packages.');
     } finally {
@@ -297,8 +369,8 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     setLicensesLoading(true);
     try {
       const [v2, v3] = await Promise.all([
-        adminApi.listInstallerLicenses({ version: 'V2', q: licenseQuery || undefined, status: licenseStatus, page: licensePages.V2, perPage: licensePerPage }),
-        adminApi.listInstallerLicenses({ version: 'V3', q: licenseQuery || undefined, status: licenseStatus, page: licensePages.V3, perPage: licensePerPage }),
+        adminApi.listInstallerLicenses({ version: 'V2', q: debouncedLicenseQuery || undefined, status: licenseStatus, page: licensePages.V2, perPage: licensePerPage }),
+        adminApi.listInstallerLicenses({ version: 'V3', q: debouncedLicenseQuery || undefined, status: licenseStatus, page: licensePages.V3, perPage: licensePerPage }),
       ]);
       setLicensesByVersion({ V2: v2.items || [], V3: v3.items || [] });
       setLicenseTotals({ V2: v2.total || 0, V3: v3.total || 0 });
@@ -307,7 +379,7 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     } finally {
       setLicensesLoading(false);
     }
-  }, [licensePages, licenseQuery, licenseStatus, showMessage]);
+  }, [debouncedLicenseQuery, licensePages, licenseStatus, showMessage]);
 
   const loadCatalog = React.useCallback(async () => {
     setCatalogLoading(true);
@@ -328,8 +400,8 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     setRequestsLoading(true);
     try {
       const [v2, v3] = await Promise.all([
-        adminApi.listInstallerPurchaseRequests({ version: 'V2', q: requestQuery || undefined, status: requestStatus, page: requestPages.V2, perPage: requestPerPage }),
-        adminApi.listInstallerPurchaseRequests({ version: 'V3', q: requestQuery || undefined, status: requestStatus, page: requestPages.V3, perPage: requestPerPage }),
+        adminApi.listInstallerPurchaseRequests({ version: 'V2', q: debouncedRequestQuery || undefined, status: requestStatus, page: requestPages.V2, perPage: requestPerPage }),
+        adminApi.listInstallerPurchaseRequests({ version: 'V3', q: debouncedRequestQuery || undefined, status: requestStatus, page: requestPages.V3, perPage: requestPerPage }),
       ]);
       setRequestsByVersion({ V2: v2.items || [], V3: v3.items || [] });
       setRequestTotals({ V2: v2.total || 0, V3: v3.total || 0 });
@@ -338,14 +410,14 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     } finally {
       setRequestsLoading(false);
     }
-  }, [requestPages, requestQuery, requestStatus, showMessage]);
+  }, [debouncedRequestQuery, requestPages, requestStatus, showMessage]);
 
   const loadEvents = React.useCallback(async () => {
     setEventsLoading(true);
     try {
       const [v2, v3] = await Promise.all([
-        adminApi.listInstallerEvents({ version: 'V2', q: eventQuery || undefined, eventType, page: eventPages.V2, perPage: eventPerPage }),
-        adminApi.listInstallerEvents({ version: 'V3', q: eventQuery || undefined, eventType, page: eventPages.V3, perPage: eventPerPage }),
+        adminApi.listInstallerEvents({ version: 'V2', q: debouncedEventQuery || undefined, eventType, page: eventPages.V2, perPage: eventPerPage }),
+        adminApi.listInstallerEvents({ version: 'V3', q: debouncedEventQuery || undefined, eventType, page: eventPages.V3, perPage: eventPerPage }),
       ]);
       setEventsByVersion({ V2: v2.items || [], V3: v3.items || [] });
       setEventTotals({ V2: v2.total || 0, V3: v3.total || 0 });
@@ -354,7 +426,7 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     } finally {
       setEventsLoading(false);
     }
-  }, [eventPages, eventQuery, eventType, showMessage]);
+  }, [debouncedEventQuery, eventPages, eventType, showMessage]);
 
   React.useEffect(() => {
     if (view === 'packages' || view === 'licenses' || view === 'events') {
@@ -391,11 +463,19 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     if (!productCode) return 'Product code is required.';
     if (!productCode.startsWith(`${item.version}_`)) return `Product code must start with ${item.version}_.`;
     if (!item.displayName.trim()) return 'Display name is required.';
-    if (!item.archiveName.trim()) return 'Archive name is required.';
-    if (!item.zipPassword.trim()) return 'Zip password is required.';
-    if (!isHttpUrl(item.downloadUrl.trim())) return 'Download URL must be a valid http or https URL.';
-    if (!Number.isFinite(item.downloadSize) || item.downloadSize < 0) return 'Download size must be zero or greater.';
     if (!Number.isFinite(item.installOrder) || item.installOrder < 0) return 'Install order must be zero or greater.';
+
+    const parts = normalizePackageParts(item.parts || []);
+    if (parts.length === 0) return 'At least one package part is required.';
+    const seenPartIndexes = new Set<number>();
+    for (const part of parts) {
+      if (!part.archiveName.trim()) return `Archive name is required for part ${part.partIndex}.`;
+      if (!part.zipPassword.trim()) return `Zip password is required for part ${part.partIndex}.`;
+      if (!isHttpUrl(part.downloadUrl.trim())) return `Download URL must be valid for part ${part.partIndex}.`;
+      if (!Number.isFinite(part.downloadSize) || part.downloadSize < 0) return `Download size must be zero or greater for part ${part.partIndex}.`;
+      if (seenPartIndexes.has(part.partIndex)) return `Duplicate part index: ${part.partIndex}`;
+      seenPartIndexes.add(part.partIndex);
+    }
 
     const compareProductCode = packageDialog.mode === 'edit' ? packageDialog.originalProductCode : null;
     const otherPackages = existing.filter((entry) => entry.productCode !== compareProductCode);
@@ -406,15 +486,51 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
   }, [packageDialog.mode, packageDialog.originalProductCode]);
 
   const openCreatePackageDialog = (version: InstallerVersionKey) => {
-    setPackageDialog({ open: true, mode: 'create', originalProductCode: null, draft: blankPackage(version) });
+    setPackageDialog({ open: true, mode: 'create', originalProductCode: null, draft: withDerivedPackageSummary(blankPackage(version)) });
   };
 
   const openEditPackageDialog = (item: InstallerPackage) => {
-    setPackageDialog({ open: true, mode: 'edit', originalProductCode: item.productCode, draft: { ...item } });
+    setPackageDialog({ open: true, mode: 'edit', originalProductCode: item.productCode, draft: withDerivedPackageSummary({ ...item }) });
+  };
+
+  const updatePackagePart = (partIndex: number, updater: (current: InstallerPackage['parts'][number]) => InstallerPackage['parts'][number]) => {
+    setPackageDialog((current) => ({
+      ...current,
+      draft: withDerivedPackageSummary({
+        ...current.draft,
+        parts: current.draft.parts.map((part) => (part.partIndex === partIndex ? updater(part) : part)),
+      }),
+    }));
+  };
+
+  const addPackagePart = () => {
+    setPackageDialog((current) => {
+      const nextIndex = (current.draft.parts.reduce((max, part) => Math.max(max, part.partIndex), 0) || 0) + 1;
+      return {
+        ...current,
+        draft: withDerivedPackageSummary({
+          ...current.draft,
+          parts: [...current.draft.parts, blankPackagePart(nextIndex)],
+        }),
+      };
+    });
+  };
+
+  const removePackagePart = (partIndex: number) => {
+    setPackageDialog((current) => {
+      const nextParts = current.draft.parts.filter((part) => part.partIndex !== partIndex);
+      return {
+        ...current,
+        draft: withDerivedPackageSummary({
+          ...current.draft,
+          parts: nextParts.length > 0 ? nextParts : [blankPackagePart(1)],
+        }),
+      };
+    });
   };
 
   const handleSavePackageDialog = async () => {
-    const draft = packageDialog.draft;
+    const draft = withDerivedPackageSummary(packageDialog.draft);
     const validationError = validatePackage(draft, packagesByVersion[draft.version]);
     if (validationError) {
       showMessage('error', validationError);
@@ -425,7 +541,7 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
       await adminApi.saveInstallerPackage(draft);
       setPackageDialog((current) => ({ ...current, open: false }));
       showMessage('success', `${draft.productCode} saved.`);
-      await loadPackages();
+      await reloadPackages();
     } catch (error) {
       showMessage('error', error instanceof Error ? error.message : 'Failed to save package.');
     } finally {
@@ -438,7 +554,7 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     try {
       await adminApi.deleteInstallerPackage({ version: item.version, productCode: item.productCode });
       showMessage('success', `${item.productCode} deleted.`);
-      await loadPackages();
+      await reloadPackages();
     } catch (error) {
       showMessage('error', error instanceof Error ? error.message : 'Failed to delete package.');
     } finally {
@@ -653,10 +769,15 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
             {items.map((item) => (
               <TableRow key={item.productCode}>
                 <TableCell className="font-medium">{item.productCode}</TableCell>
-                <TableCell><div>{item.displayName}</div><div className="text-xs opacity-60">{item.archiveName}</div></TableCell>
+                <TableCell>
+                  <div>{item.displayName}</div>
+                  <div className="text-xs opacity-60">
+                    {item.partCount && item.partCount > 1 ? `${item.partCount} parts` : item.archiveName}
+                  </div>
+                </TableCell>
                 <TableCell>{item.packageKind}</TableCell>
                 <TableCell>{item.installOrder}</TableCell>
-                <TableCell>{item.downloadSize.toLocaleString()}</TableCell>
+                <TableCell>{item.parts.reduce((total, part) => total + (part.downloadSize || 0), 0).toLocaleString()}</TableCell>
                 <TableCell>{item.includeInProMax ? 'Yes' : 'No'}</TableCell>
                 <TableCell>{item.enabled ? 'Yes' : 'No'}</TableCell>
                 <TableCell>
@@ -982,7 +1103,7 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
           <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'catalog', theme)} onClick={() => setView('catalog')}>Catalog</Button>
           <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'requests', theme)} onClick={() => setView('requests')}>Requests</Button>
           <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'events', theme)} onClick={() => setView('events')}>Events</Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => { if (view === 'packages') void loadPackages(); if (view === 'licenses') void loadLicenses(); if (view === 'catalog') void loadCatalog(); if (view === 'requests') void loadRequests(); if (view === 'events') void loadEvents(); }}>
+          <Button type="button" variant="outline" size="sm" onClick={() => { if (view === 'packages') void reloadPackages(); if (view === 'licenses') void loadLicenses(); if (view === 'catalog') void loadCatalog(); if (view === 'requests') void loadRequests(); if (view === 'events') void loadEvents(); }}>
             <RefreshCw className={`mr-2 h-4 w-4 ${currentViewLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -1086,17 +1207,46 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
             <div className="space-y-1"><Label className="text-xs">Version</Label><select value={packageDialog.draft.version} disabled={packageDialog.mode === 'edit'} className={selectClass(theme)} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, version: event.target.value as InstallerVersionKey, productCode: `${event.target.value}_` } }))}>{VERSIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
             <div className="space-y-1"><Label className="text-xs">Product Code</Label><Input className={inputClass(theme)} value={packageDialog.draft.productCode} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, productCode: event.target.value.toUpperCase() } }))} /></div>
             <div className="space-y-1"><Label className="text-xs">Display Name</Label><Input className={inputClass(theme)} value={packageDialog.draft.displayName} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, displayName: event.target.value } }))} /></div>
-            <div className="space-y-1"><Label className="text-xs">Archive Name</Label><Input className={inputClass(theme)} value={packageDialog.draft.archiveName} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, archiveName: event.target.value } }))} /></div>
-            <div className="space-y-1"><Label className="text-xs">Download URL</Label><Input className={inputClass(theme)} value={packageDialog.draft.downloadUrl} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, downloadUrl: event.target.value } }))} /></div>
-            <div className="space-y-1"><Label className="text-xs">SHA-256</Label><Input className={inputClass(theme)} value={packageDialog.draft.sha256} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, sha256: event.target.value } }))} /></div>
-            <div className="space-y-1"><Label className="text-xs">Zip Password</Label><Input className={inputClass(theme)} value={packageDialog.draft.zipPassword} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, zipPassword: event.target.value } }))} /></div>
-            <div className="space-y-1"><Label className="text-xs">Download Size (bytes)</Label><Input className={inputClass(theme)} type="number" value={packageDialog.draft.downloadSize} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, downloadSize: Number(event.target.value || 0) } }))} /></div>
             <div className="space-y-1"><Label className="text-xs">Install Order</Label><Input className={inputClass(theme)} type="number" value={packageDialog.draft.installOrder} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, installOrder: Number(event.target.value || 0) } }))} /></div>
             <div className="space-y-1"><Label className="text-xs">Package Kind</Label><select className={selectClass(theme)} value={packageDialog.draft.packageKind} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, packageKind: event.target.value as InstallerPackage['packageKind'] } }))}><option value="standard">Standard</option><option value="update">Update</option></select></div>
           </div>
           <div className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 text-sm"><Checkbox checked={packageDialog.draft.includeInProMax} onCheckedChange={(checked) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, includeInProMax: Boolean(checked) } }))} /><span>Include in PRO MAX</span></label>
             <label className="flex items-center gap-2 text-sm"><Checkbox checked={packageDialog.draft.enabled} onCheckedChange={(checked) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, enabled: Boolean(checked) } }))} /><span>Enabled</span></label>
+          </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">Package Parts</div>
+                <div className="text-xs opacity-70">Use one part for normal packages, or add multiple parts for split archives like `.001`, `.002`, `.003`.</div>
+              </div>
+              <Button type="button" size="sm" variant="outline" onClick={addPackagePart}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Part
+              </Button>
+            </div>
+            <div className="space-y-3">
+              {packageDialog.draft.parts.map((part) => (
+                <div key={part.partIndex} className={`rounded-xl border p-3 space-y-3 ${cardShell(theme)}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-medium">Part {part.partIndex}</div>
+                    <Button type="button" size="sm" variant="ghost" disabled={packageDialog.draft.parts.length <= 1} onClick={() => removePackagePart(part.partIndex)}>
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Remove
+                    </Button>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="space-y-1"><Label className="text-xs">Part Index</Label><Input className={inputClass(theme)} type="number" min="1" value={part.partIndex} onChange={(event) => updatePackagePart(part.partIndex, (current) => ({ ...current, partIndex: Number(event.target.value || current.partIndex || 1) }))} /></div>
+                    <div className="space-y-1"><Label className="text-xs">Archive Name</Label><Input className={inputClass(theme)} value={part.archiveName} onChange={(event) => updatePackagePart(part.partIndex, (current) => ({ ...current, archiveName: event.target.value }))} /></div>
+                    <div className="space-y-1 md:col-span-2"><Label className="text-xs">Download URL</Label><Input className={inputClass(theme)} value={part.downloadUrl} onChange={(event) => updatePackagePart(part.partIndex, (current) => ({ ...current, downloadUrl: event.target.value }))} /></div>
+                    <div className="space-y-1"><Label className="text-xs">SHA-256</Label><Input className={inputClass(theme)} value={part.sha256} onChange={(event) => updatePackagePart(part.partIndex, (current) => ({ ...current, sha256: event.target.value }))} /></div>
+                    <div className="space-y-1"><Label className="text-xs">Zip Password</Label><Input className={inputClass(theme)} value={part.zipPassword} onChange={(event) => updatePackagePart(part.partIndex, (current) => ({ ...current, zipPassword: event.target.value }))} /></div>
+                    <div className="space-y-1"><Label className="text-xs">Download Size (bytes)</Label><Input className={inputClass(theme)} type="number" min="0" value={part.downloadSize} onChange={(event) => updatePackagePart(part.partIndex, (current) => ({ ...current, downloadSize: Number(event.target.value || 0) }))} /></div>
+                    <div className="space-y-1 flex items-end"><label className="flex items-center gap-2 text-sm"><Checkbox checked={part.enabled} onCheckedChange={(checked) => updatePackagePart(part.partIndex, (current) => ({ ...current, enabled: Boolean(checked) }))} /><span>Enabled</span></label></div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setPackageDialog((current) => ({ ...current, open: false }))}>Cancel</Button>
