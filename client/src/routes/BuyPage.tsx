@@ -237,14 +237,30 @@ export default function BuyPage() {
 
   const handleProductToggle = React.useCallback((product: BuyConfigResponse['v2v3Products'][number]) => {
     setSelectedSkus((current) => {
+      const currentStandard = current.filter((skuCode) => (
+        versionProducts.some((item) => item.skuCode === skuCode && item.productType === 'standard')
+      ));
       if (product.productType === 'update') {
         const currentUpdates = current.filter((skuCode) => (
           versionProducts.some((item) => item.skuCode === skuCode && item.productType === 'update')
         ));
         if (currentUpdates.includes(product.skuCode)) {
-          return currentUpdates.filter((skuCode) => skuCode !== product.skuCode);
+          return [...currentStandard, ...currentUpdates.filter((skuCode) => skuCode !== product.skuCode)];
         }
-        return [...currentUpdates, product.skuCode].sort((left, right) => {
+        return [...currentStandard, ...currentUpdates, product.skuCode].sort((left, right) => {
+          const leftOrder = versionProducts.find((item) => item.skuCode === left)?.sortOrder ?? 0;
+          const rightOrder = versionProducts.find((item) => item.skuCode === right)?.sortOrder ?? 0;
+          return leftOrder - rightOrder;
+        });
+      }
+      if (product.productType === 'standard') {
+        if (currentStandard.includes(product.skuCode)) {
+          return current.filter((skuCode) => skuCode !== product.skuCode);
+        }
+        const currentUpdates = current.filter((skuCode) => (
+          versionProducts.some((item) => item.skuCode === skuCode && item.productType === 'update')
+        ));
+        return [product.skuCode, ...currentUpdates].sort((left, right) => {
           const leftOrder = versionProducts.find((item) => item.skuCode === left)?.sortOrder ?? 0;
           const rightOrder = versionProducts.find((item) => item.skuCode === right)?.sortOrder ?? 0;
           return leftOrder - rightOrder;
@@ -602,6 +618,11 @@ export default function BuyPage() {
                   {selectedVersion !== 'V1' && selectedUpdatesOnly.length > 1 ? (
                     <div className="mt-2 text-sm text-slate-600">
                       Buying {selectedUpdatesOnly.length} updates in one transaction.
+                    </div>
+                  ) : null}
+                  {selectedVersion !== 'V1' && selectedPrimaryProduct?.productType === 'standard' && selectedUpdatesOnly.length > 0 ? (
+                    <div className="mt-2 text-sm text-slate-600">
+                      Buying Standard with {selectedUpdatesOnly.length} selected update{selectedUpdatesOnly.length === 1 ? '' : 's'}.
                     </div>
                   ) : null}
                 </div>

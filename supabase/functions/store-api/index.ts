@@ -3206,8 +3206,20 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
   if (products.length !== skuCodes.length || products.some((product) => !product.enabled)) {
     return fail(404, "INSTALLER_BUY_PRODUCT_NOT_FOUND");
   }
-  if (products.length > 1 && products.some((product) => product.productType !== "update")) {
-    return badRequest("Multiple selection is only supported for update purchases");
+  const standardProducts = products.filter((product) => product.productType === "standard");
+  const updateProducts = products.filter((product) => product.productType === "update");
+  const promaxProducts = products.filter((product) => product.productType === "promax");
+  if (promaxProducts.length > 0 && products.length > 1) {
+    return badRequest("PRO MAX cannot be combined with other items");
+  }
+  if (standardProducts.length > 1) {
+    return badRequest("Only one Standard item can be selected");
+  }
+  if (products.length > 1 && standardProducts.length === 0 && updateProducts.length !== products.length) {
+    return badRequest("Multiple selection is only supported for Standard + updates or update-only purchases");
+  }
+  if (products.length > 1 && standardProducts.length === 1 && standardProducts.length + updateProducts.length !== products.length) {
+    return badRequest("Standard can only be combined with update purchases");
   }
 
   const { data: existingPending, error: existingPendingError } = await admin
