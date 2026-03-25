@@ -675,7 +675,7 @@ html.motion-off .sampler-search-hit-dark {
   margin: 0 auto;
   padding: 1.06rem 1.25rem;
   display: flex;
-  justify-content: flex-start;
+  justify-content: space-between;
   align-items: center;
   gap: 0.7rem;
 }
@@ -686,6 +686,7 @@ html.motion-off .sampler-search-hit-dark {
   gap: 0.7rem;
   text-decoration: none;
   color: #171717;
+  min-width: 0;
 }
 
 .lp-brand-logo {

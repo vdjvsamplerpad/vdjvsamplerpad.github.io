@@ -1,8 +1,10 @@
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Switch } from '@/components/ui/switch';
 import type { SortDirection } from '@/lib/admin-api';
-import { ChevronLeft, ChevronRight, EyeOff, Globe, ImageIcon, Loader2, Save, Upload } from 'lucide-react';
+import { ChevronLeft, ChevronRight, EyeOff, Globe, ImageIcon, Loader2, Upload } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -534,28 +536,27 @@ export function ProofImagePreview({ path }: { path: string }) {
 export function CatalogCard({
   draft,
   isDark,
-  onUpdate,
-  onPublish,
+  onApplyAction,
   pushNotice,
   onReload,
 }: {
   draft: CatalogDraft;
   isDark: boolean;
-  onUpdate: (id: string, updates: Record<string, any>) => void;
-  onPublish: (draft: CatalogDraft) => void;
+  onApplyAction: (draft: CatalogDraft, updates: Record<string, any>, action: 'publish' | 'save' | 'unpublish') => Promise<boolean>;
   pushNotice: (notice: { variant: 'success' | 'error'; message: string }) => void;
   onReload: () => void;
 }) {
-  const [isPaid, setIsPaid] = React.useState(draft.is_paid);
+  const [isFree, setIsFree] = React.useState(!draft.is_paid && !draft.coming_soon);
   const [isPinned, setIsPinned] = React.useState(Boolean(draft.is_pinned));
   const [isComingSoon, setIsComingSoon] = React.useState(Boolean(draft.coming_soon));
   const [pricePhp, setPricePhp] = React.useState(draft.price_php === null ? '' : draft.price_php.toString());
   const [thumbFile, setThumbFile] = React.useState<File | null>(null);
   const [thumbUploading, setThumbUploading] = React.useState(false);
   const [thumbPreviewUrl, setThumbPreviewUrl] = React.useState<string | null>(null);
+  const [editorOpen, setEditorOpen] = React.useState(false);
 
   React.useEffect(() => {
-    setIsPaid(draft.is_paid);
+    setIsFree(!draft.is_paid && !draft.coming_soon);
     setIsPinned(Boolean(draft.is_pinned));
     setIsComingSoon(Boolean(draft.coming_soon));
     setPricePhp(draft.price_php === null ? '' : draft.price_php.toString());
@@ -573,25 +574,52 @@ export function CatalogCard({
     };
   }, [thumbFile]);
 
-  const hasChanges =
-    isPaid !== draft.is_paid
-    || isPinned !== Boolean(draft.is_pinned)
-    || isComingSoon !== Boolean(draft.coming_soon)
-    || (pricePhp === '' ? null : Number(pricePhp)) !== draft.price_php;
-
-  const handleSave = () => {
-    onUpdate(draft.id, {
-      is_paid: isComingSoon ? false : isPaid,
+  const normalizedPrice = String(pricePhp || '').trim();
+  const parsedPrice = normalizedPrice === '' ? null : Number(normalizedPrice);
+  const requiresPrice = !isComingSoon && !isFree;
+  const hasValidPrice = !requiresPrice || (parsedPrice !== null && Number.isFinite(parsedPrice) && parsedPrice > 0);
+  const buildDraftUpdates = React.useCallback(() => ({
+      is_paid: isComingSoon ? false : !isFree,
       is_pinned: isPinned,
       coming_soon: isComingSoon,
-      price_php: !isComingSoon && isPaid ? (pricePhp === '' ? null : Number(pricePhp)) : null,
-      requires_grant: isComingSoon ? true : isPaid,
-    });
-  };
+      price_php: !isComingSoon && !isFree ? parsedPrice : null,
+      requires_grant: isComingSoon ? true : !isFree,
+    }), [isComingSoon, isFree, isPinned, parsedPrice]);
+  const hasChanges =
+    isFree !== (!draft.is_paid && !draft.coming_soon)
+    || isPinned !== Boolean(draft.is_pinned)
+    || isComingSoon !== Boolean(draft.coming_soon)
+    || parsedPrice !== draft.price_php;
 
-  const handleUnpublish = () => {
-    onUpdate(draft.id, { status: 'draft' });
-  };
+  const resetEditorState = React.useCallback(() => {
+    setIsFree(!draft.is_paid && !draft.coming_soon);
+    setIsPinned(Boolean(draft.is_pinned));
+    setIsComingSoon(Boolean(draft.coming_soon));
+    setPricePhp(draft.price_php === null ? '' : draft.price_php.toString());
+  }, [draft]);
+
+  const openEditor = React.useCallback(() => {
+    resetEditorState();
+    setEditorOpen(true);
+  }, [resetEditorState]);
+
+  const handleSubmit = React.useCallback(async (action: 'publish' | 'save') => {
+    if (!hasValidPrice) {
+      pushNotice({ variant: 'error', message: 'Enter a valid price before publishing or saving a paid catalog item.' });
+      return;
+    }
+    const succeeded = await onApplyAction(draft, buildDraftUpdates(), action);
+    if (succeeded) {
+      setEditorOpen(false);
+    }
+  }, [buildDraftUpdates, draft, hasValidPrice, onApplyAction, pushNotice]);
+
+  const handleUnpublish = React.useCallback(async () => {
+    const succeeded = await onApplyAction(draft, {}, 'unpublish');
+    if (succeeded) {
+      setEditorOpen(false);
+    }
+  }, [draft, onApplyAction]);
 
   const handleThumbUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -655,31 +683,131 @@ export function CatalogCard({
           <input type="file" accept="image/*" className="hidden" onChange={handleThumbUpload} disabled={thumbUploading} />
         </label>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h4 className={`font-semibold text-sm truncate ${isDark ? 'text-white' : 'text-gray-900'}`} title={draft.bank?.title}>{draft.bank?.title || 'Unknown Bank'}</h4>
-            {draft.is_pinned && <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase rounded bg-amber-500/20 text-amber-700 dark:text-amber-300">Pinned</span>}
+          <div className="flex items-start gap-2">
+            <h4 className={`min-w-0 flex-1 font-semibold text-sm truncate ${isDark ? 'text-white' : 'text-gray-900'}`} title={draft.bank?.title}>{draft.bank?.title || 'Unknown Bank'}</h4>
             <span className={`shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase rounded ${statusBadgeClass}`}>{statusLabel}</span>
           </div>
-          <div className={`text-[11px] mt-0.5 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{savedPriceLabel}</div>
-          <div className={`text-[10px] mt-1 font-mono truncate ${isDark ? 'text-gray-500' : 'text-gray-500'}`} title={draft.expected_asset_name}>{draft.expected_asset_name}</div>
-          <div className="flex flex-wrap items-center gap-2 mt-2">
-            <label className="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" checked={isComingSoon} onChange={(event) => { const checked = event.target.checked; setIsComingSoon(checked); if (checked) { setIsPaid(false); setPricePhp(''); } }} className="w-3.5 h-3.5 rounded accent-indigo-600" /><span className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Coming Soon</span></label>
-            <label className="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" checked={isPaid} onChange={(event) => setIsPaid(event.target.checked)} className="w-3.5 h-3.5 rounded accent-indigo-600" disabled={isComingSoon} /><span className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'} ${isComingSoon ? 'opacity-50' : ''}`}>Paid</span></label>
-            <label className="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" checked={isPinned} onChange={(event) => setIsPinned(event.target.checked)} className="w-3.5 h-3.5 rounded accent-indigo-600" /><span className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>Pinned</span></label>
-            {isPaid && !isComingSoon && <div className="flex items-center gap-1"><span className={`text-[10px] ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>PHP</span><input type="number" value={pricePhp} onChange={(event) => setPricePhp(event.target.value)} className={`w-20 rounded border px-1.5 py-0.5 text-xs outline-none focus:ring-1 focus:ring-indigo-500/50 ${isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300'}`} placeholder="0.00" /></div>}
-          </div>
-          {draft.coming_soon ? (
-            <div className={`mt-2 text-[11px] ${isDark ? 'text-violet-300/90' : 'text-violet-700'}`}>
-              Teaser listing only. Users can see it in Store, but buy/download stays blocked until you upload and publish a live bank asset.
-            </div>
-          ) : null}
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {!isPublished && <Button size="sm" onClick={() => onPublish(draft)} className="h-6 px-2 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px]"><Globe className="w-3 h-3 mr-1" />{draft.coming_soon ? 'Publish Teaser' : 'Publish'}</Button>}
-            {isPublished && <Button size="sm" variant="outline" onClick={handleUnpublish} className={`h-6 px-2 text-[11px] ${isDark ? 'border-gray-600 hover:bg-gray-700' : ''}`}><EyeOff className="w-3 h-3 mr-1" /> Unpublish</Button>}
-            {hasChanges && <Button size="sm" onClick={handleSave} className="h-6 px-2 bg-blue-600 hover:bg-blue-500 text-white text-[11px]"><Save className="w-3 h-3 mr-1" /> Save</Button>}
+          <div className="mt-1 flex items-center justify-between gap-3">
+            <div className={`text-base font-semibold ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>{savedPriceLabel}</div>
+            <Button size="sm" onClick={openEditor} className="h-7 px-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] shrink-0">
+              <Globe className="w-3 h-3 mr-1" />
+              {isPublished ? 'Edit' : 'Publish'}
+            </Button>
           </div>
         </div>
       </div>
+      <Dialog open={editorOpen} onOpenChange={setEditorOpen} useHistory={false}>
+        <DialogContent className={`${isDark ? 'bg-gray-900 border-gray-700 text-gray-100' : ''} sm:max-w-lg`}>
+          <DialogHeader>
+            <DialogTitle>{isPublished ? 'Edit Store Listing' : 'Publish to Store'}</DialogTitle>
+            <DialogDescription>
+              {isPublished
+                ? 'Update how this bank appears in Bank Store, or unpublish it back to draft.'
+                : 'Choose how this bank should go live before publishing it to Bank Store.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className={`rounded-lg border px-3 py-2 ${isDark ? 'border-gray-700 bg-gray-800/60' : 'border-gray-200 bg-gray-50'}`}>
+              <div className="text-sm font-semibold truncate" title={draft.bank?.title}>{draft.bank?.title || 'Unknown Bank'}</div>
+              <div className={`mt-1 text-[11px] font-mono truncate ${isDark ? 'text-gray-400' : 'text-gray-500'}`} title={draft.expected_asset_name}>
+                {draft.expected_asset_name}
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className={`rounded-lg border px-3 py-2.5 space-y-2 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">Coming Soon</div>
+                    <div className="text-[11px] opacity-70">Show teaser only. Buying and downloading stay blocked.</div>
+                  </div>
+                  <Switch
+                    checked={isComingSoon}
+                    onCheckedChange={(checked) => {
+                      setIsComingSoon(checked);
+                      if (checked) {
+                        setIsFree(false);
+                        setPricePhp('');
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+              <div className={`rounded-lg border px-3 py-2.5 space-y-2 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'} ${isComingSoon ? 'opacity-60' : ''}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">Free</div>
+                    <div className="text-[11px] opacity-70">Turn this on to hide pricing and publish as a free bank.</div>
+                  </div>
+                  <Switch
+                    checked={isFree}
+                    disabled={isComingSoon}
+                    onCheckedChange={(checked) => {
+                      setIsFree(checked);
+                      if (checked) {
+                        setPricePhp('');
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+              <div className={`rounded-lg border px-3 py-2.5 space-y-2 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">Pinned</div>
+                    <div className="text-[11px] opacity-70">Keep this bank promoted near the top of the catalog.</div>
+                  </div>
+                  <Switch
+                    checked={isPinned}
+                    onCheckedChange={setIsPinned}
+                  />
+                </div>
+              </div>
+              <div className={`rounded-lg border px-3 py-2.5 space-y-2 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'} ${(isComingSoon || isFree) ? 'opacity-60' : ''}`}>
+                <div className="text-sm font-medium">Price</div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-semibold ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>PHP</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={pricePhp}
+                    onChange={(event) => setPricePhp(event.target.value)}
+                    disabled={isComingSoon || isFree}
+                    className={`w-full rounded-md border px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-indigo-500/50 ${isDark ? 'bg-gray-900 border-gray-700 text-gray-100' : 'bg-white border-gray-300'}`}
+                    placeholder={isComingSoon ? 'Disabled while Coming Soon is on' : isFree ? 'Disabled while Free is on' : 'e.g. 99.00'}
+                  />
+                </div>
+                {!hasValidPrice && (
+                  <div className="text-[11px] text-amber-600 dark:text-amber-300">
+                    Add a valid price before publishing or saving a paid bank.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            {isPublished && (
+              <Button
+                variant="destructive"
+                onClick={() => void handleUnpublish()}
+              >
+                <EyeOff className="w-4 h-4 mr-2" />
+                Unpublish
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setEditorOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleSubmit(isPublished ? 'save' : 'publish')}
+              disabled={!hasValidPrice}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white"
+            >
+              {isPublished ? 'Save Changes' : 'Publish'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

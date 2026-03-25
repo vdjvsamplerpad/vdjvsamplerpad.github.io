@@ -3,6 +3,7 @@ import { BrowserRouter, HashRouter, Navigate, Route, Routes } from 'react-router
 import { usePerformanceTier } from '@/hooks/usePerformanceTier';
 import {
   WEB_SAMPLER_APP_PATH,
+  getBuyPagePath,
   getLandingPagePath,
   getSamplerAppPath,
   isPackagedAppRuntime,
@@ -10,6 +11,7 @@ import {
 
 const SamplerRouteApp = React.lazy(() => import('@/routes/SamplerRouteApp'));
 const LandingPage = __VDJV_INCLUDE_LANDING__ ? React.lazy(() => import('@/routes/LandingPage')) : null;
+const BuyPage = __VDJV_INCLUDE_LANDING__ ? React.lazy(() => import('@/routes/BuyPage')) : null;
 
 function AppFallback() {
   return (
@@ -24,6 +26,7 @@ function RouteContainer() {
   const packagedRuntime = isPackagedAppRuntime();
   const includeLanding = __VDJV_INCLUDE_LANDING__ && Boolean(LandingPage);
   const landingPath = getLandingPagePath();
+  const buyPath = getBuyPagePath();
   const samplerPath = getSamplerAppPath();
   const fallbackPath = packagedRuntime || !includeLanding ? samplerPath : landingPath;
 
@@ -34,6 +37,7 @@ function RouteContainer() {
           <>
             <Route path={samplerPath} element={<SamplerRouteApp />} />
             {includeLanding && LandingPage ? <Route path={landingPath} element={<LandingPage />} /> : null}
+            {includeLanding && BuyPage ? <Route path={buyPath} element={<BuyPage />} /> : null}
             <Route path={WEB_SAMPLER_APP_PATH} element={<SamplerRouteApp />} />
             <Route path={`${WEB_SAMPLER_APP_PATH}/*`} element={<SamplerRouteApp />} />
           </>
@@ -44,6 +48,9 @@ function RouteContainer() {
             ) : (
               <Route path={landingPath} element={<Navigate to={samplerPath} replace />} />
             )}
+            {includeLanding && BuyPage ? (
+              <Route path={buyPath} element={<BuyPage />} />
+            ) : null}
             <Route path={samplerPath} element={<SamplerRouteApp />} />
             <Route path={`${samplerPath}/*`} element={<SamplerRouteApp />} />
           </>

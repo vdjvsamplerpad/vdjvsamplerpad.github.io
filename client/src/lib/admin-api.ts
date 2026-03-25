@@ -260,10 +260,135 @@ export interface LandingVersionDescription {
   desc: string;
 }
 
+export interface LandingBuySection {
+  title: string;
+  description: string;
+  imageUrl: string;
+  defaultInstallerDownloadLink: string;
+}
+
 export interface LandingDownloadConfig {
   downloadLinks: Record<LandingVersionKey, Record<LandingPlatformKey, string>>;
   platformDescriptions: Record<LandingVersionKey, Record<LandingPlatformKey, string>>;
   versionDescriptions: Record<LandingVersionKey, LandingVersionDescription>;
+  buySections: Record<LandingVersionKey, LandingBuySection>;
+}
+
+export type InstallerVersionKey = 'V2' | 'V3';
+export type InstallerPackageKind = 'standard' | 'update';
+export type InstallerBuyProductType = 'standard' | 'update' | 'promax';
+
+export interface InstallerPackage {
+  version: InstallerVersionKey;
+  productCode: string;
+  displayName: string;
+  archiveName: string;
+  downloadUrl: string;
+  downloadSize: number;
+  sha256: string;
+  zipPassword: string;
+  installOrder: number;
+  packageKind: InstallerPackageKind;
+  includeInProMax: boolean;
+  enabled: boolean;
+}
+
+export interface AdminInstallerLicense {
+  id: number;
+  codeHint: string | null;
+  rawCode: string | null;
+  version: InstallerVersionKey;
+  customerName: string | null;
+  status: 'available' | 'claimed' | 'used' | 'disabled' | string;
+  notes: string;
+  unlimited: boolean;
+  claimedAt: string | null;
+  claimExpiresAt: string | null;
+  usedAt: string | null;
+  redemptionCount: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+  entitlements: string[];
+  completedProducts: string[];
+}
+
+export interface AdminInstallerEvent {
+  id: number;
+  licenseId: number;
+  eventType: string;
+  createdAt: string;
+  version: InstallerVersionKey;
+  customerName: string | null;
+  codeHint: string | null;
+  payload: Record<string, unknown>;
+}
+
+export interface InstallerBuyProduct {
+  id?: string;
+  version: InstallerVersionKey;
+  skuCode: string;
+  productType: InstallerBuyProductType;
+  displayName: string;
+  description: string;
+  pricePhp: number;
+  enabled: boolean;
+  sortOrder: number;
+  allowAutoApprove: boolean;
+  heroImageUrl: string;
+  downloadLinkOverride: string;
+  grantedEntitlements: string[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface AdminInstallerPurchaseRequest {
+  id: string;
+  email: string;
+  version: InstallerVersionKey;
+  skuCode: string;
+  productType: InstallerBuyProductType;
+  displayNameSnapshot: string;
+  pricePhpSnapshot: number | null;
+  grantedEntitlementsSnapshot: string[];
+  status: 'pending' | 'approved' | 'rejected';
+  paymentChannel: 'image_proof' | 'gcash_manual' | 'maya_manual';
+  payerName?: string | null;
+  referenceNo?: string | null;
+  receiptReference?: string | null;
+  notes?: string | null;
+  proofPath?: string | null;
+  rejectionMessage?: string | null;
+  decisionEmailStatus?: 'pending' | 'sent' | 'failed' | 'skipped' | null;
+  decisionEmailError?: string | null;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  issuedLicenseId?: number | null;
+  issuedLicenseCode?: string | null;
+  installerDownloadLink?: string | null;
+  ocrReferenceNo?: string | null;
+  ocrPayerName?: string | null;
+  ocrAmountPhp?: number | null;
+  ocrRecipientNumber?: string | null;
+  ocrProvider?: string | null;
+  ocrScannedAt?: string | null;
+  ocrStatus?: 'detected' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'failed' | 'unavailable' | 'skipped' | null;
+  ocrErrorCode?: string | null;
+  decisionSource?: 'manual' | 'automation' | null;
+  automationResult?: string | null;
+  createdAt: string;
+}
+
+export interface BuyConfig {
+  config: LandingDownloadConfig;
+  paymentConfig: {
+    instructions?: string;
+    gcash_number?: string;
+    maya_number?: string;
+    messenger_url?: string;
+    qr_image_path?: string;
+    account_price_php?: number | null;
+  };
+  v2v3Products: InstallerBuyProduct[];
 }
 
 const toQueryString = (params: Record<string, string | number | boolean | null | undefined>) => {
@@ -654,5 +779,171 @@ export const adminApi = {
     return callStoreApi<{
       report: { id: string; status: 'new' | 'acknowledged' | 'fixed' | 'ignored'; updated_at: string };
     }>('PATCH', `admin/store/crash-reports/${reportId}`, { status });
+  },
+
+  async listInstallerPackages(version: InstallerVersionKey) {
+    return callStoreApi<{
+      version: InstallerVersionKey;
+      items: InstallerPackage[];
+    }>('GET', `admin/store/installer/packages?version=${encodeURIComponent(version)}`);
+  },
+
+  async saveInstallerPackage(input: InstallerPackage) {
+    return callStoreApi<{
+      item: InstallerPackage | null;
+    }>('POST', 'admin/store/installer/packages/save', input);
+  },
+
+  async deleteInstallerPackage(input: { version: InstallerVersionKey; productCode: string }) {
+    return callStoreApi<{
+      deleted: boolean;
+      version: InstallerVersionKey;
+      productCode: string;
+    }>('POST', 'admin/store/installer/packages/delete', input);
+  },
+
+  async listInstallerLicenses(input: {
+    version: InstallerVersionKey;
+    q?: string;
+    status?: 'all' | 'available' | 'claimed' | 'used' | 'disabled';
+    page?: number;
+    perPage?: number;
+  }) {
+    const query = toQueryString({
+      version: input.version,
+      q: input.q,
+      status: input.status ?? 'all',
+      page: input.page ?? 1,
+      perPage: input.perPage ?? 20,
+    });
+    return callStoreApi<{
+      version: InstallerVersionKey;
+      items: AdminInstallerLicense[];
+      total: number;
+      page: number;
+      perPage: number;
+    }>('GET', `admin/store/installer/licenses${query}`);
+  },
+
+  async listInstallerEvents(input: {
+    version: InstallerVersionKey;
+    q?: string;
+    eventType?: 'all' | 'claim' | 'complete' | 'release';
+    licenseId?: number;
+    page?: number;
+    perPage?: number;
+  }) {
+    const query = toQueryString({
+      version: input.version,
+      q: input.q,
+      eventType: input.eventType ?? 'all',
+      licenseId: input.licenseId,
+      page: input.page ?? 1,
+      perPage: input.perPage ?? 20,
+    });
+    return callStoreApi<{
+      version: InstallerVersionKey;
+      items: AdminInstallerEvent[];
+      total: number;
+      page: number;
+      perPage: number;
+    }>('GET', `admin/store/installer/events${query}`);
+  },
+
+  async createInstallerLicense(input: {
+    code?: string;
+    version: InstallerVersionKey;
+    customerName?: string;
+    notes?: string;
+    unlimited?: boolean;
+    entitlements: string[];
+  }) {
+    return callStoreApi<{
+      rawCode: string;
+      item: AdminInstallerLicense | null;
+    }>('POST', 'admin/store/installer/licenses/create', input);
+  },
+
+  async updateInstallerLicense(input: {
+    id: number;
+    customerName?: string;
+    notes?: string;
+    unlimited?: boolean;
+    disabled?: boolean;
+    entitlements: string[];
+  }) {
+    return callStoreApi<{
+      item: AdminInstallerLicense | null;
+    }>('POST', 'admin/store/installer/licenses/update', input);
+  },
+
+  async resetInstallerLicense(id: number) {
+    return callStoreApi<{
+      item: AdminInstallerLicense | null;
+    }>('POST', 'admin/store/installer/licenses/reset', { id });
+  },
+
+  async deleteInstallerLicense(id: number) {
+    return callStoreApi<{
+      deleted: boolean;
+      id: number;
+    }>('POST', 'admin/store/installer/licenses/delete', { id });
+  },
+
+  async listInstallerBuyProducts(version?: InstallerVersionKey) {
+    const query = toQueryString({ version });
+    return callStoreApi<{
+      items: InstallerBuyProduct[];
+    }>('GET', `admin/store/installer-buy/products${query}`);
+  },
+
+  async saveInstallerBuyProduct(input: InstallerBuyProduct) {
+    return callStoreApi<{
+      item: InstallerBuyProduct | null;
+    }>('POST', 'admin/store/installer-buy/products/save', input);
+  },
+
+  async deleteInstallerBuyProduct(input: { version: InstallerVersionKey; skuCode: string }) {
+    return callStoreApi<{
+      deleted: boolean;
+      version: InstallerVersionKey;
+      skuCode: string;
+    }>('POST', 'admin/store/installer-buy/products/delete', input);
+  },
+
+  async listInstallerPurchaseRequests(input: {
+    version?: InstallerVersionKey;
+    q?: string;
+    status?: 'all' | 'pending' | 'approved' | 'rejected';
+    page?: number;
+    perPage?: number;
+  }) {
+    const query = toQueryString({
+      version: input.version,
+      q: input.q,
+      status: input.status ?? 'all',
+      page: input.page ?? 1,
+      perPage: input.perPage ?? 20,
+    });
+    return callStoreApi<{
+      items: AdminInstallerPurchaseRequest[];
+      total: number;
+      page: number;
+      perPage: number;
+    }>('GET', `admin/store/installer-buy/requests${query}`);
+  },
+
+  async installerPurchaseRequestAction(
+    requestId: string,
+    input: { action: 'approve' | 'reject'; rejection_message?: string }
+  ) {
+    return callStoreApi<{
+      requestId: string;
+      status: 'approved' | 'rejected';
+      issued_license_code?: string | null;
+      installer_download_link?: string | null;
+      decision_email_status?: 'pending' | 'sent' | 'failed' | 'skipped';
+      decision_email_error?: string | null;
+    }>('POST', `admin/store/installer-buy/requests/${requestId}`, input);
   },
 };

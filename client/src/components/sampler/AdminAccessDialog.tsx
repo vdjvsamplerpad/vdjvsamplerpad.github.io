@@ -67,12 +67,32 @@ import {
   StoreConfigTab,
   StoreRequestsTab,
 } from './AdminAccessDialog.tabs';
+import { AdminAccessInstallerTab } from './AdminAccessInstallerTab';
 import { AdminAccessNonStoreTabs } from './AdminAccessDialog.nonStoreTabs';
 import { AdminAccessDialogModals } from './AdminAccessDialog.dialogs';
 import { useAdminAccessStoreManager } from './AdminAccessDialog.store';
 
 const ADMIN_HOME_AUTO_REFRESH_MS = 5 * 60 * 1000;
 const ADMIN_HOME_FETCH_COOLDOWN_MS = 60 * 1000;
+const ADMIN_NAV_ORDER: TabKey[] = [
+  'home',
+  'account_requests',
+  'store_requests',
+  'assignments',
+  'banks',
+  'store_catalog',
+  'users',
+  'active',
+  'activity',
+  'sampler_defaults',
+  'default_bank',
+  'store_banners',
+  'store_promotions',
+  'landing_download',
+  'store_config',
+  'installer',
+  'crash_reports',
+];
 
 
 
@@ -124,7 +144,9 @@ export function AdminAccessDialog({
     handleSaveStoreBanner,
     handleStoreBannerImageReplace,
     handleStoreCatalogUpdate,
+    handleStoreCatalogDraftAction,
     handleStoreConfigSave,
+    handleStoreMaintenanceMode,
     handleStoreAutoApprovalAction,
     persistStorePromotion,
     deleteStorePromotion,
@@ -174,7 +196,6 @@ export function AdminAccessDialog({
     setStoreRequestToReject,
     setStoreQrFile,
     showInactiveBanners,
-    showStorePublishDialog,
     storeBanners,
     storeBannerStats,
     storeCatalogBankFilter,
@@ -1652,10 +1673,16 @@ export function AdminAccessDialog({
     setBankAccessOpen(true);
   };
 
-  const activeTab = TABS.find((item) => item.key === tab) || TABS[0];
-  const tabToneForKey = (tabKey: TabKey) => (TABS.find((item) => item.key === tabKey) || TABS[0]).tone;
+  const tabMap = React.useMemo(() => new Map(TABS.map((item) => [item.key, item])), []);
+  const navTabs = React.useMemo(
+    () => ADMIN_NAV_ORDER.map((key) => tabMap.get(key)).filter(Boolean) as typeof TABS,
+    [tabMap],
+  );
+
+  const activeTab = tabMap.get(tab) || TABS[0];
+  const tabToneForKey = (tabKey: TabKey) => (tabMap.get(tabKey) || TABS[0]).tone;
   const tabButtonClass = (tabKey: TabKey): string => {
-    const config = TABS.find((item) => item.key === tabKey);
+    const config = tabMap.get(tabKey);
     if (!config) return '';
     const tone = TAB_TONE_CLASSES[config.tone];
     const isActive = tab === tabKey;
@@ -1697,7 +1724,7 @@ export function AdminAccessDialog({
                 <div className="opacity-75 mt-0.5 truncate whitespace-nowrap" title={activeTab.hint}>{activeTab.hint}</div>
               </div>
               <div className="space-y-2">
-                {TABS.map((t) => (
+                {navTabs.map((t) => (
                   <Button
                     key={t.key}
                     size="sm"
@@ -2169,10 +2196,8 @@ export function AdminAccessDialog({
                   }}
                   onResetFilters={resetStoreCatalogFilters}
                   onPageChange={setStoreCatalogPage}
-                  onStoreConfigChange={setStoreConfig}
-                  onSaveStoreConfig={() => void handleStoreConfigSave()}
-                  onUpdateDraft={handleStoreCatalogUpdate}
-                  onPublishDraft={showStorePublishDialog}
+                  onApplyStoreMaintenanceMode={(enabled, message) => handleStoreMaintenanceMode(enabled, message)}
+                  onApplyDraftAction={handleStoreCatalogDraftAction}
                   onReload={loadStoreCatalog}
                   pushNotice={pushNotice}
                 />
@@ -2251,6 +2276,14 @@ export function AdminAccessDialog({
                   onSave={() => void handleStoreConfigSave()}
                 />
               )}
+
+              {tab === 'installer' && (
+                <AdminAccessInstallerTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('installer')}
+                  pushNotice={pushNotice}
+                />
+              )}
             </div>
           </div>
           {isNavOpen && (
@@ -2270,7 +2303,7 @@ export function AdminAccessDialog({
                   <div className="opacity-75 mt-0.5">{activeTab.hint}</div>
                 </div>
                 <div className="space-y-2 overflow-auto max-h-[calc(100vh-120px)] pr-1">
-                  {TABS.map((t) => (
+                  {navTabs.map((t) => (
                     <Button
                       key={`mobile-${t.key}`}
                       type="button"

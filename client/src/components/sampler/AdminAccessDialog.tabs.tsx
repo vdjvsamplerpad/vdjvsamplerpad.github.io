@@ -191,10 +191,8 @@ interface StoreCatalogTabProps {
   onSortChange: (value: StoreCatalogSort) => void;
   onResetFilters: () => void;
   onPageChange: (page: number) => void;
-  onStoreConfigChange: (next: StoreConfigDraft) => void;
-  onSaveStoreConfig: () => void;
-  onUpdateDraft: (id: string, updates: Record<string, any>) => void;
-  onPublishDraft: (draft: CatalogDraft) => void;
+  onApplyStoreMaintenanceMode: (enabled: boolean, message?: string) => Promise<boolean>;
+  onApplyDraftAction: (draft: CatalogDraft, updates: Record<string, any>, action: 'publish' | 'save' | 'unpublish') => Promise<boolean>;
   onReload: () => void;
   pushNotice: (notice: { variant: 'success' | 'error'; message: string }) => void;
 }
@@ -283,7 +281,7 @@ interface StoreConfigTabProps {
   hasQrImage: boolean;
   onStoreConfigChange: (next: StoreConfigDraft) => void;
   onQrFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
-  onAutoApprovalAction: (target: 'account' | 'store', action: 'start' | 'stop') => void;
+  onAutoApprovalAction: (target: 'account' | 'store' | 'installer_v2' | 'installer_v3', action: 'start' | 'stop') => void;
   onRemoveQr: () => void;
   onSave: () => void;
 }
@@ -663,6 +661,77 @@ export function LandingDownloadTab({
                     })}
                     className={`w-full min-h-[140px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`}
                   />
+                </div>
+                <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-fuchsia-900/60 bg-fuchsia-950/20' : 'border-fuchsia-200 bg-fuchsia-50/60'}`}>
+                  <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Buy Section</div>
+                  <div className="space-y-1">
+                    <Label>{version} Buy Title</Label>
+                    <Input
+                      value={config.buySections[version].title}
+                      onChange={(event) => onConfigChange({
+                        ...config,
+                        buySections: {
+                          ...config.buySections,
+                          [version]: {
+                            ...config.buySections[version],
+                            title: event.target.value,
+                          },
+                        },
+                      })}
+                      className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>{version} Buy Description</Label>
+                    <textarea
+                      value={config.buySections[version].description}
+                      onChange={(event) => onConfigChange({
+                        ...config,
+                        buySections: {
+                          ...config.buySections,
+                          [version]: {
+                            ...config.buySections[version],
+                            description: event.target.value,
+                          },
+                        },
+                      })}
+                      className={`w-full min-h-[120px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>{version} Buy Image URL</Label>
+                    <Input
+                      value={config.buySections[version].imageUrl}
+                      onChange={(event) => onConfigChange({
+                        ...config,
+                        buySections: {
+                          ...config.buySections,
+                          [version]: {
+                            ...config.buySections[version],
+                            imageUrl: event.target.value,
+                          },
+                        },
+                      })}
+                      className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>{version} Default Installer Link</Label>
+                    <Input
+                      value={config.buySections[version].defaultInstallerDownloadLink}
+                      onChange={(event) => onConfigChange({
+                        ...config,
+                        buySections: {
+                          ...config.buySections,
+                          [version]: {
+                            ...config.buySections[version],
+                            defaultInstallerDownloadLink: event.target.value,
+                          },
+                        },
+                      })}
+                      className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                    />
+                  </div>
                 </div>
               </div>
               <div className="space-y-3">
@@ -1824,13 +1893,32 @@ export function StoreCatalogTab({
   onSortChange,
   onResetFilters,
   onPageChange,
-  onStoreConfigChange,
-  onSaveStoreConfig,
-  onUpdateDraft,
-  onPublishDraft,
+  onApplyStoreMaintenanceMode,
+  onApplyDraftAction,
   onReload,
   pushNotice,
 }: StoreCatalogTabProps) {
+  const [maintenanceDialogMode, setMaintenanceDialogMode] = React.useState<'start' | 'edit' | null>(null);
+  const [maintenanceDraft, setMaintenanceDraft] = React.useState('');
+  const [confirmStopOpen, setConfirmStopOpen] = React.useState(false);
+  const currentMaintenanceMessage = String(storeConfig.store_maintenance_message || '').trim();
+  const openMaintenanceDialog = React.useCallback((mode: 'start' | 'edit') => {
+    setMaintenanceDraft(currentMaintenanceMessage);
+    setMaintenanceDialogMode(mode);
+  }, [currentMaintenanceMessage]);
+  const submitMaintenanceDialog = React.useCallback(async () => {
+    const succeeded = await onApplyStoreMaintenanceMode(true, maintenanceDraft);
+    if (succeeded) {
+      setMaintenanceDialogMode(null);
+    }
+  }, [maintenanceDraft, onApplyStoreMaintenanceMode]);
+  const stopMaintenance = React.useCallback(async () => {
+    const succeeded = await onApplyStoreMaintenanceMode(false);
+    if (succeeded) {
+      setConfirmStopOpen(false);
+    }
+  }, [onApplyStoreMaintenanceMode]);
+
   return (
     <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
       <div className="space-y-2">
@@ -1843,48 +1931,118 @@ export function StoreCatalogTab({
                 Hide the Bank Store for end users and guests while still allowing admins to browse and manage it.
               </div>
             </div>
-            <Button
-              size="sm"
-              onClick={onSaveStoreConfig}
-              disabled={loading}
-              className={storeConfig.store_maintenance_enabled ? 'bg-amber-600 hover:bg-amber-700 text-white' : undefined}
-            >
-              {storeConfig.store_maintenance_enabled ? 'Save Maintenance' : 'Save Store Config'}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {storeConfig.store_maintenance_enabled ? (
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => openMaintenanceDialog('edit')}
+                    disabled={loading}
+                  >
+                    Edit Message
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setConfirmStopOpen(true)}
+                    disabled={loading}
+                  >
+                    Stop Maintenance
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => openMaintenanceDialog('start')}
+                  disabled={loading}
+                  className={theme === 'dark' ? 'bg-amber-500 hover:bg-amber-400 text-black' : 'bg-amber-600 hover:bg-amber-700 text-white'}
+                >
+                  Start Maintenance
+                </Button>
+              )}
+            </div>
           </div>
-          <div className="flex flex-col gap-3 md:flex-row md:items-start">
-            <label className="flex items-start gap-3 rounded-lg border px-3 py-2 md:min-w-[260px] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={storeConfig.store_maintenance_enabled}
-                onChange={(event) => onStoreConfigChange({
-                  ...storeConfig,
-                  store_maintenance_enabled: event.target.checked,
-                })}
-                className="mt-0.5"
-              />
-              <div className="space-y-0.5">
-                <div className="text-xs font-semibold uppercase tracking-wide opacity-80">Maintenance Enabled</div>
-                <div className="text-xs opacity-70">
-                  End users see a maintenance message instead of catalog banks. Guest sample banks are hidden too.
-                </div>
+          <div className="grid gap-3 md:grid-cols-[minmax(0,220px),1fr]">
+            <div className={`rounded-lg border px-3 py-2.5 space-y-1 ${theme === 'dark' ? 'border-amber-700/40 bg-gray-900/40' : 'border-amber-200 bg-white/70'}`}>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-80">Current Status</div>
+              <div className={`text-sm font-semibold ${storeConfig.store_maintenance_enabled ? (theme === 'dark' ? 'text-amber-300' : 'text-amber-800') : ''}`}>
+                {storeConfig.store_maintenance_enabled ? 'Maintenance is active' : 'Store is live'}
               </div>
-            </label>
-            <div className="flex-1 min-w-0 space-y-1">
-              <Label>Maintenance Message</Label>
-              <textarea
-                value={storeConfig.store_maintenance_message}
-                onChange={(event) => onStoreConfigChange({
-                  ...storeConfig,
-                  store_maintenance_message: event.target.value,
-                })}
-                placeholder="Bank Store is under maintenance. Downloads and browsing are temporarily unavailable."
-                className={`w-full min-h-[92px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`}
-              />
-              <div className="text-[11px] opacity-70">Admins bypass maintenance and can still use the store.</div>
+              <div className="text-xs opacity-70">
+                End users and guests are blocked while maintenance is active. Admins still bypass it.
+              </div>
+            </div>
+            <div className={`rounded-lg border px-3 py-2.5 space-y-1 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white/70'}`}>
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-80">Maintenance Message</div>
+              <div className="text-sm leading-relaxed">
+                {storeConfig.store_maintenance_enabled
+                  ? (currentMaintenanceMessage || 'Bank Store is under maintenance. Downloads and browsing are temporarily unavailable.')
+                  : (currentMaintenanceMessage || 'Fallback message will be used if you start maintenance without entering a custom message.')}
+              </div>
             </div>
           </div>
         </div>
+        <Dialog
+          open={maintenanceDialogMode !== null}
+          onOpenChange={(open) => {
+            if (!open) setMaintenanceDialogMode(null);
+          }}
+          useHistory={false}
+        >
+          <DialogContent className={theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : ''}>
+            <DialogHeader>
+              <DialogTitle>
+                {maintenanceDialogMode === 'edit' ? 'Edit Maintenance Message' : 'Start Store Maintenance'}
+              </DialogTitle>
+              <DialogDescription>
+                {maintenanceDialogMode === 'edit'
+                  ? 'Update the message shown to end users while Bank Store maintenance is active.'
+                  : 'Start maintenance now. The message is optional and a fallback message will be used if left blank.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label htmlFor="store-maintenance-message">Maintenance Message</Label>
+              <textarea
+                id="store-maintenance-message"
+                value={maintenanceDraft}
+                onChange={(event) => setMaintenanceDraft(event.target.value)}
+                placeholder="Bank Store is under maintenance. Downloads and browsing are temporarily unavailable."
+                className={`w-full min-h-[120px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`}
+              />
+              <div className="text-[11px] opacity-70">Leave this blank to use the fallback maintenance message.</div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setMaintenanceDialogMode(null)}
+                disabled={loading}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void submitMaintenanceDialog()}
+                disabled={loading}
+                className={theme === 'dark' ? 'bg-amber-500 hover:bg-amber-400 text-black' : 'bg-amber-600 hover:bg-amber-700 text-white'}
+              >
+                {maintenanceDialogMode === 'edit' ? 'Save Message' : 'Start Maintenance'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <ConfirmationDialog
+          open={confirmStopOpen}
+          onOpenChange={setConfirmStopOpen}
+          title="Stop Store Maintenance?"
+          description="This will make Bank Store visible to end users and guests again immediately."
+          confirmText="Stop Maintenance"
+          cancelText="Keep Active"
+          variant="destructive"
+          theme={theme}
+          onConfirm={() => {
+            void stopMaintenance();
+          }}
+        />
         <div className={`rounded-lg border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50/70'}`}>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-2">
             <div className="xl:col-span-2">
@@ -1973,7 +2131,7 @@ export function StoreCatalogTab({
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {pagedDrafts.map((draft) => (
-                  <CatalogCard key={draft.id} draft={draft} isDark={theme === 'dark'} onUpdate={onUpdateDraft} onPublish={onPublishDraft} pushNotice={pushNotice} onReload={onReload} />
+                  <CatalogCard key={draft.id} draft={draft} isDark={theme === 'dark'} onApplyAction={onApplyDraftAction} pushNotice={pushNotice} onReload={onReload} />
                 ))}
               </div>
             )}
@@ -2917,9 +3075,13 @@ export function StoreConfigTab({
   onRemoveQr,
   onSave,
 }: StoreConfigTabProps) {
-  const [confirmAction, setConfirmAction] = React.useState<{ target: 'account' | 'store'; action: 'start' | 'stop' } | null>(null);
+  const [confirmAction, setConfirmAction] = React.useState<{ target: 'account' | 'store' | 'installer_v2' | 'installer_v3'; action: 'start' | 'stop' } | null>(null);
   const [nowMs, setNowMs] = React.useState(() => Date.now());
-  const runningAutomationCount = Number(Boolean(storeConfig.account_auto_approve_enabled)) + Number(Boolean(storeConfig.store_auto_approve_enabled));
+  const runningAutomationCount =
+    Number(Boolean(storeConfig.account_auto_approve_enabled))
+    + Number(Boolean(storeConfig.store_auto_approve_enabled))
+    + Number(Boolean(storeConfig.installer_v2_auto_approve_enabled))
+    + Number(Boolean(storeConfig.installer_v3_auto_approve_enabled));
   const hasMessengerConfig = Boolean(String(storeConfig.messenger_url || '').trim());
   React.useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 60000);
@@ -2927,7 +3089,7 @@ export function StoreConfigTab({
   }, []);
 
   const renderAutoApprovalCard = (
-    target: 'account' | 'store',
+    target: 'account' | 'store' | 'installer_v2' | 'installer_v3',
     title: string,
     description: string,
     enabled: boolean,
@@ -3008,10 +3170,20 @@ export function StoreConfigTab({
                       account_auto_approve_mode: nextMode,
                       account_auto_approve_expires_at: nextMode === 'countdown' ? storeConfig.account_auto_approve_expires_at : null,
                     }
-                    : {
-                      store_auto_approve_mode: nextMode,
-                      store_auto_approve_expires_at: nextMode === 'countdown' ? storeConfig.store_auto_approve_expires_at : null,
-                    }),
+                    : target === 'store'
+                      ? {
+                        store_auto_approve_mode: nextMode,
+                        store_auto_approve_expires_at: nextMode === 'countdown' ? storeConfig.store_auto_approve_expires_at : null,
+                      }
+                      : target === 'installer_v2'
+                        ? {
+                          installer_v2_auto_approve_mode: nextMode,
+                          installer_v2_auto_approve_expires_at: nextMode === 'countdown' ? storeConfig.installer_v2_auto_approve_expires_at : null,
+                        }
+                        : {
+                          installer_v3_auto_approve_mode: nextMode,
+                          installer_v3_auto_approve_expires_at: nextMode === 'countdown' ? storeConfig.installer_v3_auto_approve_expires_at : null,
+                        }),
                 });
               }}
               className={`w-full rounded-md border px-3 py-2 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -3042,7 +3214,11 @@ export function StoreConfigTab({
                 ...storeConfig,
                 ...(target === 'account'
                   ? { account_auto_approve_duration_hours: event.target.value }
-                  : { store_auto_approve_duration_hours: event.target.value }),
+                  : target === 'store'
+                    ? { store_auto_approve_duration_hours: event.target.value }
+                    : target === 'installer_v2'
+                      ? { installer_v2_auto_approve_duration_hours: event.target.value }
+                      : { installer_v3_auto_approve_duration_hours: event.target.value }),
               })}
               className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
             />
@@ -3065,7 +3241,11 @@ export function StoreConfigTab({
                   ...storeConfig,
                   ...(target === 'account'
                     ? { account_auto_approve_start_hour: event.target.value }
-                    : { store_auto_approve_start_hour: event.target.value }),
+                    : target === 'store'
+                      ? { store_auto_approve_start_hour: event.target.value }
+                      : target === 'installer_v2'
+                        ? { installer_v2_auto_approve_start_hour: event.target.value }
+                        : { installer_v3_auto_approve_start_hour: event.target.value }),
                 })}
                 className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
               />
@@ -3082,7 +3262,11 @@ export function StoreConfigTab({
                   ...storeConfig,
                   ...(target === 'account'
                     ? { account_auto_approve_end_hour: event.target.value }
-                    : { store_auto_approve_end_hour: event.target.value }),
+                    : target === 'store'
+                      ? { store_auto_approve_end_hour: event.target.value }
+                      : target === 'installer_v2'
+                        ? { installer_v2_auto_approve_end_hour: event.target.value }
+                        : { installer_v3_auto_approve_end_hour: event.target.value }),
                 })}
                 className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
               />
@@ -3123,7 +3307,7 @@ export function StoreConfigTab({
               </div>
               <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
                 <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-emerald-300' : 'text-emerald-700'}`}>Automation</div>
-                <div className="mt-1 text-xl font-semibold">{runningAutomationCount}/2</div>
+                <div className="mt-1 text-xl font-semibold">{runningAutomationCount}/4</div>
               </div>
               <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
                 <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-amber-300' : 'text-amber-700'}`}>Checkout Support</div>
@@ -3217,6 +3401,28 @@ export function StoreConfigTab({
                 storeConfig.store_auto_approve_duration_hours,
                 storeConfig.store_auto_approve_expires_at,
               )}
+              {renderAutoApprovalCard(
+                'installer_v2',
+                'Installer Buyer - V2',
+                'Approve V2 installer purchases automatically when OCR matches the SKU amount.',
+                storeConfig.installer_v2_auto_approve_enabled,
+                storeConfig.installer_v2_auto_approve_mode,
+                storeConfig.installer_v2_auto_approve_start_hour,
+                storeConfig.installer_v2_auto_approve_end_hour,
+                storeConfig.installer_v2_auto_approve_duration_hours,
+                storeConfig.installer_v2_auto_approve_expires_at,
+              )}
+              {renderAutoApprovalCard(
+                'installer_v3',
+                'Installer Buyer - V3',
+                'Approve V3 installer purchases automatically when OCR matches the SKU amount.',
+                storeConfig.installer_v3_auto_approve_enabled,
+                storeConfig.installer_v3_auto_approve_mode,
+                storeConfig.installer_v3_auto_approve_start_hour,
+                storeConfig.installer_v3_auto_approve_end_hour,
+                storeConfig.installer_v3_auto_approve_duration_hours,
+                storeConfig.installer_v3_auto_approve_expires_at,
+              )}
             </div>
           </div>
 
@@ -3261,7 +3467,15 @@ export function StoreConfigTab({
         }}
         title={confirmAction?.action === 'start' ? 'Start Auto Approval' : 'Stop Auto Approval'}
         description={confirmAction
-          ? `${confirmAction.action === 'start' ? 'Start' : 'Stop'} ${confirmAction.target === 'account' ? 'Account Requests' : 'Store Requests'} auto approval now?`
+          ? `${confirmAction.action === 'start' ? 'Start' : 'Stop'} ${
+            confirmAction.target === 'account'
+              ? 'Account Requests'
+              : confirmAction.target === 'store'
+                ? 'Store Requests'
+                : confirmAction.target === 'installer_v2'
+                  ? 'Installer Buyer - V2'
+                  : 'Installer Buyer - V3'
+          } auto approval now?`
           : ''}
         confirmText={confirmAction?.action === 'start' ? 'Start' : 'Stop'}
         variant={confirmAction?.action === 'stop' ? 'destructive' : 'default'}

@@ -181,12 +181,46 @@ const userIdentityCache = new Map<string, CachedUserIdentity>();
 const RESEND_API_KEY = String(Deno.env.get("RESEND_API_KEY") || "").trim();
 const STORE_EMAIL_FROM = String(Deno.env.get("STORE_EMAIL_FROM") || "").trim();
 const STORE_EMAIL_REPLY_TO = asString(Deno.env.get("STORE_EMAIL_REPLY_TO"), 320) || null;
+const INSTALLER_WORKER_BASE_URL = String(Deno.env.get("INSTALLER_WORKER_BASE_URL") || "").trim().replace(/\/+$/, "");
+const INSTALLER_WORKER_ADMIN_SECRET = String(Deno.env.get("INSTALLER_WORKER_ADMIN_SECRET") || "").trim();
 
 const normalizeAuthErrorMessage = (error: unknown): string => {
   if (!error) return "Unknown auth error";
   if (typeof error === "string") return error;
   if (typeof (error as any)?.message === "string") return String((error as any).message);
   return String(error);
+};
+
+const buildInstallerWorkerUrl = (pathWithQuery: string): string => {
+  if (!INSTALLER_WORKER_BASE_URL) {
+    throw new Error("INSTALLER_WORKER_BASE_URL is not configured");
+  }
+  const normalizedPath = pathWithQuery.startsWith("/") ? pathWithQuery : `/${pathWithQuery}`;
+  return `${INSTALLER_WORKER_BASE_URL}${normalizedPath}`;
+};
+
+const callInstallerAdmin = async <T>(method: "GET" | "POST", pathWithQuery: string, body?: unknown): Promise<T> => {
+  if (!INSTALLER_WORKER_ADMIN_SECRET) {
+    throw new Error("INSTALLER_WORKER_ADMIN_SECRET is not configured");
+  }
+
+  const response = await fetch(buildInstallerWorkerUrl(pathWithQuery), {
+    method,
+    headers: {
+      "x-admin-secret": INSTALLER_WORKER_ADMIN_SECRET,
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message =
+      String((payload as any)?.message || (payload as any)?.error || (payload as any)?.status || "Installer worker request failed");
+    throw new Error(message);
+  }
+
+  return payload as T;
 };
 
 const escapeHtml = (value: string): string =>
@@ -775,6 +809,9 @@ const buildAccountReceiptReference = (): string =>
 const buildStoreReceiptReference = (batchId: string): string =>
   `VDJV-STORE-${utcDateStamp()}-${String(batchId || "").replace(/-/g, "").slice(0, 10).toUpperCase()}`;
 
+const buildInstallerReceiptReference = (version: InstallerBuyVersionKey): string =>
+  `VDJV-${version}-BUY-${utcDateStamp()}-${crypto.randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+
 const normalizeReceiptText = (value: string): string =>
   value
     .replace(/\r/g, "\n")
@@ -851,9 +888,31 @@ const detectPayerName = (rawText: string): string | null => {
   return null;
 };
 
-const detectReceiptAmount = (rawText: string): number | null => {
+const RECEIPT_PROMO_LINE_REGEX = /\b(?:lazada|shopee|shop\s*now|free\s*shipping|free\s*gift|up\s*to\s*\d+%|voucher|promo|discount|cashback|register\s+and\s+get|score\s+the\s+best\s+deals|gco2e|carbon\s+footprint|transportation,\s*paper,\s*and\s*plastic|eth(?:yl)?\s+alcohol|jilidd)\b/i;
+const RECEIPT_TAIL_ANCHOR_REGEX = /\b(?:ref(?:erence)?(?:\s*no\.?)?|transaction(?:\s+date|\s+date\s*&\s*time|\s+time)?|processing\s*time|sent\s+via|total\s+amount|total\s+amount\s+sent|transfer\s+method|transfer\s+amount)\b/i;
+
+const getRelevantReceiptLines = (rawText: string): string[] => {
   const lines = rawText.split("\n").map((line) => line.trim()).filter(Boolean);
-  const positiveKeywordRegex = /\b(amount|total|paid|payment|grand\s*total|total\s*amount|amount\s*paid|payment\s*amount)\b/i;
+  if (lines.length === 0) return lines;
+
+  const filtered: string[] = [];
+  let seenTailAnchor = false;
+  for (const line of lines) {
+    if (RECEIPT_TAIL_ANCHOR_REGEX.test(line)) {
+      seenTailAnchor = true;
+    }
+    if (seenTailAnchor && RECEIPT_PROMO_LINE_REGEX.test(line)) {
+      break;
+    }
+    filtered.push(line);
+  }
+  return filtered.length > 0 ? filtered : lines;
+};
+
+const detectReceiptAmount = (rawText: string): number | null => {
+  const lines = getRelevantReceiptLines(rawText);
+  const positiveKeywordRegex = /\b(amount|total|paid|payment|grand\s*total|total\s*amount|amount\s*paid|payment\s*amount|transfer\s*amount|total\s*amount\s*sent|transferred)\b/i;
+  const strongPositiveKeywordRegex = /\b(total\s*amount\s*sent|transfer\s*amount|total\s*amount|amount\s*paid|transferred)\b/i;
   const negativeKeywordRegex = /\b(balance|available|fee|service\s*fee|charge|discount|cashback|change|before|after)\b/i;
   const amountTokenRegex = /(?:PHP|P|\u20b1)?\s*([0-9]{1,3}(?:[,\s][0-9]{3})*(?:\.[0-9]{2})|[0-9]+(?:\.[0-9]{2})?)/gi;
   const standaloneAmountLineRegex = /^-?\s*(?:PHP|P|\u20b1)\s*[0-9]{1,3}(?:[,\s][0-9]{3})*(?:\.[0-9]{2})\s*$/i;
@@ -876,38 +935,44 @@ const detectReceiptAmount = (rawText: string): number | null => {
     return candidates;
   };
 
-  type Candidate = { value: number; score: number };
+  type Candidate = { value: number; score: number; lineIndex: number };
   const scoredCandidates: Candidate[] = [];
-  for (const line of lines) {
+  lines.forEach((line, lineIndex) => {
     const candidates = getLineCandidates(line);
-    if (candidates.length === 0) continue;
+    if (candidates.length === 0) return;
     const hasPositive = positiveKeywordRegex.test(line);
+    const hasStrongPositive = strongPositiveKeywordRegex.test(line);
     const hasNegative = negativeKeywordRegex.test(line);
+    const hasPromo = RECEIPT_PROMO_LINE_REGEX.test(line);
     const isStandaloneAmountLine = standaloneAmountLineRegex.test(line);
     const isDebitStyleAmountLine = /^-\s*(?:PHP|P|\u20b1)/i.test(line);
     const letterlessAmountLine = line.replace(/(?:PHP|P|\u20b1|[\d,\s.\-])/gi, "").trim().length === 0;
     for (const value of candidates) {
       let score = 0;
       if (hasPositive) score += 5;
+      if (hasStrongPositive) score += 4;
       if (/grand\s*total|total\s*amount|amount\s*paid/i.test(line)) score += 2;
       if (/(php|\u20b1|\bpaid\b)/i.test(line)) score += 1;
       if (isStandaloneAmountLine) score += 5;
       if (isDebitStyleAmountLine) score += 2;
       if (letterlessAmountLine) score += 2;
       if (hasNegative) score -= 4;
-      scoredCandidates.push({ value, score });
+      if (hasPromo) score -= 8;
+      if (lineIndex > Math.floor(lines.length * 0.6) && !hasPositive) score -= 2;
+      scoredCandidates.push({ value, score, lineIndex });
     }
-  }
+  });
 
   const positiveCandidates = scoredCandidates
     .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score || right.value - left.value);
+    .sort((left, right) => right.score - left.score || left.lineIndex - right.lineIndex || right.value - left.value);
   if (positiveCandidates.length > 0) return positiveCandidates[0].value;
 
-  const fallbackCandidates = Array.from(
-    new Set(lines.flatMap((line) => getLineCandidates(line)).filter((value) => value > 0)),
-  );
-  if (fallbackCandidates.length === 1) return fallbackCandidates[0];
+  const fallbackCandidates = lines
+    .flatMap((line) => getLineCandidates(line))
+    .filter((value) => value > 0);
+  const uniqueFallbackCandidates = Array.from(new Set(fallbackCandidates));
+  if (uniqueFallbackCandidates.length === 1) return uniqueFallbackCandidates[0];
   return null;
 };
 
@@ -2318,14 +2383,37 @@ const DEFAULT_LANDING_VERSION_DESCRIPTIONS = {
   },
 } as const;
 
+const DEFAULT_LANDING_BUY_SECTIONS = {
+  V1: {
+    title: "Buy V1",
+    description: "Register your VDJV V1 account, submit payment proof, and wait for approval before logging in.",
+    imageUrl: "/assets/logo.png",
+    defaultInstallerDownloadLink: "",
+  },
+  V2: {
+    title: "Buy V2",
+    description: "Choose V2 Standard, exact updates, or V2 PRO MAX. Approved purchases receive a real installer license.",
+    imageUrl: "/assets/logo.png",
+    defaultInstallerDownloadLink: "https://m.me/vdjvsampler/",
+  },
+  V3: {
+    title: "Buy V3",
+    description: "Choose V3 Standard, exact updates, or V3 PRO MAX. Approved purchases receive a real installer license.",
+    imageUrl: "/assets/logo.png",
+    defaultInstallerDownloadLink: "https://m.me/vdjvsampler/",
+  },
+} as const;
+
 const normalizeLandingDownloadConfig = (row: any) => {
   const downloadLinksRaw = row?.download_links && typeof row.download_links === "object" ? row.download_links : {};
   const platformDescriptionsRaw = row?.platform_descriptions && typeof row.platform_descriptions === "object" ? row.platform_descriptions : {};
   const versionDescriptionsRaw = row?.version_descriptions && typeof row.version_descriptions === "object" ? row.version_descriptions : {};
+  const buySectionsRaw = row?.buy_sections && typeof row.buy_sections === "object" ? row.buy_sections : {};
 
   const downloadLinks: Record<string, Record<string, string>> = {};
   const platformDescriptions: Record<string, Record<string, string>> = {};
   const versionDescriptions: Record<string, { title: string; desc: string }> = {};
+  const buySections: Record<string, { title: string; description: string; imageUrl: string; defaultInstallerDownloadLink: string }> = {};
 
   LANDING_VERSION_KEYS.forEach((version) => {
     const downloadEntry = downloadLinksRaw?.[version] && typeof downloadLinksRaw[version] === "object" ? downloadLinksRaw[version] : {};
@@ -2342,9 +2430,17 @@ const normalizeLandingDownloadConfig = (row: any) => {
       title: asString(versionEntry?.title, 200) || DEFAULT_LANDING_VERSION_DESCRIPTIONS[version].title,
       desc: asString(versionEntry?.desc, 5000) || DEFAULT_LANDING_VERSION_DESCRIPTIONS[version].desc,
     };
+
+    const buyEntry = buySectionsRaw?.[version] && typeof buySectionsRaw[version] === "object" ? buySectionsRaw[version] : {};
+    buySections[version] = {
+      title: asString(buyEntry?.title, 200) || DEFAULT_LANDING_BUY_SECTIONS[version].title,
+      description: asString(buyEntry?.description, 5000) || DEFAULT_LANDING_BUY_SECTIONS[version].description,
+      imageUrl: asString(buyEntry?.imageUrl, 2000) || DEFAULT_LANDING_BUY_SECTIONS[version].imageUrl,
+      defaultInstallerDownloadLink: asString(buyEntry?.defaultInstallerDownloadLink, 2000) || DEFAULT_LANDING_BUY_SECTIONS[version].defaultInstallerDownloadLink,
+    };
   });
 
-  return { downloadLinks, platformDescriptions, versionDescriptions };
+  return { downloadLinks, platformDescriptions, versionDescriptions, buySections };
 };
 
 const getSamplerAppConfigRecord = async (admin: ReturnType<typeof createServiceClient>) => {
@@ -2378,12 +2474,863 @@ const getLandingDownloadConfig = async () => {
   const admin = createServiceClient();
   const { data, error } = await admin
     .from("landing_download_config")
-    .select("download_links,platform_descriptions,version_descriptions")
+    .select("download_links,platform_descriptions,version_descriptions,buy_sections")
     .eq("id", "default")
     .eq("is_active", true)
     .maybeSingle();
   if (error) return fail(500, error.message);
   return ok({ config: normalizeLandingDownloadConfig(data || {}) });
+};
+
+const INSTALLER_BUY_VERSION_KEYS = ["V2", "V3"] as const;
+type InstallerBuyVersionKey = typeof INSTALLER_BUY_VERSION_KEYS[number];
+type InstallerBuyProductType = "standard" | "update" | "promax";
+
+const normalizeInstallerBuyVersion = (value: unknown): InstallerBuyVersionKey | null => {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (normalized === "V2" || normalized === "V3") return normalized;
+  return null;
+};
+
+const normalizeInstallerBuyProductType = (value: unknown): InstallerBuyProductType | null => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "standard" || normalized === "update" || normalized === "promax") return normalized;
+  return null;
+};
+
+const sanitizeInstallerBuyEntitlements = (value: unknown, version: InstallerBuyVersionKey): string[] => {
+  const items = Array.isArray(value) ? value : [];
+  const prefix = `${version}_`;
+  return Array.from(new Set(items
+    .map((entry) => String(entry || "").trim().toUpperCase())
+    .filter((entry) => entry.startsWith(prefix))));
+};
+
+const mapInstallerBuyProductRow = (row: any) => {
+  const version = normalizeInstallerBuyVersion(row?.version) || "V2";
+  return {
+    id: asString(row?.id, 80) || "",
+    version,
+    skuCode: asString(row?.sku_code, 120) || "",
+    productType: normalizeInstallerBuyProductType(row?.product_type) || "standard",
+    displayName: asString(row?.display_name, 200) || "",
+    description: asString(row?.description, 5000) || "",
+    pricePhp: asPriceNumber(row?.price_php) || 0,
+    enabled: Boolean(row?.enabled),
+    sortOrder: Math.max(0, Math.floor(Number(row?.sort_order || 0))),
+    allowAutoApprove: Boolean(row?.allow_auto_approve),
+    heroImageUrl: asString(row?.hero_image_url, 2000) || "",
+    downloadLinkOverride: asString(row?.download_link_override, 2000) || "",
+    grantedEntitlements: sanitizeInstallerBuyEntitlements(row?.granted_entitlements, version),
+    createdAt: asString(row?.created_at, 80) || null,
+    updatedAt: asString(row?.updated_at, 80) || null,
+  };
+};
+
+const listEnabledInstallerBuyProducts = async (admin: ReturnType<typeof createServiceClient>) => {
+  const { data, error } = await admin
+    .from("installer_buy_products")
+    .select("*")
+    .eq("enabled", true)
+    .order("version", { ascending: true })
+    .order("sort_order", { ascending: true })
+    .order("display_name", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data || []).map(mapInstallerBuyProductRow);
+};
+
+const getPublicBuyConfig = async () => {
+  const admin = createServiceClient();
+  const [{ data: landingRow, error: landingError }, { data: paymentRow, error: paymentError }, products] = await Promise.all([
+    admin.from("landing_download_config").select("download_links,platform_descriptions,version_descriptions,buy_sections").eq("id", "default").eq("is_active", true).maybeSingle(),
+    admin.from("store_payment_settings").select("instructions,gcash_number,maya_number,messenger_url,qr_image_path,account_price_php").eq("id", "default").eq("is_active", true).maybeSingle(),
+    listEnabledInstallerBuyProducts(admin),
+  ]);
+  if (landingError) return fail(500, landingError.message);
+  if (paymentError) return fail(500, paymentError.message);
+  return ok({
+    config: normalizeLandingDownloadConfig(landingRow || {}),
+    paymentConfig: {
+      instructions: asString((paymentRow as any)?.instructions, 5000) || "",
+      gcash_number: asString((paymentRow as any)?.gcash_number, 80) || "",
+      maya_number: asString((paymentRow as any)?.maya_number, 80) || "",
+      messenger_url: asString((paymentRow as any)?.messenger_url, 500) || "",
+      qr_image_path: asString((paymentRow as any)?.qr_image_path, 1000) || "",
+      account_price_php: asPriceNumber((paymentRow as any)?.account_price_php),
+    },
+    v2v3Products: products,
+  });
+};
+
+const getNormalizedLandingConfigRecord = async (admin: ReturnType<typeof createServiceClient>) => {
+  const { data, error } = await admin
+    .from("landing_download_config")
+    .select("download_links,platform_descriptions,version_descriptions,buy_sections")
+    .eq("id", "default")
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return normalizeLandingDownloadConfig(data || {});
+};
+
+const createInstallerRequestProofUploadUrl = async (req: Request, body: any) => {
+  const admin = createServiceClient();
+  const email = normalizeEmail(body?.email);
+  const fileName = asString(body?.fileName, 240);
+  const contentType = asString(body?.contentType, 160)?.toLowerCase() || "";
+  const paymentChannel = asString(body?.paymentChannel, 40);
+  const sizeBytes = Number(body?.sizeBytes ?? body?.size_bytes ?? 0);
+
+  if (!email) return badRequest("A valid email is required");
+  if (!paymentChannel || !PAYMENT_CHANNEL_VALUES.has(paymentChannel)) {
+    return badRequest("Invalid paymentChannel");
+  }
+  if (!fileName) return badRequest("fileName is required");
+  const ext = getExtensionFromFileName(fileName);
+  if (!ext || !ACCOUNT_REG_ALLOWED_EXTENSIONS.has(ext)) {
+    return badRequest("Unsupported proof file extension");
+  }
+  if (contentType && !ACCOUNT_REG_ALLOWED_MIME_TYPES.has(contentType)) {
+    return badRequest("Unsupported proof mime type");
+  }
+  if (Number.isFinite(sizeBytes) && sizeBytes > ACCOUNT_REG_MAX_PROOF_BYTES) {
+    return fail(413, "PROOF_TOO_LARGE", { max_bytes: ACCOUNT_REG_MAX_PROOF_BYTES });
+  }
+
+  const uploadRateLimit = await consumeRateLimit({
+    scope: "installer_purchase.proof_upload",
+    subject: `${getRequestIp(req)}:${email}`,
+    maxHits: ACCOUNT_REG_UPLOAD_RATE_LIMIT,
+    windowSeconds: ACCOUNT_REG_UPLOAD_RATE_WINDOW_SECONDS,
+  });
+  if (!uploadRateLimit.allowed) {
+    return fail(429, "RATE_LIMITED", {
+      scope: "installer_purchase.proof_upload",
+      retry_after_seconds: uploadRateLimit.retryAfterSeconds,
+    });
+  }
+
+  const objectPath = `installer/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const { data, error } = await admin.storage.from("payment-proof").createSignedUploadUrl(objectPath);
+  if (error || !data?.token) {
+    return fail(500, error?.message || "Failed to create signed upload URL");
+  }
+  return ok({
+    bucket: "payment-proof",
+    path: objectPath,
+    token: data.token,
+    signedUrl: data.signedUrl || null,
+    max_bytes: ACCOUNT_REG_MAX_PROOF_BYTES,
+  });
+};
+
+const getInstallerAutomationConfigForVersion = (
+  settings: Awaited<ReturnType<typeof getStoreAutomationSettings>>,
+  version: InstallerBuyVersionKey,
+) => version === "V2" ? settings.installerV2 : settings.installerV3;
+
+const getInstallerBuyProductByVersionAndSku = async (
+  admin: ReturnType<typeof createServiceClient>,
+  version: InstallerBuyVersionKey,
+  skuCode: string,
+) => {
+  const { data, error } = await admin
+    .from("installer_buy_products")
+    .select("*")
+    .eq("version", version)
+    .eq("sku_code", skuCode)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapInstallerBuyProductRow(data) : null;
+};
+
+const resolveInstallerDownloadLink = (
+  landingConfig: ReturnType<typeof normalizeLandingDownloadConfig>,
+  row: {
+    version?: unknown;
+    download_link_override?: unknown;
+    installer_download_link?: unknown;
+  },
+): string => {
+  const explicit = asString(row?.installer_download_link, 2000)
+    || asString(row?.download_link_override, 2000);
+  if (explicit) return explicit;
+  const version = normalizeInstallerBuyVersion(row?.version) || "V2";
+  return landingConfig.buySections[version]?.defaultInstallerDownloadLink || "";
+};
+
+const mapInstallerPurchaseRequestRow = (row: any) => ({
+  id: asString(row?.id, 80) || "",
+  email: asString(row?.email, 320) || "",
+  version: normalizeInstallerBuyVersion(row?.version) || "V2",
+  skuCode: asString(row?.sku_code, 120) || "",
+  productType: normalizeInstallerBuyProductType(row?.product_type) || "standard",
+  displayNameSnapshot: asString(row?.display_name_snapshot, 200) || "",
+  pricePhpSnapshot: asPriceNumber(row?.price_php_snapshot),
+  grantedEntitlementsSnapshot: Array.isArray(row?.granted_entitlements_snapshot)
+    ? row.granted_entitlements_snapshot.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+    : [],
+  status: String(row?.status || "pending"),
+  paymentChannel: asString(row?.payment_channel, 40) || "",
+  payerName: asString(row?.payer_name, 160) || null,
+  referenceNo: asString(row?.reference_no, 160) || null,
+  receiptReference: asString(row?.receipt_reference, 160) || null,
+  notes: asString(row?.notes, 1000) || null,
+  proofPath: asString(row?.proof_path, 600) || null,
+  rejectionMessage: asString(row?.rejection_message, 1000) || null,
+  decisionEmailStatus: asString(row?.decision_email_status, 40) || null,
+  decisionEmailError: asString(row?.decision_email_error, 1000) || null,
+  reviewedBy: asString(row?.reviewed_by, 80) || null,
+  reviewedAt: asString(row?.reviewed_at, 80) || null,
+  issuedLicenseId: Number.isFinite(Number(row?.issued_license_id)) ? Number(row.issued_license_id) : null,
+  issuedLicenseCode: asString(row?.issued_license_code, 120) || null,
+  installerDownloadLink: asString(row?.installer_download_link, 2000) || null,
+  ocrReferenceNo: asString(row?.ocr_reference_no, 160) || null,
+  ocrPayerName: asString(row?.ocr_payer_name, 160) || null,
+  ocrAmountPhp: asPriceNumber(row?.ocr_amount_php),
+  ocrRecipientNumber: asString(row?.ocr_recipient_number, 80) || null,
+  ocrProvider: asString(row?.ocr_provider, 80) || null,
+  ocrScannedAt: asString(row?.ocr_scanned_at, 80) || null,
+  ocrStatus: asString(row?.ocr_status, 40) || null,
+  ocrErrorCode: asString(row?.ocr_error_code, 120) || null,
+  decisionSource: asString(row?.decision_source, 40) || null,
+  automationResult: asString(row?.automation_result, 120) || null,
+  createdAt: asString(row?.created_at, 80) || new Date().toISOString(),
+});
+
+const sendInstallerPendingSubmissionEmail = async (input: {
+  requestRow: any;
+}): Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }> => {
+  const targetEmail = normalizeEmail(input.requestRow?.email);
+  if (!targetEmail) return { status: "skipped", error: "No valid recipient email" };
+  if (!RESEND_API_KEY || !STORE_EMAIL_FROM) {
+    return {
+      status: "skipped",
+      error: "Email provider is not configured (missing RESEND_API_KEY or STORE_EMAIL_FROM)",
+    };
+  }
+
+  const version = normalizeInstallerBuyVersion(input.requestRow?.version) || "V2";
+  const title = asString(input.requestRow?.display_name_snapshot, 200) || `${version} Purchase`;
+  const amount = asPriceNumber(input.requestRow?.price_php_snapshot);
+  const receiptReference = asString(input.requestRow?.receipt_reference, 160) || "-";
+  const referenceNo = asString(input.requestRow?.reference_no, 160) || "-";
+  const paymentChannel = asString(input.requestRow?.payment_channel, 80) || "-";
+  const submittedAt = new Date(asString(input.requestRow?.created_at, 80) || new Date().toISOString()).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
+
+  const textBody = [
+    `We received your ${title} payment submission.`,
+    "",
+    "Status: PENDING APPROVAL",
+    "Keep your receipt reference. If you do not receive an email update soon, send this receipt reference to Facebook Messenger for manual status checking.",
+    "",
+    `Receipt Reference: ${receiptReference}`,
+  ].join("\n");
+
+  const htmlBody = buildReceiptStyleEmailHtml({
+    variant: "pending",
+    title: "Pending Approval",
+    subtitle: `Your ${version} purchase is waiting for review.`,
+    amountLabel: "Total Payment",
+    amountValue: amount !== null ? formatPhpCurrency(amount) : "To be confirmed",
+    details: [
+      { label: "Purchase", value: title },
+      { label: "VDJV Receipt No", value: receiptReference },
+      { label: "Payment Reference", value: referenceNo },
+      { label: "Payment Channel", value: paymentChannel },
+      { label: "Submitted At", value: submittedAt },
+      { label: "Status", value: "Pending Approval" },
+    ],
+    bodyText: textBody,
+  });
+
+  try {
+    await sendEmailViaResend({
+      to: targetEmail,
+      subject: `Payment Received - Pending Approval - ${receiptReference}`,
+      html: htmlBody,
+      text: textBody,
+    });
+    return { status: "sent", error: null };
+  } catch (err) {
+    return { status: "failed", error: err instanceof Error ? err.message : String(err) };
+  }
+};
+
+const sendInstallerDecisionEmail = async (input: {
+  admin: ReturnType<typeof createServiceClient>;
+  requestRow: any;
+  nextStatus: "approved" | "rejected";
+  reviewedAtIso: string;
+  rejectionMessage?: string | null;
+  issuedLicenseCode?: string | null;
+  installerDownloadLink?: string | null;
+}): Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }> => {
+  const targetEmail = normalizeEmail(input.requestRow?.email);
+  if (!targetEmail) return { status: "skipped", error: "No valid recipient email" };
+  if (!RESEND_API_KEY || !STORE_EMAIL_FROM) {
+    return {
+      status: "skipped",
+      error: "Email provider is not configured (missing RESEND_API_KEY or STORE_EMAIL_FROM)",
+    };
+  }
+
+  const version = normalizeInstallerBuyVersion(input.requestRow?.version) || "V2";
+  const title = asString(input.requestRow?.display_name_snapshot, 200) || `${version} Purchase`;
+  const receiptReference = asString(input.requestRow?.receipt_reference, 160) || "-";
+  const paymentReference = asString(input.requestRow?.reference_no, 160) || "-";
+  const paymentChannel = asString(input.requestRow?.payment_channel, 80) || "-";
+  const reviewedAt = new Date(input.reviewedAtIso).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
+
+  const subject = input.nextStatus === "approved"
+    ? `License Ready - ${receiptReference}`
+    : `Purchase Update - ${receiptReference}`;
+
+  const textBody = input.nextStatus === "approved"
+    ? [
+      `Your ${title} purchase has been approved.`,
+      "",
+      `License Code: ${input.issuedLicenseCode || "-"}`,
+      `Installer Download: ${input.installerDownloadLink || "-"}`,
+      "",
+      "Keep this email for future reinstall and support reference.",
+    ].join("\n")
+    : [
+      `Your ${title} purchase was not approved.`,
+      "",
+      `Reason: ${asString(input.rejectionMessage, 1000) || "Please message us on Facebook for assistance."}`,
+      "",
+      `Receipt Reference: ${receiptReference}`,
+    ].join("\n");
+
+  const htmlBody = buildReceiptStyleEmailHtml({
+    variant: input.nextStatus === "approved" ? "approved" : "rejected",
+    title: input.nextStatus === "approved" ? "License Ready" : "Purchase Rejected",
+    subtitle: input.nextStatus === "approved"
+      ? `Your ${version} purchase is approved and ready to use.`
+      : `Your ${version} purchase requires manual follow-up.`,
+    amountLabel: "Purchase",
+    amountValue: title,
+    details: [
+      { label: "VDJV Receipt No", value: receiptReference },
+      { label: "Payment Reference", value: paymentReference },
+      { label: "Payment Channel", value: paymentChannel },
+      { label: "Reviewed At", value: reviewedAt },
+      ...(input.nextStatus === "approved"
+        ? [
+          { label: "License Code", value: asString(input.issuedLicenseCode, 120) || "-" },
+          { label: "Download Link", value: asString(input.installerDownloadLink, 2000) || "-" },
+        ]
+        : [{ label: "Reason", value: asString(input.rejectionMessage, 1000) || "-" }]),
+    ],
+    bodyText: textBody,
+  });
+
+  try {
+    await sendEmailViaResend({
+      to: targetEmail,
+      subject,
+      html: htmlBody,
+      text: textBody,
+    });
+    return { status: "sent", error: null };
+  } catch (err) {
+    return { status: "failed", error: err instanceof Error ? err.message : String(err) };
+  }
+};
+
+const executeInstallerPurchaseApproval = async (input: {
+  admin: ReturnType<typeof createServiceClient>;
+  requestRow: any;
+  reviewedAtIso: string;
+  reviewedBy: string | null;
+  decisionSource: "manual" | "automation";
+  automationResult?: string | null;
+}) => {
+  const version = normalizeInstallerBuyVersion(input.requestRow?.version);
+  if (!version) return fail(400, "INVALID_VERSION");
+
+  const landingConfig = await getNormalizedLandingConfigRecord(input.admin);
+  let issuedLicenseId = Number.isFinite(Number(input.requestRow?.issued_license_id))
+    ? Number(input.requestRow.issued_license_id)
+    : null;
+  let issuedLicenseCode = asString(input.requestRow?.issued_license_code, 120) || null;
+
+  if (!issuedLicenseId || !issuedLicenseCode) {
+    const createPayload = await callInstallerAdmin<Record<string, unknown>>("POST", "/admin/licenses/create", {
+      version,
+      customerName: asString(input.requestRow?.email, 320) || asString(input.requestRow?.display_name_snapshot, 200) || `${version} Buyer`,
+      notes: [
+        `installer_purchase_request:${asString(input.requestRow?.id, 80) || ""}`,
+        `sku:${asString(input.requestRow?.sku_code, 120) || ""}`,
+        `email:${asString(input.requestRow?.email, 320) || ""}`,
+      ].join(" | "),
+      unlimited: false,
+      entitlements: Array.isArray(input.requestRow?.granted_entitlements_snapshot)
+        ? input.requestRow.granted_entitlements_snapshot
+        : [],
+    });
+
+    issuedLicenseCode = asString((createPayload as any)?.rawCode, 120) || null;
+    issuedLicenseId = Number.isFinite(Number((createPayload as any)?.item?.id))
+      ? Number((createPayload as any).item.id)
+      : null;
+    if (!issuedLicenseId || !issuedLicenseCode) {
+      return fail(500, "INSTALLER_LICENSE_CREATE_FAILED");
+    }
+  }
+
+  const installerDownloadLink = resolveInstallerDownloadLink(landingConfig, input.requestRow);
+  const decisionEmail = await sendInstallerDecisionEmail({
+    admin: input.admin,
+    requestRow: input.requestRow,
+    nextStatus: "approved",
+    reviewedAtIso: input.reviewedAtIso,
+    issuedLicenseCode,
+    installerDownloadLink,
+  });
+
+  const { error } = await input.admin
+    .from("installer_purchase_requests")
+    .update({
+      status: "approved",
+      rejection_message: null,
+      reviewed_by: input.reviewedBy,
+      reviewed_at: input.reviewedAtIso,
+      issued_license_id: issuedLicenseId,
+      issued_license_code: issuedLicenseCode,
+      installer_download_link: installerDownloadLink || null,
+      decision_email_status: decisionEmail.status,
+      decision_email_error: decisionEmail.error,
+      decision_source: input.decisionSource,
+      automation_result: input.automationResult || null,
+    })
+    .eq("id", input.requestRow.id)
+    .eq("status", "pending");
+  if (error) return fail(500, error.message);
+
+  return ok({
+    requestId: input.requestRow.id,
+    status: "approved",
+    issued_license_id: issuedLicenseId,
+    issued_license_code: issuedLicenseCode,
+    installer_download_link: installerDownloadLink || null,
+    decision_email_status: decisionEmail.status,
+    decision_email_error: decisionEmail.error,
+  });
+};
+
+const createInstallerPurchaseRequest = async (req: Request, body: any) => {
+  const admin = createServiceClient();
+  const email = normalizeEmail(body?.email);
+  const version = normalizeInstallerBuyVersion(body?.version);
+  const skuCode = asString(body?.skuCode, 120)?.trim() || "";
+  const paymentChannel = asString(body?.paymentChannel, 40);
+  let payerName = asString(body?.payerName, 120);
+  let referenceNo = asString(body?.referenceNo, 120);
+  const notes = asString(body?.notes, 1000);
+  const proofPath = asString(body?.proofPath, 600);
+
+  if (!email) return badRequest("A valid email is required");
+  if (!version) return badRequest("A valid version is required");
+  if (!skuCode) return badRequest("skuCode is required");
+  if (!paymentChannel || !PAYMENT_CHANNEL_VALUES.has(paymentChannel)) return badRequest("Invalid paymentChannel");
+  if (!proofPath && paymentChannel === "image_proof") return badRequest("proofPath is required for image_proof");
+  if (proofPath) {
+    if (!proofPath.startsWith("installer/")) return badRequest("Invalid proofPath");
+    const ext = getExtensionFromFileName(proofPath);
+    if (!ext || !ACCOUNT_REG_ALLOWED_EXTENSIONS.has(ext)) return badRequest("Invalid proofPath extension");
+  }
+
+  const purchaseRateLimit = await consumeRateLimit({
+    scope: "installer_purchase.submit",
+    subject: `${getRequestIp(req)}:${email}`,
+    maxHits: ACCOUNT_REG_SUBMIT_RATE_LIMIT,
+    windowSeconds: ACCOUNT_REG_SUBMIT_RATE_WINDOW_SECONDS,
+  });
+  if (!purchaseRateLimit.allowed) {
+    return fail(429, "RATE_LIMITED", {
+      scope: "installer_purchase.submit",
+      retry_after_seconds: purchaseRateLimit.retryAfterSeconds,
+    });
+  }
+
+  if (proofPath) {
+    const { error: signedError } = await admin.storage.from("payment-proof").createSignedUrl(proofPath, 60);
+    if (signedError) return fail(400, "INVALID_PROOF_PATH");
+  }
+
+  const product = await getInstallerBuyProductByVersionAndSku(admin, version, skuCode);
+  if (!product || !product.enabled) return fail(404, "INSTALLER_BUY_PRODUCT_NOT_FOUND");
+
+  const { data: existingPending, error: existingPendingError } = await admin
+    .from("installer_purchase_requests")
+    .select("id")
+    .eq("email_normalized", email)
+    .eq("version", version)
+    .eq("sku_code", skuCode)
+    .eq("status", "pending")
+    .limit(1);
+  if (existingPendingError) return fail(500, existingPendingError.message);
+  if ((existingPending || []).length > 0) return fail(409, "INSTALLER_PURCHASE_PENDING");
+
+  const automationSettings = await getStoreAutomationSettings(admin);
+  let ocrDetected: ReceiptOcrDetection | null = null;
+  let ocrErrorCode: string | null = null;
+  let ocrProvider: string | null = null;
+  const automationConfig = getInstallerAutomationConfigForVersion(automationSettings, version);
+  const shouldRunServerOcr = paymentChannel === "image_proof" && Boolean(proofPath) && automationConfig.enabled;
+  if (shouldRunServerOcr && proofPath) {
+    const attempt = await extractReceiptFieldsFromStoragePath(
+      admin,
+      "payment-proof",
+      proofPath,
+      "account_registration",
+    ).catch(() => ({ detected: null, errorCode: "OCR_FAILED", provider: OCR_SPACE_PROVIDER, elapsedMs: 0 } satisfies ReceiptOcrAttempt));
+    if (attempt.detected) {
+      ocrDetected = attempt.detected;
+      ocrProvider = attempt.detected.provider;
+      if (!payerName && attempt.detected.payerName) payerName = attempt.detected.payerName;
+      if (!referenceNo && attempt.detected.referenceNo) referenceNo = attempt.detected.referenceNo;
+    } else {
+      ocrErrorCode = attempt.errorCode || (String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE");
+      ocrProvider = attempt.provider;
+    }
+  } else if (paymentChannel === "image_proof" && proofPath) {
+    ocrErrorCode = "MANUAL_REVIEW_MODE";
+  }
+
+  const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode, ocrProvider);
+  const { data: paymentSettings, error: paymentSettingsError } = await admin
+    .from("store_payment_settings")
+    .select("gcash_number,maya_number,messenger_url")
+    .eq("id", "default")
+    .maybeSingle();
+  if (paymentSettingsError) return fail(500, paymentSettingsError.message);
+
+  const receiptReference = buildInstallerReceiptReference(version);
+  const insertPayload = {
+    email,
+    version,
+    sku_code: product.skuCode,
+    product_type: product.productType,
+    display_name_snapshot: product.displayName,
+    price_php_snapshot: product.pricePhp,
+    granted_entitlements_snapshot: product.grantedEntitlements,
+    status: "pending",
+    payment_channel: paymentChannel,
+    payer_name: payerName || null,
+    reference_no: referenceNo || null,
+    receipt_reference: receiptReference,
+    notes: notes || null,
+    proof_path: proofPath || null,
+    decision_email_status: "pending",
+    ocr_reference_no: ocrMetadata.referenceNo,
+    ocr_payer_name: ocrMetadata.payerName,
+    ocr_amount_php: ocrMetadata.amountPhp,
+    ocr_recipient_number: ocrMetadata.recipientNumber,
+    ocr_provider: ocrMetadata.provider,
+    ocr_scanned_at: ocrMetadata.scannedAt,
+    ocr_status: ocrMetadata.status,
+    ocr_error_code: ocrMetadata.errorCode,
+  };
+
+  const { data, error } = await admin
+    .from("installer_purchase_requests")
+    .insert(insertPayload)
+    .select("*")
+    .single();
+  if (error) return fail(500, error.message);
+  const requestRow = data as any;
+
+  let automationResult: AutomationReason = "not_image_proof";
+  let autoApproved = false;
+  if (paymentChannel === "image_proof") {
+    if (!automationConfig.enabled) {
+      automationResult = "manual_review_disabled";
+    } else if (!ocrDetected) {
+      automationResult = "ocr_failed";
+    } else if (!ocrMetadata.referenceNo) {
+      automationResult = "missing_reference";
+    } else if (ocrMetadata.amountPhp === null) {
+      automationResult = "missing_amount";
+    } else if (!ocrMetadata.recipientNumber) {
+      automationResult = "missing_recipient_number";
+    } else {
+      const reserved = await tryReservePaymentReference({
+        admin,
+        sourceReference: ocrMetadata.referenceNo,
+        sourceTable: "installer_purchase_requests",
+        sourceRequestId: String(requestRow.id),
+      });
+      if (reserved.errorMessage) {
+        automationResult = "approval_error";
+      } else if (!reserved.reserved) {
+        automationResult = "duplicate_reference";
+      } else if (!isWithinAutoApprovalWindow(automationConfig)) {
+        automationResult = "outside_window";
+      } else if (!matchesConfiguredWalletRecipient({
+        paymentChannel,
+        detectedRecipientNumber: ocrMetadata.recipientNumber,
+        paymentConfig: paymentSettings,
+      })) {
+        automationResult = "wallet_number_mismatch";
+      } else {
+        const expectedAmount = roundMoney(product.pricePhp || 0);
+        const detectedAmount = roundMoney(ocrMetadata.amountPhp);
+        if (!matchesAutoApprovalAmount(expectedAmount, detectedAmount)) {
+          automationResult = "amount_mismatch";
+        } else {
+          automationResult = "approved";
+          autoApproved = true;
+        }
+      }
+    }
+  }
+
+  if (autoApproved) {
+    const approvalResponse = await executeInstallerPurchaseApproval({
+      admin,
+      requestRow,
+      reviewedAtIso: new Date().toISOString(),
+      reviewedBy: null,
+      decisionSource: "automation",
+      automationResult,
+    });
+    if (approvalResponse.ok || approvalResponse.status < 500) {
+      return approvalResponse;
+    }
+    automationResult = "approval_error";
+  }
+
+  await admin
+    .from("installer_purchase_requests")
+    .update({ automation_result: automationResult })
+    .eq("id", requestRow.id);
+
+  const pendingEmailResult = await sendInstallerPendingSubmissionEmail({ requestRow });
+  if (pendingEmailResult.status !== "skipped") {
+    await admin
+      .from("installer_purchase_requests")
+      .update({
+        decision_email_status: pendingEmailResult.status,
+        decision_email_error: pendingEmailResult.error,
+      })
+      .eq("id", requestRow.id);
+  }
+
+  return ok({
+    requestId: requestRow.id,
+    status: "pending",
+    auto_approved: false,
+    payer_name: payerName || null,
+    reference_no: ocrMetadata.referenceNo || referenceNo || null,
+    receipt_reference: receiptReference,
+    decision_email_status: pendingEmailResult.status,
+    decision_email_error: pendingEmailResult.error,
+    wait_message: "Your purchase request is under confirmation. Please check your email or message us on Facebook with the receipt reference for status.",
+  });
+};
+
+const listAdminInstallerBuyProducts = async (req: Request) => {
+  const admin = createServiceClient();
+  const url = new URL(req.url);
+  const version = normalizeInstallerBuyVersion(url.searchParams.get("version"));
+
+  let query = admin
+    .from("installer_buy_products")
+    .select("*")
+    .order("version", { ascending: true })
+    .order("sort_order", { ascending: true })
+    .order("display_name", { ascending: true });
+  if (version) query = query.eq("version", version);
+
+  const { data, error } = await query;
+  if (error) return fail(500, error.message);
+  return ok({ items: (data || []).map(mapInstallerBuyProductRow) });
+};
+
+const saveAdminInstallerBuyProduct = async (body: any, adminUserId: string) => {
+  const admin = createServiceClient();
+  const version = normalizeInstallerBuyVersion(body?.version);
+  const productType = normalizeInstallerBuyProductType(body?.productType);
+  const skuCode = asString(body?.skuCode, 120)?.trim().toUpperCase() || "";
+  const displayName = asString(body?.displayName, 200)?.trim() || "";
+  const description = asString(body?.description, 5000) || "";
+  const heroImageUrl = asString(body?.heroImageUrl, 2000) || null;
+  const downloadLinkOverride = asString(body?.downloadLinkOverride, 2000) || null;
+  const pricePhp = asPriceNumber(body?.pricePhp);
+  const sortOrder = Math.max(0, Math.floor(Number(body?.sortOrder || 0)));
+  const allowAutoApprove = Boolean(body?.allowAutoApprove);
+  const enabled = Boolean(body?.enabled);
+  const grantedEntitlements = sanitizeInstallerBuyEntitlements(body?.grantedEntitlements, version || "V2");
+  if (!version) return badRequest("Invalid version");
+  if (!productType) return badRequest("Invalid productType");
+  if (!skuCode) return badRequest("skuCode is required");
+  if (!displayName) return badRequest("displayName is required");
+  if (pricePhp === null) return badRequest("pricePhp is required");
+  if (grantedEntitlements.length === 0) return badRequest("grantedEntitlements is required");
+  if (heroImageUrl) {
+    try {
+      const parsed = new URL(heroImageUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return badRequest("heroImageUrl must be a valid http or https URL");
+      }
+    } catch {
+      return badRequest("heroImageUrl must be a valid http or https URL");
+    }
+  }
+  if (downloadLinkOverride) {
+    try {
+      const parsed = new URL(downloadLinkOverride);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return badRequest("downloadLinkOverride must be a valid http or https URL");
+      }
+    } catch {
+      return badRequest("downloadLinkOverride must be a valid http or https URL");
+    }
+  }
+
+  const payload = {
+    version,
+    sku_code: skuCode,
+    product_type: productType,
+    display_name: displayName,
+    description,
+    price_php: pricePhp,
+    enabled,
+    sort_order: sortOrder,
+    allow_auto_approve: allowAutoApprove,
+    hero_image_url: heroImageUrl,
+    download_link_override: downloadLinkOverride,
+    granted_entitlements: grantedEntitlements,
+    updated_by: adminUserId,
+  };
+
+  const { data, error } = await admin
+    .from("installer_buy_products")
+    .upsert(payload, { onConflict: "version,sku_code" })
+    .select("*")
+    .single();
+  if (error) return fail(500, error.message);
+  return ok({ item: mapInstallerBuyProductRow(data) });
+};
+
+const deleteAdminInstallerBuyProduct = async (body: any) => {
+  const admin = createServiceClient();
+  const version = normalizeInstallerBuyVersion(body?.version);
+  const skuCode = asString(body?.skuCode, 120)?.trim().toUpperCase() || "";
+  if (!version) return badRequest("Invalid version");
+  if (!skuCode) return badRequest("skuCode is required");
+
+  const { error } = await admin
+    .from("installer_buy_products")
+    .delete()
+    .eq("version", version)
+    .eq("sku_code", skuCode);
+  if (error) return fail(500, error.message);
+  return ok({ deleted: true, version, skuCode });
+};
+
+const listAdminInstallerPurchaseRequests = async (req: Request) => {
+  const admin = createServiceClient();
+  const url = new URL(req.url);
+  const version = normalizeInstallerBuyVersion(url.searchParams.get("version"));
+  const status = String(url.searchParams.get("status") || "all").toLowerCase();
+  const page = Math.max(1, Number(url.searchParams.get("page") || 1));
+  const perPage = Math.max(1, Math.min(100, Number(url.searchParams.get("perPage") || 20)));
+  const q = asString(url.searchParams.get("q"), 120)?.trim();
+  const from = (page - 1) * perPage;
+  const to = from + perPage - 1;
+
+  let query: any = admin
+    .from("installer_purchase_requests")
+    .select("*", { count: "exact" })
+    .order("created_at", { ascending: false });
+
+  if (version) query = query.eq("version", version);
+  if (status === "pending" || status === "approved" || status === "rejected") query = query.eq("status", status);
+  if (q) {
+    const escaped = q.replace(/[%_]/g, "");
+    query = query.or([
+      `email.ilike.%${escaped}%`,
+      `sku_code.ilike.%${escaped}%`,
+      `display_name_snapshot.ilike.%${escaped}%`,
+      `reference_no.ilike.%${escaped}%`,
+      `ocr_reference_no.ilike.%${escaped}%`,
+      `receipt_reference.ilike.%${escaped}%`,
+      `issued_license_code.ilike.%${escaped}%`,
+    ].join(","));
+  }
+
+  const { data, error, count } = await query.range(from, to);
+  if (error) return fail(500, error.message);
+  return ok({
+    items: (data || []).map(mapInstallerPurchaseRequestRow),
+    total: Number(count || 0),
+    page,
+    perPage,
+  });
+};
+
+const adminInstallerPurchaseRequestAction = async (requestId: string, body: any, adminUserId: string) => {
+  const admin = createServiceClient();
+  const action = String(body?.action || "").toLowerCase();
+  if (action !== "approve" && action !== "reject") return badRequest("Invalid action");
+  const rejectionMessage = asString(body?.rejection_message, 1000);
+  if (action === "reject" && !rejectionMessage) return badRequest("rejection_message is required");
+
+  const { data: requestRow, error: requestError } = await admin
+    .from("installer_purchase_requests")
+    .select("*")
+    .eq("id", requestId)
+    .maybeSingle();
+  if (requestError) return fail(500, requestError.message);
+  if (!requestRow) return fail(404, "Request not found");
+  if (requestRow.status !== "pending") return badRequest("Request is not pending");
+
+  const reviewedAtIso = new Date().toISOString();
+  if (action === "approve") {
+    return await executeInstallerPurchaseApproval({
+      admin,
+      requestRow,
+      reviewedAtIso,
+      reviewedBy: adminUserId,
+      decisionSource: "manual",
+      automationResult: asString(requestRow?.automation_result, 120) || null,
+    });
+  }
+
+  const decisionEmail = await sendInstallerDecisionEmail({
+    admin,
+    requestRow,
+    nextStatus: "rejected",
+    reviewedAtIso,
+    rejectionMessage: rejectionMessage || null,
+  });
+
+  const { error } = await admin
+    .from("installer_purchase_requests")
+    .update({
+      status: "rejected",
+      rejection_message: rejectionMessage || null,
+      reviewed_by: adminUserId,
+      reviewed_at: reviewedAtIso,
+      decision_email_status: decisionEmail.status,
+      decision_email_error: decisionEmail.error,
+      decision_source: "manual",
+      automation_result: asString(requestRow?.automation_result, 120) || null,
+    })
+    .eq("id", requestId)
+    .eq("status", "pending");
+  if (error) return fail(500, error.message);
+
+  return ok({
+    requestId,
+    status: "rejected",
+    decision_email_status: decisionEmail.status,
+    decision_email_error: decisionEmail.error,
+  });
 };
 
 const getPublicSamplerAppConfig = async () => {
@@ -2944,6 +3891,28 @@ const disableExpiredCountdowns = async (admin: ReturnType<typeof createServiceCl
     .eq("store_auto_approve_enabled", true)
     .eq("store_auto_approve_mode", "countdown")
     .lt("store_auto_approve_expires_at", nowIso);
+
+  await admin
+    .from("store_payment_settings")
+    .update({
+      installer_v2_auto_approve_enabled: false,
+      installer_v2_auto_approve_expires_at: null,
+    })
+    .eq("id", "default")
+    .eq("installer_v2_auto_approve_enabled", true)
+    .eq("installer_v2_auto_approve_mode", "countdown")
+    .lt("installer_v2_auto_approve_expires_at", nowIso);
+
+  await admin
+    .from("store_payment_settings")
+    .update({
+      installer_v3_auto_approve_enabled: false,
+      installer_v3_auto_approve_expires_at: null,
+    })
+    .eq("id", "default")
+    .eq("installer_v3_auto_approve_enabled", true)
+    .eq("installer_v3_auto_approve_mode", "countdown")
+    .lt("installer_v3_auto_approve_expires_at", nowIso);
 };
 
 const getStoreAutomationSettings = async (admin: ReturnType<typeof createServiceClient>) => {
@@ -2951,7 +3920,7 @@ const getStoreAutomationSettings = async (admin: ReturnType<typeof createService
   const { data, error } = await admin
     .from("store_payment_settings")
     .select(
-      "id,account_auto_approve_enabled,account_auto_approve_mode,account_auto_approve_start_hour,account_auto_approve_end_hour,account_auto_approve_duration_hours,account_auto_approve_expires_at,store_auto_approve_enabled,store_auto_approve_mode,store_auto_approve_start_hour,store_auto_approve_end_hour,store_auto_approve_duration_hours,store_auto_approve_expires_at",
+      "id,account_auto_approve_enabled,account_auto_approve_mode,account_auto_approve_start_hour,account_auto_approve_end_hour,account_auto_approve_duration_hours,account_auto_approve_expires_at,store_auto_approve_enabled,store_auto_approve_mode,store_auto_approve_start_hour,store_auto_approve_end_hour,store_auto_approve_duration_hours,store_auto_approve_expires_at,installer_v2_auto_approve_enabled,installer_v2_auto_approve_mode,installer_v2_auto_approve_start_hour,installer_v2_auto_approve_end_hour,installer_v2_auto_approve_duration_hours,installer_v2_auto_approve_expires_at,installer_v3_auto_approve_enabled,installer_v3_auto_approve_mode,installer_v3_auto_approve_start_hour,installer_v3_auto_approve_end_hour,installer_v3_auto_approve_duration_hours,installer_v3_auto_approve_expires_at",
     )
     .eq("id", "default")
     .maybeSingle();
@@ -2973,13 +3942,29 @@ const getStoreAutomationSettings = async (admin: ReturnType<typeof createService
       durationHours: normalizeAutoApprovalDurationHours((data as any)?.store_auto_approve_duration_hours),
       expiresAt: asString((data as any)?.store_auto_approve_expires_at, 80) || null,
     },
+    installerV2: {
+      enabled: Boolean((data as any)?.installer_v2_auto_approve_enabled),
+      mode: normalizeAutoApprovalMode((data as any)?.installer_v2_auto_approve_mode),
+      startHour: normalizeAutoApprovalHour((data as any)?.installer_v2_auto_approve_start_hour),
+      endHour: normalizeAutoApprovalHour((data as any)?.installer_v2_auto_approve_end_hour),
+      durationHours: normalizeAutoApprovalDurationHours((data as any)?.installer_v2_auto_approve_duration_hours),
+      expiresAt: asString((data as any)?.installer_v2_auto_approve_expires_at, 80) || null,
+    },
+    installerV3: {
+      enabled: Boolean((data as any)?.installer_v3_auto_approve_enabled),
+      mode: normalizeAutoApprovalMode((data as any)?.installer_v3_auto_approve_mode),
+      startHour: normalizeAutoApprovalHour((data as any)?.installer_v3_auto_approve_start_hour),
+      endHour: normalizeAutoApprovalHour((data as any)?.installer_v3_auto_approve_end_hour),
+      durationHours: normalizeAutoApprovalDurationHours((data as any)?.installer_v3_auto_approve_duration_hours),
+      expiresAt: asString((data as any)?.installer_v3_auto_approve_expires_at, 80) || null,
+    },
   };
 };
 
 const reservePaymentReference = async (input: {
   admin: ReturnType<typeof createServiceClient>;
   sourceReference: string;
-  sourceTable: "account_registration_requests" | "bank_purchase_requests";
+  sourceTable: "account_registration_requests" | "bank_purchase_requests" | "installer_purchase_requests";
   sourceRequestId: string | null;
 }): Promise<{ reserved: boolean; normalizedReference: string | null }> => {
   const normalizedReference = normalizePaymentReferenceRegistryKey(input.sourceReference);
@@ -3160,6 +4145,7 @@ const executeAccountApproval = async (input: {
   };
   if (!input.assisted) {
     approvalEmailResult = await sendAccountApprovalDecisionEmail({
+      admin: input.admin,
       requestRow: input.requestRow,
       reviewedAtIso: input.reviewedAtIso,
       loginHint: buildAccountApprovalLoginHint(false),
@@ -3507,6 +4493,7 @@ const adminAccountRegistrationRetryDecisionEmail = async (requestId: string, adm
         throw new Error("Approved user account not found. Cannot retry decision email.");
       }
       const approvalEmailResult = await sendAccountApprovalDecisionEmail({
+        admin,
         requestRow,
         reviewedAtIso: nowIso,
         loginHint: "Your account is approved. Sign in using your registered password.",
@@ -4234,6 +5221,7 @@ const sendAccountPendingSubmissionEmail = async (input: {
 };
 
 const sendAccountApprovalDecisionEmail = async (input: {
+  admin: ReturnType<typeof createServiceClient>;
   requestRow: any;
   reviewedAtIso: string;
   loginHint?: string;
@@ -4250,6 +5238,21 @@ const sendAccountApprovalDecisionEmail = async (input: {
   const displayName = asString(input.requestRow?.display_name, 160) || "User";
   const reviewTime = new Date(input.reviewedAtIso).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
   const loginHint = asString(input.loginHint, 500) || "You can now sign in using the password you registered.";
+  let platformGuideText = "";
+  try {
+    const landingConfig = await getNormalizedLandingConfigRecord(input.admin);
+    const v1Links = landingConfig.downloadLinks.V1;
+    platformGuideText = [
+      "",
+      "Download guides:",
+      `Android: ${v1Links.android || "-"}`,
+      `iOS: ${v1Links.ios || "-"}`,
+      `Desktop: ${v1Links.windows || "-"}`,
+      `macOS: ${v1Links.macos || "-"}`,
+    ].join("\n");
+  } catch {
+    // Best-effort extra guidance only.
+  }
   const subject = `Account Approved - ${asString(input.requestRow?.receipt_reference, 120) || "VDJV"}`;
   const bodyLines = [
     `Hi ${displayName},`,
@@ -4257,6 +5260,7 @@ const sendAccountApprovalDecisionEmail = async (input: {
     "Your account registration request has been approved.",
     "",
     loginHint,
+    platformGuideText,
   ];
   const textBody = bodyLines.join("\n");
   const htmlBody = buildReceiptStyleEmailHtml({
@@ -5751,6 +6755,18 @@ const getAdminStoreConfig = async () => {
       store_auto_approve_end_hour: normalizeAutoApprovalHour((data as any)?.store_auto_approve_end_hour),
       store_auto_approve_duration_hours: normalizeAutoApprovalDurationHours((data as any)?.store_auto_approve_duration_hours),
       store_auto_approve_expires_at: asString((data as any)?.store_auto_approve_expires_at, 80) || null,
+      installer_v2_auto_approve_enabled: Boolean((data as any)?.installer_v2_auto_approve_enabled),
+      installer_v2_auto_approve_mode: normalizeAutoApprovalMode((data as any)?.installer_v2_auto_approve_mode),
+      installer_v2_auto_approve_start_hour: normalizeAutoApprovalHour((data as any)?.installer_v2_auto_approve_start_hour),
+      installer_v2_auto_approve_end_hour: normalizeAutoApprovalHour((data as any)?.installer_v2_auto_approve_end_hour),
+      installer_v2_auto_approve_duration_hours: normalizeAutoApprovalDurationHours((data as any)?.installer_v2_auto_approve_duration_hours),
+      installer_v2_auto_approve_expires_at: asString((data as any)?.installer_v2_auto_approve_expires_at, 80) || null,
+      installer_v3_auto_approve_enabled: Boolean((data as any)?.installer_v3_auto_approve_enabled),
+      installer_v3_auto_approve_mode: normalizeAutoApprovalMode((data as any)?.installer_v3_auto_approve_mode),
+      installer_v3_auto_approve_start_hour: normalizeAutoApprovalHour((data as any)?.installer_v3_auto_approve_start_hour),
+      installer_v3_auto_approve_end_hour: normalizeAutoApprovalHour((data as any)?.installer_v3_auto_approve_end_hour),
+      installer_v3_auto_approve_duration_hours: normalizeAutoApprovalDurationHours((data as any)?.installer_v3_auto_approve_duration_hours),
+      installer_v3_auto_approve_expires_at: asString((data as any)?.installer_v3_auto_approve_expires_at, 80) || null,
     },
   });
 };
@@ -5778,6 +6794,7 @@ const saveAdminLandingDownloadConfig = async (body: any, adminUserId: string) =>
     download_links: body?.downloadLinks,
     platform_descriptions: body?.platformDescriptions,
     version_descriptions: body?.versionDescriptions,
+    buy_sections: body?.buySections,
   });
   const admin = createServiceClient();
   const row = {
@@ -5786,6 +6803,7 @@ const saveAdminLandingDownloadConfig = async (body: any, adminUserId: string) =>
     download_links: payload.downloadLinks,
     platform_descriptions: payload.platformDescriptions,
     version_descriptions: payload.versionDescriptions,
+    buy_sections: payload.buySections,
     updated_by: adminUserId,
     updated_at: new Date().toISOString(),
   };
@@ -5898,6 +6916,42 @@ const saveAdminStoreConfig = async (body: any, adminUserId: string) => {
   const storeAutoApproveExpiresAt = hasField("store_auto_approve_expires_at")
     ? (body?.store_auto_approve_expires_at === null ? null : asString(body?.store_auto_approve_expires_at, 80))
     : (asString((existingConfig as any)?.store_auto_approve_expires_at, 80) || null);
+  const installerV2AutoApproveEnabled = hasField("installer_v2_auto_approve_enabled")
+    ? Boolean(body?.installer_v2_auto_approve_enabled)
+    : Boolean((existingConfig as any)?.installer_v2_auto_approve_enabled);
+  const installerV3AutoApproveEnabled = hasField("installer_v3_auto_approve_enabled")
+    ? Boolean(body?.installer_v3_auto_approve_enabled)
+    : Boolean((existingConfig as any)?.installer_v3_auto_approve_enabled);
+  const installerV2AutoApproveMode = hasField("installer_v2_auto_approve_mode")
+    ? normalizeAutoApprovalMode(body?.installer_v2_auto_approve_mode)
+    : normalizeAutoApprovalMode((existingConfig as any)?.installer_v2_auto_approve_mode);
+  const installerV3AutoApproveMode = hasField("installer_v3_auto_approve_mode")
+    ? normalizeAutoApprovalMode(body?.installer_v3_auto_approve_mode)
+    : normalizeAutoApprovalMode((existingConfig as any)?.installer_v3_auto_approve_mode);
+  const installerV2AutoApproveStartHour = hasField("installer_v2_auto_approve_start_hour")
+    ? normalizeAutoApprovalHour(body?.installer_v2_auto_approve_start_hour)
+    : normalizeAutoApprovalHour((existingConfig as any)?.installer_v2_auto_approve_start_hour);
+  const installerV2AutoApproveEndHour = hasField("installer_v2_auto_approve_end_hour")
+    ? normalizeAutoApprovalHour(body?.installer_v2_auto_approve_end_hour)
+    : normalizeAutoApprovalHour((existingConfig as any)?.installer_v2_auto_approve_end_hour);
+  const installerV2AutoApproveDurationHours = hasField("installer_v2_auto_approve_duration_hours")
+    ? normalizeAutoApprovalDurationHours(body?.installer_v2_auto_approve_duration_hours)
+    : normalizeAutoApprovalDurationHours((existingConfig as any)?.installer_v2_auto_approve_duration_hours);
+  const installerV3AutoApproveStartHour = hasField("installer_v3_auto_approve_start_hour")
+    ? normalizeAutoApprovalHour(body?.installer_v3_auto_approve_start_hour)
+    : normalizeAutoApprovalHour((existingConfig as any)?.installer_v3_auto_approve_start_hour);
+  const installerV3AutoApproveEndHour = hasField("installer_v3_auto_approve_end_hour")
+    ? normalizeAutoApprovalHour(body?.installer_v3_auto_approve_end_hour)
+    : normalizeAutoApprovalHour((existingConfig as any)?.installer_v3_auto_approve_end_hour);
+  const installerV3AutoApproveDurationHours = hasField("installer_v3_auto_approve_duration_hours")
+    ? normalizeAutoApprovalDurationHours(body?.installer_v3_auto_approve_duration_hours)
+    : normalizeAutoApprovalDurationHours((existingConfig as any)?.installer_v3_auto_approve_duration_hours);
+  const installerV2AutoApproveExpiresAt = hasField("installer_v2_auto_approve_expires_at")
+    ? (body?.installer_v2_auto_approve_expires_at === null ? null : asString(body?.installer_v2_auto_approve_expires_at, 80))
+    : (asString((existingConfig as any)?.installer_v2_auto_approve_expires_at, 80) || null);
+  const installerV3AutoApproveExpiresAt = hasField("installer_v3_auto_approve_expires_at")
+    ? (body?.installer_v3_auto_approve_expires_at === null ? null : asString(body?.installer_v3_auto_approve_expires_at, 80))
+    : (asString((existingConfig as any)?.installer_v3_auto_approve_expires_at, 80) || null);
   const payload: Record<string, unknown> = {
     id: "default",
     is_active: true,
@@ -5926,6 +6980,18 @@ const saveAdminStoreConfig = async (body: any, adminUserId: string) => {
     store_auto_approve_end_hour: storeAutoApproveEndHour,
     store_auto_approve_duration_hours: storeAutoApproveDurationHours,
     store_auto_approve_expires_at: storeAutoApproveExpiresAt,
+    installer_v2_auto_approve_enabled: installerV2AutoApproveEnabled,
+    installer_v2_auto_approve_mode: installerV2AutoApproveMode,
+    installer_v2_auto_approve_start_hour: installerV2AutoApproveStartHour,
+    installer_v2_auto_approve_end_hour: installerV2AutoApproveEndHour,
+    installer_v2_auto_approve_duration_hours: installerV2AutoApproveDurationHours,
+    installer_v2_auto_approve_expires_at: installerV2AutoApproveExpiresAt,
+    installer_v3_auto_approve_enabled: installerV3AutoApproveEnabled,
+    installer_v3_auto_approve_mode: installerV3AutoApproveMode,
+    installer_v3_auto_approve_start_hour: installerV3AutoApproveStartHour,
+    installer_v3_auto_approve_end_hour: installerV3AutoApproveEndHour,
+    installer_v3_auto_approve_duration_hours: installerV3AutoApproveDurationHours,
+    installer_v3_auto_approve_expires_at: installerV3AutoApproveExpiresAt,
     updated_by: adminUserId,
     updated_at: new Date().toISOString(),
   };
@@ -6005,6 +7071,7 @@ Deno.serve(async (req) => {
     if (req.method === "GET" && scoped[0] === "catalog" && scoped.length === 1) return await getStoreCatalog(req);
     if (req.method === "GET" && scoped[0] === "payment-config" && scoped.length === 1) return await getStorePaymentConfig(req);
     if (req.method === "GET" && scoped[0] === "landing-config" && scoped.length === 1) return await getLandingDownloadConfig();
+    if (req.method === "GET" && scoped[0] === "buy-config" && scoped.length === 1) return await getPublicBuyConfig();
     if (req.method === "GET" && scoped[0] === "sampler-config" && scoped.length === 1) return await getPublicSamplerAppConfig();
     if (req.method === "GET" && scoped[0] === "default-bank" && scoped[1] === "manifest" && scoped.length === 2) {
       return await getPublicDefaultBankManifest();
@@ -6033,6 +7100,14 @@ Deno.serve(async (req) => {
     if (req.method === "POST" && scoped[0] === "account-registration" && scoped[1] === "login-hint" && scoped.length === 2) {
       const body = await req.json().catch(() => ({}));
       return await getAccountRegistrationLoginHint(req, body);
+    }
+    if (req.method === "POST" && scoped[0] === "installer-request" && scoped[1] === "proof-upload-url" && scoped.length === 2) {
+      const body = await req.json().catch(() => ({}));
+      return await createInstallerRequestProofUploadUrl(req, body);
+    }
+    if (req.method === "POST" && scoped[0] === "installer-request" && scoped[1] === "submit" && scoped.length === 2) {
+      const body = await req.json().catch(() => ({}));
+      return await createInstallerPurchaseRequest(req, body);
     }
     if (req.method === "POST" && scoped[0] === "purchase-request" && scoped.length === 1) {
       const body = await req.json().catch(() => ({}));
@@ -6074,6 +7149,97 @@ Deno.serve(async (req) => {
     const adminCheck = await requireAdmin(req);
     if (!adminCheck.ok) return adminCheck.response;
     const adminUserId = adminCheck.userId;
+
+    if (req.method === "GET" && scoped[2] === "installer" && scoped[3] === "packages" && scoped.length === 4) {
+      const version = asString(url.searchParams.get("version"), 10)?.trim().toUpperCase();
+      if (!version) return badRequest("Missing version");
+      const payload = await callInstallerAdmin<Record<string, unknown>>("GET", `/admin/packages?version=${encodeURIComponent(version)}`);
+      return ok(payload);
+    }
+    if (req.method === "POST" && scoped[2] === "installer" && scoped[3] === "packages" && scoped[4] === "save" && scoped.length === 5) {
+      const body = await req.json().catch(() => ({}));
+      const payload = await callInstallerAdmin<Record<string, unknown>>("POST", "/admin/packages/save", body);
+      return ok(payload);
+    }
+    if (req.method === "POST" && scoped[2] === "installer" && scoped[3] === "packages" && scoped[4] === "delete" && scoped.length === 5) {
+      const body = await req.json().catch(() => ({}));
+      const payload = await callInstallerAdmin<Record<string, unknown>>("POST", "/admin/packages/delete", body);
+      return ok(payload);
+    }
+    if (req.method === "GET" && scoped[2] === "installer" && scoped[3] === "licenses" && scoped.length === 4) {
+      const version = asString(url.searchParams.get("version"), 10)?.trim().toUpperCase();
+      if (!version) return badRequest("Missing version");
+      const params = new URLSearchParams();
+      params.set("version", version);
+      const q = asString(url.searchParams.get("q"), 200)?.trim();
+      const status = asString(url.searchParams.get("status"), 40)?.trim();
+      const page = asString(url.searchParams.get("page"), 20)?.trim();
+      const perPage = asString(url.searchParams.get("perPage"), 20)?.trim();
+      if (q) params.set("q", q);
+      if (status) params.set("status", status);
+      if (page) params.set("page", page);
+      if (perPage) params.set("perPage", perPage);
+      const payload = await callInstallerAdmin<Record<string, unknown>>("GET", `/admin/licenses?${params.toString()}`);
+      return ok(payload);
+    }
+    if (req.method === "GET" && scoped[2] === "installer" && scoped[3] === "events" && scoped.length === 4) {
+      const version = asString(url.searchParams.get("version"), 10)?.trim().toUpperCase();
+      if (!version) return badRequest("Missing version");
+      const params = new URLSearchParams();
+      params.set("version", version);
+      const q = asString(url.searchParams.get("q"), 200)?.trim();
+      const eventType = asString(url.searchParams.get("eventType"), 40)?.trim();
+      const page = asString(url.searchParams.get("page"), 20)?.trim();
+      const perPage = asString(url.searchParams.get("perPage"), 20)?.trim();
+      const licenseId = asString(url.searchParams.get("licenseId"), 20)?.trim();
+      if (q) params.set("q", q);
+      if (eventType) params.set("eventType", eventType);
+      if (page) params.set("page", page);
+      if (perPage) params.set("perPage", perPage);
+      if (licenseId) params.set("licenseId", licenseId);
+      const payload = await callInstallerAdmin<Record<string, unknown>>("GET", `/admin/events?${params.toString()}`);
+      return ok(payload);
+    }
+    if (req.method === "POST" && scoped[2] === "installer" && scoped[3] === "licenses" && scoped[4] === "create" && scoped.length === 5) {
+      const body = await req.json().catch(() => ({}));
+      const payload = await callInstallerAdmin<Record<string, unknown>>("POST", "/admin/licenses/create", body);
+      return ok(payload);
+    }
+    if (req.method === "POST" && scoped[2] === "installer" && scoped[3] === "licenses" && scoped[4] === "update" && scoped.length === 5) {
+      const body = await req.json().catch(() => ({}));
+      const payload = await callInstallerAdmin<Record<string, unknown>>("POST", "/admin/licenses/update", body);
+      return ok(payload);
+    }
+    if (req.method === "POST" && scoped[2] === "installer" && scoped[3] === "licenses" && scoped[4] === "reset" && scoped.length === 5) {
+      const body = await req.json().catch(() => ({}));
+      const payload = await callInstallerAdmin<Record<string, unknown>>("POST", "/admin/licenses/reset", body);
+      return ok(payload);
+    }
+    if (req.method === "POST" && scoped[2] === "installer" && scoped[3] === "licenses" && scoped[4] === "delete" && scoped.length === 5) {
+      const body = await req.json().catch(() => ({}));
+      const payload = await callInstallerAdmin<Record<string, unknown>>("POST", "/admin/licenses/delete", body);
+      return ok(payload);
+    }
+    if (req.method === "GET" && scoped[2] === "installer-buy" && scoped[3] === "products" && scoped.length === 4) {
+      return await listAdminInstallerBuyProducts(req);
+    }
+    if (req.method === "POST" && scoped[2] === "installer-buy" && scoped[3] === "products" && scoped[4] === "save" && scoped.length === 5) {
+      const body = await req.json().catch(() => ({}));
+      return await saveAdminInstallerBuyProduct(body, adminUserId);
+    }
+    if (req.method === "POST" && scoped[2] === "installer-buy" && scoped[3] === "products" && scoped[4] === "delete" && scoped.length === 5) {
+      const body = await req.json().catch(() => ({}));
+      return await deleteAdminInstallerBuyProduct(body);
+    }
+    if (req.method === "GET" && scoped[2] === "installer-buy" && scoped[3] === "requests" && scoped.length === 4) {
+      return await listAdminInstallerPurchaseRequests(req);
+    }
+    if (req.method === "POST" && scoped[2] === "installer-buy" && scoped[3] === "requests" && scoped.length === 5) {
+      const requestId = asUuid(scoped[4]);
+      if (!requestId) return badRequest("Invalid request id");
+      const body = await req.json().catch(() => ({}));
+      return await adminInstallerPurchaseRequestAction(requestId, body, adminUserId);
+    }
 
     if (req.method === "GET" && scoped[2] === "crash-reports" && scoped.length === 3) {
       return await listAdminClientCrashReports(req);

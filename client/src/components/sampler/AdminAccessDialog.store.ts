@@ -106,11 +106,25 @@ const EMPTY_STORE_CONFIG: StoreConfigDraft = {
   store_auto_approve_end_hour: '0',
   store_auto_approve_duration_hours: '24',
   store_auto_approve_expires_at: null,
+  installer_v2_auto_approve_enabled: false,
+  installer_v2_auto_approve_mode: 'schedule',
+  installer_v2_auto_approve_start_hour: '0',
+  installer_v2_auto_approve_end_hour: '0',
+  installer_v2_auto_approve_duration_hours: '24',
+  installer_v2_auto_approve_expires_at: null,
+  installer_v3_auto_approve_enabled: false,
+  installer_v3_auto_approve_mode: 'schedule',
+  installer_v3_auto_approve_start_hour: '0',
+  installer_v3_auto_approve_end_hour: '0',
+  installer_v3_auto_approve_duration_hours: '24',
+  installer_v3_auto_approve_expires_at: null,
   store_email_approve_subject: '',
   store_email_approve_body: '',
   store_email_reject_subject: '',
   store_email_reject_body: '',
 };
+
+const DEFAULT_STORE_MAINTENANCE_MESSAGE = 'Bank Store is under maintenance. Downloads and browsing are temporarily unavailable.';
 
 type StorePromotionForm = {
   name: string;
@@ -376,6 +390,50 @@ export function useAdminAccessStoreManager({
                 : 24,
             ),
             store_auto_approve_expires_at: data.config.store_auto_approve_expires_at ? String(data.config.store_auto_approve_expires_at) : null,
+            installer_v2_auto_approve_enabled: Boolean(data.config.installer_v2_auto_approve_enabled),
+            installer_v2_auto_approve_mode: data.config.installer_v2_auto_approve_mode === 'countdown'
+              ? 'countdown'
+              : data.config.installer_v2_auto_approve_mode === 'always'
+                ? 'always'
+                : 'schedule',
+            installer_v2_auto_approve_start_hour: String(
+              Number.isFinite(Number(data.config.installer_v2_auto_approve_start_hour))
+                ? Math.max(0, Math.min(23, Math.floor(Number(data.config.installer_v2_auto_approve_start_hour))))
+                : 0,
+            ),
+            installer_v2_auto_approve_end_hour: String(
+              Number.isFinite(Number(data.config.installer_v2_auto_approve_end_hour))
+                ? Math.max(0, Math.min(23, Math.floor(Number(data.config.installer_v2_auto_approve_end_hour))))
+                : 0,
+            ),
+            installer_v2_auto_approve_duration_hours: String(
+              Number.isFinite(Number(data.config.installer_v2_auto_approve_duration_hours))
+                ? Math.max(1, Math.min(168, Math.floor(Number(data.config.installer_v2_auto_approve_duration_hours))))
+                : 24,
+            ),
+            installer_v2_auto_approve_expires_at: data.config.installer_v2_auto_approve_expires_at ? String(data.config.installer_v2_auto_approve_expires_at) : null,
+            installer_v3_auto_approve_enabled: Boolean(data.config.installer_v3_auto_approve_enabled),
+            installer_v3_auto_approve_mode: data.config.installer_v3_auto_approve_mode === 'countdown'
+              ? 'countdown'
+              : data.config.installer_v3_auto_approve_mode === 'always'
+                ? 'always'
+                : 'schedule',
+            installer_v3_auto_approve_start_hour: String(
+              Number.isFinite(Number(data.config.installer_v3_auto_approve_start_hour))
+                ? Math.max(0, Math.min(23, Math.floor(Number(data.config.installer_v3_auto_approve_start_hour))))
+                : 0,
+            ),
+            installer_v3_auto_approve_end_hour: String(
+              Number.isFinite(Number(data.config.installer_v3_auto_approve_end_hour))
+                ? Math.max(0, Math.min(23, Math.floor(Number(data.config.installer_v3_auto_approve_end_hour))))
+                : 0,
+            ),
+            installer_v3_auto_approve_duration_hours: String(
+              Number.isFinite(Number(data.config.installer_v3_auto_approve_duration_hours))
+                ? Math.max(1, Math.min(168, Math.floor(Number(data.config.installer_v3_auto_approve_duration_hours))))
+                : 24,
+            ),
+            installer_v3_auto_approve_expires_at: data.config.installer_v3_auto_approve_expires_at ? String(data.config.installer_v3_auto_approve_expires_at) : null,
             store_email_approve_subject: data.config.store_email_approve_subject || '',
             store_email_approve_body: data.config.store_email_approve_body || '',
             store_email_reject_subject: data.config.store_email_reject_subject || '',
@@ -467,7 +525,11 @@ export function useAdminAccessStoreManager({
     }
   }, [loadStoreRequests, pushNotice, storeAuthFetch]);
 
-  const handleStoreCatalogUpdate = React.useCallback(async (id: string, updates: Record<string, any>) => {
+  const handleStoreCatalogUpdate = React.useCallback(async (
+    id: string,
+    updates: Record<string, any>,
+    options?: { successMessage?: string }
+  ): Promise<boolean> => {
     try {
       const res = await storeAuthFetch(`/api/admin/store/catalog/${id}`, {
         method: 'PATCH',
@@ -475,14 +537,17 @@ export function useAdminAccessStoreManager({
         body: JSON.stringify(updates),
       });
       if (res.ok) {
-        pushNotice({ variant: 'success', message: 'Catalog item updated!' });
+        pushNotice({ variant: 'success', message: options?.successMessage || 'Catalog item updated!' });
         void loadStoreCatalog();
+        return true;
       } else {
         const text = await res.text();
         pushNotice({ variant: 'error', message: `Update could not be saved. Please try again. (${text})` });
+        return false;
       }
     } catch {
       pushNotice({ variant: 'error', message: 'Network error updating catalog' });
+      return false;
     }
   }, [loadStoreCatalog, pushNotice, storeAuthFetch]);
 
@@ -816,6 +881,55 @@ export function useAdminAccessStoreManager({
     setStoreLoading(false);
   }, [loadStoreCatalog, pushNotice, storePublishDialog]);
 
+  const publishStoreCatalogItem = React.useCallback(async (draft: CatalogDraft): Promise<boolean> => {
+    setStoreLoading(true);
+    try {
+      const { supabase } = await import('@/lib/supabase');
+      const res = await supabase.functions.invoke(`admin-api/store/catalog/${draft.id}/publish`, {
+        method: 'POST',
+        body: { asset_name: draft.expected_asset_name },
+      });
+      if (res.error) {
+        let errMsg = res.error.message;
+        try {
+          if (res.error.context && typeof res.error.context === 'object') {
+            const parsed = await (res.error.context as any)?.json?.();
+            if (parsed?.error) errMsg = parsed.error;
+          }
+        } catch {}
+        pushNotice({ variant: 'error', message: `Could not publish this item. (${errMsg})` });
+        return false;
+      }
+      pushNotice({ variant: 'success', message: 'Catalog item published!' });
+      void loadStoreCatalog();
+      return true;
+    } catch (err: any) {
+      pushNotice({ variant: 'error', message: err?.message || 'Could not publish due to an unexpected issue.' });
+      return false;
+    } finally {
+      setStoreLoading(false);
+    }
+  }, [loadStoreCatalog, pushNotice]);
+
+  const handleStoreCatalogDraftAction = React.useCallback(async (
+    draft: CatalogDraft,
+    updates: Record<string, any>,
+    action: 'publish' | 'save' | 'unpublish'
+  ): Promise<boolean> => {
+    if (action === 'unpublish') {
+      return await handleStoreCatalogUpdate(draft.id, { status: 'draft' }, { successMessage: 'Catalog item unpublished.' });
+    }
+
+    const saved = await handleStoreCatalogUpdate(
+      draft.id,
+      updates,
+      { successMessage: action === 'publish' ? 'Catalog settings saved. Publishing now...' : 'Catalog item updated!' },
+    );
+    if (!saved) return false;
+    if (action !== 'publish') return true;
+    return await publishStoreCatalogItem(draft);
+  }, [handleStoreCatalogUpdate, publishStoreCatalogItem]);
+
   const handleStoreQrFileChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -865,43 +979,66 @@ export function useAdminAccessStoreManager({
     }
   }, []);
 
-  const validateStoreAutomationDraft = React.useCallback((target: 'account' | 'store', config: StoreConfigDraft) => {
-    if (target === 'account') {
-      if (config.account_auto_approve_mode === 'schedule') {
-        const hourFields = [
-          ['Account Auto Approval Start Hour', config.account_auto_approve_start_hour],
-          ['Account Auto Approval End Hour', config.account_auto_approve_end_hour],
-        ] as const;
-        for (const [label, value] of hourFields) {
-          const parsed = Number(String(value || '').trim());
-          if (!Number.isFinite(parsed) || parsed < 0 || parsed > 23) {
-            throw new Error(`${label} must be between 0 and 23.`);
-          }
-        }
-      } else if (config.account_auto_approve_mode === 'countdown') {
-        const parsed = Number(String(config.account_auto_approve_duration_hours || '').trim());
-        if (!Number.isFinite(parsed) || parsed < 1 || parsed > 168) {
-          throw new Error('Account Auto Approval Duration must be between 1 and 168 hours.');
-        }
-      }
-      return;
-    }
+  const validateStoreAutomationDraft = React.useCallback((
+    target: 'account' | 'store' | 'installer_v2' | 'installer_v3',
+    config: StoreConfigDraft
+  ) => {
+    const label =
+      target === 'account'
+        ? 'Account Auto Approval'
+        : target === 'store'
+          ? 'Store Auto Approval'
+          : target === 'installer_v2'
+            ? 'Installer V2 Auto Approval'
+            : 'Installer V3 Auto Approval';
+    const mode =
+      target === 'account'
+        ? config.account_auto_approve_mode
+        : target === 'store'
+          ? config.store_auto_approve_mode
+          : target === 'installer_v2'
+            ? config.installer_v2_auto_approve_mode
+            : config.installer_v3_auto_approve_mode;
+    const startHour =
+      target === 'account'
+        ? config.account_auto_approve_start_hour
+        : target === 'store'
+          ? config.store_auto_approve_start_hour
+          : target === 'installer_v2'
+            ? config.installer_v2_auto_approve_start_hour
+            : config.installer_v3_auto_approve_start_hour;
+    const endHour =
+      target === 'account'
+        ? config.account_auto_approve_end_hour
+        : target === 'store'
+          ? config.store_auto_approve_end_hour
+          : target === 'installer_v2'
+            ? config.installer_v2_auto_approve_end_hour
+            : config.installer_v3_auto_approve_end_hour;
+    const durationHours =
+      target === 'account'
+        ? config.account_auto_approve_duration_hours
+        : target === 'store'
+          ? config.store_auto_approve_duration_hours
+          : target === 'installer_v2'
+            ? config.installer_v2_auto_approve_duration_hours
+            : config.installer_v3_auto_approve_duration_hours;
 
-    if (config.store_auto_approve_mode === 'schedule') {
+    if (mode === 'schedule') {
       const hourFields = [
-        ['Store Auto Approval Start Hour', config.store_auto_approve_start_hour],
-        ['Store Auto Approval End Hour', config.store_auto_approve_end_hour],
+        [`${label} Start Hour`, startHour],
+        [`${label} End Hour`, endHour],
       ] as const;
-      for (const [label, value] of hourFields) {
+      for (const [fieldLabel, value] of hourFields) {
         const parsed = Number(String(value || '').trim());
         if (!Number.isFinite(parsed) || parsed < 0 || parsed > 23) {
-          throw new Error(`${label} must be between 0 and 23.`);
+          throw new Error(`${fieldLabel} must be between 0 and 23.`);
         }
       }
-    } else if (config.store_auto_approve_mode === 'countdown') {
-      const parsed = Number(String(config.store_auto_approve_duration_hours || '').trim());
+    } else if (mode === 'countdown') {
+      const parsed = Number(String(durationHours || '').trim());
       if (!Number.isFinite(parsed) || parsed < 1 || parsed > 168) {
-        throw new Error('Store Auto Approval Duration must be between 1 and 168 hours.');
+        throw new Error(`${label} Duration must be between 1 and 168 hours.`);
       }
     }
   }, []);
@@ -921,6 +1058,12 @@ export function useAdminAccessStoreManager({
       store_auto_approve_start_hour: Math.floor(Number(config.store_auto_approve_start_hour)),
       store_auto_approve_end_hour: Math.floor(Number(config.store_auto_approve_end_hour)),
       store_auto_approve_duration_hours: Math.floor(Number(config.store_auto_approve_duration_hours)),
+      installer_v2_auto_approve_start_hour: Math.floor(Number(config.installer_v2_auto_approve_start_hour)),
+      installer_v2_auto_approve_end_hour: Math.floor(Number(config.installer_v2_auto_approve_end_hour)),
+      installer_v2_auto_approve_duration_hours: Math.floor(Number(config.installer_v2_auto_approve_duration_hours)),
+      installer_v3_auto_approve_start_hour: Math.floor(Number(config.installer_v3_auto_approve_start_hour)),
+      installer_v3_auto_approve_end_hour: Math.floor(Number(config.installer_v3_auto_approve_end_hour)),
+      installer_v3_auto_approve_duration_hours: Math.floor(Number(config.installer_v3_auto_approve_duration_hours)),
     };
   }, []);
 
@@ -986,7 +1129,7 @@ export function useAdminAccessStoreManager({
   }, [buildStoreConfigPayload, pushNotice, storeAuthFetch, storeQrFile, validateStoreConfigDraft]);
 
   const persistStoreAutomationConfig = React.useCallback(async (
-    target: 'account' | 'store',
+    target: 'account' | 'store' | 'installer_v2' | 'installer_v3',
     nextConfig: StoreConfigDraft,
     successMessage: string
   ): Promise<boolean> => {
@@ -1006,14 +1149,32 @@ export function useAdminAccessStoreManager({
         account_auto_approve_duration_hours: Math.floor(Number(nextConfig.account_auto_approve_duration_hours)),
         account_auto_approve_expires_at: nextConfig.account_auto_approve_expires_at,
       }
-      : {
-        store_auto_approve_enabled: nextConfig.store_auto_approve_enabled,
-        store_auto_approve_mode: nextConfig.store_auto_approve_mode,
-        store_auto_approve_start_hour: Math.floor(Number(nextConfig.store_auto_approve_start_hour)),
-        store_auto_approve_end_hour: Math.floor(Number(nextConfig.store_auto_approve_end_hour)),
-        store_auto_approve_duration_hours: Math.floor(Number(nextConfig.store_auto_approve_duration_hours)),
-        store_auto_approve_expires_at: nextConfig.store_auto_approve_expires_at,
-      };
+      : target === 'store'
+        ? {
+          store_auto_approve_enabled: nextConfig.store_auto_approve_enabled,
+          store_auto_approve_mode: nextConfig.store_auto_approve_mode,
+          store_auto_approve_start_hour: Math.floor(Number(nextConfig.store_auto_approve_start_hour)),
+          store_auto_approve_end_hour: Math.floor(Number(nextConfig.store_auto_approve_end_hour)),
+          store_auto_approve_duration_hours: Math.floor(Number(nextConfig.store_auto_approve_duration_hours)),
+          store_auto_approve_expires_at: nextConfig.store_auto_approve_expires_at,
+        }
+        : target === 'installer_v2'
+          ? {
+            installer_v2_auto_approve_enabled: nextConfig.installer_v2_auto_approve_enabled,
+            installer_v2_auto_approve_mode: nextConfig.installer_v2_auto_approve_mode,
+            installer_v2_auto_approve_start_hour: Math.floor(Number(nextConfig.installer_v2_auto_approve_start_hour)),
+            installer_v2_auto_approve_end_hour: Math.floor(Number(nextConfig.installer_v2_auto_approve_end_hour)),
+            installer_v2_auto_approve_duration_hours: Math.floor(Number(nextConfig.installer_v2_auto_approve_duration_hours)),
+            installer_v2_auto_approve_expires_at: nextConfig.installer_v2_auto_approve_expires_at,
+          }
+          : {
+            installer_v3_auto_approve_enabled: nextConfig.installer_v3_auto_approve_enabled,
+            installer_v3_auto_approve_mode: nextConfig.installer_v3_auto_approve_mode,
+            installer_v3_auto_approve_start_hour: Math.floor(Number(nextConfig.installer_v3_auto_approve_start_hour)),
+            installer_v3_auto_approve_end_hour: Math.floor(Number(nextConfig.installer_v3_auto_approve_end_hour)),
+            installer_v3_auto_approve_duration_hours: Math.floor(Number(nextConfig.installer_v3_auto_approve_duration_hours)),
+            installer_v3_auto_approve_expires_at: nextConfig.installer_v3_auto_approve_expires_at,
+          };
 
     setStoreLoading(true);
     try {
@@ -1038,8 +1199,26 @@ export function useAdminAccessStoreManager({
     await persistStoreConfig(storeConfig);
   }, [persistStoreConfig, storeConfig]);
 
+  const handleStoreMaintenanceMode = React.useCallback(async (
+    enabled: boolean,
+    message?: string
+  ): Promise<boolean> => {
+    const trimmedIncomingMessage = String(message ?? '').trim();
+    const trimmedCurrentMessage = String(storeConfig.store_maintenance_message || '').trim();
+    const nextConfig: StoreConfigDraft = {
+      ...storeConfig,
+      store_maintenance_enabled: enabled,
+      store_maintenance_message: enabled
+        ? (trimmedIncomingMessage || trimmedCurrentMessage || DEFAULT_STORE_MAINTENANCE_MESSAGE)
+        : (trimmedIncomingMessage || trimmedCurrentMessage),
+    };
+    return await persistStoreConfig(nextConfig, {
+      successMessage: enabled ? 'Store maintenance started.' : 'Store maintenance stopped.',
+    });
+  }, [persistStoreConfig, storeConfig]);
+
   const handleStoreAutoApprovalAction = React.useCallback(async (
-    target: 'account' | 'store',
+    target: 'account' | 'store' | 'installer_v2' | 'installer_v3',
     action: 'start' | 'stop'
   ) => {
     const nextConfig: StoreConfigDraft = { ...storeConfig };
@@ -1057,7 +1236,7 @@ export function useAdminAccessStoreManager({
         nextConfig.account_auto_approve_enabled = false;
         nextConfig.account_auto_approve_expires_at = null;
       }
-    } else {
+    } else if (target === 'store') {
       if (action === 'start') {
         nextConfig.store_auto_approve_enabled = true;
         if (nextConfig.store_auto_approve_mode === 'countdown') {
@@ -1071,13 +1250,41 @@ export function useAdminAccessStoreManager({
         nextConfig.store_auto_approve_enabled = false;
         nextConfig.store_auto_approve_expires_at = null;
       }
+    } else if (target === 'installer_v2') {
+      if (action === 'start') {
+        nextConfig.installer_v2_auto_approve_enabled = true;
+        if (nextConfig.installer_v2_auto_approve_mode === 'countdown') {
+          const hours = Math.max(1, Math.min(168, Math.floor(Number(nextConfig.installer_v2_auto_approve_duration_hours || '24'))));
+          nextConfig.installer_v2_auto_approve_duration_hours = String(hours);
+          nextConfig.installer_v2_auto_approve_expires_at = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+        } else {
+          nextConfig.installer_v2_auto_approve_expires_at = null;
+        }
+      } else {
+        nextConfig.installer_v2_auto_approve_enabled = false;
+        nextConfig.installer_v2_auto_approve_expires_at = null;
+      }
+    } else {
+      if (action === 'start') {
+        nextConfig.installer_v3_auto_approve_enabled = true;
+        if (nextConfig.installer_v3_auto_approve_mode === 'countdown') {
+          const hours = Math.max(1, Math.min(168, Math.floor(Number(nextConfig.installer_v3_auto_approve_duration_hours || '24'))));
+          nextConfig.installer_v3_auto_approve_duration_hours = String(hours);
+          nextConfig.installer_v3_auto_approve_expires_at = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+        } else {
+          nextConfig.installer_v3_auto_approve_expires_at = null;
+        }
+      } else {
+        nextConfig.installer_v3_auto_approve_enabled = false;
+        nextConfig.installer_v3_auto_approve_expires_at = null;
+      }
     }
     await persistStoreAutomationConfig(
       target,
       nextConfig,
       action === 'start'
-        ? `${target === 'account' ? 'Account' : 'Store'} auto approval started.`
-        : `${target === 'account' ? 'Account' : 'Store'} auto approval stopped.`
+        ? `${target === 'account' ? 'Account' : target === 'store' ? 'Store' : target === 'installer_v2' ? 'Installer V2' : 'Installer V3'} auto approval started.`
+        : `${target === 'account' ? 'Account' : target === 'store' ? 'Store' : target === 'installer_v2' ? 'Installer V2' : 'Installer V3'} auto approval stopped.`
     );
   }, [persistStoreAutomationConfig, storeConfig]);
 
@@ -1383,7 +1590,9 @@ export function useAdminAccessStoreManager({
     handleSaveStoreBanner,
     handleStoreBannerImageReplace,
     handleStoreCatalogUpdate,
+    handleStoreCatalogDraftAction,
     handleStoreConfigSave,
+    handleStoreMaintenanceMode,
     handleStoreAutoApprovalAction,
     persistStorePromotion,
     deleteStorePromotion,

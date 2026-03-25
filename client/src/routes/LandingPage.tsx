@@ -11,7 +11,7 @@ import {
 import { VersionSelector } from '@/components/landing/VersionSelector';
 import { usePerformanceTier } from '@/hooks/usePerformanceTier';
 import { edgeFunctionUrl } from '@/lib/edge-api';
-import { getLandingPagePath } from '@/lib/runtime-routes';
+import { getBuyPagePath, getLandingPagePath } from '@/lib/runtime-routes';
 import { Download, Monitor, Smartphone } from 'lucide-react';
 
 const FRAME_COUNT = 97;
@@ -25,7 +25,7 @@ const platformGroups: Array<{
 }> = [
   {
     sideClass: 'is-left',
-    title: 'Mobile',
+    title: 'Mobile DOWNLOAD',
     items: [
       { key: 'android', label: 'Android', Icon: Smartphone },
       { key: 'ios', label: 'iOS', Icon: Smartphone },
@@ -33,7 +33,7 @@ const platformGroups: Array<{
   },
   {
     sideClass: 'is-right',
-    title: 'Desktop',
+    title: 'Desktop DOWNLOAD',
     items: [
       { key: 'windows', label: 'Windows', Icon: Monitor },
       { key: 'macos', label: 'macOS', Icon: Monitor },
@@ -110,6 +110,7 @@ export default function LandingPage() {
   const allowVersionTransitions = !prefersReducedMotion && tier !== 'lowest';
   const revealVisible = revealOverride || progress >= REVEAL_THRESHOLD;
   const landingPagePath = React.useMemo(() => getLandingPagePath(), []);
+  const buyPagePath = React.useMemo(() => getBuyPagePath(), []);
   const activeLinks = landingConfig.downloadLinks[version];
   const activePlatformDescriptions = landingConfig.platformDescriptions[version];
   const activeVersionDescription = landingConfig.versionDescriptions[version];
@@ -185,11 +186,17 @@ export default function LandingPage() {
           <img src="/assets/logo.png" alt="VDJV Sampler Pad logo" className="lp-brand-logo" />
           <span className="lp-brand-copy">VDJV Sampler Pad App</span>
         </Link>
+        <Link
+          to={buyPagePath}
+          className="inline-flex items-center rounded-full border border-amber-300 bg-amber-400 px-4 py-2 text-xs font-semibold tracking-[0.2em] text-slate-950 shadow-[0_16px_36px_rgba(251,191,36,0.22)] transition hover:bg-amber-300"
+        >
+          BUY VDJV
+        </Link>
       </header>
 
       <section className="lp-marketing-band">
         <p className="lp-kicker">VDJV Sampler Pad App</p>
-        <h1>Premium Performance Sampler</h1>
+        <h1>Turn Your Device Into a Pro Sampler</h1>
         <p className="lp-lead">Cross-platform build for Android, iOS, Windows, and macOS.</p>
       </section>
 
@@ -251,6 +258,14 @@ export default function LandingPage() {
                     })}
                   </div>
                 ))}
+              </div>
+              <div className="mt-5">
+                <Link
+                  to={`${buyPagePath}?version=${version}`}
+                  className="inline-flex w-full items-center justify-center rounded-full bg-amber-400 px-5 py-3 text-sm font-black tracking-[0.18em] text-slate-950 shadow-[0_18px_40px_rgba(251,191,36,0.28)] transition hover:translate-y-[-1px] hover:bg-amber-300"
+                >
+                  {version === 'V1' ? 'CREATE V1 ACCOUNT' : 'BUY VDJV LICENSE'}
+                </Link>
               </div>
             </div>
           )}

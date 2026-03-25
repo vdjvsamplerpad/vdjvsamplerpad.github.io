@@ -40,7 +40,8 @@ export type TabKey =
   | 'store_promotions'
   | 'store_banners'
   | 'landing_download'
-  | 'store_config';
+  | 'store_config'
+  | 'installer';
 export type UserSortBy = 'display_name' | 'email' | 'created_at' | 'last_sign_in_at' | 'ban_status';
 export type BankSortBy = 'title' | 'created_at' | 'access_count';
 export type AssignmentUserSortBy = 'display_name' | 'email' | 'created_at';
@@ -122,6 +123,7 @@ export const TABS: Array<{
   { key: 'default_bank', label: 'Default Bank', emoji: 'DB', hint: 'Publish and roll back versioned default-bank releases', tone: 'teal' },
   { key: 'landing_download', label: 'Landing Download', emoji: 'LD', hint: 'Manage landing page download links and descriptions', tone: 'fuchsia' },
   { key: 'store_config', label: 'Pay Config', emoji: '💳', hint: 'Configure payment details and QR', tone: 'fuchsia' },
+  { key: 'installer', label: 'Installer', emoji: 'IN', hint: 'Manage V2 and V3 installer packages and licenses', tone: 'fuchsia' },
 ];
 
 export const TAB_TONE_CLASSES: Record<
@@ -428,6 +430,18 @@ export interface StoreConfigDraft {
   store_auto_approve_end_hour: string;
   store_auto_approve_duration_hours: string;
   store_auto_approve_expires_at: string | null;
+  installer_v2_auto_approve_enabled: boolean;
+  installer_v2_auto_approve_mode: 'schedule' | 'countdown' | 'always';
+  installer_v2_auto_approve_start_hour: string;
+  installer_v2_auto_approve_end_hour: string;
+  installer_v2_auto_approve_duration_hours: string;
+  installer_v2_auto_approve_expires_at: string | null;
+  installer_v3_auto_approve_enabled: boolean;
+  installer_v3_auto_approve_mode: 'schedule' | 'countdown' | 'always';
+  installer_v3_auto_approve_start_hour: string;
+  installer_v3_auto_approve_end_hour: string;
+  installer_v3_auto_approve_duration_hours: string;
+  installer_v3_auto_approve_expires_at: string | null;
   store_email_approve_subject: string;
   store_email_approve_body: string;
   store_email_reject_subject: string;
