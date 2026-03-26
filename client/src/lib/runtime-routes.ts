@@ -29,6 +29,10 @@ export const getBuyPagePath = (): string =>
 export const getInstallerRedirectPath = (version: string, platform: string): string => {
   const normalizedVersion = String(version || '').trim().toLowerCase();
   const normalizedPlatform = String(platform || '').trim().toLowerCase();
-  const basePath = isPackagedAppRuntime() ? '/go' : '/go';
-  return `${basePath}/${encodeURIComponent(normalizedVersion)}/${encodeURIComponent(normalizedPlatform)}`;
+  const query = new URLSearchParams({
+    goVersion: normalizedVersion,
+    goPlatform: normalizedPlatform,
+  });
+  const basePath = isPackagedAppRuntime() ? PACKAGED_LANDING_PATH : WEB_LANDING_PATH;
+  return `${basePath}?${query.toString()}`;
 };

@@ -2421,7 +2421,7 @@ const buildInstallerEmailRedirectUrl = (
   platform: LandingPlatformKey,
   fallbackUrl: string,
 ): string => {
-  const redirectUrl = absolutizePublicSiteUrl(`/go/${version.toLowerCase()}/${platform}`);
+  const redirectUrl = absolutizePublicSiteUrl(`/?goVersion=${encodeURIComponent(version)}&goPlatform=${encodeURIComponent(platform)}`);
   return /^https?:\/\//i.test(redirectUrl) ? redirectUrl : fallbackUrl;
 };
 const DEFAULT_LANDING_PLATFORM_DESCRIPTIONS = {

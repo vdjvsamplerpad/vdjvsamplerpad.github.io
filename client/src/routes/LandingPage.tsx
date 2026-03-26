@@ -114,6 +114,21 @@ export default function LandingPage() {
   const activeLinks = landingConfig.downloadLinks[version];
   const activePlatformDescriptions = landingConfig.platformDescriptions[version];
   const activeVersionDescription = landingConfig.versionDescriptions[version];
+  const redirectRequest = React.useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    const requestedVersion = String(params.get('goVersion') || '').trim().toUpperCase();
+    const requestedPlatform = String(params.get('goPlatform') || '').trim().toLowerCase();
+    const normalizedVersion = (['V1', 'V2', 'V3'] as VersionKey[]).includes(requestedVersion as VersionKey)
+      ? (requestedVersion as VersionKey)
+      : null;
+    const normalizedPlatform = (['android', 'ios', 'windows', 'macos'] as PlatformKey[]).includes(requestedPlatform as PlatformKey)
+      ? (requestedPlatform as PlatformKey)
+      : null;
+    return normalizedVersion && normalizedPlatform
+      ? { version: normalizedVersion, platform: normalizedPlatform }
+      : null;
+  }, []);
 
   React.useEffect(() => {
     let active = true;
@@ -138,6 +153,13 @@ export default function LandingPage() {
       controller.abort();
     };
   }, [slowConnection]);
+
+  React.useEffect(() => {
+    if (!redirectRequest) return;
+    const targetUrl = String(landingConfig.downloadLinks?.[redirectRequest.version]?.[redirectRequest.platform] || '').trim();
+    if (!targetUrl) return;
+    window.location.replace(targetUrl);
+  }, [landingConfig, redirectRequest]);
 
   const clearTimers = React.useCallback(() => {
     if (autoplayStartTimeoutRef.current !== null) {
@@ -178,6 +200,18 @@ export default function LandingPage() {
   const handleDownloadIntent = React.useCallback(() => {
     animatorRef.current?.primeMainSequence();
   }, []);
+
+  if (redirectRequest) {
+    return (
+      <main className="lp-page">
+        <section className="lp-marketing-band">
+          <p className="lp-kicker">VDJV Sampler Pad App</p>
+          <h1>Opening download...</h1>
+          <p className="lp-lead">Please wait while we redirect you to the latest installer link.</p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="lp-page">
