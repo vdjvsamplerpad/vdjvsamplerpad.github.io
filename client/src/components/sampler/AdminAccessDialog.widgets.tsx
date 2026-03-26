@@ -316,6 +316,48 @@ export function MiniGroupedBarChart({
   );
 }
 
+export function ActiveUsersTrendChart({
+  points,
+  activeUsers,
+  theme,
+}: {
+  points: string[];
+  activeUsers: number[];
+  theme: AdminDialogTheme;
+}) {
+  const chartRows = React.useMemo(
+    () =>
+      points.map((label, index) => ({
+        label,
+        active: Number(activeUsers[index] || 0),
+      })),
+    [points, activeUsers],
+  );
+  const tooltipStyle = theme === 'dark'
+    ? { backgroundColor: '#111827', borderColor: '#374151', color: '#f9fafb' }
+    : { backgroundColor: '#ffffff', borderColor: '#d1d5db', color: '#111827' };
+
+  if (chartRows.length === 0) {
+    return <div className="h-64 rounded border border-dashed flex items-center justify-center text-xs opacity-70">No active-user data in this range.</div>;
+  }
+
+  return (
+    <div className="h-64 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={chartRows} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#334155' : '#cbd5e1'} />
+          <XAxis dataKey="label" interval="preserveStartEnd" minTickGap={22} />
+          <YAxis allowDecimals={false} />
+          <RechartsTooltip contentStyle={tooltipStyle} formatter={(value: any) => [Number(value || 0), 'Daily Active Users']} />
+          <Legend />
+          <Bar dataKey="active" name="Daily Active Users" fill="#0ea5e9" radius={[4, 4, 0, 0]} maxBarSize={22} />
+          <Brush dataKey="label" height={20} travellerWidth={8} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 export function RevenueAdvancedChart({
   rows,
   theme,
@@ -337,6 +379,7 @@ export function RevenueAdvancedChart({
           total: Number(row.totalRevenueApproved || 0),
           store: Number(row.storeRevenueApproved || 0),
           account: Number(row.accountRevenueApproved || 0),
+          installer: Number(row.installerRevenueApproved || 0),
         };
       }),
     [rows],
@@ -385,6 +428,7 @@ export function RevenueAdvancedChart({
             <Area type="monotone" dataKey="total" name="Total Revenue" stroke="#10b981" fill="#10b981" fillOpacity={0.2} strokeWidth={2.2} />
             <Area type="monotone" dataKey="store" name="Store Revenue" stroke="#22c55e" fill="#22c55e" fillOpacity={0.12} strokeWidth={1.8} />
             <Area type="monotone" dataKey="account" name="Account Revenue" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.12} strokeWidth={1.8} />
+            <Area type="monotone" dataKey="installer" name="Installer Revenue" stroke="#eab308" fill="#eab308" fillOpacity={0.12} strokeWidth={1.8} />
             <Brush dataKey="label" height={22} travellerWidth={8} />
           </AreaChart>
         </ResponsiveContainer>

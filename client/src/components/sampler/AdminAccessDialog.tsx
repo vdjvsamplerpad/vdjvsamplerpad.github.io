@@ -1190,6 +1190,7 @@ export function AdminAccessDialog({
       const dd = String(day.getUTCDate()).padStart(2, '0');
       fallback.push({
         date: `${yyyy}-${mm}-${dd}`,
+        activeUsers: 0,
         exportSuccess: 0,
         exportFailed: 0,
         authSuccess: 0,
@@ -1215,14 +1216,13 @@ export function AdminAccessDialog({
     }),
     [homeTrends],
   );
-  const homeExportSuccessSeries = React.useMemo(() => homeTrends.map((point) => Number(point.exportSuccess || 0)), [homeTrends]);
-  const homeExportFailedSeries = React.useMemo(() => homeTrends.map((point) => Number(point.exportFailed || 0)), [homeTrends]);
   const homeAuthSuccessSeries = React.useMemo(() => homeTrends.map((point) => Number(point.authSuccess || 0)), [homeTrends]);
   const homeAuthFailedSeries = React.useMemo(() => homeTrends.map((point) => Number(point.authFailed || 0)), [homeTrends]);
   const homeImportSeries = React.useMemo(() => homeTrends.map((point) => Number(point.importTotal || 0)), [homeTrends]);
   const homeStoreBuyersSeries = React.useMemo(() => homeTrends.map((point) => Number(point.storeBuyersApproved || 0)), [homeTrends]);
   const homeAccountBuyersSeries = React.useMemo(() => homeTrends.map((point) => Number(point.accountBuyersApproved || 0)), [homeTrends]);
-  const homeImportRequestsSeries = React.useMemo(() => homeTrends.map((point) => Number(point.importRequests || 0)), [homeTrends]);
+  const homeInstallerSalesSeries = React.useMemo(() => homeTrends.map((point) => Number(point.installerSalesApproved || 0)), [homeTrends]);
+  const homeActiveUsersSeries = React.useMemo(() => homeTrends.map((point) => Number(point.activeUsers || 0)), [homeTrends]);
   const homeRangeLabel = React.useMemo(() => {
     const start = homeData?.meta?.rangeStartDate || homeFromDate || '-';
     const end = homeData?.meta?.rangeEndDate || homeToDate || '-';
@@ -1821,11 +1821,10 @@ export function AdminAccessDialog({
                   homePointLabels,
                   homeStoreBuyersSeries,
                   homeAccountBuyersSeries,
-                  homeImportRequestsSeries,
-                  homeExportSuccessSeries,
-                  homeExportFailedSeries,
+                  homeInstallerSalesSeries,
                   homeAuthSuccessSeries,
                   homeAuthFailedSeries,
+                  homeActiveUsersSeries,
                   homeImportSeries,
                   onHomeFromDateChange: setHomeFromDate,
                   onHomeToDateChange: setHomeToDate,

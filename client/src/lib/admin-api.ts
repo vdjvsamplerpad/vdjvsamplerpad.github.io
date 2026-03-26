@@ -119,6 +119,7 @@ export interface AdminActivityRow {
 
 export interface AdminDashboardTrendPoint {
   date: string;
+  activeUsers: number;
   exportSuccess: number;
   exportFailed: number;
   authSuccess: number;

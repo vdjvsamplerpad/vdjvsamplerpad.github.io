@@ -1194,7 +1194,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .limit(5),
     admin
       .from("activity_logs")
-      .select("created_at, event_type, status")
+      .select("created_at, event_type, status, user_id")
       .gte("created_at", windowStartIso)
       .lte("created_at", windowEndIso)
       .order("created_at", { ascending: true })
@@ -1259,6 +1259,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     const date = toUtcDateKey(day);
     trendSeed.set(date, {
       date,
+      activeUsers: 0,
       exportSuccess: 0,
       exportFailed: 0,
       authSuccess: 0,
@@ -1312,12 +1313,20 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   }
 
   const trendRows = trendRowsResp.data || [];
+  const dailyActiveUserSets = new Map<string, Set<string>>();
   for (const row of trendRows) {
     const createdAt = new Date(String((row as any).created_at || ""));
     if (Number.isNaN(createdAt.getTime())) continue;
     const date = toUtcDateKey(createdAt);
     const bucket = trendSeed.get(date);
     if (!bucket) continue;
+
+    const userId = String((row as any).user_id || "");
+    if (userId && !adminIds.has(userId)) {
+      const activeSet = dailyActiveUserSets.get(date) || new Set<string>();
+      activeSet.add(userId);
+      dailyActiveUserSets.set(date, activeSet);
+    }
 
     const eventType = String((row as any).event_type || "");
     const status = String((row as any).status || "");
@@ -1335,6 +1344,11 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       else bucket.authSuccess += 1;
       continue;
     }
+  }
+  for (const [date, activeSet] of dailyActiveUserSets.entries()) {
+    const bucket = trendSeed.get(date);
+    if (!bucket) continue;
+    bucket.activeUsers = activeSet.size;
   }
 
   const accountRequests = (accountQueueResp.data || []).map((row: any) => ({

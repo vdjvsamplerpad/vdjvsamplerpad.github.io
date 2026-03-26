@@ -28,7 +28,7 @@ import {
   type UserSortBy,
 } from './AdminAccessDialog.shared';
 import {
-  ExportHealthPieChart,
+  ActiveUsersTrendChart,
   MiniGroupedBarChart,
   Pagination,
   RevenueAdvancedChart,
@@ -50,11 +50,10 @@ interface HomeTabProps {
   homePointLabels: string[];
   homeStoreBuyersSeries: number[];
   homeAccountBuyersSeries: number[];
-  homeImportRequestsSeries: number[];
-  homeExportSuccessSeries: number[];
-  homeExportFailedSeries: number[];
+  homeInstallerSalesSeries: number[];
   homeAuthSuccessSeries: number[];
   homeAuthFailedSeries: number[];
+  homeActiveUsersSeries: number[];
   homeImportSeries: number[];
   onHomeFromDateChange: (value: string) => void;
   onHomeToDateChange: (value: string) => void;
@@ -235,11 +234,10 @@ function HomeTab({
   homePointLabels,
   homeStoreBuyersSeries,
   homeAccountBuyersSeries,
-  homeImportRequestsSeries,
-  homeExportSuccessSeries,
-  homeExportFailedSeries,
+  homeInstallerSalesSeries,
   homeAuthSuccessSeries,
   homeAuthFailedSeries,
+  homeActiveUsersSeries,
   homeImportSeries,
   onHomeFromDateChange,
   onHomeToDateChange,
@@ -473,10 +471,10 @@ function HomeTab({
               points={homePointLabels}
               authSuccess={homeStoreBuyersSeries}
               authFailed={homeAccountBuyersSeries}
-              imports={homeImportRequestsSeries}
+              imports={homeInstallerSalesSeries}
               seriesALabel="Store Buyers"
               seriesBLabel="Account Buyers"
-              seriesCLabel="Import Requests"
+              seriesCLabel="Installer Sales"
               theme={theme}
             />
           </div>
@@ -484,13 +482,9 @@ function HomeTab({
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-stretch">
           <div className={`border rounded p-3 h-full flex flex-col ${cardClass}`}>
-            <div className="text-sm font-semibold">Export Health</div>
+            <div className="text-sm font-semibold">Active Today Trend</div>
             <div className="text-xs opacity-70 mb-1">Range: {homeRangeLabel}</div>
-            <ExportHealthPieChart
-              successTotal={homeExportSuccessSeries.reduce((sum, value) => sum + value, 0)}
-              failedTotal={homeExportFailedSeries.reduce((sum, value) => sum + value, 0)}
-              theme={theme}
-            />
+            <ActiveUsersTrendChart points={homePointLabels} activeUsers={homeActiveUsersSeries} theme={theme} />
           </div>
           <div className={`border rounded p-3 h-full flex flex-col ${cardClass}`}>
             <div className="text-sm font-semibold">Auth & Import</div>

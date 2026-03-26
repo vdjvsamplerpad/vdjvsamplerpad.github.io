@@ -2386,6 +2386,8 @@ const getStorePaymentConfig = async (req: Request) => {
 
 const LANDING_VERSION_KEYS = ["V1", "V2", "V3"] as const;
 const LANDING_PLATFORM_KEYS = ["android", "ios", "windows", "macos"] as const;
+type LandingVersionKey = typeof LANDING_VERSION_KEYS[number];
+type LandingPlatformKey = typeof LANDING_PLATFORM_KEYS[number];
 const DEFAULT_LANDING_DOWNLOAD_LINKS = {
   V1: {
     android: "/android/",
@@ -2406,6 +2408,22 @@ const DEFAULT_LANDING_DOWNLOAD_LINKS = {
     macos: "https://m.me/vdjvsampler/",
   },
 } as const;
+
+const normalizeLandingPlatformKey = (value: unknown): LandingPlatformKey | null => {
+  const normalized = String(value || "").trim().toLowerCase();
+  return LANDING_PLATFORM_KEYS.includes(normalized as LandingPlatformKey)
+    ? (normalized as LandingPlatformKey)
+    : null;
+};
+
+const buildInstallerEmailRedirectUrl = (
+  version: InstallerBuyVersionKey,
+  platform: LandingPlatformKey,
+  fallbackUrl: string,
+): string => {
+  const redirectUrl = absolutizePublicSiteUrl(`/go/${version.toLowerCase()}/${platform}`);
+  return /^https?:\/\//i.test(redirectUrl) ? redirectUrl : fallbackUrl;
+};
 const DEFAULT_LANDING_PLATFORM_DESCRIPTIONS = {
   V1: {
     android: "VDJV App, no laptop needed",
@@ -3165,6 +3183,13 @@ const sendInstallerDecisionEmail = async (input: {
     .map(([platform, value]) => ({
       label: `${platform.toUpperCase()} Download`,
       value: asString(value, 2000) || "",
+      url: (() => {
+        const fallbackUrl = asString(value, 2000) || "";
+        const normalizedPlatform = normalizeLandingPlatformKey(platform);
+        return normalizedPlatform
+          ? buildInstallerEmailRedirectUrl(version, normalizedPlatform, fallbackUrl)
+          : fallbackUrl;
+      })(),
     }));
 
   const textBody = input.nextStatus === "approved"
@@ -3172,8 +3197,7 @@ const sendInstallerDecisionEmail = async (input: {
       `Your ${title} purchase has been approved.`,
       "",
       `License Code: ${input.issuedLicenseCode || "-"}`,
-      `Installer Download: ${input.installerDownloadLink || "-"}`,
-      ...downloadLinks.map((entry) => `${entry.label}: ${entry.value}`),
+      "Use the download buttons in this email to install your purchase.",
       "",
       "Keep this email for future reinstall and support reference.",
     ].join("\n")
@@ -3201,14 +3225,12 @@ const sendInstallerDecisionEmail = async (input: {
       ...(input.nextStatus === "approved"
         ? [
           { label: "License Code", value: asString(input.issuedLicenseCode, 120) || "-" },
-          { label: "Download Link", value: asString(input.installerDownloadLink, 2000) || "-" },
-          ...downloadLinks,
         ]
         : [{ label: "Reason", value: asString(input.rejectionMessage, 1000) || "-" }]),
     ],
     bodyText: textBody,
     actionLinks: input.nextStatus === "approved"
-      ? downloadLinks.map((entry) => ({ label: entry.label, url: entry.value }))
+      ? downloadLinks.map((entry) => ({ label: entry.label, url: entry.url }))
       : [],
   });
 
