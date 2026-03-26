@@ -254,6 +254,7 @@ const postDiscordPayload = async (
 export const sendDiscordNotification = async (input: {
   webhook?: string | null;
   severity: DiscordSeverity;
+  colorOverride?: number | null;
   title: string;
   description?: string | null;
   fields?: DiscordField[];
@@ -287,7 +288,7 @@ export const sendDiscordNotification = async (input: {
   const embed = {
     title: truncate(`${DISCORD_ENV_LABEL ? `[${DISCORD_ENV_LABEL}] ` : ""}${input.title}`, 256),
     description: input.description ? truncate(input.description, 4096) : undefined,
-    color: DISCORD_EMBED_COLORS[input.severity],
+    color: typeof input.colorOverride === "number" ? input.colorOverride : DISCORD_EMBED_COLORS[input.severity],
     fields: sanitizeFields(fields),
     timestamp: new Date().toISOString(),
     footer: {
@@ -488,6 +489,7 @@ export const sendDiscordAdminActionEvent = async (input: {
 export const sendDiscordAccountRegistrationEvent = async (input: {
   webhook?: string | null;
   severity: DiscordSeverity;
+  colorOverride?: number | null;
   title: string;
   description?: string | null;
   requestId?: string | null;
@@ -508,6 +510,7 @@ export const sendDiscordAccountRegistrationEvent = async (input: {
     webhook: input.webhook || DISCORD_WEBHOOK_ACCOUNT || null,
     preferExplicitWebhook: true,
     severity: input.severity,
+    colorOverride: input.colorOverride,
     title: input.title,
     description: input.description || "Account registration event recorded.",
     fields: [
@@ -533,6 +536,7 @@ export const sendDiscordAccountRegistrationEvent = async (input: {
 export const sendDiscordStoreRequestEvent = async (input: {
   webhook?: string | null;
   severity: DiscordSeverity;
+  colorOverride?: number | null;
   title: string;
   description?: string | null;
   requestId?: string | null;
@@ -554,6 +558,7 @@ export const sendDiscordStoreRequestEvent = async (input: {
     webhook: input.webhook || DISCORD_WEBHOOK_STORE || null,
     preferExplicitWebhook: true,
     severity: input.severity,
+    colorOverride: input.colorOverride,
     title: input.title,
     description: input.description || "Store request event recorded.",
     fields: [

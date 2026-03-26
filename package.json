@@ -1,7 +1,7 @@
 {
   "name": "vdjv-sampler-pad",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Cross-platform sampler pad app for web, Android, and Windows.",
   "author": "VDJV Sampler Pad",
   "type": "module",

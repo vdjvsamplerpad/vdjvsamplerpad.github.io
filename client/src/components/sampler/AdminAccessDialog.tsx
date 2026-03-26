@@ -325,6 +325,10 @@ export function AdminAccessDialog({
   const [editOwnedBankQuota, setEditOwnedBankQuota] = React.useState('6');
   const [editOwnedBankPadCap, setEditOwnedBankPadCap] = React.useState('64');
   const [editDeviceTotalBankCap, setEditDeviceTotalBankCap] = React.useState('120');
+  const [detailsBankListsLoading, setDetailsBankListsLoading] = React.useState(false);
+  const [detailsOwnedBanks, setDetailsOwnedBanks] = React.useState<AdminBank[]>([]);
+  const [detailsGrantedBanks, setDetailsGrantedBanks] = React.useState<AccessEntry[]>([]);
+  const detailsBankListsRequestRef = React.useRef(0);
   const [profileSaving, setProfileSaving] = React.useState(false);
   const [banOpen, setBanOpen] = React.useState(false);
   const [banHours, setBanHours] = React.useState(24);
@@ -1570,6 +1574,49 @@ export function AdminAccessDialog({
     }
   };
 
+  const loadUserBankLists = React.useCallback(async (userId: string) => {
+    const requestId = detailsBankListsRequestRef.current + 1;
+    detailsBankListsRequestRef.current = requestId;
+    setDetailsBankListsLoading(true);
+    try {
+      const [banksData, accessData] = await Promise.all([
+        adminApi.listBanks({
+          page: 1,
+          perPage: 2000,
+          sortBy: 'title',
+          sortDir: 'asc',
+        }),
+        adminApi.getUserAccess(userId),
+      ]);
+      if (detailsBankListsRequestRef.current !== requestId) return;
+      const ownedBanks = (Array.isArray(banksData.banks) ? banksData.banks : [])
+        .filter((bank) => bank.created_by === userId)
+        .sort((left, right) => String(left.title || '').localeCompare(String(right.title || ''), undefined, { sensitivity: 'base' }));
+      const grantedBanks = (Array.isArray(accessData.access) ? accessData.access : [])
+        .sort((left, right) => String(left.bank?.title || '').localeCompare(String(right.bank?.title || ''), undefined, { sensitivity: 'base' }));
+      setDetailsOwnedBanks(ownedBanks);
+      setDetailsGrantedBanks(grantedBanks);
+    } catch {
+      if (detailsBankListsRequestRef.current !== requestId) return;
+      setDetailsOwnedBanks([]);
+      setDetailsGrantedBanks([]);
+    } finally {
+      if (detailsBankListsRequestRef.current === requestId) {
+        setDetailsBankListsLoading(false);
+      }
+    }
+  }, []);
+
+  const handleDetailsOpenChange = React.useCallback((nextOpen: boolean) => {
+    setDetailsOpen(nextOpen);
+    if (!nextOpen) {
+      detailsBankListsRequestRef.current += 1;
+      setDetailsBankListsLoading(false);
+      setDetailsOwnedBanks([]);
+      setDetailsGrantedBanks([]);
+    }
+  }, []);
+
   const removeUser = async () => {
     if (!detailsUser) return;
     try {
@@ -1664,8 +1711,12 @@ export function AdminAccessDialog({
     setEditOwnedBankQuota(String(user.owned_bank_quota ?? samplerDefaultsConfig.quotaDefaults.ownedBankQuota));
     setEditOwnedBankPadCap(String(user.owned_bank_pad_cap ?? samplerDefaultsConfig.quotaDefaults.ownedBankPadCap));
     setEditDeviceTotalBankCap(String(user.device_total_bank_cap ?? samplerDefaultsConfig.quotaDefaults.deviceTotalBankCap));
+    setDetailsOwnedBanks([]);
+    setDetailsGrantedBanks([]);
+    setDetailsBankListsLoading(true);
     setBanHours(24);
     setDetailsOpen(true);
+    void loadUserBankLists(user.id);
   };
 
   const openBankAccessDialog = (bank: AdminBank) => {
@@ -2363,7 +2414,10 @@ export function AdminAccessDialog({
           ownedBankPadCap: editOwnedBankPadCap,
           deviceTotalBankCap: editDeviceTotalBankCap,
           saving: profileSaving,
-          onOpenChange: setDetailsOpen,
+          bankListsLoading: detailsBankListsLoading,
+          ownedBanks: detailsOwnedBanks,
+          grantedBanks: detailsGrantedBanks,
+          onOpenChange: handleDetailsOpenChange,
           onDisplayNameChange: setEditDisplayName,
           onOwnedBankQuotaChange: setEditOwnedBankQuota,
           onOwnedBankPadCapChange: setEditOwnedBankPadCap,

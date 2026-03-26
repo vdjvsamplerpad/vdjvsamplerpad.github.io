@@ -641,11 +641,19 @@ function AssignmentsTab({
             <TableBody className="block md:table-row-group space-y-2 md:space-y-0 p-2 md:p-0">
               {assignmentBanks.map((bank) => {
                 const granted = grantedBankIds.has(bank.id);
+                const selected = selectedBankIds.has(bank.id);
+                const checked = granted ? !selected : selected;
+                const statusLabel = selected
+                  ? (granted ? 'Selected to revoke' : 'Selected to grant')
+                  : (granted ? 'Granted' : 'Not granted');
+                const statusClass = selected
+                  ? (granted ? 'bg-amber-500/20 text-amber-500' : 'bg-sky-500/20 text-sky-500')
+                  : (granted ? 'bg-emerald-600/20 text-emerald-500' : 'bg-gray-600/20 text-gray-500');
                 return (
                   <TableRow key={bank.id} className="flex flex-col md:table-row relative border rounded md:border-none p-2 md:p-0">
-                    <TableCell className="absolute top-2 right-2 md:relative md:top-0 md:right-0 block md:table-cell p-0 md:p-4 border-none md:border-b"><Checkbox checked={selectedBankIds.has(bank.id)} onCheckedChange={() => onToggleBankSelection(bank.id)} disabled={!selectedUserId} /></TableCell>
+                    <TableCell className="absolute top-2 right-2 md:relative md:top-0 md:right-0 block md:table-cell p-0 md:p-4 border-none md:border-b"><Checkbox checked={checked} onCheckedChange={() => onToggleBankSelection(bank.id)} disabled={!selectedUserId} /></TableCell>
                     <TableCell className="block md:table-cell border-none md:border-b pb-1 md:pb-4 pr-8 md:pr-4"><div className="font-medium truncate max-w-[240px]" title={bank.title}>{bank.title}</div><div className="text-xs opacity-70 truncate max-w-[240px]" title={bank.description || ''}>{bank.description || '-'}</div></TableCell>
-                    <TableCell className="block md:table-cell border-none md:border-b py-1 md:py-4"><span className={`text-xs px-2 py-1 rounded ${granted ? 'bg-emerald-600/20 text-emerald-500' : 'bg-gray-600/20 text-gray-500'}`}>{granted ? 'Granted' : 'Not granted'}</span></TableCell>
+                    <TableCell className="block md:table-cell border-none md:border-b py-1 md:py-4"><span className={`text-xs px-2 py-1 rounded ${statusClass}`}>{statusLabel}</span></TableCell>
                     <TableCell className="block md:table-cell border-none md:border-b pt-1 md:pt-4 text-xs"><span className="md:hidden font-semibold opacity-70 mr-1">Access count:</span>{bank.access_count}</TableCell>
                   </TableRow>
                 );

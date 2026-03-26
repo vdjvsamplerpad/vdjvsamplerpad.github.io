@@ -545,6 +545,7 @@ const buildReceiptStyleEmailHtml = (input: {
   bodyText: string;
   receiptImageUrl?: string;
   actionLinks?: Array<{ label: string; url: string }>;
+  actionLinksNote?: string;
 }): string => {
   const isApproved = input.variant === "approved";
   const isPending = input.variant === "pending";
@@ -596,18 +597,28 @@ const buildReceiptStyleEmailHtml = (input: {
     `
     : "";
 
+  const actionLinksNoteSection = String(input.actionLinksNote || "").trim()
+    ? `
+      <tr>
+        <td style="padding:0 24px 18px;">
+          <div style="font-size:12px;line-height:1.65;color:#cbd5e1;">${toHtmlFromPlainText(String(input.actionLinksNote || "").trim())}</div>
+        </td>
+      </tr>
+    `
+    : "";
+
   const actionLinksSection = Array.isArray(input.actionLinks) && input.actionLinks.length > 0
     ? `
       <tr>
         <td style="padding:0 24px 20px;">
           <div style="margin-bottom:10px;font-size:12px;font-weight:700;color:#f9fafb;">Download Links</div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          <div style="display:block;">
             ${input.actionLinks.map((entry) => `
               <a
                 href="${escapeHtml(entry.url)}"
                 target="_blank"
                 rel="noreferrer"
-                style="display:inline-block;padding:10px 14px;border-radius:9999px;background:${accent};color:#ffffff;font-size:12px;font-weight:700;text-decoration:none;"
+                style="display:block;width:100%;box-sizing:border-box;padding:12px 14px;border-radius:10px;background:${accent};color:#ffffff;font-size:12px;font-weight:700;text-decoration:none;text-align:center;margin:0 0 8px 0;"
               >
                 ${escapeHtml(entry.label)}
               </a>
@@ -653,6 +664,7 @@ const buildReceiptStyleEmailHtml = (input: {
             </tr>
             ${messageBlock}
             ${actionLinksSection}
+            ${actionLinksNoteSection}
             ${receiptSection}
           </table>
         </td>
@@ -1410,6 +1422,28 @@ const normalizeOptionalHttpUrl = (value: unknown): string | null => {
 const normalizeRequiredHttpUrl = (value: unknown): string | null => {
   const normalized = normalizeOptionalHttpUrl(value);
   return normalized || null;
+};
+
+const resolvePublicSiteBaseUrl = (): string | null => {
+  const explicit = asString(Deno.env.get("PUBLIC_SITE_URL"), 500);
+  if (!explicit) return null;
+  try {
+    const parsed = new URL(explicit);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+};
+
+const absolutizePublicSiteUrl = (value: string): string => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (!trimmed.startsWith("/")) return trimmed;
+  const siteBase = resolvePublicSiteBaseUrl();
+  if (!siteBase) return trimmed;
+  return `${siteBase}${trimmed}`;
 };
 
 const buildStoreApiBaseUrl = (req?: Request): string | null => {
@@ -2447,7 +2481,9 @@ const normalizeLandingDownloadConfig = (row: any) => {
     downloadLinks[version] = {};
     platformDescriptions[version] = {};
     LANDING_PLATFORM_KEYS.forEach((platform) => {
-      downloadLinks[version][platform] = asString(downloadEntry?.[platform], 2000) || DEFAULT_LANDING_DOWNLOAD_LINKS[version][platform];
+      downloadLinks[version][platform] = absolutizePublicSiteUrl(
+        asString(downloadEntry?.[platform], 2000) || DEFAULT_LANDING_DOWNLOAD_LINKS[version][platform]
+      );
       platformDescriptions[version][platform] = asString(platformEntry?.[platform], 500) || DEFAULT_LANDING_PLATFORM_DESCRIPTIONS[version][platform];
     });
     versionDescriptions[version] = {
@@ -3201,6 +3237,21 @@ const executeInstallerPurchaseApproval = async (input: {
   const summary = buildInstallerPurchaseBatchSummary(batchRows.length > 0 ? batchRows : [input.requestRow]);
   const version = summary.version;
   if (!version) return fail(400, "INVALID_VERSION");
+
+  const sourceReference = asString(summary.firstRow?.ocr_reference_no, 160)
+    || asString(summary.firstRow?.reference_no, 160)
+    || asString(input.requestRow?.ocr_reference_no, 160)
+    || asString(input.requestRow?.reference_no, 160)
+    || null;
+  if (sourceReference) {
+    const referenceClaim = await ensurePaymentReferenceClaimed({
+      admin: input.admin,
+      sourceReference,
+      sourceTable: "installer_purchase_requests",
+      sourceRequestId: asString(summary.firstRow?.id, 80) || asString(input.requestRow?.id, 80) || null,
+    });
+    if (!referenceClaim.ok) return referenceClaim.response;
+  }
 
   const landingConfig = await getNormalizedLandingConfigRecord(input.admin);
   const existingIssuedRow = summary.rows.find((row) => Number.isFinite(Number(row?.issued_license_id)) && asString(row?.issued_license_code, 120));
@@ -4110,6 +4161,7 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
   await swallowDiscordError(() =>
     sendDiscordAccountRegistrationEvent({
       severity: "info",
+      colorOverride: 0x16a34a,
       title: "Account Registration Submitted",
       description: "A new account registration request was submitted.",
       requestId: String(data.id),
@@ -4475,6 +4527,48 @@ const tryReservePaymentReference = async (input: Parameters<typeof reservePaymen
   }
 };
 
+const ensurePaymentReferenceClaimed = async (input: {
+  admin: ReturnType<typeof createServiceClient>;
+  sourceReference: string | null;
+  sourceTable: "account_registration_requests" | "bank_purchase_requests" | "installer_purchase_requests";
+  sourceRequestId: string | null;
+}): Promise<{ ok: true; normalizedReference: string | null } | { ok: false; response: Response }> => {
+  const normalizedReference = normalizePaymentReferenceRegistryKey(input.sourceReference);
+  if (!normalizedReference) return { ok: true, normalizedReference: null };
+
+  const { data: existingRow, error: existingError } = await input.admin
+    .from("payment_reference_registry")
+    .select("normalized_reference, source_table, source_request_id")
+    .eq("normalized_reference", normalizedReference)
+    .maybeSingle();
+  if (existingError) {
+    return { ok: false, response: fail(500, "PAYMENT_REFERENCE_LOOKUP_FAILED", { detail: existingError.message }) };
+  }
+
+  const existingRequestId = asString((existingRow as any)?.source_request_id, 80) || null;
+  const existingSourceTable = asString((existingRow as any)?.source_table, 80) || null;
+  if (existingRow) {
+    if (existingSourceTable === input.sourceTable && existingRequestId && existingRequestId === input.sourceRequestId) {
+      return { ok: true, normalizedReference };
+    }
+    return { ok: false, response: fail(409, "DUPLICATE_REFERENCE") };
+  }
+
+  const reserved = await tryReservePaymentReference({
+    admin: input.admin,
+    sourceReference: input.sourceReference || "",
+    sourceTable: input.sourceTable,
+    sourceRequestId: input.sourceRequestId,
+  });
+  if (reserved.errorMessage) {
+    return { ok: false, response: fail(500, "PAYMENT_REFERENCE_RESERVE_FAILED", { detail: reserved.errorMessage }) };
+  }
+  if (!reserved.reserved) {
+    return { ok: false, response: fail(409, "DUPLICATE_REFERENCE") };
+  }
+  return { ok: true, normalizedReference: reserved.normalizedReference };
+};
+
 const buildAccountApprovalLoginHint = (assisted: boolean): string =>
   assisted
     ? "Your account is approved. Sign in using the temporary password provided by the admin. If you do not have it, use Reset Password on the login screen."
@@ -4636,6 +4730,7 @@ const executeAccountApproval = async (input: {
   await swallowDiscordError(() =>
     sendDiscordAccountRegistrationEvent({
       severity: input.decisionSource === "automation" ? "warning" : "info",
+      colorOverride: 0x16a34a,
       title: "Account Request Approved",
       description: input.decisionSource === "automation"
         ? "Account request was auto-approved."
@@ -4722,6 +4817,7 @@ const executeStoreDecision = async (input: {
   await swallowDiscordError(() =>
     sendDiscordStoreRequestEvent({
       severity: input.nextStatus === "rejected" ? "warning" : (input.decisionSource === "automation" ? "warning" : "info"),
+      colorOverride: input.nextStatus === "approved" ? 0x16a34a : null,
       title: input.nextStatus === "approved" ? "Store Request Approved" : "Store Request Rejected",
       description: input.decisionSource === "automation"
         ? `Store request was ${input.nextStatus} automatically.`
@@ -5228,6 +5324,7 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
   await swallowDiscordError(() =>
     sendDiscordStoreRequestEvent({
       severity: "info",
+      colorOverride: 0x16a34a,
       title: "Store Purchase Request Submitted",
       description: "A new store purchase request was submitted.",
       requestId: String(insertedRows[0]?.id || ""),
@@ -5712,13 +5809,19 @@ const sendAccountApprovalDecisionEmail = async (input: {
   const displayName = asString(input.requestRow?.display_name, 160) || "User";
   const reviewTime = new Date(input.reviewedAtIso).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
   const loginHint = asString(input.loginHint, 500) || "You can now sign in using the password you registered.";
+  let actionLinks: Array<{ label: string; url: string }> = [];
   let platformGuideText = "";
   try {
     const landingConfig = await getNormalizedLandingConfigRecord(input.admin);
     const v1Links = landingConfig.downloadLinks.V1;
+    actionLinks = [
+      { label: "Android Download", url: asString(v1Links.android, 2000) || "" },
+      { label: "Open iOS Guide", url: asString(v1Links.ios, 2000) || "" },
+      { label: "Desktop Download", url: asString(v1Links.windows, 2000) || "" },
+      { label: "Message Us First", url: asString(v1Links.macos, 2000) || "" },
+    ].filter((entry) => Boolean(entry.url));
     platformGuideText = [
-      "",
-      "Download guides:",
+      "Download guides/url if download button doesnt work:",
       `Android: ${v1Links.android || "-"}`,
       `iOS: ${v1Links.ios || "-"}`,
       `Desktop: ${v1Links.windows || "-"}`,
@@ -5734,7 +5837,6 @@ const sendAccountApprovalDecisionEmail = async (input: {
     "Your account registration request has been approved.",
     "",
     loginHint,
-    platformGuideText,
   ];
   const textBody = bodyLines.join("\n");
   const htmlBody = buildReceiptStyleEmailHtml({
@@ -5748,6 +5850,8 @@ const sendAccountApprovalDecisionEmail = async (input: {
       { label: "Reviewed At", value: reviewTime },
     ],
     bodyText: textBody,
+    actionLinks,
+    actionLinksNote: platformGuideText,
   });
 
   try {

@@ -3,7 +3,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { AdminBank, AdminUser, BankAccessEntry } from '@/lib/admin-api';
+import type { AccessEntry, AdminBank, AdminUser, BankAccessEntry } from '@/lib/admin-api';
 import { Eye, EyeOff, Loader2, Search, UserPlus, Users } from 'lucide-react';
 import {
   colorOptions,
@@ -37,6 +37,9 @@ interface AdminAccessDialogModalsProps {
     ownedBankPadCap: string;
     deviceTotalBankCap: string;
     saving: boolean;
+    bankListsLoading: boolean;
+    ownedBanks: AdminBank[];
+    grantedBanks: AccessEntry[];
     onOpenChange: (open: boolean) => void;
     onDisplayNameChange: (value: string) => void;
     onOwnedBankQuotaChange: (value: string) => void;
@@ -211,6 +214,61 @@ export function AdminAccessDialogModals({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <div><Label>Created</Label><div>{details.user?.created_at ? new Date(details.user.created_at).toLocaleString() : '-'}</div></div>
               <div><Label>Last Sign-In</Label><div>{details.user?.last_sign_in_at ? new Date(details.user.last_sign_in_at).toLocaleString() : '-'}</div></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div className={`rounded border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50/70'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-xs uppercase tracking-wide opacity-80">Owned Banks</Label>
+                  <span className="text-[11px] opacity-70">{details.ownedBanks.length}</span>
+                </div>
+                <div className={`max-h-40 overflow-auto rounded border p-2 text-xs ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+                  {details.bankListsLoading ? (
+                    <div className="flex items-center justify-center py-4 opacity-70">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    </div>
+                  ) : details.ownedBanks.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {details.ownedBanks.map((bank) => (
+                        <div key={bank.id} className="flex items-start justify-between gap-2">
+                          <span className="truncate font-medium" title={bank.title}>{bank.title}</span>
+                          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${theme === 'dark' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-emerald-100 text-emerald-700'}`}>Owner</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-2 opacity-70">No owned banks.</div>
+                  )}
+                </div>
+              </div>
+              <div className={`rounded border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50/70'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-xs uppercase tracking-wide opacity-80">Granted Banks</Label>
+                  <span className="text-[11px] opacity-70">{details.grantedBanks.length}</span>
+                </div>
+                <div className={`max-h-40 overflow-auto rounded border p-2 text-xs ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+                  {details.bankListsLoading ? (
+                    <div className="flex items-center justify-center py-4 opacity-70">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    </div>
+                  ) : details.grantedBanks.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {details.grantedBanks.map((row) => {
+                        const grantedTitle = row.bank?.title || row.bank_id;
+                        return (
+                          <div key={row.id} className="space-y-0.5">
+                            <div className="truncate font-medium" title={grantedTitle}>{grantedTitle}</div>
+                            <div className="text-[11px] opacity-70">
+                              Granted {row.granted_at ? new Date(row.granted_at).toLocaleString() : '-'}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="py-2 opacity-70">No granted banks.</div>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="flex gap-2">
               <Button className="flex-1" disabled={details.saving} onClick={details.onSaveProfile}>{details.saving ? 'Saving...' : 'Save Profile'}</Button>
