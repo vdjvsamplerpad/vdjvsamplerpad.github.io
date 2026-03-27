@@ -623,7 +623,7 @@ export default function BuyPage() {
                           key={platform}
                           type="button"
                           variant="outline"
-                          className="justify-between"
+                          className="justify-between border-slate-200 bg-white text-slate-900 hover:bg-slate-100 hover:text-slate-950"
                           onClick={() => window.open(v1Links[platform], '_blank', 'noopener,noreferrer')}
                         >
                           <span>{platformButtonLabel[platform]}</span>
@@ -648,7 +648,7 @@ export default function BuyPage() {
                               key={`installer-${platform}`}
                               type="button"
                               variant="outline"
-                              className="justify-between"
+                              className="justify-between border-slate-200 bg-white text-slate-900 hover:bg-slate-100 hover:text-slate-950"
                               onClick={() => window.open(link, '_blank', 'noopener,noreferrer')}
                             >
                               <span>{platformButtonLabel[platform]}</span>

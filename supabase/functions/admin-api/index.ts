@@ -1179,6 +1179,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     trendRowsResp,
     revenueDailyResp,
     installerRevenueDailyResp,
+    installerRequestDailyResp,
   ] = await Promise.all([
     admin
       .from("account_registration_requests")
@@ -1214,6 +1215,13 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .lte("created_at", windowEndIso)
       .order("created_at", { ascending: true })
       .limit(10000),
+    admin
+      .from("installer_purchase_requests")
+      .select("id, created_at, receipt_reference")
+      .gte("created_at", windowStartIso)
+      .lte("created_at", windowEndIso)
+      .order("created_at", { ascending: true })
+      .limit(10000),
   ]);
 
   if (accountQueueResp.error) return fail(500, accountQueueResp.error.message);
@@ -1221,6 +1229,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   if (trendRowsResp.error) return fail(500, trendRowsResp.error.message);
   if (revenueDailyResp.error) return fail(500, revenueDailyResp.error.message);
   if (installerRevenueDailyResp.error) return fail(500, installerRevenueDailyResp.error.message);
+  if (installerRequestDailyResp.error) return fail(500, installerRequestDailyResp.error.message);
 
   const storeQueueRows = storeQueueResp.data || [];
   const storeQueueUserIds = Array.from(
@@ -1310,6 +1319,24 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     bucket.installerRevenueApproved = daily.revenue;
     bucket.installerSalesApproved = daily.receiptRefs.size;
     bucket.totalRevenueApproved = bucket.storeRevenueApproved + bucket.accountRevenueApproved + daily.revenue;
+  }
+
+  const installerRequestDailyMap = new Map<string, Set<string>>();
+  for (const row of installerRequestDailyResp.data || []) {
+    const createdAt = new Date(String((row as any).created_at || ""));
+    if (Number.isNaN(createdAt.getTime())) continue;
+    const date = toUtcDateKey(createdAt);
+    const daily = installerRequestDailyMap.get(date) || new Set<string>();
+    const rawReceiptReference = asString((row as any).receipt_reference, 160) || "";
+    const requestKey = rawReceiptReference || `row:${asString((row as any).id, 160) || ""}`;
+    if (!requestKey) continue;
+    daily.add(requestKey);
+    installerRequestDailyMap.set(date, daily);
+  }
+  for (const [date, requestKeys] of installerRequestDailyMap.entries()) {
+    const bucket = trendSeed.get(date);
+    if (!bucket) continue;
+    bucket.importRequests += requestKeys.size;
   }
 
   const trendRows = trendRowsResp.data || [];

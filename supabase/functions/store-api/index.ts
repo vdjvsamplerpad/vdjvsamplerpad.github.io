@@ -10,6 +10,7 @@ import {
   type DiscordField,
   sendDiscordAccountRegistrationEvent,
   sendDiscordAdminActionEvent,
+  sendDiscordInstallerRequestEvent,
   sendDiscordOcrFailureEvent,
   sendDiscordStoreCrashReportEvent,
   sendDiscordStoreRequestEvent,
@@ -2468,13 +2469,13 @@ const DEFAULT_LANDING_BUY_SECTIONS = {
   },
   V2: {
     title: "Buy V2",
-    description: "Choose V2 Standard, exact updates, or V2 PRO MAX. Approved purchases receive a real installer license.",
+    description: "Includes FREE Android Remote App, iOS sold separately • Easy Windows installer • macOS: contact for compatibility",
     imageUrl: "/assets/logo.png",
     defaultInstallerDownloadLink: "https://m.me/vdjvsampler/",
   },
   V3: {
     title: "Buy V3",
-    description: "Choose V3 Standard, exact updates, or V3 PRO MAX. Approved purchases receive a real installer license.",
+    description: "Includes FREE Android Remote App, iOS sold separately • Easy Windows installer • macOS: contact for compatibility",
     imageUrl: "/assets/logo.png",
     defaultInstallerDownloadLink: "https://m.me/vdjvsampler/",
   },
@@ -3340,6 +3341,33 @@ const executeInstallerPurchaseApproval = async (input: {
     .eq("status", "pending");
   if (error) return fail(500, error.message);
 
+  await swallowDiscordError(() =>
+    sendDiscordInstallerRequestEvent({
+      severity: input.decisionSource === "automation" ? "warning" : "info",
+      colorOverride: 0x16a34a,
+      title: "Installer Request Approved",
+      description: input.decisionSource === "automation"
+        ? "Installer request was approved automatically."
+        : "Installer request was approved by admin.",
+      requestId: asString(summary.firstRow?.id, 80) || asString(input.requestRow?.id, 80) || null,
+      actorUserId: input.reviewedBy,
+      email: summary.email,
+      version,
+      purchaseLabel: summary.purchaseLabel,
+      skuCodes: summary.skuCodes,
+      paymentChannel: asString(summary.firstRow?.payment_channel, 80) || null,
+      payerName: asString(summary.firstRow?.payer_name, 160) || null,
+      referenceNo: asString(summary.firstRow?.reference_no, 160) || null,
+      receiptReference: summary.receiptReference,
+      decisionSource: input.decisionSource,
+      automationResult: input.automationResult || null,
+      extraFields: [
+        { name: "Request Count", value: String(summary.rows.length || 1), inline: true },
+        { name: "License Code", value: issuedLicenseCode, inline: true },
+      ],
+    })
+  );
+
   return ok({
     requestId: asString(summary.firstRow?.id, 80) || asString(input.requestRow?.id, 80) || "",
     status: "approved",
@@ -3497,6 +3525,27 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
   const requestRows = Array.isArray(data) ? data : [];
   const requestRow = requestRows[0] as any;
   const summary = buildInstallerPurchaseBatchSummary(requestRows);
+
+  await swallowDiscordError(() =>
+    sendDiscordInstallerRequestEvent({
+      severity: "info",
+      colorOverride: 0x16a34a,
+      title: "Installer Purchase Request Submitted",
+      description: "A new installer purchase request was submitted.",
+      requestId: asString(requestRow?.id, 80) || null,
+      email,
+      version,
+      purchaseLabel: summary.purchaseLabel,
+      skuCodes: summary.skuCodes,
+      paymentChannel,
+      payerName: payerName || null,
+      referenceNo: referenceNo || null,
+      receiptReference,
+      extraFields: [
+        { name: "Request Count", value: String(summary.rows.length || requestRows.length || 1), inline: true },
+      ],
+    })
+  );
 
   let automationResult: AutomationReason = "not_image_proof";
   let autoApproved = false;
@@ -3871,6 +3920,29 @@ const adminInstallerPurchaseRequestAction = async (requestId: string, body: any,
     .eq("version", normalizeInstallerBuyVersion(requestRow?.version) || "V2")
     .eq("status", "pending");
   if (error) return fail(500, error.message);
+
+  await swallowDiscordError(() =>
+    sendDiscordInstallerRequestEvent({
+      severity: "warning",
+      title: "Installer Request Rejected",
+      description: "Installer request was rejected by admin.",
+      requestId,
+      actorUserId: adminUserId,
+      email: normalizeEmail(requestRow?.email) || "",
+      version: normalizeInstallerBuyVersion(requestRow?.version) || "V2",
+      purchaseLabel: asString(requestRow?.display_name_snapshot, 200) || null,
+      skuCodes: [asString(requestRow?.sku_code, 120) || ""].filter(Boolean),
+      paymentChannel: asString(requestRow?.payment_channel, 80) || null,
+      payerName: asString(requestRow?.payer_name, 160) || null,
+      referenceNo: asString(requestRow?.reference_no, 160) || null,
+      receiptReference: asString(requestRow?.receipt_reference, 160) || null,
+      decisionSource: "manual",
+      automationResult: asString(requestRow?.automation_result, 120) || null,
+      extraFields: rejectionMessage
+        ? [{ name: "Reason", value: rejectionMessage, inline: false }]
+        : [],
+    })
+  );
 
   return ok({
     requestId,

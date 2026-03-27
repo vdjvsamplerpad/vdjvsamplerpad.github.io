@@ -44,6 +44,7 @@ const DISCORD_WEBHOOK_WARNING = asString(Deno.env.get("DISCORD_WEBHOOK_WARNING")
 const DISCORD_WEBHOOK_CRITICAL = asString(Deno.env.get("DISCORD_WEBHOOK_CRITICAL"), 5000);
 const DISCORD_WEBHOOK_ACCOUNT = asString(Deno.env.get("DISCORD_WEBHOOK_ACCOUNT"), 5000);
 const DISCORD_WEBHOOK_STORE = asString(Deno.env.get("DISCORD_WEBHOOK_STORE"), 5000);
+const DISCORD_WEBHOOK_INSTALLER = asString(Deno.env.get("DISCORD_WEBHOOK_INSTALLER"), 5000);
 
 const DISCORD_EMBED_COLORS: Record<DiscordSeverity, number> = {
   info: 0x2563eb,
@@ -573,6 +574,57 @@ export const sendDiscordStoreRequestEvent = async (input: {
         bankIds: input.bankIds || null,
         catalogItemIds: input.catalogItemIds || null,
         batchId: input.batchId,
+        receiptReference: input.receiptReference,
+        decisionSource: input.decisionSource,
+        automationResult: input.automationResult,
+      }),
+      ...(input.extraFields || []),
+    ],
+  });
+};
+
+export const sendDiscordInstallerRequestEvent = async (input: {
+  webhook?: string | null;
+  severity: DiscordSeverity;
+  colorOverride?: number | null;
+  title: string;
+  description?: string | null;
+  requestId?: string | null;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  email: string;
+  version?: string | null;
+  purchaseLabel?: string | null;
+  skuCodes?: string[] | null;
+  paymentChannel?: string | null;
+  payerName?: string | null;
+  referenceNo?: string | null;
+  receiptReference?: string | null;
+  decisionSource?: string | null;
+  automationResult?: string | null;
+  extraFields?: DiscordField[];
+}) => {
+  await sendDiscordNotification({
+    webhook: input.webhook || DISCORD_WEBHOOK_INSTALLER || null,
+    preferExplicitWebhook: true,
+    severity: input.severity,
+    colorOverride: input.colorOverride,
+    title: input.title,
+    description: input.description || "Installer request event recorded.",
+    fields: [
+      { name: "Email", value: input.email, inline: true },
+      ...(input.version ? [{ name: "Version", value: input.version, inline: true }] : []),
+      ...(input.purchaseLabel ? [{ name: "Purchase", value: input.purchaseLabel, inline: false }] : []),
+      ...(Array.isArray(input.skuCodes) && input.skuCodes.length > 0
+        ? [{ name: "SKU Codes", value: input.skuCodes.join(", "), inline: false }]
+        : []),
+      ...(input.paymentChannel ? [{ name: "Payment Channel", value: input.paymentChannel, inline: true }] : []),
+      ...(input.payerName ? [{ name: "Payer", value: input.payerName, inline: true }] : []),
+      ...(input.referenceNo ? [{ name: "Reference", value: input.referenceNo, inline: true }] : []),
+      ...buildDiscordTraceFields({
+        requestId: input.requestId,
+        actorUserId: input.actorUserId,
+        actorEmail: input.actorEmail,
         receiptReference: input.receiptReference,
         decisionSource: input.decisionSource,
         automationResult: input.automationResult,

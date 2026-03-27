@@ -89,13 +89,13 @@ export const DEFAULT_BUY_SECTIONS: Record<VersionKey, LandingBuySection> = {
   },
   V2: {
     title: 'Buy V2',
-    description: 'Choose V2 Standard, exact updates, or V2 PRO MAX. Approved purchases receive a real installer license.',
+    description: 'Includes FREE Android Remote App, iOS sold separately • Easy Windows installer • macOS: contact for compatibility',
     imageUrl: '/assets/logo.png',
     defaultInstallerDownloadLink: 'https://m.me/vdjvsampler/',
   },
   V3: {
     title: 'Buy V3',
-    description: 'Choose V3 Standard, exact updates, or V3 PRO MAX. Approved purchases receive a real installer license.',
+    description: 'Includes FREE Android Remote App, iOS sold separately • Easy Windows installer • macOS: contact for compatibility',
     imageUrl: '/assets/logo.png',
     defaultInstallerDownloadLink: 'https://m.me/vdjvsampler/',
   },
