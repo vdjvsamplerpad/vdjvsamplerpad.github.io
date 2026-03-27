@@ -18,10 +18,11 @@ export function useStorePreviewBadge(input: {
   const { effectiveUser, profileId } = input;
   const { previewBanks } = useGuestStorePreviewBanks(effectiveUser);
   const [signedInPreviewBanks, setSignedInPreviewBanks] = React.useState<GuestStorePreviewBank[]>([]);
-  const storePreviewItems = effectiveUser ? signedInPreviewBanks : previewBanks;
+  const storePreviewItems = effectiveUser ? [] : previewBanks;
+  const badgePreviewItems = effectiveUser ? signedInPreviewBanks : previewBanks;
   const storePreviewSignature = React.useMemo(
-    () => buildStorePreviewSignature(storePreviewItems),
-    [storePreviewItems],
+    () => buildStorePreviewSignature(badgePreviewItems),
+    [badgePreviewItems],
   );
   const storePreviewSeenKey = React.useMemo(
     () => `${STORE_PREVIEW_SEEN_KEY_PREFIX}${profileId || effectiveUser?.id || 'guest'}`,

@@ -264,8 +264,8 @@ export const sendDiscordNotification = async (input: {
   includeGeoLookup?: boolean;
   preferExplicitWebhook?: boolean;
 }) => {
-  const webhookUrl = input.preferExplicitWebhook && input.webhook
-    ? input.webhook
+  const webhookUrl = input.preferExplicitWebhook
+    ? (input.webhook || null)
     : resolveSeverityWebhook(input.severity, input.webhook);
   if (!webhookUrl) return;
 
