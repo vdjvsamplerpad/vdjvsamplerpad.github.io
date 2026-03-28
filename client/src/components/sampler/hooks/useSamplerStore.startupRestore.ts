@@ -44,6 +44,7 @@ export interface RunRestoreAllFilesDeps {
   hideProtectedBanksKey: string;
   pruneBanksForGuestLock: (banks: SamplerBank[]) => SamplerBank[];
   setHiddenProtectedBanks: (ownerId: string | null, hiddenBanks: SamplerBank[]) => void;
+  getDefaultBankPadImagePreference: (padId: string) => 'none' | null;
   isNativeCapacitorPlatform: () => boolean;
   maxNativeStartupRestorePads: number;
   yieldToMainThread: () => Promise<void>;
@@ -97,6 +98,7 @@ export const runRestoreAllFilesPipeline = async (
     hideProtectedBanksKey,
     pruneBanksForGuestLock,
     setHiddenProtectedBanks,
+    getDefaultBankPadImagePreference,
     isNativeCapacitorPlatform,
     maxNativeStartupRestorePads,
     yieldToMainThread,
@@ -224,14 +226,20 @@ export const runRestoreAllFilesPipeline = async (
         ? new Map(defaultBankAssetSource.pads.map((pad) => [pad.id, pad] as const))
         : null;
       const thumbnailStorageId = `bank-thumbnail-${bank.id}`;
+      const hasExplicitThumbnailRemoval = bank.bankMetadata?.thumbnailRemoved === true;
       let nextMetadata = defaultBankAssetSource?.bankMetadata
         ? {
             ...defaultBankAssetSource.bankMetadata,
             ...bank.bankMetadata,
-            thumbnailUrl: bank.bankMetadata?.thumbnailUrl || defaultBankAssetSource.bankMetadata.thumbnailUrl,
+            thumbnailUrl: hasExplicitThumbnailRemoval
+              ? undefined
+              : (bank.bankMetadata?.thumbnailUrl || defaultBankAssetSource.bankMetadata.thumbnailUrl),
+            remoteSnapshotThumbnailUrl: hasExplicitThumbnailRemoval
+              ? undefined
+              : bank.bankMetadata?.remoteSnapshotThumbnailUrl,
           }
         : bank.bankMetadata;
-      if (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend) {
+      if (!nextMetadata?.thumbnailRemoved && (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend)) {
         try {
           const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
           const restoredThumbnail = await restoreFileAccess(
@@ -245,6 +253,7 @@ export const runRestoreAllFilesPipeline = async (
             thumbnailUrl: restoredThumbnail.url || (/^https?:\/\//i.test(currentThumbnailUrl) ? currentThumbnailUrl : undefined),
             thumbnailStorageKey: restoredThumbnail.storageKey || nextMetadata.thumbnailStorageKey,
             thumbnailBackend: restoredThumbnail.backend || nextMetadata.thumbnailBackend,
+            thumbnailRemoved: restoredThumbnail.url ? undefined : nextMetadata.thumbnailRemoved,
           };
         } catch {
           // Ignore thumbnail restore failures and keep any durable remote URL.
@@ -258,10 +267,17 @@ export const runRestoreAllFilesPipeline = async (
           defaultBankAssetSource?.pads[i] ||
           null;
         if (assetPad) {
+          const imagePreference = getDefaultBankPadImagePreference(restoredPad.id || assetPad.id || '');
+          const shouldHideImage = imagePreference === 'none';
           if (!restoredPad.audioUrl && !restoredPad.audioStorageKey && !restoredPad.audioBackend) {
             restoredPad.audioUrl = assetPad.audioUrl || restoredPad.audioUrl;
           }
-          if (!restoredPad.imageUrl && !restoredPad.imageStorageKey && !restoredPad.imageBackend) {
+          if (shouldHideImage) {
+            restoredPad.imageUrl = '';
+            restoredPad.imageStorageKey = undefined;
+            restoredPad.imageBackend = undefined;
+            restoredPad.hasImageAsset = false;
+          } else if (!restoredPad.imageUrl && !restoredPad.imageStorageKey && !restoredPad.imageBackend) {
             restoredPad.imageUrl = assetPad.imageUrl || restoredPad.imageUrl;
             if (assetPad.imageUrl) restoredPad.hasImageAsset = true;
           }

@@ -1394,7 +1394,9 @@ export function SamplerPadApp() {
       bankDescriptionToken: normalizeSamplerSearchKeywordText(bank.bankMetadata?.description),
       bankDescriptionKeywords: normalizeSamplerSearchKeywords(bank.bankMetadata?.description),
       bankColor: bank.defaultColor || bank.bankMetadata?.color || '#3b82f6',
-      thumbnailUrl: bank.bankMetadata?.thumbnailUrl || bank.bankMetadata?.remoteSnapshotThumbnailUrl || undefined,
+      thumbnailUrl: bank.bankMetadata?.thumbnailRemoved
+        ? undefined
+        : (bank.bankMetadata?.thumbnailUrl || bank.bankMetadata?.remoteSnapshotThumbnailUrl || undefined),
       hideThumbnailPreview: Boolean(bank.bankMetadata?.hideThumbnailPreview),
     }));
   }, [banks]);

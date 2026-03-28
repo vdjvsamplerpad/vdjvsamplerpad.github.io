@@ -183,6 +183,7 @@ export const loadDefaultBankFromAssetsPipeline = async (
     description: metadata.description || '',
     color: metadata.color || defaultColor,
     thumbnailUrl: metadata.thumbnailUrl,
+    thumbnailRemoved: typeof metadata.thumbnailRemoved === 'boolean' ? metadata.thumbnailRemoved : undefined,
     thumbnailAssetPath: metadata.thumbnailAssetPath,
     hideThumbnailPreview: typeof metadata.hideThumbnailPreview === 'boolean' ? metadata.hideThumbnailPreview : undefined,
     defaultBankSource: 'assets',

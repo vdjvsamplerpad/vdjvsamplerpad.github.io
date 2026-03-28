@@ -110,6 +110,7 @@ export interface BankMetadata {
   description?: string; // Bank description from database
   color?: string; // Optional bank color override
   thumbnailUrl?: string; // Store catalog thumbnail URL for visual display
+  thumbnailRemoved?: boolean; // Persist explicit local thumbnail removal so defaults do not reappear on restore
   thumbnailStorageKey?: string; // Persistent offline thumbnail media key
   thumbnailBackend?: 'native' | 'idb'; // Storage backend hint for offline thumbnail recovery
   thumbnailAssetPath?: string; // Embedded thumbnail file path inside .bank archive

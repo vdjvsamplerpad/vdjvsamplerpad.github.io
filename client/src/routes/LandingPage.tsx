@@ -101,6 +101,8 @@ export default function LandingPage() {
     } catch {}
     return normalizeLandingDownloadConfig(DEFAULT_LANDING_DOWNLOAD_CONFIG);
   });
+  const [landingConfigLoaded, setLandingConfigLoaded] = React.useState(false);
+  const [redirectFailed, setRedirectFailed] = React.useState(false);
   const { tier } = usePerformanceTier();
   const prefersReducedMotion = usePrefersReducedMotion();
   const { saveData, slowConnection } = useConnectionHints();
@@ -139,14 +141,20 @@ export default function LandingPage() {
       .then(async (res) => {
         const payload = await res.json().catch(() => ({}));
         const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
-        if (!active || !res.ok) return;
+        if (!active || !res.ok) {
+          if (active) setLandingConfigLoaded(true);
+          return;
+        }
         const normalized = normalizeLandingDownloadConfig(data?.config || DEFAULT_LANDING_DOWNLOAD_CONFIG);
         setLandingConfig(normalized);
+        setLandingConfigLoaded(true);
         try {
           window.localStorage.setItem(LANDING_CONFIG_CACHE_KEY, JSON.stringify(normalized));
         } catch {}
       })
-      .catch(() => { });
+      .catch(() => {
+        if (active) setLandingConfigLoaded(true);
+      });
     return () => {
       active = false;
       window.clearTimeout(timeoutId);
@@ -156,10 +164,14 @@ export default function LandingPage() {
 
   React.useEffect(() => {
     if (!redirectRequest) return;
+    if (!landingConfigLoaded) return;
     const targetUrl = String(landingConfig.downloadLinks?.[redirectRequest.version]?.[redirectRequest.platform] || '').trim();
-    if (!targetUrl) return;
+    if (!targetUrl) {
+      setRedirectFailed(true);
+      return;
+    }
     window.location.replace(targetUrl);
-  }, [landingConfig, redirectRequest]);
+  }, [landingConfig, landingConfigLoaded, redirectRequest]);
 
   const clearTimers = React.useCallback(() => {
     if (autoplayStartTimeoutRef.current !== null) {
@@ -207,7 +219,11 @@ export default function LandingPage() {
         <section className="lp-marketing-band">
           <p className="lp-kicker">VDJV Sampler Pad App</p>
           <h1>Opening download...</h1>
-          <p className="lp-lead">Please wait while we redirect you to the latest installer link.</p>
+          <p className="lp-lead">
+            {redirectFailed
+              ? 'We could not resolve the latest installer link right now. Please try again in a moment.'
+              : 'Please wait while we redirect you to the latest installer link.'}
+          </p>
         </section>
       </main>
     );

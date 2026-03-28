@@ -502,7 +502,9 @@ export function SideMenu({
         bankMetadata: isPaidBankDuplicate
           ? {
               ...candidate.bankMetadata,
-              thumbnailUrl: meta.thumbnailUrl || candidate.bankMetadata?.thumbnailUrl,
+              thumbnailUrl: candidate.bankMetadata?.thumbnailRemoved
+                ? undefined
+                : (meta.thumbnailUrl || candidate.bankMetadata?.thumbnailUrl),
             }
           : candidate.bankMetadata,
       });
@@ -635,7 +637,9 @@ export function SideMenu({
       is_purchased: true,
       price_php: null,
       sha256: bank.bankMetadata?.catalogSha256 || resolvedItem?.sha256 || null,
-      thumbnail_path: bank.bankMetadata?.thumbnailUrl || bank.bankMetadata?.remoteSnapshotThumbnailUrl || null,
+      thumbnail_path: bank.bankMetadata?.thumbnailRemoved
+        ? null
+        : (bank.bankMetadata?.thumbnailUrl || bank.bankMetadata?.remoteSnapshotThumbnailUrl || null),
       status: 'granted_download',
       rejection_message: null,
       bank: {
@@ -1222,7 +1226,7 @@ export function SideMenu({
                   : undefined;
                 const thumbnailUrl = isPreview
                   ? preview?.thumbnailUrl || undefined
-                  : (!bank?.bankMetadata?.hideThumbnailPreview ? bank?.bankMetadata?.thumbnailUrl : undefined);
+                  : (!bank?.bankMetadata?.hideThumbnailPreview && !bank?.bankMetadata?.thumbnailRemoved ? bank?.bankMetadata?.thumbnailUrl : undefined);
                 const status = getBankStatus(bankId);
                 const isPrimary = status === 'primary';
                 const isSecondary = status === 'secondary';
@@ -1857,13 +1861,16 @@ export function SideMenu({
               }
 
               if (currentMetadata) {
+                const nextBankMetadata = {
+                  ...currentMetadata,
+                  thumbnailUrl: nextThumbnailUrl || undefined,
+                  thumbnailRemoved: nextThumbnailUrl ? undefined : true,
+                  thumbnailStorageKey: thumbnail?.thumbnailStorageKey,
+                  thumbnailBackend: thumbnail?.thumbnailBackend,
+                  remoteSnapshotThumbnailUrl: nextThumbnailUrl ? currentMetadata.remoteSnapshotThumbnailUrl : undefined,
+                };
                 onUpdateBank(latestBank.id, {
-                  bankMetadata: {
-                    ...currentMetadata,
-                    thumbnailUrl: nextThumbnailUrl || undefined,
-                    thumbnailStorageKey: thumbnail?.thumbnailStorageKey,
-                    thumbnailBackend: thumbnail?.thumbnailBackend,
-                  }
+                  bankMetadata: nextBankMetadata,
                 });
                 return;
               }
@@ -1875,6 +1882,7 @@ export function SideMenu({
                     transferable: typeof latestBank.transferable === 'boolean' ? latestBank.transferable : true,
                     exportable: latestBank.exportable,
                     thumbnailUrl: nextThumbnailUrl,
+                    thumbnailRemoved: undefined,
                     thumbnailStorageKey: thumbnail?.thumbnailStorageKey,
                     thumbnailBackend: thumbnail?.thumbnailBackend,
                   }

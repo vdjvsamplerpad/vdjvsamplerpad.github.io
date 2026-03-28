@@ -3,6 +3,7 @@ import { SamplerPad } from './SamplerPad';
 import { PadData, SamplerBank, StopMode } from './types/sampler';
 import { buildPadSearchAnchorId } from './samplerSearch';
 import { parsePadDragTransferPayload } from './padDragTransfer';
+import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
 
 const normalizeSearchHitColor = (value: string | undefined, fallback = '#22d3ee'): string => {
   if (!value) return fallback;
@@ -294,7 +295,7 @@ export const PadGrid = React.memo(function PadGrid({
         <input
           ref={fileInputRef}
           type="file"
-          accept="audio/*"
+          accept={AUDIO_FILE_INPUT_ACCEPT}
           multiple
           onChange={handleFileSelect}
           className="hidden"

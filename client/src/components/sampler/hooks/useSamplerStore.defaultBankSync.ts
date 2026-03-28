@@ -198,7 +198,15 @@ export const runDefaultBankSyncPipeline = async (
           bankMetadata: assetDefault.bankMetadata
             ? {
                 ...assetDefault.bankMetadata,
-                thumbnailUrl: bank.bankMetadata?.thumbnailUrl || assetDefault.bankMetadata.thumbnailUrl,
+                thumbnailUrl:
+                  bank.bankMetadata?.thumbnailRemoved === true
+                    ? undefined
+                    : (bank.bankMetadata?.thumbnailUrl || assetDefault.bankMetadata.thumbnailUrl),
+                thumbnailRemoved: bank.bankMetadata?.thumbnailRemoved === true ? true : undefined,
+                remoteSnapshotThumbnailUrl:
+                  bank.bankMetadata?.thumbnailRemoved === true
+                    ? undefined
+                    : bank.bankMetadata?.remoteSnapshotThumbnailUrl,
                 hideThumbnailPreview:
                   typeof bank.bankMetadata?.hideThumbnailPreview === 'boolean'
                     ? bank.bankMetadata.hideThumbnailPreview

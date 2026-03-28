@@ -1,6 +1,7 @@
 ﻿import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { Upload, Music, AlertCircle, Smartphone } from 'lucide-react';
+import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
 
 // IndexedDB setup
 const DB_NAME = 'sampler-audio-db';
@@ -88,14 +89,7 @@ function createIOSCompatibleFileInput(): HTMLInputElement {
   input.type = 'file';
   input.multiple = true;
   
-  // Enhanced iOS Safari compatible accept string
-  const acceptTypes = [
-    'audio/*',
-    '.mp3,.wav,.m4a,.aac,.ogg,.webm,.aiff,.flac',
-    'audio/mpeg,audio/mp3,audio/wav,audio/wave,audio/x-wav,audio/aac,audio/mp4,audio/x-m4a,audio/ogg,audio/webm,audio/m4a,audio/aiff,audio/x-aiff,audio/flac,audio/x-flac'
-  ].join(',');
-  
-  input.accept = acceptTypes;
+  input.accept = AUDIO_FILE_INPUT_ACCEPT;
   
   // iOS Safari specific attributes
   input.setAttribute('capture', 'none'); // Don't use camera/microphone
@@ -283,7 +277,7 @@ export function FileUploader({ onFilesUpload, onError }: FileUploaderProps) {
       <input
         ref={fileInputRef}
         type="file"
-        accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.webm,.aiff,.flac"
+        accept={AUDIO_FILE_INPUT_ACCEPT}
         multiple
         onChange={handleFileSelect}
         className="hidden"

@@ -234,7 +234,13 @@ export const materializeSnapshotBanks = (
       bankMetadata: bank.bankMetadata
         ? {
             ...bank.bankMetadata,
-            thumbnailUrl: existing?.bankMetadata?.thumbnailUrl || bank.bankMetadata.remoteSnapshotThumbnailUrl,
+            thumbnailUrl: existing?.bankMetadata?.thumbnailRemoved
+              ? undefined
+              : (existing?.bankMetadata?.thumbnailUrl || bank.bankMetadata.remoteSnapshotThumbnailUrl),
+            thumbnailRemoved: existing?.bankMetadata?.thumbnailRemoved,
+            remoteSnapshotThumbnailUrl: existing?.bankMetadata?.thumbnailRemoved
+              ? undefined
+              : bank.bankMetadata.remoteSnapshotThumbnailUrl,
           }
         : bank.bankMetadata,
       pads: bank.pads.map((pad) => {

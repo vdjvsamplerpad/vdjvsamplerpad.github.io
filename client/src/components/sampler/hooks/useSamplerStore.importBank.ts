@@ -393,6 +393,7 @@ export const runImportBankPipeline = async (
               description: openResult.metadata.description,
               color: openResult.metadata.color,
               thumbnailUrl: openResult.metadata.thumbnailUrl,
+              thumbnailRemoved: openResult.metadata.thumbnailRemoved,
               thumbnailAssetPath: openResult.metadata.thumbnailAssetPath,
               hideThumbnailPreview: openResult.metadata.hideThumbnailPreview,
             }
@@ -446,6 +447,7 @@ export const runImportBankPipeline = async (
           description: metadata?.description,
           color: metadata?.color,
           thumbnailUrl: metadata?.thumbnailUrl,
+          thumbnailRemoved: metadata?.thumbnailRemoved,
           thumbnailAssetPath: metadata?.thumbnailAssetPath,
           hideThumbnailPreview: metadata?.hideThumbnailPreview,
         };
@@ -514,6 +516,7 @@ export const runImportBankPipeline = async (
             description: resolvedMetadata.description,
             color: resolvedMetadata.color || metadata?.color,
             thumbnailUrl: metadata?.thumbnailUrl,
+            thumbnailRemoved: metadata?.thumbnailRemoved,
             thumbnailAssetPath: metadata?.thumbnailAssetPath,
             hideThumbnailPreview: metadata?.hideThumbnailPreview,
           };
@@ -542,6 +545,7 @@ export const runImportBankPipeline = async (
             transferable: true,
           }),
           thumbnailUrl: URL.createObjectURL(embeddedThumbnailBlob),
+          thumbnailRemoved: undefined,
           hideThumbnailPreview: metadata?.hideThumbnailPreview,
         };
       }

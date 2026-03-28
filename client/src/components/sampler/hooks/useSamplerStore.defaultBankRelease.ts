@@ -290,6 +290,7 @@ export const installDefaultBankReleaseArchive = async (
     description: metadata?.description || '',
     color: metadata?.color || defaultColor,
     thumbnailUrl: metadata?.thumbnailUrl,
+    thumbnailRemoved: metadata?.thumbnailRemoved,
     thumbnailAssetPath: metadata?.thumbnailAssetPath,
     hideThumbnailPreview: metadata?.hideThumbnailPreview,
     defaultBankSource: 'remote',

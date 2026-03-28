@@ -5,6 +5,7 @@ import { Progress } from '@/components/ui/progress';
 import { PadData, SamplerBank, StopMode } from './types/sampler';
 import { useAudioPlayer } from './hooks/useAudioPlayer';
 import { Play, Pause, MousePointer2, Zap, VolumeX, Loader2, Ban } from 'lucide-react';
+import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
 import { normalizeShortcutKey, normalizeStoredShortcutKey } from '@/lib/keyboard-shortcuts';
 import type { PadEditDialog as PadEditDialogType } from './PadEditDialog';
 import type { PadTransferDialog as PadTransferDialogType } from './PadTransferDialog';
@@ -1200,7 +1201,7 @@ export const SamplerPad = React.memo(function SamplerPad({
       <input
         ref={relinkInputRef}
         type="file"
-        accept="audio/*"
+        accept={AUDIO_FILE_INPUT_ACCEPT}
         className="hidden"
         onChange={handleRelinkFileChange}
       />

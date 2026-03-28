@@ -107,7 +107,7 @@ export function BankEditDialog({
 }: BankEditDialogProps) {
   type BankWithMidi = SamplerBank & { midiNote?: number; midiCC?: number };
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
-  const canDeleteBank = !isExplicitDefaultBankIdentity(bank);
+  const canDeleteBank = bank.isLocalDuplicate || !isExplicitDefaultBankIdentity(bank);
   const { profile } = useAuthState();
   const shouldShowPreparedPlaybackUi = profile?.role === 'admin';
   const [name, setName] = React.useState(bank.name);

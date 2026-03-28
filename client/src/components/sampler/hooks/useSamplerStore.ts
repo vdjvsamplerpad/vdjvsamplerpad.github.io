@@ -976,7 +976,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     const thumbnailStorageId = `bank-thumbnail-${bank.id}`;
     let nextMetadata = bank.bankMetadata;
     const hasThumbnailUrl = typeof nextMetadata?.thumbnailUrl === 'string' && nextMetadata.thumbnailUrl.trim().length > 0;
-    if (!hasThumbnailUrl && (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend)) {
+    if (!nextMetadata?.thumbnailRemoved && !hasThumbnailUrl && (nextMetadata?.thumbnailStorageKey || nextMetadata?.thumbnailBackend)) {
       try {
         const currentThumbnailUrl = typeof nextMetadata.thumbnailUrl === 'string' ? nextMetadata.thumbnailUrl.trim() : '';
         const restoredThumbnail = await restoreFileAccess(
@@ -990,6 +990,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
           thumbnailUrl: restoredThumbnail.url || (/^https?:\/\//i.test(currentThumbnailUrl) ? currentThumbnailUrl : undefined),
           thumbnailStorageKey: restoredThumbnail.storageKey || nextMetadata.thumbnailStorageKey,
           thumbnailBackend: restoredThumbnail.backend || nextMetadata.thumbnailBackend,
+          thumbnailRemoved: restoredThumbnail.url ? undefined : nextMetadata.thumbnailRemoved,
         };
       } catch {
         // Ignore thumbnail restore failures and keep any durable remote URL.
@@ -1914,6 +1915,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         hideProtectedBanksKey: HIDE_PROTECTED_BANKS_KEY,
         pruneBanksForGuestLock,
         setHiddenProtectedBanks,
+        getDefaultBankPadImagePreference,
         isNativeCapacitorPlatform,
         maxNativeStartupRestorePads: runtimeTuningProfile.startupRestorePadLimit,
         yieldToMainThread,
@@ -1925,6 +1927,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
   }, [
     authSessionUserId,
     isGuestLockedSession,
+    getDefaultBankPadImagePreference,
     readLastOpenBankId,
     samplerConfig.bankDefaults.defaultBankColor,
     samplerConfig.bankDefaults.defaultBankName,

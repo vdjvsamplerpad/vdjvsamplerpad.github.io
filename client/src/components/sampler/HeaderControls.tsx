@@ -17,6 +17,7 @@ import type { HeaderAdminDebugPanel as HeaderAdminDebugPanelType } from './Heade
 import { EXTRA_PAD_COLORS, PRIMARY_PAD_COLORS, getPadColorOptionLabel } from './padColorPalette';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
 import { useStorePreviewBadge } from './hooks/useStorePreviewBadge';
+import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
 
 const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then((module) => ({ default: module.LoginModal }))) as unknown as typeof LoginModalType;
 const AboutDialog = React.lazy(() => import('@/components/ui/about-dialog').then((module) => ({ default: module.AboutDialog }))) as unknown as typeof AboutDialogType;
@@ -694,7 +695,7 @@ export function HeaderControls({
       <input
         ref={fileInputRef}
         type="file"
-        accept="audio/*"
+        accept={AUDIO_FILE_INPUT_ACCEPT}
         multiple
         onChange={handleFileSelect}
         className="hidden"

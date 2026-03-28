@@ -25,6 +25,7 @@
     "type-check": "tsc --noEmit",
     "dist": "node scripts/build-electron-package.cjs",
     "build:win": "npm run build:electron:package -- --win nsis --x64 --ia32",
+    "build:win:portable": "npm run build:electron:package -- --win portable --x64",
     "cap:init": "npx cap init",
     "cap:add:android": "npx cap add android",
     "cap:add:ios": "npx cap add ios",
@@ -167,6 +168,9 @@
       ],
       "artifactName": "VDJV-Sampler-Pad-Setup-${version}-${arch}.${ext}",
       "icon": "icon.ico"
+    },
+    "portable": {
+      "artifactName": "VDJV-Sampler-Pad-Portable-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

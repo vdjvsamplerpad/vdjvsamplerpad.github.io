@@ -899,6 +899,7 @@ export const runExportAdminBankPipeline = async (
         color: bank.defaultColor,
         bankId: adminBank.id,
         thumbnailUrl: durableThumbnailPath,
+        thumbnailRemoved: bank.bankMetadata?.thumbnailRemoved,
         thumbnailAssetPath: embeddedThumbnailAssetPath,
         hideThumbnailPreview: bank.bankMetadata?.hideThumbnailPreview,
       };
@@ -1049,6 +1050,7 @@ export const runExportAdminBankPipeline = async (
         description,
         color: bank.defaultColor,
         thumbnailUrl: durableThumbnailPath,
+        thumbnailRemoved: bank.bankMetadata?.thumbnailRemoved,
         thumbnailAssetPath: embeddedThumbnailAssetPath,
         hideThumbnailPreview: bank.bankMetadata?.hideThumbnailPreview,
         adminExportToken: signedAdminExportToken?.token,

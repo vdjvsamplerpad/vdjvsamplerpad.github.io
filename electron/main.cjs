@@ -13,6 +13,11 @@ const { setupAutoUpdater, disposeAutoUpdater } = require('./auto-updater.cjs');
 
 let mainWindow;
 const isDev = !app.isPackaged;
+const PORTABLE_DATA_MARKER_FILES = [
+  'vdjv-portable-data.flag',
+  '.vdjv-portable-data',
+  'portable-data.flag',
+];
 const ENCRYPTION_MAGIC = Buffer.from('VDJVENC2');
 const ENCRYPTION_VERSION = 1;
 const ENCRYPTION_SALT_BYTES = 16;
@@ -28,6 +33,52 @@ const DEFAULT_WINDOW_STATE = Object.freeze({
   width: 1200,
   height: 800,
 });
+
+function resolvePortableExecutableDir() {
+  const portableExecutableDir = String(process.env.PORTABLE_EXECUTABLE_DIR || '').trim();
+  if (portableExecutableDir) return portableExecutableDir;
+  if (!process.execPath) return null;
+  return path.dirname(process.execPath);
+}
+
+function shouldUsePortableDataMode() {
+  if (isDev) return false;
+  const explicitPortableFlag = String(process.env.VDJV_PORTABLE_DATA || '').trim().toLowerCase();
+  if (explicitPortableFlag === '1' || explicitPortableFlag === 'true' || explicitPortableFlag === 'yes') {
+    return true;
+  }
+  if (process.argv.includes('--portable-data')) return true;
+  if (String(process.env.PORTABLE_EXECUTABLE_DIR || '').trim()) return true;
+  const executableDir = resolvePortableExecutableDir();
+  if (!executableDir) return false;
+  return PORTABLE_DATA_MARKER_FILES.some((markerName) => fs.existsSync(path.join(executableDir, markerName)));
+}
+
+function configurePortableDataPaths() {
+  if (!shouldUsePortableDataMode()) return null;
+  const executableDir = resolvePortableExecutableDir();
+  if (!executableDir) return null;
+  const portableDataRoot = path.join(executableDir, 'VDJV Data');
+  const nextUserDataPath = path.join(portableDataRoot, 'userData');
+  const nextSessionDataPath = path.join(portableDataRoot, 'sessionData');
+  const nextCrashDumpPath = path.join(portableDataRoot, 'crashDumps');
+  const nextLogsPath = path.join(portableDataRoot, 'logs');
+  fs.mkdirSync(nextUserDataPath, { recursive: true });
+  fs.mkdirSync(nextSessionDataPath, { recursive: true });
+  fs.mkdirSync(nextCrashDumpPath, { recursive: true });
+  fs.mkdirSync(nextLogsPath, { recursive: true });
+  app.setPath('userData', nextUserDataPath);
+  app.setPath('sessionData', nextSessionDataPath);
+  app.setPath('crashDumps', nextCrashDumpPath);
+  app.setAppLogsPath(nextLogsPath);
+  return {
+    executableDir,
+    portableDataRoot,
+  };
+}
+
+const portableDataMode = configurePortableDataPaths();
+const isPortableDataMode = Boolean(portableDataMode);
 
 function getWindowStateFilePath() {
   return path.join(app.getPath('userData'), WINDOW_STATE_FILE_NAME);
@@ -1341,9 +1392,11 @@ app.whenReady().then(() => {
     app.setAppUserModelId('com.vdjv.samplerpad.desktop');
   }
   createMainWindow();
-  setupAutoUpdater({
-    getMainWindow: () => mainWindow,
-  });
+  if (!isPortableDataMode) {
+    setupAutoUpdater({
+      getMainWindow: () => mainWindow,
+    });
+  }
 });
 
 app.on('before-quit', () => {
