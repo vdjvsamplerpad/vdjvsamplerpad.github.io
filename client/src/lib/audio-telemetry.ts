@@ -109,6 +109,9 @@ const resolvePlatform = (): string => {
   return 'desktop-web';
 };
 
+const isCapacitorNativeRuntime = (): boolean =>
+  typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
+
 const asRecord = (value: unknown): Record<string, unknown> | undefined => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
@@ -185,6 +188,7 @@ export class AudioTelemetryStore {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private latestHeartbeatData: AudioTelemetryUiState['latestHeartbeat'] = null;
   private initializedGlobalHooks = false;
+  private nativeLifecycleHooksReady = false;
 
   constructor(appVersion: string) {
     this.recoveredCrashSession = this.readSession(STORAGE_RECOVERED_KEY);
@@ -453,6 +457,8 @@ export class AudioTelemetryStore {
       this.markSessionActive(reason);
     };
 
+    const isNativeCapacitor = isCapacitorNativeRuntime();
+
     window.addEventListener('beforeunload', () => {
       handleCleanExit('beforeunload');
     });
@@ -472,14 +478,16 @@ export class AudioTelemetryStore {
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
-          handleCleanExit('visibility_hidden');
+          handleCleanExit(isNativeCapacitor ? 'visibility_hidden_native' : 'visibility_hidden');
           return;
         }
         if (document.visibilityState === 'visible') {
-          handleResume('visibility_visible');
+          handleResume(isNativeCapacitor ? 'visibility_visible_native' : 'visibility_visible');
         }
       });
     }
+
+    this.installNativeLifecycleHooks(handleCleanExit, handleResume);
 
     window.addEventListener('error', (event) => {
       this.log(
@@ -508,6 +516,43 @@ export class AudioTelemetryStore {
 
     window.addEventListener('online', () => this.log('network_online', { online: true }, 'info'));
     window.addEventListener('offline', () => this.log('network_offline', { online: false }, 'warn'));
+  }
+
+  private installNativeLifecycleHooks(
+    handleCleanExit: (reason: string) => void,
+    handleResume: (reason: string) => void,
+  ): void {
+    if (this.nativeLifecycleHooksReady || typeof window === 'undefined') return;
+    const capacitor = (window as any).Capacitor;
+    if (!capacitor?.isNativePlatform?.()) return;
+    const appPlugin = capacitor?.Plugins?.App;
+    if (!appPlugin?.addListener) return;
+
+    this.nativeLifecycleHooksReady = true;
+
+    const safeAddListener = (eventName: string, callback: (payload?: any) => void) => {
+      Promise.resolve(appPlugin.addListener(eventName, callback)).catch(() => {
+        // Best effort only; browser lifecycle hooks remain as fallback.
+      });
+    };
+
+    safeAddListener('appStateChange', (state?: { isActive?: boolean }) => {
+      if (state?.isActive === false) {
+        handleCleanExit('native_app_inactive');
+        return;
+      }
+      if (state?.isActive === true) {
+        handleResume('native_app_active');
+      }
+    });
+
+    safeAddListener('pause', () => {
+      handleCleanExit('native_pause');
+    });
+
+    safeAddListener('resume', () => {
+      handleResume('native_resume');
+    });
   }
 }
 

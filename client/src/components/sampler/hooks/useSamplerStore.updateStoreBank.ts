@@ -143,6 +143,16 @@ export interface RunUpdateStoreBankDeps {
   encryptZip: (zip: JSZip, password: string) => Promise<Blob>;
   saveExportFile: (blob: Blob, fileName: string) => Promise<SaveExportFileResult>;
   patchAdminCatalogItem: (input: { catalogItemId: string; updates: Record<string, unknown> }) => Promise<Record<string, unknown>>;
+  resolveCurrentCatalogItemIdForBank: (input: {
+    runtimeBankId: string;
+    sourceBankId: string;
+    previousCatalogItemId: string;
+  }) => Promise<string | null>;
+  persistResolvedCatalogItemId: (input: {
+    runtimeBankId: string;
+    sourceBankId: string;
+    catalogItemId: string;
+  }) => void;
   uploadAdminCatalogAsset: (input: {
     catalogItemId: string;
     operationType?: 'create' | 'update';
@@ -239,6 +249,8 @@ export const runUpdateStoreBankPipeline = async (
     encryptZip,
     saveExportFile,
     patchAdminCatalogItem,
+    resolveCurrentCatalogItemIdForBank,
+    persistResolvedCatalogItemId,
     uploadAdminCatalogAsset,
     isNonRetryableGithubUploadError,
     enqueueAdminExportUpload,
@@ -251,10 +263,13 @@ export const runUpdateStoreBankPipeline = async (
   const shouldStoreArchive = isNativeCapacitorPlatform() || exportMode !== 'compact';
 
   if (!user || profileRole !== 'admin') throw new Error('Only admins can update store banks.');
-  const catalogItemId = typeof bankSnapshot.bankMetadata?.catalogItemId === 'string'
+  let catalogItemId = typeof bankSnapshot.bankMetadata?.catalogItemId === 'string'
     ? bankSnapshot.bankMetadata.catalogItemId.trim()
     : '';
   if (!catalogItemId) throw new Error('Only linked store banks can be updated.');
+  const sourceBankId = typeof bankSnapshot.bankMetadata?.bankId === 'string' && bankSnapshot.bankMetadata.bankId.trim()
+    ? bankSnapshot.bankMetadata.bankId.trim()
+    : bankSnapshot.id;
 
   const normalizedTitle = (title || bankSnapshot.name || 'Bank').trim();
   const diagnostics = createOperationDiagnostics('admin_bank_export', user.id);
@@ -766,34 +781,89 @@ export const runUpdateStoreBankPipeline = async (
       uploadSucceeded = true;
       onProgress?.(99);
     } catch (uploadError) {
-      const reason = uploadError instanceof Error ? uploadError.message : String(uploadError);
-      const shouldQueueRetry = !isNonRetryableGithubUploadError(uploadError);
-      if (shouldQueueRetry) {
-        enqueueAdminExportUpload({
-          exportOperationId: diagnostics.operationId,
-          userId: user.id,
-          bankId: bankSnapshot.id,
-          bankName: normalizedTitle,
-          catalogItemId,
-          operationType: 'update',
-          fileName,
-          assetName: fileName,
-          assetProtection,
-          exportAudioMode: exportMode,
-          fileSize: outputBlob.size,
-          fileSha256: await sha256HexFromBlob(outputBlob),
-          padNames: bankSnapshot.pads.map((pad) => pad.name || 'Untitled Pad'),
-          blob: outputBlob,
+      let effectiveError: unknown = uploadError;
+      let reason = uploadError instanceof Error ? uploadError.message : String(uploadError);
+
+      if (/catalog item not found/i.test(reason)) {
+        const reboundCatalogItemId = await resolveCurrentCatalogItemIdForBank({
+          runtimeBankId: bankSnapshot.id,
+          sourceBankId,
+          previousCatalogItemId: catalogItemId,
         });
-        uploadWarningMessage = ` Upload failed. Auto-retry queued in background. (${reason})`;
-      } else {
-        uploadWarningMessage = ` Upload failed and was not queued for retry. (${reason})`;
+        if (reboundCatalogItemId && reboundCatalogItemId !== catalogItemId) {
+          const previousCatalogItemId = catalogItemId;
+          catalogItemId = reboundCatalogItemId;
+          persistResolvedCatalogItemId({
+            runtimeBankId: bankSnapshot.id,
+            sourceBankId,
+            catalogItemId,
+          });
+          addOperationStage(diagnostics, 'catalog-item-rebound', {
+            previousCatalogItemId,
+            nextCatalogItemId: catalogItemId,
+            bankId: bankSnapshot.id,
+            sourceBankId,
+          });
+          try {
+            onProgress?.(95);
+            const reboundUploadResult = await uploadAdminCatalogAsset({
+              catalogItemId,
+              operationType: 'update',
+              assetName: fileName,
+              exportBlob: outputBlob,
+              assetProtection,
+            });
+            addOperationStage(diagnostics, 'catalog-upload-linked', {
+              catalogItemId,
+              assetName: reboundUploadResult.assetName,
+              fileSize: reboundUploadResult.fileSize,
+              assetProtection,
+              reboundFromCatalogItemId: previousCatalogItemId,
+            });
+            clearQueuedAdminUpdateJobsForCatalogItem(previousCatalogItemId, {
+              excludeExportOperationId: diagnostics.operationId,
+            });
+            clearQueuedAdminUpdateJobsForCatalogItem(catalogItemId, {
+              excludeExportOperationId: diagnostics.operationId,
+            });
+            uploadSucceeded = true;
+            onProgress?.(99);
+          } catch (reboundUploadError) {
+            effectiveError = reboundUploadError;
+            reason = reboundUploadError instanceof Error ? reboundUploadError.message : String(reboundUploadError);
+          }
+        }
       }
-      addOperationStage(diagnostics, 'catalog-upload-warning', {
-        catalogItemId,
-        reason,
-        queuedRetry: shouldQueueRetry,
-      });
+
+      if (!uploadSucceeded) {
+        const shouldQueueRetry = !isNonRetryableGithubUploadError(effectiveError);
+        if (shouldQueueRetry) {
+          enqueueAdminExportUpload({
+            exportOperationId: diagnostics.operationId,
+            userId: user.id,
+            bankId: bankSnapshot.id,
+            bankName: normalizedTitle,
+            catalogItemId,
+            operationType: 'update',
+            fileName,
+            assetName: fileName,
+            assetProtection,
+            exportAudioMode: exportMode,
+            fileSize: outputBlob.size,
+            fileSha256: await sha256HexFromBlob(outputBlob),
+            padNames: bankSnapshot.pads.map((pad) => pad.name || 'Untitled Pad'),
+            blob: outputBlob,
+          });
+          uploadWarningMessage = ` Upload failed. Auto-retry queued in background. (${reason})`;
+        } else {
+          uploadWarningMessage = ` Upload failed and was not queued for retry. (${reason})`;
+        }
+        addOperationStage(diagnostics, 'catalog-upload-warning', {
+          catalogItemId,
+          reason,
+          queuedRetry: shouldQueueRetry,
+        });
+      }
     }
 
     let metadataWarningMessage = '';

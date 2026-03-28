@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { edgeFunctionUrl } from '@/lib/edge-api';
+import { adminApi, type AdminUser } from '@/lib/admin-api';
 import { prepareManagedImageUpload } from '@/lib/image-upload';
 import { uploadManagedStoreAsset } from '@/lib/store-asset-upload';
 import {
@@ -15,6 +16,7 @@ import {
   type StoreCatalogSort,
   type StoreConfigDraft,
   type StoreMarketingBanner,
+  type StorePromotionAudienceType,
   type StorePromotion,
   type TabKey,
   validateStoreBannerFile,
@@ -43,6 +45,9 @@ interface BatchedRequest {
   user_id: string;
   user_profile?: { display_name: string; email: string } | null;
   status: PurchaseRequest['status'];
+  is_refunded?: boolean;
+  refunded_at?: string | null;
+  refunded_by?: string | null;
   payment_channel: string;
   payer_name: string;
   reference_no: string;
@@ -138,7 +143,10 @@ type StorePromotionForm = {
   badge_text: string;
   priority: string;
   is_active: boolean;
+  audience_type: StorePromotionAudienceType;
+  new_user_window_hours: string;
   target_bank_ids: string[];
+  target_user_ids: string[];
 };
 
 const EMPTY_STORE_PROMOTION_FORM: StorePromotionForm = {
@@ -153,7 +161,16 @@ const EMPTY_STORE_PROMOTION_FORM: StorePromotionForm = {
   badge_text: '',
   priority: '100',
   is_active: true,
+  audience_type: 'all',
+  new_user_window_hours: '168',
   target_bank_ids: [],
+  target_user_ids: [],
+};
+
+type PromotionUserOption = {
+  id: string;
+  label: string;
+  email: string | null;
 };
 
 const toDateTimeLocalValue = (value: string | null | undefined): string => {
@@ -162,6 +179,15 @@ const toDateTimeLocalValue = (value: string | null | undefined): string => {
   if (Number.isNaN(parsed.getTime())) return '';
   const adjusted = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60 * 1000);
   return adjusted.toISOString().slice(0, 16);
+};
+
+const formatPromotionUserLabel = (user: AdminUser): string => {
+  const displayName = String(user.display_name || '').trim();
+  const email = String(user.email || '').trim();
+  if (displayName && email && displayName.toLowerCase() !== email.toLowerCase()) {
+    return `${displayName} (${email})`;
+  }
+  return displayName || email || user.id;
 };
 
 export function useAdminAccessStoreManager({
@@ -212,6 +238,7 @@ export function useAdminAccessStoreManager({
   const [storeCatalogSort, setStoreCatalogSort] = React.useState<StoreCatalogSort>('pinned_first');
   const [storePromotionForm, setStorePromotionForm] = React.useState(EMPTY_STORE_PROMOTION_FORM);
   const [editingPromotionId, setEditingPromotionId] = React.useState<string | null>(null);
+  const [promotionUserOptions, setPromotionUserOptions] = React.useState<PromotionUserOption[]>([]);
 
   const storeAuthFetch = React.useCallback(async (url: string, options: RequestInit = {}) => {
     const normalized = url.replace(/^\/api\//, '');
@@ -322,6 +349,29 @@ export function useAdminAccessStoreManager({
       setStoreLoading(false);
     }
   }, [pushNotice, storeAuthFetch]);
+
+  const loadPromotionUsers = React.useCallback(async () => {
+    try {
+      const response = await adminApi.listUsers({
+        page: 1,
+        perPage: 1000,
+        includeAdmins: false,
+        sortBy: 'display_name',
+        sortDir: 'asc',
+      });
+      const nextOptions = Array.isArray(response.users)
+        ? response.users.map((user) => ({
+          id: user.id,
+          label: formatPromotionUserLabel(user),
+          email: user.email || null,
+        }))
+        : [];
+      setPromotionUserOptions(nextOptions);
+    } catch {
+      pushNotice({ variant: 'error', message: 'Could not load user list for promotion targeting.' });
+      setPromotionUserOptions([]);
+    }
+  }, [pushNotice]);
 
   const loadStoreConfig = React.useCallback(async () => {
     setStoreLoading(true);
@@ -457,11 +507,12 @@ export function useAdminAccessStoreManager({
     if (tab === 'store_promotions') {
       void loadStoreCatalog();
       void loadStorePromotions();
+      void loadPromotionUsers();
     }
     if (tab === 'store_catalog' || tab === 'store_config') void loadStoreConfig();
-  }, [isAdmin, loadStoreCatalog, loadStoreConfig, loadStorePromotions, loadStoreRequests, open, tab]);
+  }, [isAdmin, loadPromotionUsers, loadStoreCatalog, loadStoreConfig, loadStorePromotions, loadStoreRequests, open, tab]);
 
-  const handleStoreRequestAction = React.useCallback(async (id: string, action: 'approve' | 'reject', rejectionMessage?: string) => {
+  const handleStoreRequestAction = React.useCallback(async (id: string, action: 'approve' | 'reject' | 'refund', rejectionMessage?: string) => {
     setStoreLoading(true);
     try {
       const body: Record<string, any> = { action };
@@ -473,7 +524,9 @@ export function useAdminAccessStoreManager({
       });
       if (res.ok) {
         const data = await res.json().catch(() => ({} as any));
-        if (data?.decision_email_status === 'failed') {
+        if (action === 'refund') {
+          pushNotice({ variant: 'success', message: 'Request refunded from revenue. User access stays active.' });
+        } else if (data?.decision_email_status === 'failed') {
           pushNotice({
             variant: 'info',
             message: data?.decision_email_error
@@ -570,11 +623,18 @@ export function useAdminAccessStoreManager({
       badge_text: promotion.badge_text || '',
       priority: String(promotion.priority ?? 100),
       is_active: Boolean(promotion.is_active),
+      audience_type: promotion.audience_type || 'all',
+      new_user_window_hours: String(promotion.new_user_window_hours ?? 168),
       target_bank_ids: [...(promotion.target_bank_ids || [])],
+      target_user_ids: [...(promotion.target_user_ids || [])],
     });
   }, []);
 
   const persistStorePromotion = React.useCallback(async () => {
+    const audienceType = storePromotionForm.audience_type;
+    const newUserWindowHours = storePromotionForm.new_user_window_hours.trim()
+      ? Number(storePromotionForm.new_user_window_hours)
+      : null;
     const payload = {
       name: storePromotionForm.name.trim(),
       description: storePromotionForm.description.trim() || null,
@@ -587,7 +647,10 @@ export function useAdminAccessStoreManager({
       badge_text: storePromotionForm.badge_text.trim() || null,
       priority: Number(storePromotionForm.priority),
       is_active: Boolean(storePromotionForm.is_active),
+      audience_type: audienceType,
+      new_user_window_hours: audienceType === 'new_users_window' ? newUserWindowHours : null,
       target_bank_ids: storePromotionForm.target_bank_ids,
+      target_user_ids: audienceType === 'specific_users' ? storePromotionForm.target_user_ids : [],
     };
     if (!payload.name) {
       pushNotice({ variant: 'error', message: 'Promotion name is required.' });
@@ -607,6 +670,14 @@ export function useAdminAccessStoreManager({
     }
     if (payload.target_bank_ids.length === 0) {
       pushNotice({ variant: 'error', message: 'Select at least one target bank.' });
+      return false;
+    }
+    if (payload.audience_type === 'specific_users' && payload.target_user_ids.length === 0) {
+      pushNotice({ variant: 'error', message: 'Select at least one user for a specific-user promotion.' });
+      return false;
+    }
+    if (payload.audience_type === 'new_users_window' && (!Number.isFinite(payload.new_user_window_hours) || Number(payload.new_user_window_hours) <= 0)) {
+      pushNotice({ variant: 'error', message: 'Set a valid new-user window in hours.' });
       return false;
     }
 
@@ -1321,6 +1392,7 @@ export function useAdminAccessStoreManager({
     const result: BatchedRequest[] = [];
     batchMap.forEach((requests) => {
       const first = requests[0];
+      const refundedRequest = requests.find((request) => Boolean(request.is_refunded));
       const bankItems = requests.map(getItemMeta);
       const hasTbdAmount = bankItems.some((item) => item.isPaid && item.pricePhp === null);
       const totalAmountPhp = bankItems.reduce((sum, item) => sum + (item.isPaid ? (item.pricePhp ?? 0) : 0), 0);
@@ -1332,6 +1404,9 @@ export function useAdminAccessStoreManager({
         user_id: first.user_id,
         user_profile: first.user_profile,
         status: first.status,
+        is_refunded: Boolean(refundedRequest),
+        refunded_at: refundedRequest?.refunded_at || null,
+        refunded_by: refundedRequest?.refunded_by || null,
         payment_channel: first.payment_channel,
         payer_name: first.payer_name || '',
         reference_no: first.reference_no || '',
@@ -1367,6 +1442,9 @@ export function useAdminAccessStoreManager({
         user_id: request.user_id,
         user_profile: request.user_profile,
         status: request.status,
+        is_refunded: Boolean(request.is_refunded),
+        refunded_at: request.refunded_at || null,
+        refunded_by: request.refunded_by || null,
         payment_channel: request.payment_channel,
         payer_name: request.payer_name || '',
         reference_no: request.reference_no || '',
@@ -1614,6 +1692,7 @@ export function useAdminAccessStoreManager({
     pagedDrafts,
     pagedRequests,
     reqTotalPages,
+    promotionUserOptions,
     resetStoreCatalogFilters,
     resetBannerDraft,
     resetStorePromotionForm,

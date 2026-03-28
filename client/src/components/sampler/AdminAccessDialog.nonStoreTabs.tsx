@@ -507,6 +507,12 @@ function HomeTab({
         <span>Last refresh: {homeLastRefresh ? new Date(homeLastRefresh).toLocaleString() : '-'}</span>
         <span className="mx-2">|</span>
         <span>Time basis: {homeData?.meta?.timeBasis || 'UTC'}</span>
+        {homeData?.meta?.activeTodayTimeBasis ? (
+          <>
+            <span className="mx-2">|</span>
+            <span>Active Today: {homeData.meta.activeTodayTimeBasis}</span>
+          </>
+        ) : null}
         {homeData?.meta?.sampled ? (
           <>
             <span className="mx-2">|</span>

@@ -333,6 +333,9 @@ export interface PurchaseRequest {
   user_id: string;
   batch_id?: string;
   status: 'pending' | 'approved' | 'rejected';
+  is_refunded?: boolean;
+  refunded_at?: string | null;
+  refunded_by?: string | null;
   payment_channel: string;
   payer_name: string;
   reference_no: string;
@@ -381,6 +384,8 @@ export interface StorePromotionTargetLabel {
   label: string;
 }
 
+export type StorePromotionAudienceType = 'all' | 'specific_users' | 'new_users_window';
+
 export interface StorePromotion {
   id: string;
   name: string;
@@ -395,8 +400,11 @@ export interface StorePromotion {
   priority: number;
   is_active: boolean;
   status: 'inactive' | 'scheduled' | 'active' | 'expired';
+  audience_type: StorePromotionAudienceType;
+  new_user_window_hours?: number | null;
   target_bank_ids: string[];
   target_catalog_item_ids: string[];
+  target_user_ids: string[];
   target_labels: StorePromotionTargetLabel[];
 }
 

@@ -167,6 +167,7 @@ export function AdminAccessDialog({
     newBannerSortOrder,
     pagedDrafts,
     pagedRequests,
+    promotionUserOptions,
     reqTotalPages,
     resetStoreCatalogFilters,
     resetBannerDraft,
@@ -1110,7 +1111,7 @@ export function AdminAccessDialog({
 
   const handleAccountRequestAction = async (
     id: string,
-    action: 'approve' | 'approve_assisted' | 'reject',
+    action: 'approve' | 'approve_assisted' | 'reject' | 'refund',
     rejectionMessage?: string,
     temporaryPassword?: string
   ) => {
@@ -1126,6 +1127,8 @@ export function AdminAccessDialog({
           variant: 'info',
           message: 'Account approved without sending email. The user keeps their submitted password.'
         });
+      } else if (action === 'refund') {
+        pushNotice({ variant: 'success', message: 'Account request refunded from revenue. User account stays active.' });
       } else if (action === 'approve' && result.decision_email_status === 'failed') {
         const fallbackMsg = result.decision_email_error
           ? `Account approved. Email was not sent (${result.decision_email_error}). User can log in with submitted password.`
@@ -2087,10 +2090,11 @@ export function AdminAccessDialog({
                     }}
                     onRefresh={() => void loadAccountRegistrationRequests()}
                     onPageChange={setAccountReqPage}
-                    onApprove={(id) => void handleAccountRequestAction(id, 'approve')}
-                    onAssist={(id) => setAccountReqToAssist({ id })}
+                  onApprove={(id) => void handleAccountRequestAction(id, 'approve')}
+                  onAssist={(id) => setAccountReqToAssist({ id })}
                   onReject={(id) => setAccountReqToReject({ id, message: '' })}
                   onRetryEmail={(id) => void handleAccountRequestRetryEmail(id)}
+                  onRefund={(id) => handleAccountRequestAction(id, 'refund')}
                 />
               )}
 
@@ -2195,11 +2199,12 @@ export function AdminAccessDialog({
                     onRefresh={() => void loadStoreRequests()}
                     onPageChange={setStoreReqPage}
                     onToggleExpanded={(id) => setExpandedStoreRequestId((prev) => prev === id ? null : id)}
-                    onApprove={(id) => {
+                  onApprove={(id) => {
                     void handleStoreRequestAction(id, 'approve');
                   }}
                   onReject={(id) => setStoreRequestToReject({ id, message: '' })}
                   onRetryEmail={(id) => void handleStoreRequestRetryEmail(id)}
+                  onRefund={(id) => handleStoreRequestAction(id, 'refund')}
                 />
               )}
 
@@ -2267,6 +2272,7 @@ export function AdminAccessDialog({
                   totalPages={storePromotionsTotalPages}
                   stats={storePromotionStats}
                   catalogDrafts={storeDrafts}
+                  promotionUserOptions={promotionUserOptions}
                   editingPromotionId={editingPromotionId}
                   form={storePromotionForm}
                   onFormChange={setStorePromotionForm}

@@ -20,6 +20,7 @@ import type {
   RequestStatusFilter,
   StoreConfigDraft,
   StoreMarketingBanner,
+  StorePromotionAudienceType,
   StorePromotion,
   StoreCatalogSort
 } from './AdminAccessDialog.shared';
@@ -55,6 +56,7 @@ interface AccountRequestsTabProps {
   onAssist: (id: string) => void;
   onReject: (id: string) => void;
   onRetryEmail: (id: string) => void;
+  onRefund: (id: string) => Promise<void>;
 }
 
 interface StoreRequestItem {
@@ -71,6 +73,9 @@ interface StoreRequestGroup {
   user_id: string;
   user_profile?: { display_name: string; email: string } | null;
   status: 'pending' | 'approved' | 'rejected';
+  is_refunded?: boolean;
+  refunded_at?: string | null;
+  refunded_by?: string | null;
   payment_channel: string;
   payer_name: string;
   reference_no: string;
@@ -126,6 +131,7 @@ interface StoreRequestsTabProps {
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onRetryEmail: (id: string) => void;
+  onRefund: (id: string) => Promise<void>;
 }
 
 interface InstallerRequestsTabProps {
@@ -243,6 +249,7 @@ interface StorePromotionsTabProps {
   totalPages: number;
   stats: { total: number; active: number; scheduled: number; expired: number; inactive: number };
   catalogDrafts: CatalogDraft[];
+  promotionUserOptions: Array<{ id: string; label: string; email: string | null }>;
   editingPromotionId: string | null;
   form: {
     name: string;
@@ -256,7 +263,10 @@ interface StorePromotionsTabProps {
     badge_text: string;
     priority: string;
     is_active: boolean;
+    audience_type: StorePromotionAudienceType;
+    new_user_window_hours: string;
     target_bank_ids: string[];
+    target_user_ids: string[];
   };
   onFormChange: (next: {
     name: string;
@@ -270,7 +280,10 @@ interface StorePromotionsTabProps {
     badge_text: string;
     priority: string;
     is_active: boolean;
+    audience_type: StorePromotionAudienceType;
+    new_user_window_hours: string;
     target_bank_ids: string[];
+    target_user_ids: string[];
   }) => void;
   onPageChange: (page: number) => void;
   onEdit: (promotion: StorePromotion) => void;
@@ -341,6 +354,35 @@ const formatAutomationLabel = (value: string | null | undefined): string => {
   const normalized = String(value || '').trim();
   if (!normalized) return '-';
   return normalized.replace(/_/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+};
+
+const formatPromotionAudienceShortLabel = (promotion: StorePromotion, userLabelById: Map<string, string>): string => {
+  if (promotion.audience_type === 'specific_users') {
+    const labels = (promotion.target_user_ids || []).map((id) => userLabelById.get(id)).filter(Boolean) as string[];
+    if (labels.length === 0) return 'Specific users';
+    if (labels.length === 1) return `User: ${labels[0]}`;
+    if (labels.length === 2) return `Users: ${labels[0]}, ${labels[1]}`;
+    return `Users: ${labels[0]}, ${labels[1]} +${labels.length - 2}`;
+  }
+  if (promotion.audience_type === 'new_users_window') {
+    const hours = Number(promotion.new_user_window_hours || 0);
+    if (hours > 0 && hours % 24 === 0) {
+      const days = hours / 24;
+      return days === 1 ? 'New users 24h' : `New users ${days}d`;
+    }
+    return hours > 0 ? `New users ${hours}h` : 'New users';
+  }
+  return 'All users';
+};
+
+const formatPromotionWindowLabel = (hoursText: string): string => {
+  const hours = Number(hoursText || 0);
+  if (!Number.isFinite(hours) || hours <= 0) return 'Set a window in hours.';
+  if (hours % 24 === 0) {
+    const days = hours / 24;
+    return days === 1 ? 'Eligible for 24 hours after approval.' : `Eligible for ${days} days after approval.`;
+  }
+  return `Eligible for ${hours} hours after approval.`;
 };
 
 const formatOcrErrorLabel = (value: string | null | undefined): string => {
@@ -1303,8 +1345,10 @@ export function AccountRequestsTab({
   onAssist,
   onReject,
   onRetryEmail,
+  onRefund,
 }: AccountRequestsTabProps) {
   const [selectedRequest, setSelectedRequest] = React.useState<AdminAccountRegistrationRequest | null>(null);
+  const [refundRequest, setRefundRequest] = React.useState<AdminAccountRegistrationRequest | null>(null);
   return (
       <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
         <div className="flex flex-wrap gap-2 items-center">
@@ -1384,6 +1428,7 @@ export function AccountRequestsTab({
                       {!suppressOcrDetails && req.automation_result && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automation_result)} tone="auto" />}
                       {!suppressOcrDetails && req.ocr_status && req.ocr_status !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocr_status)} tone="ocr" />}
                       {req.status !== 'pending' && <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />}
+                      {req.is_refunded && <RequestSummaryChip theme={theme} label="Refund" value="Refunded" tone="ocr" />}
                     </div>
                     {req.status === 'rejected' && req.rejection_message && (
                       <div className={`mt-2 text-[11px] ${theme === 'dark' ? 'text-red-300/80' : 'text-red-600'}`} title={req.rejection_message}>
@@ -1448,6 +1493,7 @@ export function AccountRequestsTab({
                                 <CopyableValue value={req.id} label="account request id" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
                               </div>
                               {req.reviewed_at && <div className="sm:col-span-2"><span className="opacity-70">Reviewed:</span> {new Date(req.reviewed_at).toLocaleString()}{req.reviewed_by ? ` by ${req.reviewed_by.slice(0, 8)}...` : ''}</div>}
+                              {req.is_refunded && <div className="sm:col-span-2"><span className="opacity-70">Refunded:</span> {req.refunded_at ? new Date(req.refunded_at).toLocaleString() : '-'}{req.refunded_by ? ` by ${req.refunded_by.slice(0, 8)}...` : ''}</div>}
                               {req.approved_auth_user_id && (
                                 <div className="sm:col-span-2">
                                   <span className="opacity-70">Approved User:</span>{' '}
@@ -1507,6 +1553,14 @@ export function AccountRequestsTab({
                           </>
                         ) : (
                           <>
+                            {req.status === 'approved' && !req.is_refunded && (
+                              <Button
+                                variant="destructive"
+                                onClick={() => setRefundRequest(req)}
+                              >
+                                Refund
+                              </Button>
+                            )}
                             {req.decision_email_status !== 'sent' && (
                               <Button variant="outline" onClick={() => onRetryEmail(req.id)}>
                                 Retry Email
@@ -1524,6 +1578,20 @@ export function AccountRequestsTab({
               ) : null}
             </DialogContent>
           </Dialog>
+          <ConfirmationDialog
+            open={refundRequest !== null}
+            onOpenChange={(open) => { if (!open) setRefundRequest(null); }}
+            title="Refund Request"
+            description="This only deducts the payment from revenue. The user account and existing access stay active."
+            confirmText="Confirm Refund"
+            variant="destructive"
+            onConfirm={async () => {
+              if (!refundRequest) return;
+              await onRefund(refundRequest.id);
+              setSelectedRequest(null);
+              setRefundRequest(null);
+            }}
+          />
         </>
       )}
     </div>
@@ -1561,8 +1629,10 @@ export function StoreRequestsTab({
   onApprove,
   onReject,
   onRetryEmail,
+  onRefund,
 }: StoreRequestsTabProps) {
   const [selectedRequest, setSelectedRequest] = React.useState<StoreRequestGroup | null>(null);
+  const [refundRequest, setRefundRequest] = React.useState<StoreRequestGroup | null>(null);
   return (
     <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
         <div className="flex flex-wrap gap-2 items-center">
@@ -1641,6 +1711,7 @@ export function StoreRequestsTab({
                       {!suppressOcrDetails && req.automation_result && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automation_result)} tone="auto" />}
                       {!suppressOcrDetails && req.ocr_status && req.ocr_status !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocr_status)} tone="ocr" />}
                       {req.status !== 'pending' && <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />}
+                      {req.is_refunded && <RequestSummaryChip theme={theme} label="Refund" value="Refunded" tone="ocr" />}
                     </div>
                     {req.status === 'rejected' && req.rejection_message && (
                       <div className={`mt-2 text-[11px] ${theme === 'dark' ? 'text-red-300/80' : 'text-red-600'}`} title={req.rejection_message}>
@@ -1695,9 +1766,10 @@ export function StoreRequestsTab({
                               <div className={`grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
                                 <div><span className="opacity-70">Channel:</span> {req.payment_channel}</div>
                                 <div><span className="opacity-70">Amount:</span> {req.hasTbdAmount ? 'TBD' : `PHP ${req.totalAmountPhp.toLocaleString()}`}</div>
-                                <div><span className="opacity-70">Payer:</span> {req.payer_name || '-'}</div>
-                                <div><span className="opacity-70">Submitted:</span> {new Date(req.created_at).toLocaleString()}</div>
-                                <div className="sm:col-span-2">
+                              <div><span className="opacity-70">Payer:</span> {req.payer_name || '-'}</div>
+                              <div><span className="opacity-70">Submitted:</span> {new Date(req.created_at).toLocaleString()}</div>
+                              {req.is_refunded && <div className="sm:col-span-2"><span className="opacity-70">Refunded:</span> {req.refunded_at ? new Date(req.refunded_at).toLocaleString() : '-'}{req.refunded_by ? ` by ${req.refunded_by.slice(0, 8)}...` : ''}</div>}
+                              <div className="sm:col-span-2">
                                   <span className="opacity-70">Reference:</span>{' '}
                                   <CopyableValue value={req.reference_no} label="store request reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
                                 </div>
@@ -1774,6 +1846,11 @@ export function StoreRequestsTab({
                           </>
                         ) : (
                           <>
+                            {req.status === 'approved' && !req.is_refunded && (
+                              <Button variant="destructive" onClick={() => setRefundRequest(req)}>
+                                Refund
+                              </Button>
+                            )}
                             {req.decision_email_status !== 'sent' && (
                               <Button variant="outline" onClick={() => onRetryEmail(req.id)}>
                                 Retry Email
@@ -1791,6 +1868,20 @@ export function StoreRequestsTab({
               ) : null}
             </DialogContent>
           </Dialog>
+          <ConfirmationDialog
+            open={refundRequest !== null}
+            onOpenChange={(open) => { if (!open) setRefundRequest(null); }}
+            title="Refund Store Request"
+            description="This only deducts this payment from revenue. The user keeps their granted banks."
+            confirmText="Confirm Refund"
+            variant="destructive"
+            onConfirm={async () => {
+              if (!refundRequest) return;
+              await onRefund(refundRequest.id);
+              setSelectedRequest(null);
+              setRefundRequest(null);
+            }}
+          />
         </>
       )}
     </div>
@@ -1823,6 +1914,7 @@ export function InstallerRequestsTab({
     item: null,
     reason: '',
   });
+  const [refundRequest, setRefundRequest] = React.useState<AdminInstallerPurchaseRequestGroup | null>(null);
   const debouncedSearch = useDebouncedValue(search, 350);
 
   React.useEffect(() => {
@@ -1883,6 +1975,21 @@ export function InstallerRequestsTab({
       await loadRequests();
     } catch (error) {
       pushNotice({ variant: 'error', message: error instanceof Error ? error.message : 'Failed to reject installer request.' });
+    } finally {
+      setActionKey('');
+    }
+  }, [loadRequests, pushNotice]);
+
+  const handleRefund = React.useCallback(async (item: AdminInstallerPurchaseRequestGroup) => {
+    setActionKey(`refund:${item.id}`);
+    try {
+      await adminApi.installerPurchaseRequestAction(item.id, { action: 'refund' });
+      pushNotice({ variant: 'success', message: `${item.receiptReference || item.email} refunded from revenue.` });
+      setRefundRequest(null);
+      setSelectedRequest((current) => current?.id === item.id ? null : current);
+      await loadRequests();
+    } catch (error) {
+      pushNotice({ variant: 'error', message: error instanceof Error ? error.message : 'Failed to refund installer request.' });
     } finally {
       setActionKey('');
     }
@@ -2006,6 +2113,7 @@ export function InstallerRequestsTab({
                           {!suppressOcrDetails && req.automationResult && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automationResult)} tone="auto" />}
                           {!suppressOcrDetails && req.ocrStatus && req.ocrStatus !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocrStatus)} tone="ocr" />}
                           <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />
+                          {req.isRefunded && <RequestSummaryChip theme={theme} label="Refund" value="Refunded" tone="ocr" />}
                         </div>
                       </div>
                     </div>
@@ -2018,6 +2126,7 @@ export function InstallerRequestsTab({
                             <div><span className="opacity-70">Amount:</span> {req.hasTbdAmount ? 'TBD' : `PHP ${Number(req.totalAmountPhp || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</div>
                             <div><span className="opacity-70">Payer:</span> {req.payerName || '-'}</div>
                             <div><span className="opacity-70">Submitted:</span> {new Date(req.createdAt).toLocaleString()}</div>
+                            {req.isRefunded && <div className="sm:col-span-2"><span className="opacity-70">Refunded:</span> {req.refundedAt ? new Date(req.refundedAt).toLocaleString() : '-'}{req.refundedBy ? ` by ${req.refundedBy.slice(0, 8)}...` : ''}</div>}
                             <div className="sm:col-span-2"><span className="opacity-70">Receipt Ref:</span> <CopyableValue value={req.receiptReference} label="installer receipt reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" /></div>
                             <div className="sm:col-span-2"><span className="opacity-70">Payment Ref:</span> <CopyableValue value={req.referenceNo || req.ocrReferenceNo} label="installer payment reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" /></div>
                             <div className="sm:col-span-2"><span className="opacity-70">Request ID:</span> <CopyableValue value={req.id} label="installer request id" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" /></div>
@@ -2087,9 +2196,16 @@ export function InstallerRequestsTab({
                         </Button>
                       </>
                     ) : (
-                      <Button variant="outline" onClick={() => setSelectedRequest(null)}>
-                        Close
-                      </Button>
+                      <>
+                        {req.status === 'approved' && !req.isRefunded && (
+                          <Button variant="destructive" disabled={actionKey === `refund:${req.id}`} onClick={() => setRefundRequest(req)}>
+                            Refund
+                          </Button>
+                        )}
+                        <Button variant="outline" onClick={() => setSelectedRequest(null)}>
+                          Close
+                        </Button>
+                      </>
                     )}
                   </DialogFooter>
                 </>
@@ -2127,6 +2243,18 @@ export function InstallerRequestsTab({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ConfirmationDialog
+        open={refundRequest !== null}
+        onOpenChange={(open) => { if (!open) setRefundRequest(null); }}
+        title="Refund Installer Request"
+        description="This only deducts this payment from revenue. The user keeps their issued license and download access."
+        confirmText="Confirm Refund"
+        variant="destructive"
+        onConfirm={async () => {
+          if (!refundRequest) return;
+          await handleRefund(refundRequest);
+        }}
+      />
     </div>
   );
 }
@@ -2613,6 +2741,7 @@ export function StorePromotionsTab({
   totalPages,
   stats,
   catalogDrafts,
+  promotionUserOptions,
   editingPromotionId,
   form,
   onFormChange,
@@ -2633,6 +2762,10 @@ export function StorePromotionsTab({
     });
     return Array.from(byId.entries()).map(([id, label]) => ({ id, label })).sort((a, b) => a.label.localeCompare(b.label));
   }, [catalogDrafts]);
+  const userLabelById = React.useMemo(
+    () => new Map(promotionUserOptions.map((user) => [user.id, user.label])),
+    [promotionUserOptions],
+  );
   const selectedBankCount = form.target_bank_ids.length;
   const isFlashSale = form.promotion_type === 'flash_sale';
   const mutedToneClass = isDark ? 'text-gray-400' : 'text-gray-500';
@@ -2670,6 +2803,8 @@ export function StorePromotionsTab({
       totalPages={totalPages}
       stats={stats}
       bankOptions={bankOptions}
+      promotionUserOptions={promotionUserOptions}
+      userLabelById={userLabelById}
       editingPromotionId={editingPromotionId}
       form={form}
       onFormChange={onFormChange}
@@ -2870,6 +3005,8 @@ function StorePromotionsSurface({
   totalPages,
   stats,
   bankOptions,
+  promotionUserOptions,
+  userLabelById,
   editingPromotionId,
   form,
   onFormChange,
@@ -2892,6 +3029,8 @@ function StorePromotionsSurface({
   totalPages: number;
   stats: { total: number; active: number; scheduled: number; expired: number; inactive: number };
   bankOptions: Array<{ id: string; label: string }>;
+  promotionUserOptions: Array<{ id: string; label: string; email: string | null }>;
+  userLabelById: Map<string, string>;
   editingPromotionId: string | null;
   form: StorePromotionsTabProps['form'];
   onFormChange: StorePromotionsTabProps['onFormChange'];
@@ -2908,11 +3047,23 @@ function StorePromotionsSurface({
 }) {
   const isDark = theme === 'dark';
   const selectedBankCount = form.target_bank_ids.length;
+  const selectedUserCount = form.target_user_ids.length;
   const isFlashSale = form.promotion_type === 'flash_sale';
+  const isSpecificUsers = form.audience_type === 'specific_users';
+  const isNewUsersWindow = form.audience_type === 'new_users_window';
   const mutedToneClass = isDark ? 'text-gray-400' : 'text-gray-500';
   const selectedModeToneClass = isFlashSale
     ? (isDark ? 'border-rose-500/40 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700')
     : (isDark ? 'border-sky-500/35 bg-sky-500/10 text-sky-100' : 'border-sky-200 bg-sky-50 text-sky-700');
+  const [userSearch, setUserSearch] = React.useState('');
+  const filteredPromotionUserOptions = React.useMemo(() => {
+    const query = userSearch.trim().toLowerCase();
+    if (!query) return promotionUserOptions;
+    return promotionUserOptions.filter((user) => user.label.toLowerCase().includes(query) || String(user.email || '').toLowerCase().includes(query));
+  }, [promotionUserOptions, userSearch]);
+  React.useEffect(() => {
+    if (!editorOpen) setUserSearch('');
+  }, [editorOpen]);
 
   return (
     <>
@@ -2989,6 +3140,13 @@ function StorePromotionsSurface({
                           : (isDark ? 'bg-sky-500/20 text-sky-200' : 'bg-sky-100 text-sky-700')}`}>
                           {promotion.promotion_type === 'flash_sale' ? 'Flash Sale' : 'Standard'}
                         </span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${isDark ? 'bg-violet-500/20 text-violet-200' : 'bg-violet-100 text-violet-700'}`}>
+                          {promotion.audience_type === 'all'
+                            ? 'All Users'
+                            : promotion.audience_type === 'specific_users'
+                              ? 'Specific Users'
+                              : 'New Users'}
+                        </span>
                         {!promotion.is_active && (
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'}`}>
                             Disabled
@@ -3012,9 +3170,12 @@ function StorePromotionsSurface({
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
+                    <span className={`px-2 py-0.5 rounded border text-[11px] ${isDark ? 'border-violet-700/50 text-violet-200' : 'border-violet-300 text-violet-700'}`}>
+                      Audience: {formatPromotionAudienceShortLabel(promotion, userLabelById)}
+                    </span>
                     {(promotion.target_labels || []).map((target) => (
                       <span key={`${target.type}-${target.id}`} className={`px-2 py-0.5 rounded border text-[11px] ${isDark ? 'border-gray-700 text-gray-300' : 'border-gray-300 text-gray-700'}`}>
-                        Bank: {target.label}
+                        {target.type === 'catalog' ? 'Item' : 'Bank'}: {target.label}
                       </span>
                     ))}
                   </div>
@@ -3125,6 +3286,124 @@ function StorePromotionsSurface({
                 <Label>Priority</Label>
                 <Input type="number" min={0} step="1" value={form.priority} onChange={(event) => onFormChange({ ...form, priority: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
               </div>
+            </div>
+
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <div className="text-sm font-semibold">Audience</div>
+                  <div className={`text-xs ${mutedToneClass}`}>Choose who can see and use this promotion once the bank target matches.</div>
+                </div>
+                <div className={`text-xs font-semibold ${isDark ? 'text-violet-200' : 'text-violet-700'}`}>
+                  {form.audience_type === 'all'
+                    ? 'All users'
+                    : form.audience_type === 'specific_users'
+                      ? `${form.target_user_ids.length} specific user${form.target_user_ids.length === 1 ? '' : 's'}`
+                      : formatPromotionWindowLabel(form.new_user_window_hours)}
+                </div>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-3">
+                {([
+                  { key: 'all', title: 'All Users', description: 'Default audience for every eligible signed-in user.' },
+                  { key: 'specific_users', title: 'Specific Users', description: 'Only selected accounts can see and use this promotion.' },
+                  { key: 'new_users_window', title: 'New Users', description: 'Auto-expires per user after the approval-age window ends.' },
+                ] as Array<{ key: StorePromotionAudienceType; title: string; description: string }>).map((option) => {
+                  const selected = form.audience_type === option.key;
+                  return (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => onFormChange({ ...form, audience_type: option.key })}
+                      className={`rounded-xl border p-3 text-left transition-colors ${selected
+                        ? (isDark ? 'border-violet-500/40 bg-violet-500/10 text-violet-100' : 'border-violet-200 bg-violet-50 text-violet-700')
+                        : (isDark ? 'border-gray-700 bg-gray-900/60 hover:border-violet-500/30' : 'border-gray-200 bg-white hover:border-violet-200')}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-semibold">{option.title}</div>
+                        {selected ? <span className="text-[10px] font-bold uppercase">Selected</span> : null}
+                      </div>
+                      <div className={`mt-1 text-xs ${selected ? '' : mutedToneClass}`}>{option.description}</div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {isSpecificUsers ? (
+                <div className="mt-3 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-semibold">Specific Users</div>
+                    <div className={`text-xs ${selectedUserCount > 0 ? (isDark ? 'text-violet-200' : 'text-violet-700') : mutedToneClass}`}>
+                      {selectedUserCount} selected
+                    </div>
+                  </div>
+                  <Input
+                    value={userSearch}
+                    onChange={(event) => setUserSearch(event.target.value)}
+                    placeholder="Search users by name or email"
+                    className={isDark ? 'bg-gray-800 border-gray-700' : ''}
+                  />
+                  <div className={`max-h-44 overflow-auto rounded-md border p-2 space-y-1 ${isDark ? 'border-gray-700 bg-gray-900/60' : 'border-gray-200 bg-white'}`}>
+                    {filteredPromotionUserOptions.length === 0 ? (
+                      <div className="text-xs opacity-70">No matching users.</div>
+                    ) : filteredPromotionUserOptions.map((user) => (
+                      <label key={user.id} className="flex items-center gap-2 text-xs cursor-pointer rounded px-1.5 py-1 hover:bg-black/5 dark:hover:bg-white/5">
+                        <input
+                          type="checkbox"
+                          checked={form.target_user_ids.includes(user.id)}
+                          onChange={(event) => onFormChange({
+                            ...form,
+                            target_user_ids: event.target.checked
+                              ? [...form.target_user_ids, user.id]
+                              : form.target_user_ids.filter((id) => id !== user.id),
+                          })}
+                        />
+                        <span>{user.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {isNewUsersWindow ? (
+                <div className="mt-3 space-y-2">
+                  <div className="text-xs font-semibold">New User Window</div>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { label: '24 Hours', value: '24' },
+                      { label: '7 Days', value: '168' },
+                    ].map((preset) => (
+                      <Button
+                        key={preset.value}
+                        type="button"
+                        variant="outline"
+                        className={form.new_user_window_hours === preset.value
+                          ? (isDark ? 'border-violet-400 bg-violet-500/15 text-violet-100' : 'border-violet-300 bg-violet-50 text-violet-700')
+                          : ''}
+                        onClick={() => onFormChange({ ...form, new_user_window_hours: preset.value })}
+                      >
+                        {preset.label}
+                      </Button>
+                    ))}
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,220px)_1fr] md:items-center">
+                    <div className="space-y-1">
+                      <Label>Window Hours</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        step="1"
+                        value={form.new_user_window_hours}
+                        onChange={(event) => onFormChange({ ...form, new_user_window_hours: event.target.value })}
+                        className={isDark ? 'bg-gray-800 border-gray-700' : ''}
+                      />
+                    </div>
+                    <div className={`text-xs ${mutedToneClass}`}>
+                      {formatPromotionWindowLabel(form.new_user_window_hours)}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>

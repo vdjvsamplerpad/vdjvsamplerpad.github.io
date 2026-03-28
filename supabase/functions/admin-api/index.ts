@@ -54,6 +54,7 @@ const ADMIN_EXPORT_SIGN_TOKEN_RATE_WINDOW_SECONDS = readPositiveInt(
 const DASHBOARD_SERIES_CAP = readPositiveInt(Deno.env.get("ADMIN_DASHBOARD_SERIES_CAP"), 5000);
 const DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT = readPositiveInt(Deno.env.get("ADMIN_DASHBOARD_ACTIVE_SCAN_LIMIT"), 2000);
 const DASHBOARD_MAX_WINDOW_DAYS = Math.max(30, readPositiveInt(Deno.env.get("ADMIN_DASHBOARD_MAX_WINDOW_DAYS"), 730));
+const ASIA_MANILA_UTC_OFFSET_MINUTES = 8 * 60;
 const R2_BUCKET = asString(Deno.env.get("R2_BUCKET"), 200);
 const R2_MAX_ASSET_BYTES = 2 * 1024 * 1024 * 1024 - 1;
 const R2_UPLOAD_URL_TTL_SECONDS = Math.max(
@@ -240,6 +241,12 @@ const toUtcDateKey = (value: Date): string => {
 
 const startOfUtcDay = (value: Date): Date =>
   new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+
+const startOfFixedOffsetDay = (value: Date, offsetMinutes: number): Date => {
+  const shifted = new Date(value.getTime() + (offsetMinutes * 60 * 1000));
+  const shiftedStart = startOfUtcDay(shifted);
+  return new Date(shiftedStart.getTime() - (offsetMinutes * 60 * 1000));
+};
 
 const asFiniteNumber = (value: unknown): number => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -1005,6 +1012,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   const nowIso = now.toISOString();
   const since24hIso = new Date(now.getTime() - (24 * 60 * 60 * 1000)).toISOString();
   const startOfTodayUtc = startOfUtcDay(now);
+  const startOfTodayManila = startOfFixedOffsetDay(now, ASIA_MANILA_UTC_OFFSET_MINUTES);
   const fromDateParam = parseDateOnlyParam(url.searchParams.get("fromDate"));
   const toDateParam = parseDateOnlyParam(url.searchParams.get("toDate"));
 
@@ -1075,7 +1083,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     admin
       .from("active_sessions")
       .select("user_id")
-      .gte("last_seen_at", startOfTodayUtc.toISOString())
+      .gte("last_seen_at", startOfTodayManila.toISOString())
       .order("last_seen_at", { ascending: false })
       .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT * 5),
     admin
@@ -1130,18 +1138,21 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .from("bank_purchase_requests")
       .select("price_php_snapshot")
       .eq("status", "approved")
+      .eq("is_refunded", false)
       .gte("created_at", since24hIso)
       .limit(5000),
     admin
       .from("account_registration_requests")
       .select("account_price_php_snapshot")
       .eq("status", "approved")
+      .eq("is_refunded", false)
       .gte("created_at", since24hIso)
       .limit(5000),
     admin
       .from("installer_purchase_requests")
       .select("receipt_reference, price_php_snapshot")
       .eq("status", "approved")
+      .eq("is_refunded", false)
       .gte("created_at", since24hIso)
       .limit(10000),
     admin
@@ -1153,6 +1164,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .from("installer_purchase_requests")
       .select("receipt_reference, price_php_snapshot")
       .eq("status", "approved")
+      .eq("is_refunded", false)
       .limit(10000),
   ]);
 
@@ -1211,6 +1223,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .from("installer_purchase_requests")
       .select("created_at, receipt_reference, price_php_snapshot")
       .eq("status", "approved")
+      .eq("is_refunded", false)
       .gte("created_at", windowStartIso)
       .lte("created_at", windowEndIso)
       .order("created_at", { ascending: true })
@@ -1472,6 +1485,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     },
     meta: {
       timeBasis: "UTC",
+      activeTodayTimeBasis: "Asia/Manila",
       sampled: trendRows.length >= Math.max(100, Math.min(10000, DASHBOARD_SERIES_CAP)),
       seriesCap: Math.max(100, Math.min(10000, DASHBOARD_SERIES_CAP)),
       rangeStartDate: windowStartDate,

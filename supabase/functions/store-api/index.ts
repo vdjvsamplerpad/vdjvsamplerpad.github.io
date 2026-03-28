@@ -1525,6 +1525,7 @@ const normalizeBannerRotationMs = (value: unknown): number | null => {
 type PromotionType = "standard" | "flash_sale";
 type PromotionDiscountType = "percent" | "fixed";
 type PromotionTargetType = "catalog" | "bank";
+type PromotionAudienceType = "all" | "specific_users" | "new_users_window";
 
 type PromotionRow = {
   id: string;
@@ -1539,6 +1540,8 @@ type PromotionRow = {
   badge_text: string | null;
   priority: number;
   is_active: boolean;
+  audience_type: PromotionAudienceType;
+  new_user_window_hours: number | null;
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;
@@ -1550,6 +1553,12 @@ type PromotionTargetRow = {
   promotion_id: string;
   bank_id: string | null;
   catalog_item_id: string | null;
+};
+
+type PromotionTargetUserRow = {
+  id: string;
+  promotion_id: string;
+  user_id: string;
 };
 
 type ResolvedPromotion = {
@@ -1566,6 +1575,20 @@ const normalizePromotionType = (value: unknown): PromotionType => {
 
 const normalizePromotionDiscountType = (value: unknown): PromotionDiscountType => {
   return String(value || "").trim().toLowerCase() === "fixed" ? "fixed" : "percent";
+};
+
+const normalizePromotionAudienceType = (value: unknown): PromotionAudienceType => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "specific_users") return "specific_users";
+  if (normalized === "new_users_window") return "new_users_window";
+  return "all";
+};
+
+const normalizePromotionNewUserWindowHours = (value: unknown): number | null => {
+  if (value === null || value === "" || typeof value === "undefined") return null;
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 8760) return null;
+  return parsed;
 };
 
 const parseIsoDateTime = (value: unknown): string | null => {
@@ -1589,6 +1612,8 @@ const mapPromotionRow = (row: any): PromotionRow => ({
   badge_text: asString(row?.badge_text, 120) || null,
   priority: Math.max(0, Math.floor(Number(row?.priority || 0))),
   is_active: Boolean(row?.is_active),
+  audience_type: normalizePromotionAudienceType(row?.audience_type),
+  new_user_window_hours: normalizePromotionNewUserWindowHours(row?.new_user_window_hours),
   created_at: parseIsoDateTime(row?.created_at),
   updated_at: parseIsoDateTime(row?.updated_at),
   created_by: asUuid(row?.created_by),
@@ -1600,6 +1625,12 @@ const mapPromotionTargetRow = (row: any): PromotionTargetRow => ({
   promotion_id: asString(row?.promotion_id, 80) || "",
   bank_id: asUuid(row?.bank_id),
   catalog_item_id: asUuid(row?.catalog_item_id),
+});
+
+const mapPromotionTargetUserRow = (row: any): PromotionTargetUserRow => ({
+  id: asString(row?.id, 80) || "",
+  promotion_id: asString(row?.promotion_id, 80) || "",
+  user_id: asUuid(row?.user_id) || "",
 });
 
 const getPromotionLifecycleStatus = (promotion: PromotionRow, nowIso = new Date().toISOString()): "inactive" | "scheduled" | "active" | "expired" => {
@@ -1751,17 +1782,98 @@ const loadPromotionTargetsByPromotionId = async (
   return byPromotionId;
 };
 
+const loadPromotionTargetUsersByPromotionId = async (
+  admin: ReturnType<typeof createServiceClient>,
+  promotionIds: string[],
+): Promise<Map<string, PromotionTargetUserRow[]>> => {
+  const byPromotionId = new Map<string, PromotionTargetUserRow[]>();
+  if (promotionIds.length === 0) return byPromotionId;
+  const { data, error } = await admin
+    .from("store_promotion_target_users")
+    .select("id,promotion_id,user_id")
+    .in("promotion_id", promotionIds);
+  if (error) {
+    if (/store_promotion_target_users/i.test(error.message || "")) return byPromotionId;
+    throw new Error(error.message);
+  }
+  for (const row of data || []) {
+    const mapped = mapPromotionTargetUserRow(row);
+    if (!mapped.promotion_id || !mapped.user_id) continue;
+    const current = byPromotionId.get(mapped.promotion_id) || [];
+    current.push(mapped);
+    byPromotionId.set(mapped.promotion_id, current);
+  }
+  return byPromotionId;
+};
+
+const loadPromotionAudienceActivationIso = async (
+  admin: ReturnType<typeof createServiceClient>,
+  userId: string | null | undefined,
+): Promise<string | null> => {
+  const normalizedUserId = asUuid(userId);
+  if (!normalizedUserId) return null;
+
+  const { data: approvedRequest, error: approvedRequestError } = await admin
+    .from("account_registration_requests")
+    .select("reviewed_at,created_at")
+    .eq("approved_auth_user_id", normalizedUserId)
+    .eq("status", "approved")
+    .order("reviewed_at", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (approvedRequestError && !/account_registration_requests/i.test(approvedRequestError.message || "")) {
+    throw new Error(approvedRequestError.message);
+  }
+  const reviewedAt = parseIsoDateTime(approvedRequest?.reviewed_at);
+  if (reviewedAt) return reviewedAt;
+  const createdAt = parseIsoDateTime(approvedRequest?.created_at);
+  if (createdAt) return createdAt;
+
+  const { data: profileRow, error: profileError } = await admin
+    .from("profiles")
+    .select("created_at")
+    .eq("id", normalizedUserId)
+    .maybeSingle();
+  if (profileError && !/created_at|profiles/i.test(profileError.message || "")) {
+    throw new Error(profileError.message);
+  }
+  return parseIsoDateTime(profileRow?.created_at);
+};
+
+const isPromotionAudienceEligible = (
+  promotion: PromotionRow,
+  promotionTargetUsersByPromotionId: Map<string, PromotionTargetUserRow[]>,
+  userId: string | null | undefined,
+  activationIso: string | null,
+  nowIso: string,
+): boolean => {
+  if (promotion.audience_type === "all") return true;
+  const normalizedUserId = asUuid(userId);
+  if (!normalizedUserId) return false;
+  if (promotion.audience_type === "specific_users") {
+    const targetUsers = promotionTargetUsersByPromotionId.get(promotion.id) || [];
+    return targetUsers.some((row) => row.user_id === normalizedUserId);
+  }
+  const windowHours = promotion.new_user_window_hours;
+  if (!windowHours || !activationIso) return false;
+  const activationMs = Date.parse(activationIso);
+  const nowMs = Date.parse(nowIso);
+  if (!Number.isFinite(activationMs) || !Number.isFinite(nowMs)) return false;
+  return nowMs - activationMs <= windowHours * 60 * 60 * 1000;
+};
+
 const resolvePromotionsForCatalogItems = async (
   admin: ReturnType<typeof createServiceClient>,
   items: any[],
-  options?: { nowIso?: string; includeInactive?: boolean },
+  options?: { nowIso?: string; includeInactive?: boolean; userId?: string | null },
 ): Promise<Map<string, ResolvedPromotion>> => {
   const resolved = new Map<string, ResolvedPromotion>();
   if (!Array.isArray(items) || items.length === 0) return resolved;
   const nowIso = options?.nowIso || new Date().toISOString();
   let query: any = admin
     .from("store_promotions")
-    .select("id,name,description,promotion_type,discount_type,discount_value,starts_at,ends_at,timezone,badge_text,priority,is_active,created_at,updated_at,created_by,updated_by");
+    .select("id,name,description,promotion_type,discount_type,discount_value,starts_at,ends_at,timezone,badge_text,priority,is_active,audience_type,new_user_window_hours,created_at,updated_at,created_by,updated_by");
   if (!options?.includeInactive) {
     query = query.eq("is_active", true).lte("starts_at", nowIso).gt("ends_at", nowIso);
   }
@@ -1773,10 +1885,16 @@ const resolvePromotionsForCatalogItems = async (
   const promotions = (data || []).map(mapPromotionRow);
   if (promotions.length === 0) return resolved;
   const targetsByPromotionId = await loadPromotionTargetsByPromotionId(admin, promotions.map((promotion) => promotion.id));
+  const targetUsersByPromotionId = await loadPromotionTargetUsersByPromotionId(admin, promotions.map((promotion) => promotion.id));
+  const activationIso = await loadPromotionAudienceActivationIso(admin, options?.userId || null);
+  const eligiblePromotions = promotions.filter((promotion) =>
+    isPromotionAudienceEligible(promotion, targetUsersByPromotionId, options?.userId || null, activationIso, nowIso),
+  );
+  if (eligiblePromotions.length === 0) return resolved;
   for (const item of items) {
     const itemId = asString(item?.id, 80);
     if (!itemId) continue;
-    const chosen = resolvePromotionForCatalogItem(item, promotions, targetsByPromotionId, nowIso);
+    const chosen = resolvePromotionForCatalogItem(item, eligiblePromotions, targetsByPromotionId, nowIso);
     if (chosen) resolved.set(itemId, chosen);
   }
   return resolved;
@@ -1790,6 +1908,11 @@ const normalizePromotionTargetLists = (body: any): { bankIds: string[]; catalogI
   return { bankIds, catalogItemIds };
 };
 
+const normalizePromotionTargetUserIds = (body: any): string[] => {
+  const rawUserIds = Array.isArray(body?.target_user_ids) ? body.target_user_ids : body?.targetUserIds;
+  return Array.from(new Set((Array.isArray(rawUserIds) ? rawUserIds : []).map((value) => asUuid(value)).filter(Boolean) as string[]));
+};
+
 const validatePromotionDefinition = async (
   admin: ReturnType<typeof createServiceClient>,
   input: {
@@ -1800,6 +1923,9 @@ const validatePromotionDefinition = async (
     endsAt: string;
     bankIds: string[];
     catalogItemIds: string[];
+    audienceType: PromotionAudienceType;
+    targetUserIds: string[];
+    newUserWindowHours: number | null;
   },
 ): Promise<{ ok: true } | { ok: false; error: string }> => {
   if (!input.startsAt || !input.endsAt) return { ok: false, error: "starts_at and ends_at are required" };
@@ -1812,6 +1938,12 @@ const validatePromotionDefinition = async (
   }
   if (input.bankIds.length === 0 && input.catalogItemIds.length === 0) {
     return { ok: false, error: "Select at least one bank or catalog item target" };
+  }
+  if (input.audienceType === "specific_users" && input.targetUserIds.length === 0) {
+    return { ok: false, error: "Select at least one specific user target" };
+  }
+  if (input.audienceType === "new_users_window" && !input.newUserWindowHours) {
+    return { ok: false, error: "New-user promotions require a valid window in hours" };
   }
 
   const catalogRowsById = new Map<string, any>();
@@ -1877,7 +2009,7 @@ const loadAdminPromotionRows = async (
 ): Promise<{ promotions: PromotionRow[]; targetsByPromotionId: Map<string, PromotionTargetRow[]> }> => {
   const { data, error } = await admin
     .from("store_promotions")
-    .select("id,name,description,promotion_type,discount_type,discount_value,starts_at,ends_at,timezone,badge_text,priority,is_active,created_at,updated_at,created_by,updated_by")
+    .select("id,name,description,promotion_type,discount_type,discount_value,starts_at,ends_at,timezone,badge_text,priority,is_active,audience_type,new_user_window_hours,created_at,updated_at,created_by,updated_by")
     .order("created_at", { ascending: false });
   if (error) {
     if (/store_promotions/i.test(error.message || "")) {
@@ -2249,7 +2381,7 @@ const getStoreCatalog = async (req: Request) => {
     });
   }
 
-  const promotionMap = await resolvePromotionsForCatalogItems(admin, catalogItems || []);
+  const promotionMap = await resolvePromotionsForCatalogItems(admin, catalogItems || [], { userId });
   let items = (catalogItems || [])
     .map((item: any) => {
       const itemId = asString(item?.id, 80) || "";
@@ -2417,8 +2549,8 @@ const normalizeLandingPlatformKey = (value: unknown): LandingPlatformKey | null 
     : null;
 };
 
-const buildInstallerEmailRedirectUrl = (
-  version: InstallerBuyVersionKey,
+const buildLandingEmailRedirectUrl = (
+  version: "V1" | InstallerBuyVersionKey,
   platform: LandingPlatformKey,
   fallbackUrl: string,
 ): string => {
@@ -3017,6 +3149,9 @@ const mapInstallerPurchaseRequestRow = (row: any) => ({
   ocrErrorCode: asString(row?.ocr_error_code, 120) || null,
   decisionSource: asString(row?.decision_source, 40) || null,
   automationResult: asString(row?.automation_result, 120) || null,
+  isRefunded: Boolean(row?.is_refunded),
+  refundedAt: asString(row?.refunded_at, 80) || null,
+  refundedBy: asString(row?.refunded_by, 80) || null,
   createdAt: asString(row?.created_at, 80) || new Date().toISOString(),
 });
 
@@ -3040,6 +3175,7 @@ const groupInstallerPurchaseRequestRows = (rows: any[]) => {
   return Array.from(grouped.entries()).map(([bundleKey, bundleRows]) => {
     const mappedItems = bundleRows.map(mapInstallerPurchaseRequestRow);
     const primary = mappedItems[0];
+    const refundedItem = mappedItems.find((item) => item.isRefunded) || null;
     const totalValues = mappedItems
       .map((item) => item.pricePhpSnapshot)
       .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
@@ -3077,6 +3213,9 @@ const groupInstallerPurchaseRequestRows = (rows: any[]) => {
       ocrStatus: primary.ocrStatus,
       ocrErrorCode: primary.ocrErrorCode,
       decisionSource: primary.decisionSource,
+      isRefunded: Boolean(refundedItem),
+      refundedAt: refundedItem?.refundedAt || null,
+      refundedBy: refundedItem?.refundedBy || null,
       automationResult: primary.automationResult,
       createdAt: primary.createdAt,
       itemCount: mappedItems.length,
@@ -3188,10 +3327,10 @@ const sendInstallerDecisionEmail = async (input: {
         const fallbackUrl = asString(value, 2000) || "";
         const normalizedPlatform = normalizeLandingPlatformKey(platform);
         return normalizedPlatform
-          ? buildInstallerEmailRedirectUrl(version, normalizedPlatform, fallbackUrl)
+          ? buildLandingEmailRedirectUrl(version, normalizedPlatform, fallbackUrl)
           : fallbackUrl;
-      })(),
-    }));
+        })(),
+      }));
 
   const textBody = input.nextStatus === "approved"
     ? [
@@ -3870,7 +4009,7 @@ const listAdminInstallerPurchaseRequestGroups = async (req: Request) => {
 const adminInstallerPurchaseRequestAction = async (requestId: string, body: any, adminUserId: string) => {
   const admin = createServiceClient();
   const action = String(body?.action || "").toLowerCase();
-  if (action !== "approve" && action !== "reject") return badRequest("Invalid action");
+  if (action !== "approve" && action !== "reject" && action !== "refund") return badRequest("Invalid action");
   const rejectionMessage = asString(body?.rejection_message, 1000);
   if (action === "reject" && !rejectionMessage) return badRequest("rejection_message is required");
 
@@ -3881,6 +4020,56 @@ const adminInstallerPurchaseRequestAction = async (requestId: string, body: any,
     .maybeSingle();
   if (requestError) return fail(500, requestError.message);
   if (!requestRow) return fail(404, "Request not found");
+  if (action === "refund") {
+    if (requestRow.status !== "approved") return badRequest("Only approved requests can be refunded");
+    const approvedRows = (await listInstallerPurchaseRequestsByReceiptReference({
+      admin,
+      receiptReference: asString(requestRow?.receipt_reference, 160) || "",
+      email: normalizeEmail(requestRow?.email) || "",
+      version: normalizeInstallerBuyVersion(requestRow?.version) || "V2",
+    })).filter((row: any) => String(row?.status || "") === "approved");
+    if (approvedRows.length === 0) return badRequest("No approved requests found to refund");
+    if (approvedRows.every((row: any) => Boolean(row?.is_refunded))) return badRequest("Request is already refunded");
+    const refundIds = approvedRows
+      .filter((row: any) => !Boolean(row?.is_refunded))
+      .map((row: any) => asString(row?.id, 80) || "")
+      .filter(Boolean);
+    const refundedAtIso = new Date().toISOString();
+    const { error: refundError } = await admin
+      .from("installer_purchase_requests")
+      .update({
+        is_refunded: true,
+        refunded_at: refundedAtIso,
+        refunded_by: adminUserId,
+      })
+      .in("id", refundIds)
+      .eq("status", "approved")
+      .eq("is_refunded", false);
+    if (refundError) return fail(500, refundError.message);
+
+    const summary = buildInstallerPurchaseBatchSummary(approvedRows);
+    await swallowDiscordError(() =>
+      sendDiscordAdminActionEvent({
+        severity: "warning",
+        title: "Admin Refunded Installer Request",
+        description: "An approved installer purchase was marked refunded. License access stays active.",
+        actorUserId: adminUserId,
+        extraFields: [
+          { name: "Receipt Ref", value: summary.receiptReference || "-", inline: false },
+          { name: "Version", value: summary.version, inline: true },
+          { name: "Amount", value: formatPhpCurrency(summary.totalAmount || 0), inline: true },
+        ],
+      })
+    );
+
+    return ok({
+      requestId,
+      status: "approved",
+      refunded: true,
+      refunded_at: refundedAtIso,
+      refunded_by: adminUserId,
+    });
+  }
   if (requestRow.status !== "pending") return badRequest("Request is not pending");
 
   const reviewedAtIso = new Date().toISOString();
@@ -4967,7 +5156,7 @@ const listAdminAccountRegistrationRequests = async (req: Request) => {
   let query: any = admin
     .from("account_registration_requests")
     .select(
-      "id,email,display_name,status,payment_channel,payer_name,reference_no,receipt_reference,notes,proof_path,rejection_message,decision_email_status,decision_email_error,reviewed_by,reviewed_at,approved_auth_user_id,created_at,ocr_reference_no,ocr_payer_name,ocr_amount_php,ocr_recipient_number,ocr_provider,ocr_scanned_at,ocr_status,ocr_error_code,decision_source,automation_result",
+      "id,email,display_name,status,payment_channel,payer_name,reference_no,receipt_reference,notes,proof_path,rejection_message,decision_email_status,decision_email_error,reviewed_by,reviewed_at,approved_auth_user_id,is_refunded,refunded_at,refunded_by,created_at,ocr_reference_no,ocr_payer_name,ocr_amount_php,ocr_recipient_number,ocr_provider,ocr_scanned_at,ocr_status,ocr_error_code,decision_source,automation_result",
       { count: "exact" },
     )
     .order("created_at", { ascending: false });
@@ -5049,7 +5238,9 @@ const listAdminAccountRegistrationRequests = async (req: Request) => {
 const adminAccountRegistrationRequestAction = async (requestId: string, body: any, adminUserId: string) => {
   const admin = createServiceClient();
   const action = String(body?.action || "").toLowerCase();
-  if (action !== "approve" && action !== "approve_assisted" && action !== "reject") return badRequest("Invalid action");
+  if (action !== "approve" && action !== "approve_assisted" && action !== "reject" && action !== "refund") {
+    return badRequest("Invalid action");
+  }
   const rejectionMessage = asString(body?.rejection_message, 1000);
   const temporaryPassword = asString(body?.temporary_password, 200);
   if (action === "reject" && !rejectionMessage) return badRequest("rejection_message is required");
@@ -5064,6 +5255,44 @@ const adminAccountRegistrationRequestAction = async (requestId: string, body: an
     .maybeSingle();
   if (requestError) return fail(500, requestError.message);
   if (!requestRow) return fail(404, "Request not found");
+  if (action === "refund") {
+    if (requestRow.status !== "approved") return badRequest("Only approved requests can be refunded");
+    if (Boolean(requestRow.is_refunded)) return badRequest("Request is already refunded");
+    const refundedAtIso = new Date().toISOString();
+    const { error: refundError } = await admin
+      .from("account_registration_requests")
+      .update({
+        is_refunded: true,
+        refunded_at: refundedAtIso,
+        refunded_by: adminUserId,
+      })
+      .eq("id", requestId)
+      .eq("status", "approved")
+      .eq("is_refunded", false);
+    if (refundError) return fail(500, refundError.message);
+
+    await swallowDiscordError(() =>
+      sendDiscordAdminActionEvent({
+        severity: "warning",
+        title: "Admin Refunded Account Request",
+        description: "An approved account request was marked refunded. Account access stays active.",
+        actorUserId: adminUserId,
+        extraFields: [
+          { name: "Request ID", value: requestId, inline: false },
+          { name: "Email", value: asString(requestRow.email, 320) || "unknown", inline: true },
+          { name: "Amount", value: formatPhpCurrency(asPriceNumber(requestRow.account_price_php_snapshot) || 0), inline: true },
+        ],
+      })
+    );
+
+    return ok({
+      requestId,
+      status: "approved",
+      refunded: true,
+      refunded_at: refundedAtIso,
+      refunded_by: adminUserId,
+    });
+  }
   if (requestRow.status !== "pending") return badRequest("Request is not pending");
 
   const nowIso = new Date().toISOString();
@@ -5321,7 +5550,7 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
 
   const catalogById = new Map<string, any>();
   for (const row of catalogRows || []) catalogById.set(row.id, row);
-  const promotionMap = await resolvePromotionsForCatalogItems(admin, catalogRows || []);
+  const promotionMap = await resolvePromotionsForCatalogItems(admin, catalogRows || [], { userId });
   const enrichedCatalogById = new Map<string, any>();
   for (const row of catalogRows || []) {
     const rowId = asString(row?.id, 80) || "";
@@ -5908,18 +6137,22 @@ const sendAccountApprovalDecisionEmail = async (input: {
   try {
     const landingConfig = await getNormalizedLandingConfigRecord(input.admin);
     const v1Links = landingConfig.downloadLinks.V1;
+    const v1AndroidUrl = buildLandingEmailRedirectUrl("V1", "android", asString(v1Links.android, 2000) || "");
+    const v1IosUrl = buildLandingEmailRedirectUrl("V1", "ios", asString(v1Links.ios, 2000) || "");
+    const v1WindowsUrl = buildLandingEmailRedirectUrl("V1", "windows", asString(v1Links.windows, 2000) || "");
+    const v1MacosUrl = buildLandingEmailRedirectUrl("V1", "macos", asString(v1Links.macos, 2000) || "");
     actionLinks = [
-      { label: "Android Download", url: asString(v1Links.android, 2000) || "" },
-      { label: "Open iOS Guide", url: asString(v1Links.ios, 2000) || "" },
-      { label: "Desktop Download", url: asString(v1Links.windows, 2000) || "" },
-      { label: "Message Us First", url: asString(v1Links.macos, 2000) || "" },
+      { label: "Android Download", url: v1AndroidUrl },
+      { label: "Open iOS Guide", url: v1IosUrl },
+      { label: "Desktop Download", url: v1WindowsUrl },
+      { label: "Message Us First", url: v1MacosUrl },
     ].filter((entry) => Boolean(entry.url));
     platformGuideText = [
       "Download guides/url if download button doesnt work:",
-      `Android: ${v1Links.android || "-"}`,
-      `iOS: ${v1Links.ios || "-"}`,
-      `Desktop: ${v1Links.windows || "-"}`,
-      `macOS: ${v1Links.macos || "-"}`,
+      `Android: ${v1AndroidUrl || "-"}`,
+      `iOS: ${v1IosUrl || "-"}`,
+      `Desktop: ${v1WindowsUrl || "-"}`,
+      `macOS: ${v1MacosUrl || "-"}`,
     ].join("\n");
   } catch {
     // Best-effort extra guidance only.
@@ -6549,12 +6782,12 @@ const listAdminStoreRequests = async (req: Request) => {
   const ocrStatus = String(url.searchParams.get("ocrStatus") || "all").toLowerCase();
   const selectWithSnapshots = `
     id,catalog_item_id,user_id,bank_id,batch_id,status,payment_channel,payer_name,reference_no,receipt_reference,notes,proof_path,rejection_message,decision_email_status,decision_email_error,
-    is_paid_snapshot,price_label_snapshot,price_php_snapshot,created_at,banks ( title ),
+    is_paid_snapshot,price_label_snapshot,price_php_snapshot,is_refunded,refunded_at,refunded_by,created_at,banks ( title ),
     ocr_reference_no,ocr_payer_name,ocr_amount_php,ocr_recipient_number,ocr_provider,ocr_scanned_at,ocr_status,ocr_error_code,decision_source,automation_result
   `;
   const selectWithoutSnapshots = `
     id,catalog_item_id,user_id,bank_id,batch_id,status,payment_channel,payer_name,reference_no,receipt_reference,notes,proof_path,rejection_message,
-    created_at,banks ( title ),ocr_reference_no,ocr_payer_name,ocr_amount_php,ocr_recipient_number,ocr_provider,ocr_scanned_at,ocr_status,ocr_error_code,decision_source,automation_result
+    is_refunded,refunded_at,refunded_by,created_at,banks ( title ),ocr_reference_no,ocr_payer_name,ocr_amount_php,ocr_recipient_number,ocr_provider,ocr_scanned_at,ocr_status,ocr_error_code,decision_source,automation_result
   `;
   let requestQuery: any = admin
     .from("bank_purchase_requests")
@@ -6751,18 +6984,86 @@ const listAdminStoreRequests = async (req: Request) => {
 const adminStoreRequestAction = async (requestId: string, body: any, adminUserId: string) => {
   const admin = createServiceClient();
   const action = String(body?.action || "").toLowerCase();
-  if (action !== "approve" && action !== "reject") return badRequest("Invalid action");
+  if (action !== "approve" && action !== "reject" && action !== "refund") return badRequest("Invalid action");
   const rejectionMessage = action === "reject" ? (asString(body?.rejection_message, 1000) || "") : null;
 
   const { data: requestRow, error: requestError } = await admin
     .from("bank_purchase_requests")
     .select(
-      "id,user_id,bank_id,status,batch_id,payer_name,reference_no,receipt_reference,payment_channel,proof_path,is_paid_snapshot,price_label_snapshot,price_php_snapshot,banks ( title ),ocr_reference_no,ocr_payer_name,ocr_amount_php,ocr_recipient_number,ocr_provider,ocr_scanned_at,ocr_status,ocr_error_code,decision_source,automation_result",
+      "id,user_id,bank_id,status,batch_id,payer_name,reference_no,receipt_reference,payment_channel,proof_path,is_paid_snapshot,price_label_snapshot,price_php_snapshot,is_refunded,refunded_at,refunded_by,banks ( title ),ocr_reference_no,ocr_payer_name,ocr_amount_php,ocr_recipient_number,ocr_provider,ocr_scanned_at,ocr_status,ocr_error_code,decision_source,automation_result",
     )
     .eq("id", requestId)
     .maybeSingle();
   if (requestError) return fail(500, requestError.message);
   if (!requestRow) return fail(404, "Request not found");
+  if (action === "refund") {
+    if (requestRow.status !== "approved") return badRequest("Only approved requests can be refunded");
+    const { data: refundGroupRows, error: refundGroupError } = requestRow.batch_id
+      ? await admin
+        .from("bank_purchase_requests")
+        .select(
+          "id,user_id,bank_id,status,batch_id,payer_name,reference_no,receipt_reference,payment_channel,proof_path,is_paid_snapshot,price_label_snapshot,price_php_snapshot,is_refunded,refunded_at,refunded_by,banks ( title )",
+        )
+        .eq("batch_id", requestRow.batch_id)
+        .eq("status", "approved")
+      : await admin
+        .from("bank_purchase_requests")
+        .select(
+          "id,user_id,bank_id,status,batch_id,payer_name,reference_no,receipt_reference,payment_channel,proof_path,is_paid_snapshot,price_label_snapshot,price_php_snapshot,is_refunded,refunded_at,refunded_by,banks ( title )",
+        )
+        .eq("id", requestId)
+        .eq("status", "approved");
+    if (refundGroupError) return fail(500, refundGroupError.message);
+    const approvedRows = Array.isArray(refundGroupRows) && refundGroupRows.length > 0 ? refundGroupRows : [requestRow];
+    if (approvedRows.every((row: any) => Boolean(row?.is_refunded))) {
+      return badRequest("Request is already refunded");
+    }
+    const refundIds = approvedRows
+      .filter((row: any) => !Boolean(row?.is_refunded))
+      .map((row: any) => asString(row?.id, 80) || "")
+      .filter(Boolean);
+    const refundedAtIso = new Date().toISOString();
+    const { error: refundError } = await admin
+      .from("bank_purchase_requests")
+      .update({
+        is_refunded: true,
+        refunded_at: refundedAtIso,
+        refunded_by: adminUserId,
+      })
+      .in("id", refundIds)
+      .eq("status", "approved")
+      .eq("is_refunded", false);
+    if (refundError) return fail(500, refundError.message);
+
+    const refundAmount = approvedRows.reduce(
+      (sum, row: any) => sum + (asPriceNumber(row?.price_php_snapshot ?? row?.price_label_snapshot) || 0),
+      0,
+    );
+    await swallowDiscordError(() =>
+      sendDiscordAdminActionEvent({
+        severity: "warning",
+        title: "Admin Refunded Store Request",
+        description: "An approved store request was marked refunded. Bank grants stay active.",
+        actorUserId: adminUserId,
+        bankId: asString(requestRow.bank_id, 80) || null,
+        extraFields: [
+          { name: "Batch ID", value: asString(requestRow.batch_id, 80) || "-", inline: true },
+          { name: "Rows", value: String(refundIds.length), inline: true },
+          { name: "Amount", value: formatPhpCurrency(refundAmount), inline: true },
+        ],
+      })
+    );
+
+    return ok({
+      ids: refundIds,
+      requestIds: refundIds,
+      batchId: asString(requestRow.batch_id, 80) || null,
+      status: "approved",
+      refunded: true,
+      refunded_at: refundedAtIso,
+      refunded_by: adminUserId,
+    });
+  }
   if (requestRow.status !== "pending") return badRequest("Request is not pending");
 
   let batchRows: any[] = [requestRow];
@@ -7049,6 +7350,7 @@ const patchAdminStoreCatalog = async (catalogItemId: string, body: any, adminUse
 const listAdminStorePromotions = async () => {
   const admin = createServiceClient();
   const { promotions, targetsByPromotionId } = await loadAdminPromotionRows(admin);
+  const targetUsersByPromotionId = await loadPromotionTargetUsersByPromotionId(admin, promotions.map((promotion) => promotion.id));
   const bankIds = new Set<string>();
   const catalogItemIds = new Set<string>();
   targetsByPromotionId.forEach((targets) => {
@@ -7095,6 +7397,9 @@ const listAdminStorePromotions = async () => {
       const targetCatalogItemIds = Array.from(
         new Set(targets.map((target) => target.catalog_item_id).filter(Boolean) as string[]),
       );
+      const targetUserIds = Array.from(
+        new Set((targetUsersByPromotionId.get(promotion.id) || []).map((target) => target.user_id).filter(Boolean)),
+      );
       const targetLabels = [
         ...targetCatalogItemIds.map((id) => ({ type: "catalog", id, label: catalogLabelById.get(id) || "Unknown Catalog Item" })),
         ...targetBankIds.map((id) => ({ type: "bank", id, label: bankTitleById.get(id) || "Unknown Bank" })),
@@ -7104,6 +7409,7 @@ const listAdminStorePromotions = async () => {
         status: getPromotionLifecycleStatus(promotion, nowIso),
         target_bank_ids: targetBankIds,
         target_catalog_item_ids: targetCatalogItemIds,
+        target_user_ids: targetUserIds,
         target_labels: targetLabels,
       };
     }),
@@ -7125,7 +7431,10 @@ const createAdminStorePromotion = async (body: any, adminUserId: string) => {
   const isActive = Object.prototype.hasOwnProperty.call(body || {}, "is_active")
     ? Boolean(body?.is_active)
     : Boolean(body?.isActive ?? true);
+  const audienceType = normalizePromotionAudienceType(body?.audience_type ?? body?.audienceType);
+  const newUserWindowHours = normalizePromotionNewUserWindowHours(body?.new_user_window_hours ?? body?.newUserWindowHours);
   const targets = normalizePromotionTargetLists(body);
+  const targetUserIds = normalizePromotionTargetUserIds(body);
 
   if (!name) return badRequest("name is required");
   const validation = await validatePromotionDefinition(admin, {
@@ -7136,6 +7445,9 @@ const createAdminStorePromotion = async (body: any, adminUserId: string) => {
     endsAt: endsAt || "",
     bankIds: targets.bankIds,
     catalogItemIds: targets.catalogItemIds,
+    audienceType,
+    targetUserIds,
+    newUserWindowHours,
   });
   if (!validation.ok) return badRequest(validation.error);
 
@@ -7151,6 +7463,8 @@ const createAdminStorePromotion = async (body: any, adminUserId: string) => {
     badge_text: badgeText,
     priority,
     is_active: isActive,
+    audience_type: audienceType,
+    new_user_window_hours: audienceType === "new_users_window" ? newUserWindowHours : null,
     created_by: adminUserId,
     updated_by: adminUserId,
     updated_at: new Date().toISOString(),
@@ -7169,6 +7483,12 @@ const createAdminStorePromotion = async (body: any, adminUserId: string) => {
       ...targets.catalogItemIds.map((catalogItemId) => ({ promotion_id: promotionId, catalog_item_id: catalogItemId })),
     ];
     const { error } = await admin.from("store_promotion_targets").insert(rows);
+    if (error) return fail(500, error.message);
+  }
+  if (promotionId && audienceType === "specific_users" && targetUserIds.length > 0) {
+    const { error } = await admin.from("store_promotion_target_users").insert(
+      targetUserIds.map((userId) => ({ promotion_id: promotionId, user_id: userId })),
+    );
     if (error) return fail(500, error.message);
   }
 
@@ -7191,6 +7511,13 @@ const patchAdminStorePromotion = async (promotionId: string, body: any, adminUse
     || Object.prototype.hasOwnProperty.call(body || {}, "targetBankIds")
     || Object.prototype.hasOwnProperty.call(body || {}, "target_catalog_item_ids")
     || Object.prototype.hasOwnProperty.call(body || {}, "targetCatalogItemIds");
+  const hasTargetUserUpdate =
+    Object.prototype.hasOwnProperty.call(body || {}, "target_user_ids")
+    || Object.prototype.hasOwnProperty.call(body || {}, "targetUserIds")
+    || Object.prototype.hasOwnProperty.call(body || {}, "audience_type")
+    || Object.prototype.hasOwnProperty.call(body || {}, "audienceType")
+    || Object.prototype.hasOwnProperty.call(body || {}, "new_user_window_hours")
+    || Object.prototype.hasOwnProperty.call(body || {}, "newUserWindowHours");
 
   const nextName = Object.prototype.hasOwnProperty.call(body || {}, "name")
     ? asString(body?.name, 200)
@@ -7227,6 +7554,12 @@ const patchAdminStorePromotion = async (promotionId: string, body: any, adminUse
     : Object.prototype.hasOwnProperty.call(body || {}, "isActive")
       ? Boolean(body?.isActive)
       : Boolean(existing?.is_active);
+  const nextAudienceType = Object.prototype.hasOwnProperty.call(body || {}, "audience_type") || Object.prototype.hasOwnProperty.call(body || {}, "audienceType")
+    ? normalizePromotionAudienceType(body?.audience_type ?? body?.audienceType)
+    : normalizePromotionAudienceType(existing?.audience_type);
+  const nextNewUserWindowHours = Object.prototype.hasOwnProperty.call(body || {}, "new_user_window_hours") || Object.prototype.hasOwnProperty.call(body || {}, "newUserWindowHours")
+    ? normalizePromotionNewUserWindowHours(body?.new_user_window_hours ?? body?.newUserWindowHours)
+    : normalizePromotionNewUserWindowHours(existing?.new_user_window_hours);
 
   if (!nextName) return badRequest("name is required");
 
@@ -7241,6 +7574,17 @@ const patchAdminStorePromotion = async (promotionId: string, body: any, adminUse
     nextBankIds = Array.from(new Set((currentTargets || []).map((row: any) => asUuid(row?.bank_id)).filter(Boolean) as string[]));
     nextCatalogItemIds = Array.from(new Set((currentTargets || []).map((row: any) => asUuid(row?.catalog_item_id)).filter(Boolean) as string[]));
   }
+  let nextTargetUserIds = normalizePromotionTargetUserIds(body);
+  if (!hasTargetUserUpdate) {
+    const { data: currentTargetUsers, error: currentTargetUsersError } = await admin
+      .from("store_promotion_target_users")
+      .select("user_id")
+      .eq("promotion_id", promotionId);
+    if (currentTargetUsersError && !/store_promotion_target_users/i.test(currentTargetUsersError.message || "")) {
+      return fail(500, currentTargetUsersError.message);
+    }
+    nextTargetUserIds = Array.from(new Set((currentTargetUsers || []).map((row: any) => asUuid(row?.user_id)).filter(Boolean) as string[]));
+  }
 
   const validation = await validatePromotionDefinition(admin, {
     promotionType: nextPromotionType,
@@ -7250,6 +7594,9 @@ const patchAdminStorePromotion = async (promotionId: string, body: any, adminUse
     endsAt: nextEndsAt || "",
     bankIds: nextBankIds,
     catalogItemIds: nextCatalogItemIds,
+    audienceType: nextAudienceType,
+    targetUserIds: nextTargetUserIds,
+    newUserWindowHours: nextNewUserWindowHours,
   });
   if (!validation.ok) return badRequest(validation.error);
 
@@ -7265,6 +7612,8 @@ const patchAdminStorePromotion = async (promotionId: string, body: any, adminUse
     badge_text: nextBadgeText,
     priority: nextPriority,
     is_active: nextIsActive,
+    audience_type: nextAudienceType,
+    new_user_window_hours: nextAudienceType === "new_users_window" ? nextNewUserWindowHours : null,
     updated_by: adminUserId,
     updated_at: new Date().toISOString(),
   };
@@ -7285,6 +7634,18 @@ const patchAdminStorePromotion = async (promotionId: string, body: any, adminUse
     if (rows.length > 0) {
       const { error: insertError } = await admin.from("store_promotion_targets").insert(rows);
       if (insertError) return fail(500, insertError.message);
+    }
+  }
+  if (hasTargetUserUpdate) {
+    const { error: deleteTargetUsersError } = await admin.from("store_promotion_target_users").delete().eq("promotion_id", promotionId);
+    if (deleteTargetUsersError && !/store_promotion_target_users/i.test(deleteTargetUsersError.message || "")) {
+      return fail(500, deleteTargetUsersError.message);
+    }
+    if (nextAudienceType === "specific_users" && nextTargetUserIds.length > 0) {
+      const { error: insertTargetUsersError } = await admin.from("store_promotion_target_users").insert(
+        nextTargetUserIds.map((userId) => ({ promotion_id: promotionId, user_id: userId })),
+      );
+      if (insertTargetUsersError) return fail(500, insertTargetUsersError.message);
     }
   }
 

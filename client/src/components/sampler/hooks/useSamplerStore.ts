@@ -2717,6 +2717,46 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     return result.message;
   }, [banks, enqueueAdminExportUpload, user, profile]);
 
+  const resolveCurrentCatalogItemIdForBank = React.useCallback(async (input: {
+    runtimeBankId: string;
+    sourceBankId: string;
+    previousCatalogItemId: string;
+  }): Promise<string | null> => {
+    void input.runtimeBankId;
+    const response = await adminApi.listStoreCatalog();
+    const candidates = (response.items || []).filter((item) =>
+      item.bank_id === input.sourceBankId && item.id !== input.previousCatalogItemId,
+    );
+    if (candidates.length === 0) return null;
+    const sorted = [...candidates].sort((left, right) => {
+      const leftPublished = left.status === 'published' ? 1 : 0;
+      const rightPublished = right.status === 'published' ? 1 : 0;
+      if (rightPublished !== leftPublished) return rightPublished - leftPublished;
+      const leftTime = Date.parse(String((left as { updated_at?: string | null; created_at?: string | null }).updated_at || left.created_at || 0)) || 0;
+      const rightTime = Date.parse(String((right as { updated_at?: string | null; created_at?: string | null }).updated_at || right.created_at || 0)) || 0;
+      return rightTime - leftTime;
+    });
+    return sorted[0]?.id || null;
+  }, []);
+
+  const persistResolvedCatalogItemId = React.useCallback((input: {
+    runtimeBankId: string;
+    sourceBankId: string;
+    catalogItemId: string;
+  }) => {
+    setBanks((currentBanks) => currentBanks.map((bank) => {
+      if (bank.id !== input.runtimeBankId) return bank;
+      return {
+        ...bank,
+        bankMetadata: {
+          ...bank.bankMetadata,
+          bankId: input.sourceBankId,
+          catalogItemId: input.catalogItemId,
+        },
+      };
+    }));
+  }, []);
+
   const updateStoreBank = React.useCallback(async (
     input: UpdateStoreBankInput,
   ) => {
@@ -2759,6 +2799,8 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         encryptZip,
         saveExportFile,
         patchAdminCatalogItem,
+        resolveCurrentCatalogItemIdForBank,
+        persistResolvedCatalogItemId,
         uploadAdminCatalogAsset,
         isNonRetryableGithubUploadError,
         enqueueAdminExportUpload,
@@ -2772,7 +2814,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         writeOperationDiagnosticsLog,
       },
     );
-  }, [enqueueAdminExportUpload, user, profile]);
+  }, [enqueueAdminExportUpload, persistResolvedCatalogItemId, resolveCurrentCatalogItemIdForBank, user, profile]);
 
   const listLinkableStoreBanks = React.useCallback(async (): Promise<LinkExistingStoreBankCandidate[]> => {
     if (profile?.role !== 'admin') {

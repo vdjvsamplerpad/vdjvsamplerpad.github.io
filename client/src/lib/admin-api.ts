@@ -77,6 +77,9 @@ export interface AdminAccountRegistrationRequest {
   email: string;
   display_name: string;
   status: 'pending' | 'approved' | 'rejected';
+  is_refunded?: boolean;
+  refunded_at?: string | null;
+  refunded_by?: string | null;
   payment_channel: 'image_proof' | 'gcash_manual' | 'maya_manual';
   payer_name?: string | null;
   reference_no?: string | null;
@@ -185,6 +188,7 @@ export interface AdminDashboardOverview {
   };
   meta: {
     timeBasis: 'UTC' | string;
+    activeTodayTimeBasis?: string;
     sampled: boolean;
     seriesCap: number;
     rangeStartDate?: string;
@@ -395,6 +399,9 @@ export interface AdminInstallerPurchaseRequest {
   ocrErrorCode?: string | null;
   decisionSource?: 'manual' | 'automation' | null;
   automationResult?: string | null;
+  isRefunded?: boolean;
+  refundedAt?: string | null;
+  refundedBy?: string | null;
   createdAt: string;
 }
 
@@ -428,6 +435,9 @@ export interface AdminInstallerPurchaseRequestGroup {
   ocrErrorCode?: string | null;
   decisionSource?: 'manual' | 'automation' | null;
   automationResult?: string | null;
+  isRefunded?: boolean;
+  refundedAt?: string | null;
+  refundedBy?: string | null;
   createdAt: string;
   itemCount: number;
   totalAmountPhp: number | null;
@@ -746,11 +756,14 @@ export const adminApi = {
 
   async accountRegistrationAction(
     requestId: string,
-    input: { action: 'approve' | 'approve_assisted' | 'reject'; rejection_message?: string; temporary_password?: string }
+    input: { action: 'approve' | 'approve_assisted' | 'reject' | 'refund'; rejection_message?: string; temporary_password?: string }
   ) {
     return callStoreApi<{
       requestId: string;
       status: 'approved' | 'rejected';
+      refunded?: boolean;
+      refunded_at?: string | null;
+      refunded_by?: string | null;
       decision_email_status?: 'pending' | 'sent' | 'failed' | 'skipped';
       decision_email_error?: string | null;
       assisted_approval?: boolean;
@@ -1024,11 +1037,14 @@ export const adminApi = {
 
   async installerPurchaseRequestAction(
     requestId: string,
-    input: { action: 'approve' | 'reject'; rejection_message?: string }
+    input: { action: 'approve' | 'reject' | 'refund'; rejection_message?: string }
   ) {
     return callStoreApi<{
       requestId: string;
       status: 'approved' | 'rejected';
+      refunded?: boolean;
+      refunded_at?: string | null;
+      refunded_by?: string | null;
       issued_license_code?: string | null;
       installer_download_link?: string | null;
       decision_email_status?: 'pending' | 'sent' | 'failed' | 'skipped';
