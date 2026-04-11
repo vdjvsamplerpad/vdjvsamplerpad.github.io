@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { BrowserRouter, HashRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { usePerformanceTier } from '@/hooks/usePerformanceTier';
+import { captureProductEvent } from '@/lib/productAnalytics';
 import {
   WEB_INSTALLER_REDIRECT_PATH,
   WEB_SAMPLER_APP_PATH,
@@ -23,6 +24,30 @@ function AppFallback() {
   );
 }
 
+function AnalyticsRouteTracker() {
+  const location = useLocation();
+
+  React.useEffect(() => {
+    captureProductEvent('screen_view', {
+      path: location.pathname,
+      search: location.search || '',
+      hash: location.hash || '',
+      screen_name:
+        location.pathname === WEB_SAMPLER_APP_PATH || location.pathname.startsWith(`${WEB_SAMPLER_APP_PATH}/`)
+          ? 'sampler'
+          : location.pathname === getLandingPagePath()
+            ? 'landing'
+            : location.pathname === getBuyPagePath()
+              ? 'buy'
+              : location.pathname === WEB_INSTALLER_REDIRECT_PATH
+                ? 'installer_redirect'
+                : 'other',
+    });
+  }, [location.hash, location.pathname, location.search]);
+
+  return null;
+}
+
 function RouteContainer() {
   const Router = window.location.protocol === 'file:' ? HashRouter : BrowserRouter;
   const packagedRuntime = isPackagedAppRuntime();
@@ -34,6 +59,7 @@ function RouteContainer() {
 
   return (
     <Router>
+      <AnalyticsRouteTracker />
       <Routes>
         {packagedRuntime ? (
           <>

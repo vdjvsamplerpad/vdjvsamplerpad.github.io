@@ -173,6 +173,7 @@ import {
   normalizePadNameToken,
   padHasExpectedImageAsset,
   padNeedsMediaHydration,
+  repairDuplicatePadIdsInBank,
 } from './useSamplerStore.padHelpers';
 import { ensureStorageHeadroom } from './useSamplerStore.storageHeadroom';
 import {
@@ -3063,7 +3064,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     }
 
     const nextBanks = applyResolvedOfficialPadMedia(
-      materializeSnapshotBanks(snapshot, banksRef.current)
+      materializeSnapshotBanks(snapshot, banksRef.current).map((bank) => repairDuplicatePadIdsInBank(bank, generateId).bank)
     ).map((bank) => ({
       ...bank,
       restoreStatus: deriveSnapshotRestoreStatus(bank),

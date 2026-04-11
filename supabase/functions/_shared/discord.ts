@@ -319,6 +319,8 @@ export const sendDiscordAuthEvent = async (input: {
   sessionKey?: string | null;
   deviceSessionId?: string | null;
   isAdminLogin?: boolean;
+  appVersion?: string | null;
+  runtime?: string | null;
 }) => {
   const eventName = input.eventType.replace("auth.", "").toUpperCase();
   const severity: DiscordSeverity = input.isAdminLogin
@@ -341,6 +343,8 @@ export const sendDiscordAuthEvent = async (input: {
   if (input.device?.platform) fields.push({ name: "Platform", value: input.device.platform, inline: true });
   if (input.device?.browser) fields.push({ name: "Browser", value: input.device.browser, inline: true });
   if (input.device?.os) fields.push({ name: "OS", value: input.device.os, inline: true });
+  if (input.runtime) fields.push({ name: "Runtime", value: input.runtime, inline: true });
+  if (input.appVersion) fields.push({ name: "App Version", value: input.appVersion, inline: true });
   if (input.errorMessage) fields.push({ name: "Error", value: input.errorMessage, inline: false });
 
   await sendDiscordNotification({
@@ -368,6 +372,8 @@ export const sendDiscordExportEvent = async (input: {
   userId?: string | null;
   bankId?: string | null;
   requestId?: string | null;
+  appVersion?: string | null;
+  runtime?: string | null;
 }) => {
   const severity: DiscordSeverity = input.status === "failed" ? "warning" : "info";
   const sanitizedBankName = String(input.bankName).replace(/[^a-z0-9_-]/gi, "_").slice(0, 40) || "bank";
@@ -388,6 +394,8 @@ export const sendDiscordExportEvent = async (input: {
     fields: [
       { name: "Status", value: (input.status || "success").toUpperCase(), inline: true },
       { name: "Email", value: input.email, inline: true },
+      ...(input.runtime ? [{ name: "Runtime", value: input.runtime, inline: true }] : []),
+      ...(input.appVersion ? [{ name: "App Version", value: input.appVersion, inline: true }] : []),
       { name: "Bank", value: input.bankName, inline: false },
       { name: "Pad Count", value: String(input.padNames.length), inline: true },
       ...(input.errorMessage ? [{ name: "Error", value: input.errorMessage, inline: false }] : []),
@@ -415,6 +423,8 @@ export const sendDiscordImportEvent = async (input: {
   userId?: string | null;
   bankId?: string | null;
   requestId?: string | null;
+  appVersion?: string | null;
+  runtime?: string | null;
 }) => {
   const severity: DiscordSeverity = input.status === "failed" ? "warning" : "info";
   const shouldShowPads = input.includePadList && input.padNames.length > 0;
@@ -440,6 +450,8 @@ export const sendDiscordImportEvent = async (input: {
     fields: [
       { name: "Status", value: input.status.toUpperCase(), inline: true },
       { name: "Email", value: input.email, inline: true },
+      ...(input.runtime ? [{ name: "Runtime", value: input.runtime, inline: true }] : []),
+      ...(input.appVersion ? [{ name: "App Version", value: input.appVersion, inline: true }] : []),
       { name: "Bank", value: input.bankName, inline: false },
       ...(shouldShowPads ? [{ name: "Pad Count", value: String(input.padNames.length), inline: true }] : []),
       ...(input.errorMessage ? [{ name: "Error", value: input.errorMessage, inline: false }] : []),
@@ -734,6 +746,8 @@ export const sendDiscordSessionConflictEvent = async (input: {
   deviceSessionId?: string | null;
   clientIp?: string | null;
   lastEvent?: string | null;
+  appVersion?: string | null;
+  runtime?: string | null;
 }) => {
   await sendDiscordNotification({
     severity: "warning",
@@ -743,6 +757,8 @@ export const sendDiscordSessionConflictEvent = async (input: {
     fields: [
       ...(input.email ? [{ name: "Email", value: input.email, inline: true }] : []),
       ...(input.lastEvent ? [{ name: "Last Event", value: input.lastEvent, inline: true }] : []),
+      ...(input.runtime ? [{ name: "Runtime", value: input.runtime, inline: true }] : []),
+      ...(input.appVersion ? [{ name: "App Version", value: input.appVersion, inline: true }] : []),
       ...buildDiscordTraceFields({
         userId: input.userId,
         sessionKey: input.sessionKey,

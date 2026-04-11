@@ -1,6 +1,11 @@
 export interface StoreItem {
     id: string; // catalog item id
     bank_id: string;
+    item_type?: 'single_bank' | 'bank_bundle';
+    bundle_bank_ids?: string[];
+    bundle_bank_titles?: string[];
+    bundle_count?: number;
+    owned_bundle_bank_count?: number | null;
     snapshot_target_bank_id?: string | null;
     is_paid: boolean;
     requires_grant: boolean;

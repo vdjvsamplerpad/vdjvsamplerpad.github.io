@@ -228,6 +228,56 @@ const parseDeviceName = (platform: string, model: string, ua: string): string =>
   return platform || 'Unknown Device'
 }
 
+const parseEmbeddedAppVersion = (ua: string): string | null => {
+  const match = String(ua || '').match(/vdjv-sampler-pad\/([^\s]+)/i)
+  return match?.[1]?.trim() || null
+}
+
+const resolveActivityRuntime = (): string => {
+  if (!isBrowser) return 'server'
+  const ua = navigator.userAgent || ''
+  const loweredUa = ua.toLowerCase()
+  if (loweredUa.includes(' electron/')) return 'electron'
+  const maybeCapacitor = (window as typeof window & {
+    Capacitor?: {
+      isNativePlatform?: () => boolean
+      getPlatform?: () => string
+    }
+  }).Capacitor
+  if (maybeCapacitor?.isNativePlatform?.()) {
+    const nativePlatform = String(maybeCapacitor.getPlatform?.() || '').trim().toLowerCase()
+    if (nativePlatform === 'android' || nativePlatform === 'ios') {
+      return `capacitor-${nativePlatform}`
+    }
+    return 'capacitor'
+  }
+  return 'web'
+}
+
+const buildActivityRuntimeMeta = (): Record<string, unknown> => {
+  if (!isBrowser) {
+    return {
+      runtime: 'server',
+      appVersion: 'unknown',
+    }
+  }
+  const userAgent = navigator.userAgent || ''
+  const viteVersion = typeof import.meta !== 'undefined' && import.meta.env?.VITE_APP_VERSION
+    ? String(import.meta.env.VITE_APP_VERSION).trim()
+    : ''
+  const embeddedVersion = parseEmbeddedAppVersion(userAgent) || ''
+  return {
+    runtime: resolveActivityRuntime(),
+    appVersion: viteVersion || embeddedVersion || 'unknown',
+    userAgent,
+  }
+}
+
+const mergeActivityMeta = (meta?: Record<string, unknown>): Record<string, unknown> => ({
+  ...buildActivityRuntimeMeta(),
+  ...(meta || {}),
+})
+
 const sha256Hex = async (text: string): Promise<string> => {
   try {
     if (typeof crypto === 'undefined' || !crypto.subtle) {
@@ -570,7 +620,7 @@ const buildEventPayload = async (
     padCount: typeof input.padCount === 'number' ? input.padCount : null,
     padNames: Array.isArray(input.padNames) ? input.padNames : [],
     errorMessage: input.errorMessage || null,
-    meta: input.meta || {},
+    meta: mergeActivityMeta(input.meta),
   }
 }
 
@@ -611,7 +661,7 @@ export const sendActivityHeartbeat = async (input: HeartbeatInput) => {
     email: input.email || null,
     device,
     lastEvent: input.lastEvent || 'heartbeat',
-    meta: input.meta || {},
+    meta: mergeActivityMeta(input.meta),
   }
   heartbeatInFlight = true
   try {
@@ -656,7 +706,7 @@ export const checkSessionValidity = async (input: {
       email: input.email || null,
       device,
       lastEvent: input.lastEvent || 'session-check',
-      meta: input.meta || {},
+      meta: mergeActivityMeta(input.meta),
     }, authHeaders)
     lastSessionCheckAt = Date.now()
   } finally {

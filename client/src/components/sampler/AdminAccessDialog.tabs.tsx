@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { CopyableValue, copyTextToClipboard } from '@/components/ui/copyable-value';
 import { adminApi, type AdminAccountRegistrationRequest, type AdminClientCrashReport, type AdminInstallerPurchaseRequestGroup, type DefaultBankRelease, type LandingDownloadConfig, type LandingPlatformKey, type LandingVersionKey } from '@/lib/admin-api';
-import { Check, ChevronDown, ChevronUp, Copy, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, Download, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
 import type { SamplerAppConfig, SamplerShortcutAction } from './samplerAppConfig';
 import type {
   AdminDialogTheme,
@@ -206,6 +206,15 @@ interface StoreCatalogTabProps {
   onPageChange: (page: number) => void;
   onApplyStoreMaintenanceMode: (enabled: boolean, message?: string) => Promise<boolean>;
   onApplyDraftAction: (draft: CatalogDraft, updates: Record<string, any>, action: 'publish' | 'save' | 'unpublish') => Promise<boolean>;
+  onCreateBundle: (input: {
+    title: string;
+    description: string;
+    bundle_bank_ids: string[];
+    price_php: number | null;
+    coming_soon: boolean;
+    is_pinned: boolean;
+    thumbnail_path?: string | null;
+  }) => Promise<boolean>;
   onReload: () => void;
   pushNotice: (notice: { variant: 'success' | 'error'; message: string }) => void;
 }
@@ -266,6 +275,7 @@ interface StorePromotionsTabProps {
     audience_type: StorePromotionAudienceType;
     new_user_window_hours: string;
     target_bank_ids: string[];
+    target_catalog_item_ids: string[];
     target_user_ids: string[];
   };
   onFormChange: (next: {
@@ -283,6 +293,7 @@ interface StorePromotionsTabProps {
     audience_type: StorePromotionAudienceType;
     new_user_window_hours: string;
     target_bank_ids: string[];
+    target_catalog_item_ids: string[];
     target_user_ids: string[];
   }) => void;
   onPageChange: (page: number) => void;
@@ -2067,6 +2078,7 @@ export function InstallerRequestsTab({
                         {!suppressOcrDetails && req.automationResult && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automationResult)} tone="auto" />}
                         {!suppressOcrDetails && req.ocrStatus && req.ocrStatus !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocrStatus)} tone="ocr" />}
                         {req.status !== 'pending' && <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />}
+                        {req.isRefunded && <RequestSummaryChip theme={theme} label="Refund" value="Refunded" tone="ocr" />}
                       </div>
                       {req.status === 'rejected' && req.rejectionMessage && (
                         <div className={`mt-2 text-[11px] ${theme === 'dark' ? 'text-red-300/80' : 'text-red-600'}`} title={req.rejectionMessage}>
@@ -2320,6 +2332,45 @@ export function CrashReportsTab({
   onStatusUpdate,
 }: CrashReportsTabProps) {
   const selectClass = `h-9 w-full rounded-md border px-3 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`;
+  const [downloadingReportId, setDownloadingReportId] = React.useState<string | null>(null);
+
+  const buildCrashReportDownloadFileName = React.useCallback((row: AdminClientCrashReport): string => {
+    const objectName = String(row.report_object_key || '').split('/').pop()?.trim();
+    if (objectName) return objectName;
+    const safeTitle = String(row.report_title || 'crash-report')
+      .replace(/[^a-z0-9_-]+/gi, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 60) || 'crash-report';
+    return `${safeTitle}_${row.id}.log`;
+  }, []);
+
+  const handleDownloadCrashReport = React.useCallback(async (row: AdminClientCrashReport) => {
+    if (!row.report_download_url) return;
+    setDownloadingReportId(row.id);
+    try {
+      const response = await fetch(row.report_download_url, {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = buildCrashReportDownloadFileName(row);
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      window.open(row.report_download_url, '_blank', 'noopener,noreferrer');
+    } finally {
+      setDownloadingReportId((current) => (current === row.id ? null : current));
+    }
+  }, [buildCrashReportDownloadFileName]);
 
   return (
     <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
@@ -2423,10 +2474,31 @@ export function CrashReportsTab({
                       ))}
                     </select>
                     {row.report_download_url ? (
-                      <Button size="sm" variant="outline" asChild>
-                        <a href={row.report_download_url} target="_blank" rel="noreferrer">Open Log</a>
-                      </Button>
-                    ) : null}
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void handleDownloadCrashReport(row)}
+                          disabled={downloadingReportId === row.id}
+                        >
+                          {downloadingReportId === row.id ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-1" />}
+                          Download Log
+                        </Button>
+                        <Button size="sm" variant="outline" asChild>
+                          <a href={row.report_download_url} target="_blank" rel="noreferrer">Open Log</a>
+                        </Button>
+                      </>
+                    ) : (
+                      <span
+                        className={`inline-flex items-center rounded border px-2.5 py-1.5 text-xs font-medium ${
+                          theme === 'dark'
+                            ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                            : 'border-amber-300 bg-amber-50 text-amber-800'
+                        }`}
+                      >
+                        No uploaded log
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -2484,13 +2556,42 @@ export function StoreCatalogTab({
   onPageChange,
   onApplyStoreMaintenanceMode,
   onApplyDraftAction,
+  onCreateBundle,
   onReload,
   pushNotice,
 }: StoreCatalogTabProps) {
   const [maintenanceDialogMode, setMaintenanceDialogMode] = React.useState<'start' | 'edit' | null>(null);
   const [maintenanceDraft, setMaintenanceDraft] = React.useState('');
   const [confirmStopOpen, setConfirmStopOpen] = React.useState(false);
+  const [bundleDialogOpen, setBundleDialogOpen] = React.useState(false);
+  const [bundleTitle, setBundleTitle] = React.useState('');
+  const [bundleDescription, setBundleDescription] = React.useState('');
+  const [bundlePrice, setBundlePrice] = React.useState('');
+  const [bundleComingSoon, setBundleComingSoon] = React.useState(false);
+  const [bundlePinned, setBundlePinned] = React.useState(false);
+  const [bundleBankIds, setBundleBankIds] = React.useState<string[]>([]);
   const currentMaintenanceMessage = String(storeConfig.store_maintenance_message || '').trim();
+  const isDark = theme === 'dark';
+  const bundleBankChoices = React.useMemo(() => {
+    const byId = new Map<string, { id: string; label: string }>();
+    storeDrafts.forEach((draft) => {
+      if (draft.item_type === 'bank_bundle' || !draft.bank_id) return;
+      if (byId.has(draft.bank_id)) return;
+      byId.set(draft.bank_id, {
+        id: draft.bank_id,
+        label: draft.bank?.title || 'Unknown Bank',
+      });
+    });
+    return Array.from(byId.values()).sort((left, right) => left.label.localeCompare(right.label));
+  }, [storeDrafts]);
+  const resetBundleDialog = React.useCallback(() => {
+    setBundleTitle('');
+    setBundleDescription('');
+    setBundlePrice('');
+    setBundleComingSoon(false);
+    setBundlePinned(false);
+    setBundleBankIds([]);
+  }, []);
   const openMaintenanceDialog = React.useCallback((mode: 'start' | 'edit') => {
     setMaintenanceDraft(currentMaintenanceMessage);
     setMaintenanceDialogMode(mode);
@@ -2507,11 +2608,52 @@ export function StoreCatalogTab({
       setConfirmStopOpen(false);
     }
   }, [onApplyStoreMaintenanceMode]);
+  const submitBundleDialog = React.useCallback(async () => {
+    const trimmedTitle = bundleTitle.trim();
+    const parsedPrice = bundlePrice.trim() === '' ? null : Number(bundlePrice);
+    if (!trimmedTitle) {
+      pushNotice({ variant: 'error', message: 'Bundle title is required.' });
+      return;
+    }
+    if (bundleBankIds.length < 2) {
+      pushNotice({ variant: 'error', message: 'Select at least two banks for the bundle.' });
+      return;
+    }
+    if (!bundleComingSoon && (!Number.isFinite(parsedPrice) || Number(parsedPrice) <= 0)) {
+      pushNotice({ variant: 'error', message: 'Set a valid bundle price before creating a live bundle draft.' });
+      return;
+    }
+    const succeeded = await onCreateBundle({
+      title: trimmedTitle,
+      description: bundleDescription.trim(),
+      bundle_bank_ids: bundleBankIds,
+      price_php: bundleComingSoon ? null : Number(parsedPrice),
+      coming_soon: bundleComingSoon,
+      is_pinned: bundlePinned,
+    });
+    if (succeeded) {
+      resetBundleDialog();
+      setBundleDialogOpen(false);
+    }
+  }, [bundleBankIds, bundleComingSoon, bundleDescription, bundlePinned, bundlePrice, bundleTitle, onCreateBundle, pushNotice, resetBundleDialog]);
 
   return (
     <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
       <div className="space-y-2">
-        <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Manage store catalog items. Drafts are created automatically during Admin Export.</p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Manage store catalog items. Drafts are created automatically during Admin Export.</p>
+          <Button
+            size="sm"
+            onClick={() => {
+              resetBundleDialog();
+              setBundleDialogOpen(true);
+            }}
+            className={isDark ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}
+          >
+            <Plus className="w-3.5 h-3.5 mr-1.5" />
+            Create Bundle
+          </Button>
+        </div>
         <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-amber-700/40 bg-amber-500/10' : 'border-amber-200 bg-amber-50/80'}`}>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="space-y-1">
@@ -2632,6 +2774,92 @@ export function StoreCatalogTab({
             void stopMaintenance();
           }}
         />
+        <Dialog
+          open={bundleDialogOpen}
+          onOpenChange={(open) => {
+            setBundleDialogOpen(open);
+            if (!open) resetBundleDialog();
+          }}
+          useHistory={false}
+        >
+          <DialogContent className={theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100 sm:max-w-2xl' : 'sm:max-w-2xl'}>
+            <DialogHeader>
+              <DialogTitle>Create Bundle</DialogTitle>
+              <DialogDescription>
+                Sell multiple banks as one Bank Store item. Approval will grant every included bank from a single purchase request.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-1">
+                  <Label>Bundle Title</Label>
+                  <Input value={bundleTitle} onChange={(event) => setBundleTitle(event.target.value)} placeholder="Wedding Pack Bundle" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Price (PHP)</Label>
+                  <Input type="number" min="0" step="0.01" value={bundlePrice} onChange={(event) => setBundlePrice(event.target.value)} disabled={bundleComingSoon} placeholder={bundleComingSoon ? 'Disabled while Coming Soon is on' : 'e.g. 199.00'} className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label>Description</Label>
+                <textarea value={bundleDescription} onChange={(event) => setBundleDescription(event.target.value)} placeholder="Includes multiple banks in one discounted package." className={`w-full min-h-[88px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`} />
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className={`rounded-lg border px-3 py-2.5 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">Coming Soon</div>
+                      <div className="text-[11px] opacity-70">Create a teaser bundle first and hide the price until it goes live.</div>
+                    </div>
+                    <Checkbox checked={bundleComingSoon} onCheckedChange={(checked) => setBundleComingSoon(Boolean(checked))} />
+                  </div>
+                </div>
+                <div className={`rounded-lg border px-3 py-2.5 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">Pinned</div>
+                      <div className="text-[11px] opacity-70">Keep the bundle near the top of the catalog.</div>
+                    </div>
+                    <Checkbox checked={bundlePinned} onCheckedChange={(checked) => setBundlePinned(Boolean(checked))} />
+                  </div>
+                </div>
+              </div>
+              <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-gray-50'}`}>
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <div>
+                    <div className="text-sm font-semibold">Included Banks</div>
+                    <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Select two or more banks to grant from this bundle purchase.</div>
+                  </div>
+                  <div className={`text-xs font-semibold ${bundleBankIds.length > 0 ? (theme === 'dark' ? 'text-teal-300' : 'text-teal-700') : (theme === 'dark' ? 'text-gray-400' : 'text-gray-500')}`}>
+                    {bundleBankIds.length} selected
+                  </div>
+                </div>
+                <div className={`max-h-52 overflow-auto rounded-md border p-2 space-y-1 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-white'}`}>
+                  {bundleBankChoices.length === 0 ? (
+                    <div className="text-xs opacity-70">Create or export normal bank drafts first before building a bundle.</div>
+                  ) : bundleBankChoices.map((bank) => (
+                    <label key={bank.id} className="flex items-center gap-2 text-xs cursor-pointer rounded px-1.5 py-1 hover:bg-black/5 dark:hover:bg-white/5">
+                      <input
+                        type="checkbox"
+                        checked={bundleBankIds.includes(bank.id)}
+                        onChange={(event) => setBundleBankIds((prev) => event.target.checked ? [...prev, bank.id] : prev.filter((id) => id !== bank.id))}
+                      />
+                      <span>{bank.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button type="button" variant="outline" onClick={() => setBundleDialogOpen(false)} disabled={loading}>
+                Cancel
+              </Button>
+              <Button type="button" onClick={() => void submitBundleDialog()} disabled={loading} className={theme === 'dark' ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}>
+                Create Bundle
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <div className={`rounded-lg border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50/70'}`}>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-2">
             <div className="xl:col-span-2">
@@ -2714,13 +2942,13 @@ export function StoreCatalogTab({
                 <Store className="w-8 h-8 mx-auto mb-2 opacity-30" />
                 <p className="text-sm font-medium">{storeDrafts.length === 0 ? 'No catalog items yet' : 'No catalog items match filters'}</p>
                 <p className="text-xs mt-1">
-                  {storeDrafts.length === 0 ? 'Export a bank from Bank Edit to create a draft.' : 'Try clearing some filters or search terms.'}
+                  {storeDrafts.length === 0 ? 'Export a bank from Bank Edit or create a bundle draft here.' : 'Try clearing some filters or search terms.'}
                 </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {pagedDrafts.map((draft) => (
-                  <CatalogCard key={draft.id} draft={draft} isDark={theme === 'dark'} onApplyAction={onApplyDraftAction} pushNotice={pushNotice} onReload={onReload} />
+                  <CatalogCard key={draft.id} draft={draft} isDark={theme === 'dark'} onApplyAction={onApplyDraftAction} pushNotice={pushNotice} onReload={onReload} bundleBankChoices={bundleBankChoices} />
                 ))}
               </div>
             )}
@@ -2762,6 +2990,15 @@ export function StorePromotionsTab({
     });
     return Array.from(byId.entries()).map(([id, label]) => ({ id, label })).sort((a, b) => a.label.localeCompare(b.label));
   }, [catalogDrafts]);
+  const catalogOptions = React.useMemo(() => (
+    catalogDrafts
+      .filter((draft) => draft.item_type === 'bank_bundle')
+      .map((draft) => ({
+        id: draft.id,
+        label: draft.bundle_title || draft.bank?.title || 'Untitled Bundle',
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  ), [catalogDrafts]);
   const userLabelById = React.useMemo(
     () => new Map(promotionUserOptions.map((user) => [user.id, user.label])),
     [promotionUserOptions],
@@ -2803,6 +3040,7 @@ export function StorePromotionsTab({
       totalPages={totalPages}
       stats={stats}
       bankOptions={bankOptions}
+      catalogOptions={catalogOptions}
       promotionUserOptions={promotionUserOptions}
       userLabelById={userLabelById}
       editingPromotionId={editingPromotionId}
@@ -3005,6 +3243,7 @@ function StorePromotionsSurface({
   totalPages,
   stats,
   bankOptions,
+  catalogOptions,
   promotionUserOptions,
   userLabelById,
   editingPromotionId,
@@ -3029,6 +3268,7 @@ function StorePromotionsSurface({
   totalPages: number;
   stats: { total: number; active: number; scheduled: number; expired: number; inactive: number };
   bankOptions: Array<{ id: string; label: string }>;
+  catalogOptions: Array<{ id: string; label: string }>;
   promotionUserOptions: Array<{ id: string; label: string; email: string | null }>;
   userLabelById: Map<string, string>;
   editingPromotionId: string | null;
@@ -3047,6 +3287,7 @@ function StorePromotionsSurface({
 }) {
   const isDark = theme === 'dark';
   const selectedBankCount = form.target_bank_ids.length;
+  const selectedCatalogCount = form.target_catalog_item_ids.length;
   const selectedUserCount = form.target_user_ids.length;
   const isFlashSale = form.promotion_type === 'flash_sale';
   const isSpecificUsers = form.audience_type === 'specific_users';
@@ -3432,6 +3673,37 @@ function StorePromotionsSurface({
                       })}
                     />
                     <span>{bank.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div>
+                  <div className="text-sm font-semibold">Target Bundles</div>
+                  <div className={`text-xs ${mutedToneClass}`}>Optionally target bundle catalog items directly.</div>
+                </div>
+                <div className={`text-xs font-semibold ${selectedCatalogCount > 0 ? (isDark ? 'text-teal-300' : 'text-teal-700') : mutedToneClass}`}>
+                  {selectedCatalogCount} selected
+                </div>
+              </div>
+              <div className={`max-h-44 overflow-auto rounded-md border p-2 space-y-1 ${isDark ? 'border-gray-700 bg-gray-900/60' : 'border-gray-200 bg-white'}`}>
+                {catalogOptions.length === 0 ? (
+                  <div className="text-xs opacity-70">No bundle catalog items available yet.</div>
+                ) : catalogOptions.map((item) => (
+                  <label key={item.id} className="flex items-center gap-2 text-xs cursor-pointer rounded px-1.5 py-1 hover:bg-black/5 dark:hover:bg-white/5">
+                    <input
+                      type="checkbox"
+                      checked={form.target_catalog_item_ids.includes(item.id)}
+                      onChange={(event) => onFormChange({
+                        ...form,
+                        target_catalog_item_ids: event.target.checked
+                          ? [...form.target_catalog_item_ids, item.id]
+                          : form.target_catalog_item_ids.filter((id) => id !== item.id),
+                      })}
+                    />
+                    <span>{item.label}</span>
                   </label>
                 ))}
               </div>

@@ -377,6 +377,8 @@ Deno.serve(async (req) => {
       const bankId = asString(body.bankId, 200);
       const errorMessage = asString(body.errorMessage, 2000);
       const meta = asObject(body.meta);
+      const appVersion = asString(meta.appVersion, 80);
+      const runtime = asString(meta.runtime, 80);
       const exportPhase = normalizeExportPhase(meta.phase);
       const padNames = extractPadNames(body.padNames);
       const trimmedPadNames = padNames.slice(0, MAX_META_PAD_NAMES);
@@ -398,6 +400,8 @@ Deno.serve(async (req) => {
             sessionKey,
             deviceSessionId,
             isAdminLogin: true,
+            appVersion,
+            runtime,
           });
         }
         return json(200, { ok: true, skippedAdmin: true }, req);
@@ -484,6 +488,8 @@ Deno.serve(async (req) => {
             userId,
             sessionKey,
             deviceSessionId,
+            appVersion,
+            runtime,
           });
         } else if (eventType === "bank.export" && (!exportPhase || exportPhase === "local_export")) {
           await sendDiscordExportEvent({
@@ -496,6 +502,8 @@ Deno.serve(async (req) => {
             userId,
             bankId,
             requestId,
+            appVersion,
+            runtime,
           });
         } else if (eventType === "bank.import") {
           await sendDiscordImportEvent({
@@ -509,6 +517,8 @@ Deno.serve(async (req) => {
             userId,
             bankId,
             requestId,
+            appVersion,
+            runtime,
           });
         }
       } catch (err) {
@@ -549,6 +559,9 @@ Deno.serve(async (req) => {
       }
 
       const validation = await validateSingleSession(userId, deviceSessionId);
+      const heartbeatMeta = asObject(body.meta);
+      const heartbeatAppVersion = asString(heartbeatMeta.appVersion, 80);
+      const heartbeatRuntime = asString(heartbeatMeta.runtime, 80);
       if (!validation.valid) {
         await markSessionOffline(sessionKey, "session.conflict");
         await sendDiscordSessionConflictEvent({
@@ -558,6 +571,8 @@ Deno.serve(async (req) => {
           deviceSessionId,
           clientIp: parseClientIp(req),
           lastEvent: asString(body.lastEvent, 60) || "heartbeat",
+          appVersion: heartbeatAppVersion,
+          runtime: heartbeatRuntime,
         });
         return json(
           409,
@@ -620,6 +635,9 @@ Deno.serve(async (req) => {
       }
 
       const validation = await validateSingleSession(userId, deviceSessionId);
+      const sessionCheckMeta = asObject(body.meta);
+      const sessionCheckAppVersion = asString(sessionCheckMeta.appVersion, 80);
+      const sessionCheckRuntime = asString(sessionCheckMeta.runtime, 80);
       if (!validation.valid) {
         await markSessionOffline(sessionKey, "session.conflict");
         await sendDiscordSessionConflictEvent({
@@ -629,6 +647,8 @@ Deno.serve(async (req) => {
           deviceSessionId,
           clientIp: parseClientIp(req),
           lastEvent: asString(body.lastEvent, 60) || "session-check",
+          appVersion: sessionCheckAppVersion,
+          runtime: sessionCheckRuntime,
         });
         return json(
           409,
@@ -687,6 +707,9 @@ Deno.serve(async (req) => {
         errorMessage: asString(body.errorMessage, 2000),
         meta: asObject(body.meta),
       });
+      const signoutMeta = asObject(body.meta);
+      const signoutAppVersion = asString(signoutMeta.appVersion, 80);
+      const signoutRuntime = asString(signoutMeta.runtime, 80);
 
       if (!result.deduped && status === "success") {
         if (userId && deviceSessionId) {
@@ -710,6 +733,8 @@ Deno.serve(async (req) => {
             status,
             errorMessage: asString(body.errorMessage, 2000),
             clientIp: parseClientIp(req),
+            appVersion: signoutAppVersion,
+            runtime: signoutRuntime,
           });
         }
       } catch (err) {

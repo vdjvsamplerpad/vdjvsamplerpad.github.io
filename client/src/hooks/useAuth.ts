@@ -10,6 +10,7 @@ import {
   sendActivityHeartbeat,
   sendHeartbeatBeacon,
 } from '@/lib/activityLogger'
+import { identifyProductUser, resetProductAnalytics } from '@/lib/productAnalytics'
 
 // Keys for localStorage caching
 const USER_CACHE_KEY = 'vdjv-cached-user';
@@ -299,6 +300,25 @@ function useAuthValue(): AuthProviderValue {
   React.useEffect(() => {
     ensureActivityRuntime()
   }, [])
+
+  const lastAnalyticsUserIdRef = React.useRef<string | null>(null)
+
+  React.useEffect(() => {
+    const currentUserId = state.user?.id || null
+    if (!currentUserId) {
+      if (lastAnalyticsUserIdRef.current) {
+        resetProductAnalytics()
+        lastAnalyticsUserIdRef.current = null
+      }
+      return
+    }
+
+    identifyProductUser(currentUserId, {
+      role: state.profile?.role || null,
+      display_name: state.profile?.display_name || null,
+    })
+    lastAnalyticsUserIdRef.current = currentUserId
+  }, [state.profile?.display_name, state.profile?.role, state.user?.id])
 
   const setBannedState = React.useCallback((banned: boolean) => {
     cacheBanState(banned)

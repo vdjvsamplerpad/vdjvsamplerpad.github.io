@@ -245,7 +245,7 @@ const useDebouncedValue = <T,>(value: T, delayMs: number) => {
 };
 
 export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props) {
-  const [view, setView] = React.useState<ViewKey>('packages');
+  const [view, setView] = React.useState<ViewKey>('licenses');
 
   const [packagesByVersion, setPackagesByVersion] = React.useState<Record<InstallerVersionKey, InstallerPackage[]>>({ V2: [], V3: [] });
   const [packagesLoading, setPackagesLoading] = React.useState(false);
@@ -1098,8 +1098,8 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
           <div className={`text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>Manage V2 and V3 packages, customer licenses, and installer events from one admin surface.</div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'packages', theme)} onClick={() => setView('packages')}>Packages</Button>
           <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'licenses', theme)} onClick={() => setView('licenses')}>Licenses</Button>
+          <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'packages', theme)} onClick={() => setView('packages')}>Packages</Button>
           <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'catalog', theme)} onClick={() => setView('catalog')}>Catalog</Button>
           <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'events', theme)} onClick={() => setView('events')}>Events</Button>
           <Button type="button" variant="outline" size="sm" onClick={() => { if (view === 'packages') void reloadPackages(); if (view === 'licenses') void loadLicenses(); if (view === 'catalog') void loadCatalog(); if (view === 'events') void loadEvents(); }}>

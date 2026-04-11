@@ -7,6 +7,7 @@ import {
   isCanonicalDefaultBankIdentity,
   isExplicitDefaultBankIdentity,
 } from './useSamplerStore.bankIdentity';
+import { repairDuplicatePadIdsInBank } from './useSamplerStore.padHelpers';
 
 type MediaBackend = 'native' | 'idb';
 type SetState<T> = (value: T | ((prev: T) => T)) => void;
@@ -322,7 +323,10 @@ export const runRestoreAllFilesPipeline = async (
         position: pad.position ?? padIndex,
       })),
     }));
-    restoredBanks = dedupeBanksByIdentity(restoredBanks).banks.map((bank) => applyBankContentPolicy(bank));
+    restoredBanks = dedupeBanksByIdentity(restoredBanks).banks.map((bank) => {
+      const repairedBank = repairDuplicatePadIdsInBank(bank, generateId).bank;
+      return applyBankContentPolicy(repairedBank);
+    });
 
     const hideProtectedLock =
       typeof window !== 'undefined' && localStorage.getItem(hideProtectedBanksKey) === '1';

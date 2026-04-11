@@ -1326,18 +1326,71 @@ const setCachedUserIdentity = (userId: string, identity: { display_name: string;
   }
 };
 
-const normalizeAdminCatalogItem = (item: any) => {
+const normalizeCatalogItemType = (value: unknown): "single_bank" | "bank_bundle" => {
+  return String(value || "").trim().toLowerCase() === "bank_bundle" ? "bank_bundle" : "single_bank";
+};
+
+const getCatalogBundleItems = (item: any): any[] => {
+  if (!Array.isArray(item?.bank_catalog_bundle_items)) return [];
+  return [...item.bank_catalog_bundle_items].sort((left: any, right: any) => {
+    const leftPosition = Number.isFinite(Number(left?.position)) ? Number(left.position) : 0;
+    const rightPosition = Number.isFinite(Number(right?.position)) ? Number(right.position) : 0;
+    if (leftPosition !== rightPosition) return leftPosition - rightPosition;
+    return String(left?.id || "").localeCompare(String(right?.id || ""));
+  });
+};
+
+const getCatalogBundleBankEntries = (
+  item: any,
+  options?: { includeDeleted?: boolean },
+): Array<{ bankId: string; title: string; deleted: boolean }> => {
+  const includeDeleted = Boolean(options?.includeDeleted);
+  return getCatalogBundleItems(item)
+    .map((row: any) => {
+      const bank = getFirstRelationRow(row?.banks);
+      const bankId = asString(row?.bank_id, 80) || "";
+      const title = asString(bank?.title, 255) || "";
+      const deleted = Boolean(bank?.deleted_at);
+      return { bankId, title, deleted };
+    })
+    .filter((entry) => Boolean(entry.bankId) && (includeDeleted || !entry.deleted));
+};
+
+const getCatalogDisplayBank = (item: any) => {
   const bank = getFirstRelationRow(item?.banks);
+  const itemType = normalizeCatalogItemType(item?.item_type);
+  const fallbackTitle = asString(bank?.title, 255) || "Unknown Bank";
+  const fallbackDescription = asString(bank?.description, 2000) || "";
+  const title = itemType === "bank_bundle"
+    ? (asString(item?.bundle_title, 255) || fallbackTitle || "Untitled Bundle")
+    : fallbackTitle;
+  const description = itemType === "bank_bundle"
+    ? (asString(item?.bundle_description, 2000) || fallbackDescription)
+    : fallbackDescription;
+  const color = asString(bank?.color, 40) || "";
+  return { title, description, color };
+};
+
+const normalizeAdminCatalogItem = (item: any) => {
+  const displayBank = getCatalogDisplayBank(item);
+  const itemType = normalizeCatalogItemType(item?.item_type);
+  const bundleEntries = getCatalogBundleBankEntries(item, { includeDeleted: true });
   return {
     ...item,
+    item_type: itemType,
+    bundle_title: asString(item?.bundle_title, 255) || "",
+    bundle_description: asString(item?.bundle_description, 2000) || "",
+    bundle_bank_ids: bundleEntries.map((entry) => entry.bankId),
+    bundle_bank_titles: bundleEntries.map((entry) => entry.title || "Unknown Bank"),
+    bundle_count: bundleEntries.length,
     is_pinned: Boolean(item?.is_pinned),
     coming_soon: Boolean(item?.coming_soon),
     status: item?.is_published ? "published" : "draft",
     price_php: resolveCatalogPrice(item),
     bank: {
-      title: bank?.title || "Unknown Bank",
-      description: asString(bank?.description, 2000) || "",
-      color: asString(bank?.color, 40) || "",
+      title: displayBank.title,
+      description: displayBank.description,
+      color: displayBank.color,
     },
   };
 };
@@ -1349,19 +1402,42 @@ const normalizeStoreCatalogItem = (
     approvedRequests: Set<string>;
     pendingRequests: Set<string>;
     rejectedRequests: Map<string, string>;
+    approvedCatalogItems: Set<string>;
+    pendingCatalogItems: Set<string>;
+    rejectedCatalogItems: Map<string, string>;
     userId: string | null;
     isAdmin: boolean;
   },
 ) => {
-  const bank = getFirstRelationRow(item?.banks);
-  if (!bank || bank.deleted_at) return null;
-
+  const itemType = normalizeCatalogItemType(item?.item_type);
+  const displayBank = getCatalogDisplayBank(item);
   const bankId = asString(item?.bank_id, 80) || "";
+  const catalogItemId = asString(item?.id, 80) || "";
+  const bundleEntries = getCatalogBundleBankEntries(item);
+  const bundleBankIds = bundleEntries.map((entry) => entry.bankId);
+  const bundleBankTitles = bundleEntries.map((entry) => entry.title || "Unknown Bank");
+  if (itemType === "bank_bundle" && bundleBankIds.length === 0) return null;
+  const allBundleOwned = itemType === "bank_bundle"
+    ? bundleBankIds.length > 0 && bundleBankIds.every((id) => input.userGrants.has(id) || input.approvedRequests.has(id))
+    : false;
+  if (itemType !== "bank_bundle") {
+    const bank = getFirstRelationRow(item?.banks);
+    if (!bank || bank.deleted_at) return null;
+  } else if (!input.isAdmin && allBundleOwned) {
+    return null;
+  }
+
   const isComingSoon = Boolean(item?.coming_soon);
   let status = "buy";
   let rejectionMessage: string | null = null;
   if (isComingSoon) status = "pending";
-  else if (!item?.requires_grant) status = "free_download";
+  else if (itemType === "bank_bundle") {
+    if (input.pendingCatalogItems.has(catalogItemId)) status = "pending";
+    else if (input.rejectedCatalogItems.has(catalogItemId)) {
+      status = "rejected";
+      rejectionMessage = input.rejectedCatalogItems.get(catalogItemId) || null;
+    }
+  } else if (!item?.requires_grant) status = "free_download";
   else if (input.isAdmin) status = "granted_download";
   else if (input.userId) {
     if (input.userGrants.has(bankId) || input.approvedRequests.has(bankId)) status = "granted_download";
@@ -1373,19 +1449,32 @@ const normalizeStoreCatalogItem = (
   }
 
   return {
-    id: asString(item?.id, 80) || "",
+    id: catalogItemId,
     bank_id: bankId,
+    item_type: itemType,
+    bundle_bank_ids: bundleBankIds,
+    bundle_bank_titles: bundleBankTitles,
+    bundle_count: bundleBankIds.length,
+    owned_bundle_bank_count: itemType === "bank_bundle"
+      ? bundleBankIds.filter((id) => input.userGrants.has(id) || input.approvedRequests.has(id)).length
+      : null,
     is_paid: Boolean(item?.is_paid),
     requires_grant: Boolean(item?.requires_grant),
     coming_soon: isComingSoon,
     asset_protection: asString(item?.asset_protection, 40)?.toLowerCase() === "public" ? "public" : "encrypted",
     is_pinned: Boolean(item?.is_pinned),
-    is_owned: input.isAdmin || input.userGrants.has(bankId) || input.approvedRequests.has(bankId),
-    is_free_download: !item?.requires_grant,
-    is_pending: isComingSoon || input.pendingRequests.has(bankId),
-    is_rejected: input.rejectedRequests.has(bankId),
-    is_downloadable: status === "free_download" || status === "granted_download",
-    is_purchased: status === "granted_download",
+    is_owned: itemType === "bank_bundle"
+      ? allBundleOwned
+      : (input.isAdmin || input.userGrants.has(bankId) || input.approvedRequests.has(bankId)),
+    is_free_download: itemType === "bank_bundle" ? false : !item?.requires_grant,
+    is_pending: itemType === "bank_bundle"
+      ? (isComingSoon || input.pendingCatalogItems.has(catalogItemId))
+      : (isComingSoon || input.pendingRequests.has(bankId)),
+    is_rejected: itemType === "bank_bundle"
+      ? input.rejectedCatalogItems.has(catalogItemId)
+      : input.rejectedRequests.has(bankId),
+    is_downloadable: itemType === "bank_bundle" ? false : (status === "free_download" || status === "granted_download"),
+    is_purchased: itemType === "bank_bundle" ? false : status === "granted_download",
     price_php: isComingSoon ? null : resolveCatalogPrice(item),
     original_price_php: asPriceNumber(item?.original_price_php),
     discount_amount_php: asPriceNumber(item?.discount_amount_php) || 0,
@@ -1401,9 +1490,9 @@ const normalizeStoreCatalogItem = (
     status,
     rejection_message: rejectionMessage,
     bank: {
-      title: asString(bank?.title, 255) || "Unknown Bank",
-      description: asString(bank?.description, 2000) || "",
-      color: asString(bank?.color, 40) || "",
+      title: displayBank.title,
+      description: displayBank.description,
+      color: displayBank.color,
     },
   };
 };
@@ -2328,12 +2417,7 @@ const getStoreCatalog = async (req: Request) => {
   }
 
   const catalogSelect =
-    "id,bank_id,is_paid,requires_grant,asset_protection,price_label,price_php,sha256,thumbnail_path,is_pinned,banks ( title, description, color, deleted_at )";
-  const applyCatalogSearch = (query: any): any => {
-    if (!q) return query;
-    const escaped = q.replace(/[,%_]/g, "");
-    return query.or(`title.ilike.%${escaped}%,description.ilike.%${escaped}%`, { foreignTable: "banks" });
-  };
+    "id,bank_id,item_type,bundle_title,bundle_description,is_paid,requires_grant,asset_protection,price_label,price_php,sha256,thumbnail_path,is_pinned,coming_soon,bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title, description, color, deleted_at )";
 
   let catalogQuery: any = admin
     .from("bank_catalog_items")
@@ -2342,18 +2426,15 @@ const getStoreCatalog = async (req: Request) => {
   if (sort === "purchased" && purchasedBankIds.length > 0) {
     catalogQuery = catalogQuery.in("bank_id", purchasedBankIds);
   }
-  catalogQuery = applyCatalogSearch(catalogQuery);
   catalogQuery = catalogQuery.order("created_at", { ascending: false });
 
   let { data: catalogItems, error: catalogError } = await catalogQuery;
   if (catalogError && /is_pinned/i.test(catalogError.message || "")) {
-      const fallback = await applyCatalogSearch(
-      admin
-        .from("bank_catalog_items")
-        .select("id,bank_id,is_paid,requires_grant,asset_protection,price_label,price_php,sha256,thumbnail_path,banks ( title, description, color, deleted_at )")
-        .eq("is_published", true)
-        .order("created_at", { ascending: false }),
-    );
+    const fallback = await admin
+      .from("bank_catalog_items")
+      .select("id,bank_id,item_type,bundle_title,bundle_description,is_paid,requires_grant,asset_protection,price_label,price_php,sha256,thumbnail_path,coming_soon,bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title, description, color, deleted_at )")
+      .eq("is_published", true)
+      .order("created_at", { ascending: false });
     catalogItems = fallback.data;
     catalogError = fallback.error;
   }
@@ -2362,22 +2443,31 @@ const getStoreCatalog = async (req: Request) => {
   let userGrants = new Set<string>();
   let pendingRequests = new Set<string>();
   let approvedRequests = new Set<string>();
+  let pendingCatalogItems = new Set<string>();
+  let approvedCatalogItems = new Set<string>();
   const rejectedRequests = new Map<string, string>();
+  const rejectedCatalogItems = new Map<string, string>();
   const catalogBankIds = Array.from(new Set((catalogItems || []).map((item: any) => asString(item?.bank_id, 80)).filter(Boolean) as string[]));
+  const catalogItemIds = Array.from(new Set((catalogItems || []).map((item: any) => asString(item?.id, 80)).filter(Boolean) as string[]));
   if (userId && catalogBankIds.length > 0) {
     const [accessDataResult, requestDataResult] = await Promise.all([
       admin.from("user_bank_access").select("bank_id").eq("user_id", userId).in("bank_id", catalogBankIds),
       admin
         .from("bank_purchase_requests")
-        .select("bank_id,status,rejection_message")
+        .select("bank_id,catalog_item_id,status,rejection_message")
         .eq("user_id", userId)
-        .in("bank_id", catalogBankIds),
+        .in("catalog_item_id", catalogItemIds),
     ]);
     if (accessDataResult.data) userGrants = new Set(accessDataResult.data.map((row: any) => row.bank_id));
     (requestDataResult.data || []).forEach((row: any) => {
       if (row.status === "pending") pendingRequests.add(row.bank_id);
       if (row.status === "approved") approvedRequests.add(row.bank_id);
       if (row.status === "rejected") rejectedRequests.set(row.bank_id, row.rejection_message || "");
+      const catalogItemId = asString(row?.catalog_item_id, 80) || "";
+      if (!catalogItemId) return;
+      if (row.status === "pending") pendingCatalogItems.add(catalogItemId);
+      if (row.status === "approved") approvedCatalogItems.add(catalogItemId);
+      if (row.status === "rejected") rejectedCatalogItems.set(catalogItemId, row.rejection_message || "");
     });
   }
 
@@ -2391,11 +2481,26 @@ const getStoreCatalog = async (req: Request) => {
         approvedRequests,
         pendingRequests,
         rejectedRequests,
+        approvedCatalogItems,
+        pendingCatalogItems,
+        rejectedCatalogItems,
         userId,
         isAdmin: userIsAdmin,
       });
     })
     .filter(Boolean) as any[];
+
+  if (q) {
+    const needle = q.trim().toLocaleLowerCase("en");
+    items = items.filter((item) => {
+      const haystacks = [
+        String(item?.bank?.title || ""),
+        String(item?.bank?.description || ""),
+        ...(Array.isArray(item?.bundle_bank_titles) ? item.bundle_bank_titles : []),
+      ];
+      return haystacks.some((value) => String(value || "").toLocaleLowerCase("en").includes(needle));
+    });
+  }
 
   const compareTitle = (left: any, right: any, direction: "asc" | "desc" = "asc") => {
     const leftTitle = String(left?.bank?.title || "");
@@ -4022,12 +4127,8 @@ const adminInstallerPurchaseRequestAction = async (requestId: string, body: any,
   if (!requestRow) return fail(404, "Request not found");
   if (action === "refund") {
     if (requestRow.status !== "approved") return badRequest("Only approved requests can be refunded");
-    const approvedRows = (await listInstallerPurchaseRequestsByReceiptReference({
-      admin,
-      receiptReference: asString(requestRow?.receipt_reference, 160) || "",
-      email: normalizeEmail(requestRow?.email) || "",
-      version: normalizeInstallerBuyVersion(requestRow?.version) || "V2",
-    })).filter((row: any) => String(row?.status || "") === "approved");
+    const approvedRows = (await loadInstallerPurchaseBatchRows(admin, requestRow))
+      .filter((row: any) => String(row?.status || "") === "approved");
     if (approvedRows.length === 0) return badRequest("No approved requests found to refund");
     if (approvedRows.every((row: any) => Boolean(row?.is_refunded))) return badRequest("Request is already refunded");
     const refundIds = approvedRows
@@ -5524,25 +5625,25 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
   }
 
   const normalizedItems: Array<{ bankId: string; catalogItemId: string }> = [];
-  const seenBankIds = new Set<string>();
+  const seenCatalogItemIds = new Set<string>();
   for (const item of itemList) {
     const normalizedBankId = asUuid(item?.bankId);
     const normalizedCatalogItemId = asUuid(item?.catalogItemId);
     if (!normalizedBankId || !normalizedCatalogItemId) return badRequest("Each item must include valid bankId and catalogItemId");
-    if (seenBankIds.has(normalizedBankId)) return badRequest("Duplicate bank in purchase request is not allowed");
-    seenBankIds.add(normalizedBankId);
+    if (seenCatalogItemIds.has(normalizedCatalogItemId)) return badRequest("Duplicate catalog item in purchase request is not allowed");
+    seenCatalogItemIds.add(normalizedCatalogItemId);
     normalizedItems.push({ bankId: normalizedBankId, catalogItemId: normalizedCatalogItemId });
   }
 
   const catalogItemIds = [...new Set(normalizedItems.map((item) => item.catalogItemId))];
   let catalogQuery: any = await admin
     .from("bank_catalog_items")
-    .select("id, bank_id, is_paid, price_label, price_php, is_published, coming_soon, banks ( title )")
+    .select("id, bank_id, item_type, bundle_title, bundle_description, is_paid, price_label, price_php, is_published, coming_soon, banks ( title, description, color )")
     .in("id", catalogItemIds);
   if (catalogQuery.error && /price_php/i.test(catalogQuery.error.message || "")) {
     catalogQuery = await admin
       .from("bank_catalog_items")
-      .select("id, bank_id, is_paid, price_label, is_published, coming_soon, banks ( title )")
+      .select("id, bank_id, item_type, bundle_title, bundle_description, is_paid, price_label, is_published, coming_soon, banks ( title, description, color )")
       .in("id", catalogItemIds);
   }
   if (catalogQuery.error) return fail(500, catalogQuery.error.message);
@@ -5636,11 +5737,7 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
     id: (insertResult.data?.[index] as any)?.id || null,
     receipt_reference: (insertResult.data?.[index] as any)?.receipt_reference || receiptReference,
     banks: {
-      title: asString(enrichedCatalogById.get(row.catalog_item_id)?.banks?.[0]?.title, 200)
-        || asString(enrichedCatalogById.get(row.catalog_item_id)?.banks?.title, 200)
-        || asString(catalogById.get(row.catalog_item_id)?.banks?.[0]?.title, 200)
-        || asString(catalogById.get(row.catalog_item_id)?.banks?.title, 200)
-      || "Unknown Bank",
+      title: getCatalogDisplayBank(enrichedCatalogById.get(row.catalog_item_id) || catalogById.get(row.catalog_item_id)).title,
     },
   }));
 
@@ -7162,19 +7259,20 @@ const listAdminStoreCatalog = async () => {
   const admin = createServiceClient();
   let { data, error } = await admin
     .from("bank_catalog_items")
-    .select("*, banks ( title, deleted_at )")
+    .select("*, bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title, description, color, deleted_at )")
     .order("is_pinned", { ascending: false })
     .order("created_at", { ascending: false });
   if (error && /is_pinned/i.test(error.message || "")) {
     const fallback = await admin
       .from("bank_catalog_items")
-      .select("*, banks ( title, deleted_at )")
+      .select("*, bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title, description, color, deleted_at )")
       .order("created_at", { ascending: false });
     data = fallback.data;
     error = fallback.error;
   }
   if (error) return fail(500, error.message);
   const visible = (data || []).filter((item: any) => {
+    if (normalizeCatalogItemType(item?.item_type) === "bank_bundle") return true;
     const bank = getFirstRelationRow(item?.banks);
     return !bank?.deleted_at;
   });
@@ -7183,18 +7281,132 @@ const listAdminStoreCatalog = async () => {
   return ok({ items: visible.map(normalizeAdminCatalogItem), banners: bannersResult.banners });
 };
 
+const normalizeBundleBankIds = (body: any): string[] => {
+  const raw = Array.isArray(body?.bundle_bank_ids) ? body.bundle_bank_ids : body?.bundleBankIds;
+  return Array.from(new Set((Array.isArray(raw) ? raw : []).map((value) => asUuid(value)).filter(Boolean) as string[]));
+};
+
+const sanitizeBundleAssetName = (title: string): string => {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return `${slug || "bundle"}-package.bundle`;
+};
+
+const validateBundleBanks = async (
+  admin: ReturnType<typeof createServiceClient>,
+  bundleBankIds: string[],
+): Promise<{ ok: true; rows: any[] } | { ok: false; response: Response }> => {
+  if (bundleBankIds.length < 2) {
+    return { ok: false, response: badRequest("Bundle must include at least two banks") };
+  }
+  const { data, error } = await admin
+    .from("banks")
+    .select("id,title,deleted_at")
+    .in("id", bundleBankIds);
+  if (error) return { ok: false, response: fail(500, error.message) };
+  const rows = Array.isArray(data) ? data : [];
+  if (rows.length !== bundleBankIds.length) {
+    return { ok: false, response: badRequest("One or more included banks were not found") };
+  }
+  if (rows.some((row: any) => Boolean(row?.deleted_at))) {
+    return { ok: false, response: badRequest("Archived banks cannot be added to a bundle") };
+  }
+  return { ok: true, rows };
+};
+
+const createAdminStoreBundle = async (body: any, adminUserId: string) => {
+  const admin = createServiceClient();
+  const title = asString(body?.title, 255);
+  const description = asString(body?.description, 2000) || "";
+  const bundleBankIds = normalizeBundleBankIds(body);
+  const comingSoon = Boolean(body?.coming_soon);
+  const isPinned = Boolean(body?.is_pinned);
+  const rawPrice = body?.price_php;
+  const parsedPrice = rawPrice === null || rawPrice === "" || typeof rawPrice === "undefined"
+    ? null
+    : Number(rawPrice);
+  if (!title) return badRequest("title is required");
+  const bundleValidation = await validateBundleBanks(admin, bundleBankIds);
+  if (!bundleValidation.ok) return bundleValidation.response;
+  if (!comingSoon && (!Number.isFinite(parsedPrice) || Number(parsedPrice) <= 0)) {
+    return badRequest("Bundle price must be set before creating a live bundle draft");
+  }
+
+  const firstBankId = bundleBankIds[0];
+  const row = {
+    bank_id: firstBankId,
+    item_type: "bank_bundle",
+    bundle_title: title,
+    bundle_description: description,
+    is_paid: !comingSoon,
+    requires_grant: true,
+    coming_soon: comingSoon,
+    is_pinned: isPinned,
+    price_php: comingSoon ? null : roundMoney(Number(parsedPrice)),
+    price_label: comingSoon ? null : String(roundMoney(Number(parsedPrice))),
+    expected_asset_name: sanitizeBundleAssetName(title),
+    asset_protection: "encrypted",
+    is_published: false,
+    thumbnail_path: normalizeOptionalHttpUrl(body?.thumbnail_path) || null,
+  };
+  const insertResult = await admin
+    .from("bank_catalog_items")
+    .insert(row)
+    .select("*, bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title, description, color, deleted_at )")
+    .maybeSingle();
+  if (insertResult.error || !insertResult.data) return fail(500, insertResult.error?.message || "Failed to create bundle");
+  const catalogItemId = asString(insertResult.data?.id, 80) || "";
+  if (!catalogItemId) return fail(500, "Failed to create bundle");
+  const { error: bundleInsertError } = await admin
+    .from("bank_catalog_bundle_items")
+    .insert(bundleBankIds.map((bankId, index) => ({
+      catalog_item_id: catalogItemId,
+      bank_id: bankId,
+      position: index,
+    })));
+  if (bundleInsertError) return fail(500, bundleInsertError.message);
+
+  const refreshed = await admin
+    .from("bank_catalog_items")
+    .select("*, bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title, description, color, deleted_at )")
+    .eq("id", catalogItemId)
+    .maybeSingle();
+  if (refreshed.error || !refreshed.data) return fail(500, refreshed.error?.message || "Failed to load created bundle");
+
+  await swallowDiscordError(() => sendDiscordAdminActionEvent({
+    severity: "info",
+    title: "Store Bundle Created",
+    description: "Admin created a new bundle catalog draft.",
+    actorUserId: adminUserId,
+    bankId: firstBankId,
+    catalogItemId,
+    extraFields: [
+      { name: "Bundle", value: title, inline: false },
+      { name: "Included Banks", value: String(bundleBankIds.length), inline: true },
+      { name: "Price", value: comingSoon ? "Coming Soon" : String(roundMoney(Number(parsedPrice))), inline: true },
+    ],
+  }));
+
+  return ok({ item: normalizeAdminCatalogItem(refreshed.data) });
+};
+
 const patchAdminStoreCatalog = async (catalogItemId: string, body: any, adminUserId: string) => {
   const admin = createServiceClient();
   const { data: existing, error: existingError } = await admin
     .from("bank_catalog_items")
-    .select("id,bank_id,is_paid,requires_grant,asset_protection,thumbnail_path,coming_soon")
+    .select("id,bank_id,item_type,is_paid,requires_grant,asset_protection,thumbnail_path,coming_soon,bundle_title,bundle_description,bank_catalog_bundle_items ( bank_id, position )")
     .eq("id", catalogItemId)
     .maybeSingle();
   if (existingError) return fail(500, existingError.message);
   if (!existing) return fail(404, "Catalog item not found");
 
+  const itemType = normalizeCatalogItemType(existing?.item_type);
   const updates: Record<string, unknown> = {};
   const bankUpdates: Record<string, unknown> = {};
+  let nextBundleBankIds: string[] | null = null;
   if (Object.prototype.hasOwnProperty.call(body, "status")) {
     const nextStatus = String(body.status || "").toLowerCase();
     if (!["draft", "published", "archived"].includes(nextStatus)) return badRequest("Invalid status");
@@ -7227,6 +7439,13 @@ const patchAdminStoreCatalog = async (catalogItemId: string, body: any, adminUse
   const nextRequiresGrant = typeof updates.requires_grant === "boolean"
     ? Boolean(updates.requires_grant)
     : Boolean(existing.requires_grant);
+  const nextComingSoon = typeof updates.coming_soon === "boolean" ? Boolean(updates.coming_soon) : Boolean(existing.coming_soon);
+  if (itemType === "bank_bundle") {
+    updates.requires_grant = true;
+    if (!nextComingSoon && !nextIsPaid) {
+      return badRequest("Bundles must stay paid unless they are marked Coming Soon");
+    }
+  }
   if (nextIsPaid && !nextRequiresGrant) {
     return badRequest("Paid catalog items must require grant");
   }
@@ -7267,17 +7486,28 @@ const patchAdminStoreCatalog = async (catalogItemId: string, body: any, adminUse
   if (Object.prototype.hasOwnProperty.call(body, "title")) {
     const title = asString(body.title, 255);
     if (!title) return badRequest("title must be a non-empty string");
-    bankUpdates.title = title;
+    if (itemType === "bank_bundle") updates.bundle_title = title;
+    else bankUpdates.title = title;
   }
   if (Object.prototype.hasOwnProperty.call(body, "description")) {
     const description = asString(body.description, 2000);
-    bankUpdates.description = description || "";
+    if (itemType === "bank_bundle") updates.bundle_description = description || "";
+    else bankUpdates.description = description || "";
   }
   if (Object.prototype.hasOwnProperty.call(body, "color")) {
     const color = asString(body.color, 40);
     bankUpdates.color = color || null;
   }
-  if (Object.keys(updates).length === 0 && Object.keys(bankUpdates).length === 0) {
+  if (itemType === "bank_bundle" && (
+    Object.prototype.hasOwnProperty.call(body, "bundle_bank_ids")
+    || Object.prototype.hasOwnProperty.call(body, "bundleBankIds")
+  )) {
+    nextBundleBankIds = normalizeBundleBankIds(body);
+    const bundleValidation = await validateBundleBanks(admin, nextBundleBankIds);
+    if (!bundleValidation.ok) return bundleValidation.response;
+    updates.bank_id = nextBundleBankIds[0];
+  }
+  if (Object.keys(updates).length === 0 && Object.keys(bankUpdates).length === 0 && nextBundleBankIds === null) {
     return badRequest("No valid fields to update");
   }
 
@@ -7292,20 +7522,36 @@ const patchAdminStoreCatalog = async (catalogItemId: string, body: any, adminUse
     if (!bankUpdate.data) return fail(404, "Target bank not found");
   }
 
+  if (nextBundleBankIds) {
+    const { error: deleteBundleError } = await admin
+      .from("bank_catalog_bundle_items")
+      .delete()
+      .eq("catalog_item_id", catalogItemId);
+    if (deleteBundleError) return fail(500, deleteBundleError.message);
+    const { error: insertBundleError } = await admin
+      .from("bank_catalog_bundle_items")
+      .insert(nextBundleBankIds.map((bankId, index) => ({
+        catalog_item_id: catalogItemId,
+        bank_id: bankId,
+        position: index,
+      })));
+    if (insertBundleError) return fail(500, insertBundleError.message);
+  }
+
   let data: any = null;
   if (Object.keys(updates).length > 0) {
     const updateResult = await admin
       .from("bank_catalog_items")
       .update(updates)
       .eq("id", catalogItemId)
-      .select("*, banks ( title, description, color )")
+      .select("*, bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title, description, color, deleted_at )")
       .maybeSingle();
     if (updateResult.error) return fail(500, updateResult.error.message);
     data = updateResult.data;
   } else {
     const selectResult = await admin
       .from("bank_catalog_items")
-      .select("*, banks ( title, description, color )")
+      .select("*, bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title, description, color, deleted_at )")
       .eq("id", catalogItemId)
       .maybeSingle();
     if (selectResult.error) return fail(500, selectResult.error.message);
@@ -7378,14 +7624,13 @@ const listAdminStorePromotions = async () => {
   if (catalogItemIds.size > 0) {
     const { data, error } = await admin
       .from("bank_catalog_items")
-      .select("id,bank_id,banks ( title )")
+      .select("id,item_type,bundle_title,banks ( title )")
       .in("id", Array.from(catalogItemIds));
     if (error) return fail(500, error.message);
     for (const row of data || []) {
       const itemId = asUuid(row?.id);
       if (!itemId) continue;
-      const bank = getFirstRelationRow(row?.banks);
-      catalogLabelById.set(itemId, asString(bank?.title, 255) || "Unknown Catalog Item");
+      catalogLabelById.set(itemId, getCatalogDisplayBank(row).title || "Unknown Catalog Item");
     }
   }
 
@@ -8315,6 +8560,10 @@ Deno.serve(async (req) => {
       return await adminStoreRequestAction(requestId, body, adminUserId);
     }
     if (req.method === "GET" && scoped[2] === "catalog" && scoped.length === 3) return await listAdminStoreCatalog();
+    if (req.method === "POST" && scoped[2] === "catalog" && scoped[3] === "bundles" && scoped.length === 4) {
+      const body = await req.json().catch(() => ({}));
+      return await createAdminStoreBundle(body, adminCheck.userId);
+    }
     if (req.method === "POST" && scoped[2] === "assets" && scoped[3] === "upload" && scoped.length === 4) {
       const body = await req.json().catch(() => ({}));
       return await createAdminStoreAssetUpload(req, body);

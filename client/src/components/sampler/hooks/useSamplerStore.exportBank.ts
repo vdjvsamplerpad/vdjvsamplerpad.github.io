@@ -369,6 +369,8 @@ export const runExportBankPipeline = async (
               if (exportPad) {
                 exportPad.startTimeMs = 0;
                 exportPad.endTimeMs = trimResult.newDurationMs;
+                exportPad.audioDurationMs = trimResult.newDurationMs;
+                exportPad.audioBytes = audioBlob?.size || exportPad.audioBytes;
               }
               addOperationStage(diagnostics, 'audio-trimmed', {
                 padId: pad.id,

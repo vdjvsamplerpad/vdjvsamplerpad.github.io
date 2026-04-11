@@ -55,6 +55,10 @@ export interface NativeBankImportErrorEvent {
   jobId: string;
   message: string;
   stage?: string;
+  reason?: string;
+  errorClass?: string;
+  causeClass?: string;
+  causeMessage?: string;
 }
 
 export interface NativeSharedBankPickResult {
@@ -188,7 +192,28 @@ const runNativeImportJob = async (
       Promise.resolve(
         NativeBankImport.addListener('nativeImportFailed', (event: NativeBankImportErrorEvent) => {
           if (!activeJobId || event?.jobId !== activeJobId) return;
-          reject(new Error(event?.message || 'Native import failed.'));
+          const stage = typeof event?.stage === 'string' && event.stage.trim().length > 0 ? event.stage.trim() : '';
+          const reason = typeof event?.reason === 'string' && event.reason.trim().length > 0 ? event.reason.trim() : '';
+          const errorClass =
+            typeof event?.errorClass === 'string' && event.errorClass.trim().length > 0
+              ? event.errorClass.trim()
+              : '';
+          const causeClass =
+            typeof event?.causeClass === 'string' && event.causeClass.trim().length > 0
+              ? event.causeClass.trim()
+              : '';
+          const causeMessage =
+            typeof event?.causeMessage === 'string' && event.causeMessage.trim().length > 0
+              ? event.causeMessage.trim()
+              : '';
+          const details = [stage && `stage=${stage}`, reason && `reason=${reason}`, errorClass && `error=${errorClass}`, causeClass && `cause=${causeClass}`]
+            .filter(Boolean)
+            .join(', ');
+          const baseMessage = event?.message || 'Native import failed.';
+          const fullMessage = details
+            ? `${baseMessage} (${details}${causeMessage ? `: ${causeMessage}` : ''})`
+            : baseMessage;
+          reject(new Error(fullMessage));
         })
       ).then((handle) => handles.push(handle));
     });

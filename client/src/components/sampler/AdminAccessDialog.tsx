@@ -135,6 +135,7 @@ export function AdminAccessDialog({
     bannerUploadingIds,
     catalogBankOptions,
     catalogTotalPages,
+    createStoreCatalogBundle,
     executeStorePublish,
     expandedStoreRequestId,
     filteredDrafts,
@@ -2257,6 +2258,7 @@ export function AdminAccessDialog({
                   onPageChange={setStoreCatalogPage}
                   onApplyStoreMaintenanceMode={(enabled, message) => handleStoreMaintenanceMode(enabled, message)}
                   onApplyDraftAction={handleStoreCatalogDraftAction}
+                  onCreateBundle={createStoreCatalogBundle}
                   onReload={loadStoreCatalog}
                   pushNotice={pushNotice}
                 />

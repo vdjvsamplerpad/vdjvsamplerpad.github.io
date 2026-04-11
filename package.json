@@ -65,6 +65,7 @@
     "jszip": "^3.10.1",
     "lamejs": "^1.2.1",
     "lucide-react": "0.474.0",
+    "posthog-js": "^1.364.4",
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "react-router-dom": "^6.28.0",

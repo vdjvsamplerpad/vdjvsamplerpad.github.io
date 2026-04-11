@@ -17,6 +17,7 @@ import {
 import { VersionSelector } from '@/components/landing/VersionSelector';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links';
+import { captureProductEvent } from '@/lib/productAnalytics';
 import { getLandingPagePath } from '@/lib/runtime-routes';
 import { supabase } from '@/lib/supabase';
 
@@ -166,6 +167,7 @@ export default function BuyPage() {
   const [selectedSkus, setSelectedSkus] = React.useState<string[]>([]);
   const [result, setResult] = React.useState<SubmitResult | null>(null);
   const [versionDescriptionExpanded, setVersionDescriptionExpanded] = React.useState(false);
+  const installerBuyStartedRef = React.useRef<Record<InstallerVersion, boolean>>({ V2: false, V3: false });
 
   React.useEffect(() => {
     const requestedVersion = String(searchParams.get('version') || '').toUpperCase();
@@ -237,6 +239,22 @@ export default function BuyPage() {
     }
     setSelectedSkus((current) => current.filter((skuCode) => versionProducts.some((item) => item.skuCode === skuCode)));
   }, [config.v2v3Products, selectedVersion, versionProducts]);
+
+  React.useEffect(() => {
+    if (selectedVersion === 'V1') return;
+    const version = selectedVersion as InstallerVersion;
+    if (selectedSkus.length > 0 && !installerBuyStartedRef.current[version]) {
+      captureProductEvent('installer_buy_started', {
+        version,
+        selected_count: selectedSkus.length,
+      });
+      installerBuyStartedRef.current[version] = true;
+      return;
+    }
+    if (selectedSkus.length === 0) {
+      installerBuyStartedRef.current[version] = false;
+    }
+  }, [selectedSkus.length, selectedVersion]);
 
   const handleProductToggle = React.useCallback((product: BuyConfigResponse['v2v3Products'][number]) => {
     setSelectedSkus((current) => {
@@ -404,6 +422,12 @@ export default function BuyPage() {
           throw new Error(mapRegistrationError(submitRes.code, submitRes.payload));
         }
         const isApproved = String(submitRes.data?.status || 'pending') === 'approved';
+        captureProductEvent('payment_proof_submitted', {
+          request_type: 'account',
+          payment_channel: paymentChannel,
+          status: isApproved ? 'approved' : 'pending',
+          version: 'V1',
+        });
         setResult({
           version: 'V1',
           status: isApproved ? 'approved' : 'pending',
@@ -429,6 +453,23 @@ export default function BuyPage() {
           throw new Error(mapRegistrationError(submitRes.code, submitRes.payload));
         }
         const isApproved = String(submitRes.data?.status || 'pending') === 'approved';
+        captureProductEvent('payment_proof_submitted', {
+          request_type: 'installer',
+          payment_channel: paymentChannel,
+          status: isApproved ? 'approved' : 'pending',
+          version: selectedVersion,
+          selected_count: selectedProducts.length,
+          total_php: selectedProducts.reduce((sum, product) => sum + (Number(product.pricePhp) || 0), 0),
+        });
+        captureProductEvent('installer_buy_submitted', {
+          version: selectedVersion,
+          payment_channel: paymentChannel,
+          status: isApproved ? 'approved' : 'pending',
+          selected_count: selectedProducts.length,
+          has_update: selectedProducts.some((product) => product.productType === 'update'),
+          has_standard: selectedProducts.some((product) => product.productType === 'standard'),
+          has_promax: selectedProducts.some((product) => product.productType === 'promax'),
+        });
         setResult({
           version: selectedVersion as InstallerVersion,
           status: isApproved ? 'approved' : 'pending',

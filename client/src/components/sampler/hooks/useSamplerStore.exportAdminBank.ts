@@ -547,8 +547,10 @@ export const runExportAdminBankPipeline = async (
           let audioBlob = sourceBlob;
           if (exportMode === 'trim_mp3') {
             if (exportPad && shouldBakeTrim) {
+              const bakedDurationMs = Math.max(0, (pad.endTimeMs || 0) - (pad.startTimeMs || 0));
               exportPad.startTimeMs = 0;
-              exportPad.endTimeMs = Math.max(0, (pad.endTimeMs || 0) - (pad.startTimeMs || 0));
+              exportPad.endTimeMs = bakedDurationMs;
+              exportPad.audioDurationMs = bakedDurationMs;
               exportPad.savedHotcuesMs = remapSavedHotcuesForBakedTrim(
                 pad.savedHotcuesMs,
                 pad.startTimeMs,
@@ -567,6 +569,8 @@ export const runExportAdminBankPipeline = async (
               if (exportPad && mp3Result.appliedTrim) {
                 exportPad.startTimeMs = 0;
                 exportPad.endTimeMs = mp3Result.newDurationMs;
+                exportPad.audioDurationMs = mp3Result.newDurationMs;
+                exportPad.audioBytes = audioBlob?.size || exportPad.audioBytes;
                 exportPad.savedHotcuesMs = remapSavedHotcuesForBakedTrim(
                   pad.savedHotcuesMs,
                   pad.startTimeMs,
@@ -596,6 +600,8 @@ export const runExportAdminBankPipeline = async (
                 if (exportPad) {
                   exportPad.startTimeMs = 0;
                   exportPad.endTimeMs = trimResult.newDurationMs;
+                  exportPad.audioDurationMs = trimResult.newDurationMs;
+                  exportPad.audioBytes = audioBlob?.size || exportPad.audioBytes;
                   exportPad.savedHotcuesMs = remapSavedHotcuesForBakedTrim(
                     pad.savedHotcuesMs,
                     pad.startTimeMs,
@@ -617,8 +623,10 @@ export const runExportAdminBankPipeline = async (
               }
             } else {
               if (exportPad) {
+                const bakedDurationMs = Math.max(0, (pad.endTimeMs || 0) - (pad.startTimeMs || 0));
                 exportPad.startTimeMs = 0;
-                exportPad.endTimeMs = Math.max(0, (pad.endTimeMs || 0) - (pad.startTimeMs || 0));
+                exportPad.endTimeMs = bakedDurationMs;
+                exportPad.audioDurationMs = bakedDurationMs;
                 exportPad.savedHotcuesMs = remapSavedHotcuesForBakedTrim(
                   pad.savedHotcuesMs,
                   pad.startTimeMs,

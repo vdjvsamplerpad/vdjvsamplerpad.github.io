@@ -66,5 +66,44 @@ export const summarizeMissingMedia = (
   };
 };
 
+export const repairDuplicatePadIdsInBank = (
+  bank: SamplerBank,
+  generateId: () => string
+): { bank: SamplerBank; repairedCount: number } => {
+  const seenIds = new Set<string>();
+  let repairedCount = 0;
+
+  const nextPads = bank.pads.map((pad) => {
+    const normalizedId = typeof pad.id === 'string' ? pad.id.trim() : '';
+    let nextId = normalizedId;
+
+    if (!nextId || seenIds.has(nextId)) {
+      do {
+        nextId = generateId();
+      } while (seenIds.has(nextId));
+      repairedCount += 1;
+    }
+
+    seenIds.add(nextId);
+    if (nextId === pad.id) return pad;
+    return {
+      ...pad,
+      id: nextId,
+    };
+  });
+
+  if (repairedCount <= 0) {
+    return { bank, repairedCount: 0 };
+  }
+
+  return {
+    bank: {
+      ...bank,
+      pads: nextPads,
+    },
+    repairedCount,
+  };
+};
+
 export const generateId = (): string =>
   Date.now().toString(36) + Math.random().toString(36).substr(2);

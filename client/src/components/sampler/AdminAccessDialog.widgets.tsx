@@ -2,6 +2,7 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import type { SortDirection } from '@/lib/admin-api';
 import { ChevronLeft, ChevronRight, EyeOff, Globe, ImageIcon, Loader2, Upload } from 'lucide-react';
@@ -563,18 +564,27 @@ export function CatalogCard({
   onApplyAction,
   pushNotice,
   onReload,
+  bundleBankChoices,
 }: {
   draft: CatalogDraft;
   isDark: boolean;
   onApplyAction: (draft: CatalogDraft, updates: Record<string, any>, action: 'publish' | 'save' | 'unpublish') => Promise<boolean>;
   pushNotice: (notice: { variant: 'success' | 'error'; message: string }) => void;
   onReload: () => void;
+  bundleBankChoices: Array<{ id: string; label: string }>;
 }) {
+  const itemType = draft.item_type === 'bank_bundle' ? 'bank_bundle' : 'single_bank';
+  const isBundle = itemType === 'bank_bundle';
+  const initialTitle = isBundle ? (draft.bundle_title || draft.bank?.title || '') : (draft.bank?.title || '');
+  const initialDescription = isBundle ? (draft.bundle_description || '') : (draft.bank?.description || '');
   const [isFree, setIsFree] = React.useState(!draft.is_paid && !draft.coming_soon);
   const [isPinned, setIsPinned] = React.useState(Boolean(draft.is_pinned));
   const [isComingSoon, setIsComingSoon] = React.useState(Boolean(draft.coming_soon));
   const [pricePhp, setPricePhp] = React.useState(draft.price_php === null ? '' : draft.price_php.toString());
   const [lastPaidPrice, setLastPaidPrice] = React.useState(draft.price_php === null ? '' : draft.price_php.toString());
+  const [title, setTitle] = React.useState(initialTitle);
+  const [description, setDescription] = React.useState(initialDescription);
+  const [bundleBankIds, setBundleBankIds] = React.useState<string[]>([...(draft.bundle_bank_ids || [])]);
   const [thumbFile, setThumbFile] = React.useState<File | null>(null);
   const [thumbUploading, setThumbUploading] = React.useState(false);
   const [thumbPreviewUrl, setThumbPreviewUrl] = React.useState<string | null>(null);
@@ -587,6 +597,9 @@ export function CatalogCard({
     setIsComingSoon(Boolean(draft.coming_soon));
     setPricePhp(draft.price_php === null ? '' : draft.price_php.toString());
     setLastPaidPrice(draft.price_php === null ? '' : draft.price_php.toString());
+    setTitle(isBundle ? (draft.bundle_title || draft.bank?.title || '') : (draft.bank?.title || ''));
+    setDescription(isBundle ? (draft.bundle_description || '') : (draft.bank?.description || ''));
+    setBundleBankIds([...(draft.bundle_bank_ids || [])]);
   }, [draft]);
 
   React.useEffect(() => {
@@ -608,20 +621,27 @@ export function CatalogCard({
       setLastPaidPrice(normalizedPrice);
     }
   }, [isComingSoon, isFree, normalizedPrice]);
-  const requiresPrice = !isComingSoon && !isFree;
+  const requiresPrice = !isComingSoon && (isBundle || !isFree);
   const hasValidPrice = !requiresPrice || (parsedPrice !== null && Number.isFinite(parsedPrice) && parsedPrice > 0);
+  const hasValidBundle = !isBundle || bundleBankIds.length >= 2;
   const buildDraftUpdates = React.useCallback(() => ({
-      is_paid: isComingSoon ? false : !isFree,
+      title: isBundle ? title.trim() : undefined,
+      description: isBundle ? description.trim() : undefined,
+      bundle_bank_ids: isBundle ? bundleBankIds : undefined,
+      is_paid: isBundle ? (isComingSoon ? false : true) : (isComingSoon ? false : !isFree),
       is_pinned: isPinned,
       coming_soon: isComingSoon,
-      price_php: !isComingSoon && !isFree ? parsedPrice : null,
-      requires_grant: isComingSoon ? true : !isFree,
-    }), [isComingSoon, isFree, isPinned, parsedPrice]);
+      price_php: requiresPrice ? parsedPrice : null,
+      requires_grant: isBundle ? true : (isComingSoon ? true : !isFree),
+    }), [bundleBankIds, description, isBundle, isComingSoon, isFree, isPinned, parsedPrice, requiresPrice, title]);
   const hasChanges =
-    isFree !== (!draft.is_paid && !draft.coming_soon)
+    (!isBundle && isFree !== (!draft.is_paid && !draft.coming_soon))
     || isPinned !== Boolean(draft.is_pinned)
     || isComingSoon !== Boolean(draft.coming_soon)
-    || parsedPrice !== draft.price_php;
+    || parsedPrice !== draft.price_php
+    || (isBundle && title.trim() !== initialTitle)
+    || (isBundle && description.trim() !== initialDescription)
+    || (isBundle && bundleBankIds.join('|') !== (draft.bundle_bank_ids || []).join('|'));
 
   const resetEditorState = React.useCallback(() => {
     setIsFree(!draft.is_paid && !draft.coming_soon);
@@ -629,7 +649,10 @@ export function CatalogCard({
     setIsComingSoon(Boolean(draft.coming_soon));
     setPricePhp(draft.price_php === null ? '' : draft.price_php.toString());
     setLastPaidPrice(draft.price_php === null ? '' : draft.price_php.toString());
-  }, [draft]);
+    setTitle(isBundle ? (draft.bundle_title || draft.bank?.title || '') : (draft.bank?.title || ''));
+    setDescription(isBundle ? (draft.bundle_description || '') : (draft.bank?.description || ''));
+    setBundleBankIds([...(draft.bundle_bank_ids || [])]);
+  }, [draft, isBundle]);
 
   const openEditor = React.useCallback(() => {
     resetEditorState();
@@ -641,11 +664,19 @@ export function CatalogCard({
       pushNotice({ variant: 'error', message: 'Enter a valid price before publishing or saving a paid catalog item.' });
       return;
     }
+    if (isBundle && !title.trim()) {
+      pushNotice({ variant: 'error', message: 'Bundle title is required.' });
+      return;
+    }
+    if (!hasValidBundle) {
+      pushNotice({ variant: 'error', message: 'Bundle must include at least two banks.' });
+      return;
+    }
     const succeeded = await onApplyAction(draft, buildDraftUpdates(), action);
     if (succeeded) {
       setEditorOpen(false);
     }
-  }, [buildDraftUpdates, draft, hasValidPrice, onApplyAction, pushNotice]);
+  }, [buildDraftUpdates, draft, hasValidBundle, hasValidPrice, isBundle, onApplyAction, pushNotice, title]);
 
   const handleUnpublish = React.useCallback(async () => {
     const succeeded = await onApplyAction(draft, {}, 'unpublish');
@@ -689,6 +720,8 @@ export function CatalogCard({
 
   const isPublished = draft.status === 'published';
   const currentThumb = thumbPreviewUrl || draft.thumbnail_path;
+  const displayTitle = isBundle ? (draft.bundle_title || draft.bank?.title || 'Untitled Bundle') : (draft.bank?.title || 'Unknown Bank');
+  const displayDescription = isBundle ? (draft.bundle_description || `${draft.bundle_count || 0} banks included`) : (draft.bank?.description || '');
   const savedPriceLabel = draft.coming_soon
     ? 'Coming Soon'
     : draft.is_paid
@@ -715,10 +748,17 @@ export function CatalogCard({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-start gap-2">
-            <h4 className={`min-w-0 flex-1 font-semibold text-sm truncate ${isDark ? 'text-white' : 'text-gray-900'}`} title={draft.bank?.title}>{draft.bank?.title || 'Unknown Bank'}</h4>
+            <h4 className={`min-w-0 flex-1 font-semibold text-sm truncate ${isDark ? 'text-white' : 'text-gray-900'}`} title={displayTitle}>{displayTitle}</h4>
+            {isBundle && <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase rounded bg-sky-500/20 text-sky-700 dark:text-sky-300">Bundle</span>}
             {draft.is_pinned && <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase rounded bg-amber-500/20 text-amber-700 dark:text-amber-300">Pinned</span>}
             <span className={`shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase rounded ${statusBadgeClass}`}>{statusLabel}</span>
           </div>
+          <div className={`mt-1 text-[11px] line-clamp-2 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{displayDescription || 'No description available.'}</div>
+          {isBundle && (
+            <div className={`mt-1 text-[11px] ${isDark ? 'text-sky-200/80' : 'text-sky-700'}`}>
+              Includes {draft.bundle_count || bundleBankIds.length || 0} bank{(draft.bundle_count || bundleBankIds.length || 0) === 1 ? '' : 's'}
+            </div>
+          )}
           <div className="mt-1 flex items-center justify-between gap-3">
             <div className={`text-base font-semibold ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>{savedPriceLabel}</div>
             <Button size="sm" onClick={openEditor} className="h-7 px-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] shrink-0">
@@ -733,18 +773,64 @@ export function CatalogCard({
           <DialogHeader>
             <DialogTitle>{isPublished ? 'Edit Store Listing' : 'Publish to Store'}</DialogTitle>
             <DialogDescription>
-              {isPublished
-                ? 'Update how this bank appears in Bank Store, or unpublish it back to draft.'
-                : 'Choose how this bank should go live before publishing it to Bank Store.'}
+              {isBundle
+                ? 'Update the bundle title, included banks, and pricing before it goes live in Bank Store.'
+                : isPublished
+                  ? 'Update how this bank appears in Bank Store, or unpublish it back to draft.'
+                  : 'Choose how this bank should go live before publishing it to Bank Store.'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className={`rounded-lg border px-3 py-2 ${isDark ? 'border-gray-700 bg-gray-800/60' : 'border-gray-200 bg-gray-50'}`}>
-              <div className="text-sm font-semibold truncate" title={draft.bank?.title}>{draft.bank?.title || 'Unknown Bank'}</div>
-              <div className={`mt-1 text-[11px] font-mono truncate ${isDark ? 'text-gray-400' : 'text-gray-500'}`} title={draft.expected_asset_name}>
-                {draft.expected_asset_name}
+              <div className="text-sm font-semibold truncate" title={displayTitle}>{displayTitle}</div>
+              <div className={`mt-1 text-[11px] ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                {isBundle
+                  ? `${draft.bundle_count || bundleBankIds.length || 0} included bank${(draft.bundle_count || bundleBankIds.length || 0) === 1 ? '' : 's'}`
+                  : draft.expected_asset_name}
               </div>
             </div>
+            {isBundle && (
+              <div className="grid gap-3">
+                <div className="space-y-1">
+                  <Label>Bundle Title</Label>
+                  <input
+                    type="text"
+                    value={title}
+                    onChange={(event) => setTitle(event.target.value)}
+                    className={`w-full rounded-md border px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-indigo-500/50 ${isDark ? 'bg-gray-900 border-gray-700 text-gray-100' : 'bg-white border-gray-300'}`}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Description</Label>
+                  <textarea
+                    value={description}
+                    onChange={(event) => setDescription(event.target.value)}
+                    className={`w-full min-h-[88px] rounded-md border p-2 text-sm outline-none resize-y ${isDark ? 'bg-gray-900 border-gray-700 text-gray-100' : 'bg-white border-gray-300'}`}
+                  />
+                </div>
+                <div className={`rounded-lg border px-3 py-2.5 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <div>
+                      <div className="text-sm font-medium">Included Banks</div>
+                      <div className="text-[11px] opacity-70">Pick the banks that should be granted from this bundle purchase.</div>
+                    </div>
+                    <div className="text-[11px] font-semibold">{bundleBankIds.length} selected</div>
+                  </div>
+                  <div className={`max-h-40 overflow-auto rounded-md border p-2 space-y-1 ${isDark ? 'border-gray-700 bg-gray-900/60' : 'border-gray-200 bg-white'}`}>
+                    {bundleBankChoices.map((bank) => (
+                      <label key={bank.id} className="flex items-center gap-2 text-xs cursor-pointer rounded px-1.5 py-1 hover:bg-black/5 dark:hover:bg-white/5">
+                        <input
+                          type="checkbox"
+                          checked={bundleBankIds.includes(bank.id)}
+                          onChange={(event) => setBundleBankIds((prev) => event.target.checked ? [...prev, bank.id] : prev.filter((id) => id !== bank.id))}
+                        />
+                        <span>{bank.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
             <div className={`rounded-lg border px-3 py-2.5 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
               <div className="flex items-start gap-3">
                 <div className="shrink-0">
@@ -803,11 +889,11 @@ export function CatalogCard({
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-medium">Free</div>
-                    <div className="text-[11px] opacity-70">Turn this on to hide pricing and publish as a free bank.</div>
+                    <div className="text-[11px] opacity-70">{isBundle ? 'Bundles stay paid. Use Coming Soon instead if you want to hide the price temporarily.' : 'Turn this on to hide pricing and publish as a free bank.'}</div>
                   </div>
                   <Switch
                     checked={isFree}
-                    disabled={isComingSoon}
+                    disabled={isComingSoon || isBundle}
                     onCheckedChange={(checked) => {
                       setIsFree(checked);
                       if (checked) {
@@ -852,6 +938,11 @@ export function CatalogCard({
                     Add a valid price before publishing or saving a paid bank.
                   </div>
                 )}
+                {isBundle && !hasValidBundle && (
+                  <div className="text-[11px] text-amber-600 dark:text-amber-300">
+                    Bundles must include at least two banks.
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -870,7 +961,7 @@ export function CatalogCard({
             </Button>
             <Button
               onClick={() => void handleSubmit(isPublished ? 'save' : 'publish')}
-              disabled={!hasValidPrice}
+              disabled={!hasValidPrice || !hasValidBundle}
               className="bg-indigo-600 hover:bg-indigo-500 text-white"
             >
               {isPublished ? 'Save Changes' : 'Publish'}

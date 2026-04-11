@@ -102,6 +102,26 @@ export function OnlineStorePurchasePane({
             </div>
         );
     };
+    const renderBundleMeta = (item: StoreItem | null) => {
+        if (!item || item.item_type !== 'bank_bundle') return null;
+        const includedTitles = Array.isArray(item.bundle_bank_titles) ? item.bundle_bank_titles : [];
+        return (
+            <div className={`mt-2 space-y-1 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
+                    Includes {item.bundle_count || includedTitles.length || 0} Banks
+                </div>
+                {includedTitles.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                        {includedTitles.map((title) => (
+                            <span key={title} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${isDark ? 'bg-sky-500/15 text-sky-200' : 'bg-sky-50 text-sky-700'}`}>
+                                {title}
+                            </span>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    };
 
     return (
         <div className="relative max-w-xl mx-auto space-y-8">
@@ -124,7 +144,7 @@ export function OnlineStorePurchasePane({
             )}
             {!checkoutMode && selectedItem && (
                 <div className={`p-4 rounded-xl border ${isDark ? 'bg-gray-800/50 border-gray-700' : 'bg-white border-gray-200'} shadow-sm`}>
-                    <h3 className={`font-semibold text-sm mb-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>Selected Bank</h3>
+                    <h3 className={`font-semibold text-sm mb-2 ${isDark ? 'text-white' : 'text-gray-900'}`}>{selectedItem.item_type === 'bank_bundle' ? 'Selected Bundle' : 'Selected Bank'}</h3>
                     <div className={`flex items-center justify-between py-1 text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
                         <span className="truncate">{selectedItem.bank.title}</span>
                         <span className="shrink-0 font-medium text-right">{renderPrice(selectedItem)}</span>
@@ -133,6 +153,7 @@ export function OnlineStorePurchasePane({
                         <span>Total</span>
                         <span>{renderPrice(selectedItem)}</span>
                     </div>
+                    {renderBundleMeta(selectedItem)}
                     {renderPromotionMeta(selectedItem)}
                 </div>
             )}

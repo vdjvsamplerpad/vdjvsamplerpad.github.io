@@ -146,6 +146,7 @@ type StorePromotionForm = {
   audience_type: StorePromotionAudienceType;
   new_user_window_hours: string;
   target_bank_ids: string[];
+  target_catalog_item_ids: string[];
   target_user_ids: string[];
 };
 
@@ -164,6 +165,7 @@ const EMPTY_STORE_PROMOTION_FORM: StorePromotionForm = {
   audience_type: 'all',
   new_user_window_hours: '168',
   target_bank_ids: [],
+  target_catalog_item_ids: [],
   target_user_ids: [],
 };
 
@@ -604,6 +606,36 @@ export function useAdminAccessStoreManager({
     }
   }, [loadStoreCatalog, pushNotice, storeAuthFetch]);
 
+  const createStoreCatalogBundle = React.useCallback(async (input: {
+    title: string;
+    description: string;
+    bundle_bank_ids: string[];
+    price_php: number | null;
+    coming_soon: boolean;
+    is_pinned: boolean;
+    thumbnail_path?: string | null;
+  }): Promise<boolean> => {
+    setStoreLoading(true);
+    try {
+      const res = await storeAuthFetch('/api/admin/store/catalog/bundles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      pushNotice({ variant: 'success', message: 'Bundle draft created.' });
+      await loadStoreCatalog();
+      return true;
+    } catch (err: any) {
+      pushNotice({ variant: 'error', message: err?.message || 'Bundle could not be created.' });
+      return false;
+    } finally {
+      setStoreLoading(false);
+    }
+  }, [loadStoreCatalog, pushNotice, storeAuthFetch]);
+
   const resetStorePromotionForm = React.useCallback(() => {
     setEditingPromotionId(null);
     setStorePromotionForm(EMPTY_STORE_PROMOTION_FORM);
@@ -626,6 +658,7 @@ export function useAdminAccessStoreManager({
       audience_type: promotion.audience_type || 'all',
       new_user_window_hours: String(promotion.new_user_window_hours ?? 168),
       target_bank_ids: [...(promotion.target_bank_ids || [])],
+      target_catalog_item_ids: [...(promotion.target_catalog_item_ids || [])],
       target_user_ids: [...(promotion.target_user_ids || [])],
     });
   }, []);
@@ -650,6 +683,7 @@ export function useAdminAccessStoreManager({
       audience_type: audienceType,
       new_user_window_hours: audienceType === 'new_users_window' ? newUserWindowHours : null,
       target_bank_ids: storePromotionForm.target_bank_ids,
+      target_catalog_item_ids: storePromotionForm.target_catalog_item_ids,
       target_user_ids: audienceType === 'specific_users' ? storePromotionForm.target_user_ids : [],
     };
     if (!payload.name) {
@@ -668,8 +702,8 @@ export function useAdminAccessStoreManager({
       pushNotice({ variant: 'error', message: 'Priority must be zero or greater.' });
       return false;
     }
-    if (payload.target_bank_ids.length === 0) {
-      pushNotice({ variant: 'error', message: 'Select at least one target bank.' });
+    if (payload.target_bank_ids.length === 0 && payload.target_catalog_item_ids.length === 0) {
+      pushNotice({ variant: 'error', message: 'Select at least one target bank or bundle.' });
       return false;
     }
     if (payload.audience_type === 'specific_users' && payload.target_user_ids.length === 0) {
@@ -1493,7 +1527,7 @@ export function useAdminAccessStoreManager({
   const catalogBankOptions = React.useMemo(() => {
     const names = new Set<string>();
     storeDrafts.forEach((draft) => {
-      const name = String(draft.bank?.title || '').trim();
+      const name = String(draft.item_type === 'bank_bundle' ? (draft.bundle_title || draft.bank?.title || '') : (draft.bank?.title || '')).trim();
       if (name) names.add(name);
     });
     return Array.from(names).sort((left, right) => left.localeCompare(right));
@@ -1509,11 +1543,14 @@ export function useAdminAccessStoreManager({
     return storeDrafts
       .filter((draft) => {
         if (query) {
-          const title = String(draft.bank?.title || '').toLowerCase();
+          const title = String(draft.item_type === 'bank_bundle' ? (draft.bundle_title || draft.bank?.title || '') : (draft.bank?.title || '')).toLowerCase();
+          const description = String(draft.item_type === 'bank_bundle' ? (draft.bundle_description || '') : (draft.bank?.description || '')).toLowerCase();
           const asset = String(draft.expected_asset_name || '').toLowerCase();
-          if (!title.includes(query) && !asset.includes(query)) return false;
+          const bundleBanks = Array.isArray(draft.bundle_bank_titles) ? draft.bundle_bank_titles.join(' ').toLowerCase() : '';
+          if (!title.includes(query) && !description.includes(query) && !asset.includes(query) && !bundleBanks.includes(query)) return false;
         }
-        if (storeCatalogBankFilter !== 'all' && String(draft.bank?.title || '') !== storeCatalogBankFilter) return false;
+        const filterLabel = String(draft.item_type === 'bank_bundle' ? (draft.bundle_title || draft.bank?.title || '') : (draft.bank?.title || ''));
+        if (storeCatalogBankFilter !== 'all' && filterLabel !== storeCatalogBankFilter) return false;
         if (storeCatalogStatusFilter === 'coming_soon' && !draft.coming_soon) return false;
         if (storeCatalogStatusFilter === 'published' && (draft.status !== 'published' || draft.coming_soon)) return false;
         if (storeCatalogStatusFilter === 'draft' && draft.status !== 'draft') return false;
@@ -1524,8 +1561,10 @@ export function useAdminAccessStoreManager({
         return true;
       })
       .sort((left, right) => {
-        if (storeCatalogSort === 'title_asc') return String(left.bank?.title || '').localeCompare(String(right.bank?.title || ''));
-        if (storeCatalogSort === 'title_desc') return String(right.bank?.title || '').localeCompare(String(left.bank?.title || ''));
+        const leftTitle = String(left.item_type === 'bank_bundle' ? (left.bundle_title || left.bank?.title || '') : (left.bank?.title || ''));
+        const rightTitle = String(right.item_type === 'bank_bundle' ? (right.bundle_title || right.bank?.title || '') : (right.bank?.title || ''));
+        if (storeCatalogSort === 'title_asc') return leftTitle.localeCompare(rightTitle);
+        if (storeCatalogSort === 'title_desc') return rightTitle.localeCompare(leftTitle);
         if (storeCatalogSort === 'price_high') return Number(right.price_php || 0) - Number(left.price_php || 0);
         if (storeCatalogSort === 'price_low') return Number(left.price_php || 0) - Number(right.price_php || 0);
         if (storeCatalogSort === 'status') {
@@ -1533,7 +1572,7 @@ export function useAdminAccessStoreManager({
           const rightStatusRank = right.coming_soon ? 1 : statusRank(right.status);
           const byStatus = leftStatusRank - rightStatusRank;
           if (byStatus !== 0) return byStatus;
-          return String(left.bank?.title || '').localeCompare(String(right.bank?.title || ''));
+          return leftTitle.localeCompare(rightTitle);
         }
         if (storeCatalogSort === 'newest') {
           const leftTs = new Date((left as any).created_at || 0).getTime();
@@ -1542,7 +1581,7 @@ export function useAdminAccessStoreManager({
         }
         if (left.is_pinned && !right.is_pinned) return -1;
         if (!left.is_pinned && right.is_pinned) return 1;
-        return String(left.bank?.title || '').localeCompare(String(right.bank?.title || ''));
+        return leftTitle.localeCompare(rightTitle);
       });
   }, [
     storeCatalogBankFilter,
@@ -1675,6 +1714,7 @@ export function useAdminAccessStoreManager({
     persistStorePromotion,
     deleteStorePromotion,
     editStorePromotion,
+    createStoreCatalogBundle,
     handleStoreQrFileChange,
     loadStoreRequests,
     handleStoreRequestAction,

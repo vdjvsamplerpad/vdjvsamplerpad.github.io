@@ -50,6 +50,37 @@ const sanitizeText = (value: string): string => {
   return truncateString(next)
 }
 
+const parseEmbeddedAppVersion = (ua: string): string | null => {
+  const match = String(ua || '').match(/vdjv-sampler-pad\/([^\s]+)/i)
+  return match?.[1]?.trim() || null
+}
+
+const resolveSupportRuntime = (): string => {
+  if (typeof window === 'undefined') return 'unknown'
+  const capacitor = (window as Window & typeof globalThis & {
+    Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string }
+  }).Capacitor
+  if (capacitor?.isNativePlatform?.()) {
+    const platform = String(capacitor.getPlatform?.() || '').trim().toLowerCase()
+    return platform ? `capacitor-${platform}` : 'capacitor'
+  }
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  if (/Electron/i.test(ua)) return 'electron'
+  return 'web'
+}
+
+const resolveSupportAppVersion = (): string => {
+  const viteVersion = typeof import.meta !== 'undefined' && import.meta.env?.VITE_APP_VERSION
+    ? String(import.meta.env.VITE_APP_VERSION).trim()
+    : ''
+  if (viteVersion) return viteVersion
+  if (typeof navigator !== 'undefined') {
+    const embeddedVersion = parseEmbeddedAppVersion(navigator.userAgent || '')
+    if (embeddedVersion) return embeddedVersion
+  }
+  return 'unknown'
+}
+
 const shouldRedactKey = (key: string): boolean => {
   const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase()
   return SENSITIVE_KEY_PATTERNS.some((pattern) => normalized.includes(pattern.replace(/[^a-z0-9]/gi, '').toLowerCase()))
@@ -124,6 +155,8 @@ export const buildSupportLogText = (input: {
         `Title: ${sanitizeText(input.title)}`,
         `Time: ${new Date().toISOString()}`,
         `URL: ${typeof window !== 'undefined' ? sanitizeUrl(window.location.href) : 'unknown'}`,
+        `Runtime: ${resolveSupportRuntime()}`,
+        `App Version: ${sanitizeText(resolveSupportAppVersion())}`,
         `User Agent: ${typeof navigator !== 'undefined' ? sanitizeText(navigator.userAgent) : 'unknown'}`,
         input.errorMessage ? `Error: ${sanitizeText(input.errorMessage)}` : '',
       ].filter(Boolean).join('\n'),

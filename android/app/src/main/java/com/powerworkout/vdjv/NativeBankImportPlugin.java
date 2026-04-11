@@ -113,6 +113,22 @@ public class NativeBankImportPlugin extends Plugin {
     }
   }
 
+  private static final class FailureInfo {
+    final String reason;
+    final String message;
+    final String errorClass;
+    final String causeClass;
+    final String causeMessage;
+
+    FailureInfo(String reason, String message, String errorClass, String causeClass, String causeMessage) {
+      this.reason = reason;
+      this.message = message;
+      this.errorClass = errorClass;
+      this.causeClass = causeClass;
+      this.causeMessage = causeMessage;
+    }
+  }
+
   private static final class BankPadEntry {
     final int index;
     final String sourcePadId;
@@ -198,9 +214,9 @@ public class NativeBankImportPlugin extends Plugin {
         NativeImportResult result = processArchiveFile(job, inputFile, fileName, candidateKeys);
         emitFinished(jobId, result.toJSObject());
         job.createdStorageKeys.clear();
-      } catch (Exception e) {
+      } catch (Throwable error) {
         cleanupCreatedStorageKeys(job);
-        emitFailed(jobId, e);
+        emitFailed(jobId, error, job);
       } finally {
         deleteQuietly(inputFile);
         activeJobs.remove(jobId);
@@ -234,9 +250,9 @@ public class NativeBankImportPlugin extends Plugin {
         NativeImportResult result = processArchiveFile(job, inputFile, fileName, candidateKeys);
         emitFinished(jobId, result.toJSObject());
         job.createdStorageKeys.clear();
-      } catch (Exception e) {
+      } catch (Throwable error) {
         cleanupCreatedStorageKeys(job);
-        emitFailed(jobId, e);
+        emitFailed(jobId, error, job);
       } finally {
         deleteQuietly(inputFile);
         activeJobs.remove(jobId);
@@ -806,10 +822,63 @@ public class NativeBankImportPlugin extends Plugin {
     notifyListeners("nativeImportFinished", payload);
   }
 
-  private void emitFailed(String jobId, Exception error) {
+  private FailureInfo classifyFailure(Throwable error, String stage) {
+    Throwable cause = error.getCause();
+    String errorClass = error.getClass().getSimpleName();
+    String causeClass = cause != null ? cause.getClass().getSimpleName() : null;
+    String causeMessage = cause != null ? trimToNull(cause.getMessage()) : null;
+    String message = trimToNull(error.getMessage());
+    String reason = "native_import_failed";
+
+    if (error instanceof OutOfMemoryError) {
+      reason = "out_of_memory";
+      if (message == null) {
+        message = "Android ran out of memory while importing this bank.";
+      }
+    } else if ("decrypt-start".equals(stage)) {
+      if (message != null && message.contains("Cannot decrypt bank file")) {
+        reason = "decrypt_access_denied";
+      } else if ("AEADBadTagException".equals(errorClass) || "AEADBadTagException".equals(causeClass)) {
+        reason = "decrypt_auth_tag_failed";
+      } else if ("Unsupported encrypted bank format.".equals(message)) {
+        reason = "decrypt_unsupported_format";
+      } else if ("Unsupported encrypted bank version.".equals(message)) {
+        reason = "decrypt_unsupported_version";
+      } else {
+        reason = "decrypt_native_failure";
+      }
+    } else if ("metadata-start".equals(stage)) {
+      reason = "metadata_parse_failed";
+    } else if ("pads-start".equals(stage) || "pads-progress".equals(stage)) {
+      reason = "media_extract_failed";
+    } else if ("download-start".equals(stage) || "download-progress".equals(stage)) {
+      reason = "download_failed";
+    }
+
+    if (message == null) {
+      message = "Native import failed.";
+    }
+
+    return new FailureInfo(reason, message, errorClass, causeClass, causeMessage);
+  }
+
+  private void emitFailed(String jobId, Throwable error, ImportJob job) {
+    String stage = job != null ? job.lastProgressStage : null;
+    FailureInfo info = classifyFailure(error, stage);
     JSObject payload = new JSObject();
     payload.put("jobId", jobId);
-    payload.put("message", error.getMessage() != null ? error.getMessage() : "Native import failed.");
+    payload.put("message", info.message);
+    if (stage != null) {
+      payload.put("stage", stage);
+    }
+    payload.put("reason", info.reason);
+    payload.put("errorClass", info.errorClass);
+    if (info.causeClass != null) {
+      payload.put("causeClass", info.causeClass);
+    }
+    if (info.causeMessage != null) {
+      payload.put("causeMessage", info.causeMessage);
+    }
     notifyListeners("nativeImportFailed", payload);
   }
 

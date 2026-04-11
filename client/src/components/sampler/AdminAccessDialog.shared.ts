@@ -367,6 +367,7 @@ export interface PurchaseRequest {
 export interface CatalogDraft {
   id: string;
   bank_id: string;
+  item_type?: 'single_bank' | 'bank_bundle';
   status: 'draft' | 'published' | 'archived';
   coming_soon?: boolean;
   is_paid: boolean;
@@ -375,7 +376,16 @@ export interface CatalogDraft {
   price_php: number | null;
   expected_asset_name: string;
   thumbnail_path?: string | null;
-  bank: { title: string };
+  bundle_title?: string;
+  bundle_description?: string;
+  bundle_bank_ids?: string[];
+  bundle_bank_titles?: string[];
+  bundle_count?: number;
+  bank: {
+    title: string;
+    description?: string;
+    color?: string;
+  };
 }
 
 export interface StorePromotionTargetLabel {

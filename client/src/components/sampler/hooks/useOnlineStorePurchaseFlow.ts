@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { edgeFunctionUrl } from '@/lib/edge-api';
+import { captureProductEvent } from '@/lib/productAnalytics';
 import { optimizeReceiptProofFile, runReceiptOcr } from '@/lib/receipt-ocr';
 import {
     PaymentChannel,
@@ -215,6 +216,19 @@ export function useOnlineStorePurchaseFlow({
                 const amount = storeItem?.price_php;
                 return sum + (typeof amount === 'number' && Number.isFinite(amount) ? amount : 0);
             }, 0);
+            captureProductEvent('payment_proof_submitted', {
+                request_type: 'store',
+                payment_channel: formChannel,
+                item_count: count,
+                total_php: totalPaid,
+                status: submitStatus,
+                has_bundle: purchaseItems.some((item) => {
+                    const storeItem = checkoutMode
+                        ? cartItems.find((row) => row.id === item.catalogItemId)
+                        : items.find((row) => row.id === item.catalogItemId);
+                    return storeItem?.item_type === 'bank_bundle';
+                }),
+            });
             setPurchaseReceipt({
                 amountText: totalPaid > 0 ? formatPhp(totalPaid) : 'To be confirmed',
                 itemCount: count,

@@ -13,6 +13,7 @@ import { useOnlineStoreDebugLog } from '@/components/sampler/hooks/useOnlineStor
 import { useOnlineStoreDownloadTransfer } from '@/components/sampler/hooks/useOnlineStoreDownloadTransfer';
 import { useOnlineStoreCatalogData } from '@/components/sampler/hooks/useOnlineStoreCatalogData';
 import { useOnlineStorePurchaseFlow } from '@/components/sampler/hooks/useOnlineStorePurchaseFlow';
+import { captureProductEvent } from '@/lib/productAnalytics';
 import {
     OnlineBankStoreImportMeta,
     PaymentChannel,
@@ -259,6 +260,21 @@ export function OnlineBankStoreDialog({
     const cacheKey = `vdjv-store-snapshot-v1:${userKey}`;
     const cartStorageKey = effectiveUserId ? `vdjv-store-cart-v1:${effectiveUserId}` : null;
     const cartItemsStorageKey = effectiveUserId ? `vdjv-store-cart-items-v1:${effectiveUserId}` : null;
+    const storeOpenedRef = React.useRef(false);
+
+    React.useEffect(() => {
+        if (open && !storeOpenedRef.current) {
+            captureProductEvent('bank_store_opened', {
+                is_authenticated: Boolean(effectiveUserId),
+                is_admin: Boolean(isAdmin),
+            });
+            storeOpenedRef.current = true;
+            return;
+        }
+        if (!open) {
+            storeOpenedRef.current = false;
+        }
+    }, [effectiveUserId, isAdmin, open]);
 
     React.useEffect(() => {
         const handleOnline = () => {
@@ -968,6 +984,11 @@ export function OnlineBankStoreDialog({
                                                                         {item.bank.title}
                                                                     </h3>
                                                                     <div className="flex flex-col gap-1 items-end shrink-0">
+                                                                        {item.item_type === 'bank_bundle' && (
+                                                                            <span className="inline-flex items-center h-5 px-2 rounded-full text-[10px] font-bold uppercase tracking-wider bg-sky-500/20 backdrop-blur-md text-sky-100 border border-sky-300/30 shadow-lg">
+                                                                                Bundle
+                                                                            </span>
+                                                                        )}
                                                                         {item.is_pinned && (
                                                                             <span className="inline-flex items-center h-5 px-2 rounded-full text-[10px] font-bold uppercase tracking-wider bg-black/40 backdrop-blur-md text-amber-300 border border-amber-400/30 shadow-lg">
                                                                                 Pinned
@@ -980,6 +1001,20 @@ export function OnlineBankStoreDialog({
                                                         <p className="text-xs sm:text-sm mt-1 line-clamp-2 text-gray-300/90 drop-shadow-md leading-relaxed" title={item.bank.description || 'No description available.'}>
                                                             {item.bank.description || 'No description available.'}
                                                         </p>
+                                                        {item.item_type === 'bank_bundle' && Array.isArray(item.bundle_bank_titles) && item.bundle_bank_titles.length > 0 && (
+                                                            <div className="mt-2 flex flex-wrap gap-1.5">
+                                                                {item.bundle_bank_titles.slice(0, 3).map((title) => (
+                                                                    <span key={`${item.id}-${title}`} className="inline-flex items-center rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white/90 backdrop-blur-sm">
+                                                                        {title}
+                                                                    </span>
+                                                                ))}
+                                                                {item.bundle_bank_titles.length > 3 && (
+                                                                    <span className="inline-flex items-center rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white/80 backdrop-blur-sm">
+                                                                        +{item.bundle_bank_titles.length - 3} more
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                     </div>
 
                                                     {/* Bottom: Footer with Price & Actions */}
@@ -1144,6 +1179,16 @@ export function OnlineBankStoreDialog({
                                                                         variant="outline"
                                                                         onClick={() => {
                                                                             if (!effectiveUser) { requestLogin(); return; }
+                                                                            if (!cartItemIds.has(item.id)) {
+                                                                                captureProductEvent('bank_store_add_to_cart', {
+                                                                                    catalog_item_id: item.id,
+                                                                                    bank_id: item.bank_id,
+                                                                                    item_type: item.item_type || 'single_bank',
+                                                                                    is_paid: item.is_paid,
+                                                                                    price_php: item.price_php,
+                                                                                    bundle_count: item.bundle_count || 0,
+                                                                                });
+                                                                            }
                                                                             setCartItemIds(prev => { const next = new Set(prev); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; });
                                                                         }}
                                                                         disabled={!isOnline}
@@ -1209,6 +1254,11 @@ export function OnlineBankStoreDialog({
                             onClearCart={() => setCartItemIds(new Set())}
                             onCheckout={() => {
                                 if (!effectiveUser) { requestLogin(); return; }
+                                captureProductEvent('bank_store_checkout_started', {
+                                    item_count: cartItems.length,
+                                    total_php: cartTotal,
+                                    has_bundle: cartItems.some((item) => item.item_type === 'bank_bundle'),
+                                });
                                 setCheckoutMode(true);
                             }}
                         />

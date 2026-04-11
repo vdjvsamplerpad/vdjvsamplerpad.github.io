@@ -222,6 +222,7 @@ export interface DefaultBankRelease {
 export interface AdminStoreCatalogItem {
   id: string;
   bank_id: string;
+  item_type?: 'single_bank' | 'bank_bundle';
   status: 'published' | 'draft';
   coming_soon?: boolean;
   asset_protection?: 'encrypted' | 'public' | null;
@@ -229,6 +230,11 @@ export interface AdminStoreCatalogItem {
   sha256?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  bundle_title?: string;
+  bundle_description?: string;
+  bundle_bank_ids?: string[];
+  bundle_bank_titles?: string[];
+  bundle_count?: number;
   bank: {
     title: string;
     description: string;

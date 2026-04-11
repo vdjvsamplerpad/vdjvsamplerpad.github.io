@@ -1850,6 +1850,7 @@ const publishCatalogItem = async (
 
   const { data: item, error: itemError } = await admin.from("bank_catalog_items").select("*").eq("id", catalogItemId).single();
   if (itemError || !item) return fail(404, "Catalog item not found");
+  const itemType = String(item?.item_type || "").trim().toLowerCase() === "bank_bundle" ? "bank_bundle" : "single_bank";
   const publishAsComingSoon = Boolean(body?.coming_soon) || Boolean(item?.coming_soon);
   const isPaid = Boolean(item?.is_paid);
   const requiresGrant = Boolean(item?.requires_grant);
@@ -1861,6 +1862,9 @@ const publishCatalogItem = async (
   if (!publishAsComingSoon && isPaid && !requiresGrant) {
     return badRequest("Paid catalog items must require grant");
   }
+  if (itemType === "bank_bundle" && !publishAsComingSoon && !isPaid) {
+    return badRequest("Bundle catalog items must stay paid unless they are Coming Soon");
+  }
 
   const { data: bankData, error: bankError } = await admin
     .from("banks")
@@ -1870,6 +1874,21 @@ const publishCatalogItem = async (
   if (bankError) return fail(500, bankError.message);
   if (!bankData) return fail(404, "Target bank not found");
   if (bankData.deleted_at) return fail(400, "Cannot publish catalog for archived bank");
+  if (itemType === "bank_bundle") {
+    const { data: bundleRows, error: bundleError } = await admin
+      .from("bank_catalog_bundle_items")
+      .select("bank_id,banks ( id, deleted_at )")
+      .eq("catalog_item_id", catalogItemId);
+    if (bundleError) return fail(500, bundleError.message);
+    if (!Array.isArray(bundleRows) || bundleRows.length < 2) {
+      return badRequest("Bundle catalog items must include at least two banks");
+    }
+    const hasDeletedBundleBank = bundleRows.some((row: any) => {
+      const bank = Array.isArray(row?.banks) ? row.banks[0] : row?.banks;
+      return Boolean(bank?.deleted_at);
+    });
+    if (hasDeletedBundleBank) return badRequest("Bundles cannot publish while one of the included banks is archived");
+  }
 
   const storageProvider = asString(item?.storage_provider, 40);
   const storageBucket = asString(item?.storage_bucket, 300);
@@ -1884,6 +1903,21 @@ const publishCatalogItem = async (
       requires_grant: true,
       price_php: null,
       price_label: null,
+      file_size_bytes: null,
+      sha256: null,
+      storage_provider: "r2",
+      storage_bucket: "",
+      storage_key: "",
+      storage_etag: null,
+      storage_uploaded_at: null,
+    }).eq("id", catalogItemId).select("*").single();
+    updated = result.data;
+    updateError = result.error;
+  } else if (itemType === "bank_bundle") {
+    const result = await admin.from("bank_catalog_items").update({
+      is_published: true,
+      coming_soon: false,
+      requires_grant: true,
       file_size_bytes: null,
       sha256: null,
       storage_provider: "r2",
@@ -1926,7 +1960,9 @@ const publishCatalogItem = async (
     title: publishAsComingSoon ? "Store Bank Coming Soon Published" : "Store Bank Publish Completed",
     description: publishAsComingSoon
       ? "Catalog item was published as a teaser without an archive asset."
-      : "Catalog item was published and is now live for entitled buyers.",
+      : itemType === "bank_bundle"
+        ? "Bundle catalog item was published and now sells multiple bank grants as one purchase."
+        : "Catalog item was published and is now live for entitled buyers.",
     actorUserId: adminUserId,
     bankId: asString(item.bank_id, 80) || null,
     catalogItemId,
