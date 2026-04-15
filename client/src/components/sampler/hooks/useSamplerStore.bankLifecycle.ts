@@ -181,6 +181,7 @@ export function useSamplerStoreBankLifecycle({
   const bankMediaDehydrateTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const deckLoadedBankIdsRef = React.useRef<Set<string>>(new Set());
   const hasActiveDeckPlaybackRef = React.useRef(false);
+  const lastMissingMediaNoticeTotalRef = React.useRef<number | null>(null);
   const [deckPlaybackNonce, setDeckPlaybackNonce] = React.useState(0);
   const [hotPadNonce, setHotPadNonce] = React.useState(0);
 
@@ -859,10 +860,36 @@ export function useSamplerStoreBankLifecycle({
     if (!isBanksHydrated) return;
     if (defaultBankSessionTransitionPendingRef.current) return;
     if (!hasCompletedInitialDefaultBankSync || isDefaultBankSyncing) return;
+    if (startupMediaRestoreInProgressRef.current) return;
+
+    const selectedBankIds = collectSelectedBankIds({
+      primaryBankId,
+      secondaryBankId,
+      currentBankId,
+    });
+    const selectedBanksStillHydrating = Array.from(selectedBankIds).some((bankId) => {
+      const bank = banks.find((entry) => entry.id === bankId);
+      if (!bank) return false;
+
+      const missingThumbnail = Boolean(
+        (bank.bankMetadata?.thumbnailStorageKey || bank.bankMetadata?.thumbnailBackend)
+        && !(typeof bank.bankMetadata?.thumbnailUrl === 'string' && bank.bankMetadata.thumbnailUrl.trim().length > 0)
+      );
+      const missingPreparedAudio = bank.pads.some((pad) =>
+        Boolean(pad.preparedAudioStorageKey || pad.preparedAudioBackend)
+        && pad.preparedStatus !== 'queued'
+        && pad.preparedStatus !== 'preparing'
+        && !(typeof pad.preparedAudioUrl === 'string' && pad.preparedAudioUrl.trim().length > 0)
+      );
+
+      return missingThumbnail || missingPreparedAudio || bank.pads.some((pad) => padNeedsMediaHydration(pad));
+    });
+    if (selectedBanksStillHydrating) return;
 
     const summary = summarizeMissingMedia(banks);
     if (!summary) {
       missingMediaNoticeSignatureRef.current = null;
+      lastMissingMediaNoticeTotalRef.current = null;
       return;
     }
 
@@ -873,15 +900,29 @@ export function useSamplerStoreBankLifecycle({
     ].join(':');
     if (missingMediaNoticeSignatureRef.current === signature) return;
 
+    const totalMissing = summary.missingAudio + summary.missingImages;
+    const lastTotal = lastMissingMediaNoticeTotalRef.current;
+    const isImprovementOnly = lastTotal !== null && totalMissing <= lastTotal;
+    if (missingMediaNoticeSignatureRef.current !== null && isImprovementOnly) {
+      missingMediaNoticeSignatureRef.current = signature;
+      lastMissingMediaNoticeTotalRef.current = totalMissing;
+      return;
+    }
+
     missingMediaNoticeSignatureRef.current = signature;
+    lastMissingMediaNoticeTotalRef.current = totalMissing;
     window.dispatchEvent(new CustomEvent('vdjv-missing-media-detected', { detail: summary }));
   }, [
     banks,
+    currentBankId,
     defaultBankSessionTransitionPendingRef,
     hasCompletedInitialDefaultBankSync,
     isBanksHydrated,
     isDefaultBankSyncing,
     missingMediaNoticeSignatureRef,
+    primaryBankId,
+    secondaryBankId,
+    startupMediaRestoreInProgressRef,
     startupRestoreCompleted,
   ]);
 

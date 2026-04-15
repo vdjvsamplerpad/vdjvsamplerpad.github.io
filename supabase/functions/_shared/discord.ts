@@ -141,6 +141,17 @@ const formatIdList = (values: string[] | null | undefined): string | null => {
   return remainder > 0 ? `${listed.join(", ")} +${remainder} more` : listed.join(", ");
 };
 
+const formatLabelList = (values: string[] | null | undefined): string | null => {
+  if (!Array.isArray(values) || values.length === 0) return null;
+  const normalized = values
+    .map((value) => asString(value, 240)?.trim())
+    .filter((value): value is string => Boolean(value));
+  if (normalized.length === 0) return null;
+  const listed = normalized.slice(0, 8);
+  const remainder = normalized.length - listed.length;
+  return remainder > 0 ? `${listed.join(", ")} +${remainder} more` : listed.join(", ");
+};
+
 const normalizeFieldValue = (value: unknown, maxLength = 1024): string | null => {
   if (value === null || value === undefined) return null;
   const text = typeof value === "string" ? value.trim() : String(value).trim();
@@ -554,9 +565,13 @@ export const sendDiscordStoreRequestEvent = async (input: {
   description?: string | null;
   requestId?: string | null;
   userId?: string | null;
+  userEmail?: string | null;
+  userDisplayName?: string | null;
   actorUserId?: string | null;
   actorEmail?: string | null;
   bankIds?: string[] | null;
+  bankTitles?: string[] | null;
+  itemLabels?: string[] | null;
   catalogItemIds?: string[] | null;
   batchId?: string | null;
   receiptReference?: string | null;
@@ -575,9 +590,13 @@ export const sendDiscordStoreRequestEvent = async (input: {
     title: input.title,
     description: input.description || "Store request event recorded.",
     fields: [
+      ...(input.userEmail ? [{ name: "Buyer Email", value: input.userEmail, inline: true } satisfies DiscordField] : []),
+      ...(input.userDisplayName ? [{ name: "Buyer", value: input.userDisplayName, inline: true } satisfies DiscordField] : []),
       ...(input.paymentChannel ? [{ name: "Payment Channel", value: input.paymentChannel, inline: true }] : []),
       ...(input.payerName ? [{ name: "Payer", value: input.payerName, inline: true }] : []),
       ...(input.referenceNo ? [{ name: "Reference", value: input.referenceNo, inline: true }] : []),
+      ...(input.bankTitles?.length ? [{ name: "Banks", value: formatLabelList(input.bankTitles) || "-", inline: false } satisfies DiscordField] : []),
+      ...(input.itemLabels?.length ? [{ name: "Items", value: formatLabelList(input.itemLabels) || "-", inline: false } satisfies DiscordField] : []),
       ...buildDiscordTraceFields({
         requestId: input.requestId,
         userId: input.userId,

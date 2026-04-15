@@ -5208,8 +5208,11 @@ const executeStoreDecision = async (input: {
         : `Store request was ${input.nextStatus} by admin.`,
       requestId: String(rowIds[0] || ""),
       userId: asString(input.batchRows[0]?.user_id, 80) || null,
+      userEmail: asString(input.batchRows[0]?.profiles?.email, 320) || null,
       actorUserId: input.reviewedBy,
       bankIds: input.batchRows.map((row) => asString(row?.bank_id, 80) || "").filter(Boolean),
+      bankTitles: input.batchRows.map((row) => asString((row as any)?.banks?.title, 240) || "").filter(Boolean),
+      itemLabels: input.batchRows.map((row) => asString((row as any)?.banks?.title, 240) || "").filter(Boolean),
       catalogItemIds: input.batchRows.map((row) => asString(row?.catalog_item_id, 80) || "").filter(Boolean),
       batchId: asString(input.batchRows[0]?.batch_id, 80) || null,
       receiptReference: asString(input.batchRows[0]?.receipt_reference, 160) || null,
@@ -5749,7 +5752,10 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       description: "A new store purchase request was submitted.",
       requestId: String(insertedRows[0]?.id || ""),
       userId,
+      userEmail: user?.email || null,
       bankIds: normalizedItems.map((item) => item.bankId),
+      bankTitles: insertedRows.map((row) => asString((row as any)?.banks?.title, 240) || "").filter(Boolean),
+      itemLabels: insertedRows.map((row) => asString((row as any)?.banks?.title, 240) || "").filter(Boolean),
       catalogItemIds: normalizedItems.map((item) => item.catalogItemId),
       batchId,
       receiptReference,
@@ -6797,11 +6803,11 @@ const listAdminClientCrashReports = async (req: Request) => {
     const identity = identities[userId] || { display_name: "", email: "" };
     const objectKey = asString(row?.report_object_key, 2000) || null;
     const downloadUrl = objectKey && R2_BUCKET
-      ? await createPresignedGetUrl({
-          bucket: R2_BUCKET,
+      ? await createPresignedGetUrl(
+          R2_BUCKET,
           objectKey,
-          expiresInSeconds: STORE_R2_SIGNED_DOWNLOAD_TTL_SECONDS,
-        }).catch(() => null)
+          STORE_R2_SIGNED_DOWNLOAD_TTL_SECONDS,
+        ).catch(() => null)
       : null;
     return {
       id: asString(row?.id, 80) || "",

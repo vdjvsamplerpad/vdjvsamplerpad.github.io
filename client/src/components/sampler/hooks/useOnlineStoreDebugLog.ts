@@ -204,6 +204,22 @@ export function useOnlineStoreDebugLog({
         }
     }, [enabled]);
 
+    const markPageHide = React.useCallback((reason: string) => {
+        persistLiveState({
+            pageHideAt: Date.now(),
+            updatedAt: Date.now(),
+        });
+        pushDownloadDebugLog('info', 'session_hidden', { reason });
+    }, [persistLiveState, pushDownloadDebugLog]);
+
+    const clearPageHide = React.useCallback((reason: string) => {
+        persistLiveState({
+            pageHideAt: null,
+            updatedAt: Date.now(),
+        });
+        pushDownloadDebugLog('info', 'session_resumed', { reason });
+    }, [persistLiveState, pushDownloadDebugLog]);
+
     const downloadDebugText = React.useMemo(() => {
         if (downloadDebugEntries.length === 0) return 'No debug logs yet.';
         return downloadDebugEntries.map((entry) => {
@@ -385,14 +401,88 @@ export function useOnlineStoreDebugLog({
 
     React.useEffect(() => {
         if (!enabled) return;
-        const markPageHide = () => {
-            persistLiveState({ pageHideAt: Date.now() });
+        const handlePageHide = () => {
+            markPageHide('pagehide');
         };
-        window.addEventListener('pagehide', markPageHide);
+        const handlePageShow = () => {
+            clearPageHide('pageshow');
+        };
+        const handleFocus = () => {
+            clearPageHide('focus');
+        };
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                markPageHide('visibility_hidden');
+                return;
+            }
+            if (document.visibilityState === 'visible') {
+                clearPageHide('visibility_visible');
+            }
+        };
+
+        window.addEventListener('pagehide', handlePageHide);
+        window.addEventListener('pageshow', handlePageShow);
+        window.addEventListener('focus', handleFocus);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => {
-            window.removeEventListener('pagehide', markPageHide);
+            window.removeEventListener('pagehide', handlePageHide);
+            window.removeEventListener('pageshow', handlePageShow);
+            window.removeEventListener('focus', handleFocus);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
-    }, [enabled, persistLiveState]);
+    }, [clearPageHide, enabled, markPageHide]);
+
+    React.useEffect(() => {
+        if (!enabled || typeof window === 'undefined') return;
+        const capacitor = (window as Window & typeof globalThis & {
+            Capacitor?: {
+                isNativePlatform?: () => boolean;
+                Plugins?: {
+                    App?: {
+                        addListener?: (eventName: string, callback: (payload?: any) => void) => Promise<{ remove: () => Promise<void> } | { remove: () => void }> | { remove: () => Promise<void> } | { remove: () => void };
+                    };
+                };
+            };
+        }).Capacitor;
+        if (!capacitor?.isNativePlatform?.()) return;
+        const appPlugin = capacitor?.Plugins?.App;
+        if (!appPlugin?.addListener) return;
+
+        const handles: Array<{ remove?: () => Promise<void> | void } | null> = [];
+        const safeAddListener = async (eventName: string, callback: (payload?: any) => void) => {
+            try {
+                const handle = await Promise.resolve(appPlugin.addListener?.(eventName, callback));
+                handles.push(handle || null);
+            } catch {
+                handles.push(null);
+            }
+        };
+
+        void safeAddListener('appStateChange', (state?: { isActive?: boolean }) => {
+            if (state?.isActive === false) {
+                markPageHide('native_app_inactive');
+                return;
+            }
+            if (state?.isActive === true) {
+                clearPageHide('native_app_active');
+            }
+        });
+        void safeAddListener('pause', () => {
+            markPageHide('native_pause');
+        });
+        void safeAddListener('resume', () => {
+            clearPageHide('native_resume');
+        });
+
+        return () => {
+            handles.forEach((handle) => {
+                try {
+                    void handle?.remove?.();
+                } catch {
+                }
+            });
+        };
+    }, [clearPageHide, enabled, markPageHide]);
 
     React.useEffect(() => {
         if (!enabled || !open) return;
