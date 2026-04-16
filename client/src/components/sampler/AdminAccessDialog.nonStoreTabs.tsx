@@ -777,6 +777,8 @@ function UsersTab({
               <TableHead><SortHeader title="Email" active={usersSortBy === 'email'} direction={usersSortDir} onClick={() => onToggleUserSort('email')} /></TableHead>
               <TableHead><SortHeader title="Created" active={usersSortBy === 'created_at'} direction={usersSortDir} onClick={() => onToggleUserSort('created_at')} /></TableHead>
               <TableHead><SortHeader title="Last Sign-In" active={usersSortBy === 'last_sign_in_at'} direction={usersSortDir} onClick={() => onToggleUserSort('last_sign_in_at')} /></TableHead>
+              <TableHead>Last Device</TableHead>
+              <TableHead>Platform</TableHead>
               <TableHead><SortHeader title="Ban Status" active={usersSortBy === 'ban_status'} direction={usersSortDir} onClick={() => onToggleUserSort('ban_status')} /></TableHead>
               <TableHead className={`text-right min-w-[92px] sticky right-0 z-10 ${theme === 'dark' ? 'bg-gray-900' : 'bg-white'}`}>Actions</TableHead>
             </TableRow>
@@ -797,6 +799,14 @@ function UsersTab({
                 </TableCell>
                 <TableCell className="hidden md:table-cell">{user.created_at ? new Date(user.created_at).toLocaleString() : '-'}</TableCell>
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : '-'}</TableCell>
+                <TableCell className="hidden md:table-cell">{user.last_sign_in_device_name || '-'}</TableCell>
+                <TableCell className="hidden md:table-cell">{user.last_sign_in_platform || '-'}</TableCell>
+                <TableCell className="block md:hidden py-1 text-xs opacity-70 border-none">
+                  <span className="font-semibold">Last Device: </span>{user.last_sign_in_device_name || '-'}
+                </TableCell>
+                <TableCell className="block md:hidden py-1 text-xs opacity-70 border-none">
+                  <span className="font-semibold">Platform: </span>{user.last_sign_in_platform || '-'}
+                </TableCell>
                 <TableCell className="block md:table-cell py-1 md:py-4 border-none md:border-b">
                   <span className="md:hidden font-semibold text-xs mr-2">Status:</span>
                   <span className={`text-xs px-2 py-1 rounded ${isUserBanned(user) ? 'bg-red-600/20 text-red-500' : 'bg-emerald-600/20 text-emerald-500'}`}>{isUserBanned(user) ? 'Banned' : 'Active'}</span>
@@ -806,7 +816,7 @@ function UsersTab({
                 </TableCell>
               </TableRow>
             ))}
-            {!usersLoading && users.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={6} className="block md:table-cell text-center py-3 opacity-70">No users</TableCell></TableRow>}
+            {!usersLoading && users.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={8} className="block md:table-cell text-center py-3 opacity-70">No users</TableCell></TableRow>}
           </TableBody>
         </Table>
       </div>

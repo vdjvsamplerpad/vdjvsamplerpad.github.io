@@ -13,6 +13,8 @@ export interface AdminUser {
   device_total_bank_cap: number;
   created_at: string | null;
   last_sign_in_at: string | null;
+  last_sign_in_device_name: string | null;
+  last_sign_in_platform: string | null;
   banned_until: string | null;
   is_banned: boolean;
 }

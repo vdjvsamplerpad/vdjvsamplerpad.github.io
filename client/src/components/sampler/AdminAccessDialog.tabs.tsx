@@ -7,6 +7,8 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { CopyableValue, copyTextToClipboard } from '@/components/ui/copyable-value';
 import { adminApi, type AdminAccountRegistrationRequest, type AdminClientCrashReport, type AdminInstallerPurchaseRequestGroup, type DefaultBankRelease, type LandingDownloadConfig, type LandingPlatformKey, type LandingVersionKey } from '@/lib/admin-api';
+import { prepareManagedImageUpload } from '@/lib/image-upload';
+import { uploadManagedStoreAsset } from '@/lib/store-asset-upload';
 import { Check, ChevronDown, ChevronUp, Copy, Download, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
 import type { SamplerAppConfig, SamplerShortcutAction } from './samplerAppConfig';
 import type {
@@ -264,7 +266,7 @@ interface StorePromotionsTabProps {
     name: string;
     description: string;
     promotion_type: 'standard' | 'flash_sale';
-    discount_type: 'percent' | 'fixed';
+    discount_type: 'percent' | 'fixed' | 'free';
     discount_value: string;
     starts_at: string;
     ends_at: string;
@@ -282,7 +284,7 @@ interface StorePromotionsTabProps {
     name: string;
     description: string;
     promotion_type: 'standard' | 'flash_sale';
-    discount_type: 'percent' | 'fixed';
+    discount_type: 'percent' | 'fixed' | 'free';
     discount_value: string;
     starts_at: string;
     ends_at: string;
@@ -1760,7 +1762,7 @@ export function StoreRequestsTab({
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="min-w-0">
                               <div className="text-sm font-semibold">{req.count > 1 ? `${req.bankNames[0]} +${req.count - 1} more` : req.bankNames[0]}</div>
-                              {req.user_profile && <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.user_profile.display_name || 'No Name'} • {req.user_profile.email || '-'}</div>}
+                              {req.user_profile && <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.user_profile.display_name || 'No Name'} â€¢ {req.user_profile.email || '-'}</div>}
                             </div>
                             <div className="flex flex-wrap gap-1.5">
                               <RequestSummaryChip theme={theme} label="Decision" value={req.decision_source ? formatAutomationLabel(req.decision_source) : 'Pending'} tone="decision" />
@@ -2118,7 +2120,7 @@ export function InstallerRequestsTab({
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="text-sm font-semibold">{req.itemCount > 1 ? `${req.items[0]?.displayNameSnapshot || req.versions.join('/')} +${req.itemCount - 1} more` : (req.items[0]?.displayNameSnapshot || req.versions.join('/'))}</div>
-                          <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.versions.join(' / ')} • {req.email || '-'}</div>
+                          <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.versions.join(' / ')} â€¢ {req.email || '-'}</div>
                         </div>
                         <div className="flex flex-wrap gap-1.5">
                           <RequestSummaryChip theme={theme} label="Decision" value={req.decisionSource ? formatAutomationLabel(req.decisionSource) : 'Pending'} tone="decision" />
@@ -2155,7 +2157,7 @@ export function InstallerRequestsTab({
                               <div key={item.id} className={`flex items-center justify-between gap-3 text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
                                 <div className="min-w-0">
                                   <div className="truncate font-medium">{item.displayNameSnapshot}</div>
-                                  <div className="text-[11px] opacity-70">{item.version} • {item.skuCode}</div>
+                                  <div className="text-[11px] opacity-70">{item.version} â€¢ {item.skuCode}</div>
                                 </div>
                                 <span className="shrink-0 font-medium">{typeof item.pricePhpSnapshot === 'number' ? `PHP ${item.pricePhpSnapshot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'TBD'}</span>
                               </div>
@@ -2333,6 +2335,10 @@ export function CrashReportsTab({
 }: CrashReportsTabProps) {
   const selectClass = `h-9 w-full rounded-md border px-3 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`;
   const [downloadingReportId, setDownloadingReportId] = React.useState<string | null>(null);
+  const [openingReportId, setOpeningReportId] = React.useState<string | null>(null);
+  const [logViewerOpen, setLogViewerOpen] = React.useState(false);
+  const [logViewerTitle, setLogViewerTitle] = React.useState('');
+  const [logViewerContent, setLogViewerContent] = React.useState('');
 
   const buildCrashReportDownloadFileName = React.useCallback((row: AdminClientCrashReport): string => {
     const objectName = String(row.report_object_key || '').split('/').pop()?.trim();
@@ -2353,22 +2359,59 @@ export function CrashReportsTab({
         cache: 'no-store',
         credentials: 'omit',
       });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const fileName = buildCrashReportDownloadFileName(row);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (typeof window !== 'undefined' && typeof window.electronAPI?.saveFile === 'function') {
+          const result = await window.electronAPI.saveFile({
+            title: 'Save Crash Report Log',
+            fileName,
+            data: bytes,
+            filters: [{ name: 'Log Files', extensions: ['log', 'txt'] }],
+          });
+          if (!result?.ok && !result?.canceled) {
+            throw new Error(result?.reason || 'SAVE_FAILED');
+          }
+          return;
+        }
+        const blob = new Blob([bytes], { type: 'text/plain;charset=utf-8' });
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(objectUrl);
+      } catch {
+        window.open(row.report_download_url, '_blank', 'noopener,noreferrer');
+      } finally {
+        setDownloadingReportId((current) => (current === row.id ? null : current));
+      }
+    }, [buildCrashReportDownloadFileName]);
+
+  const handleOpenCrashReport = React.useCallback(async (row: AdminClientCrashReport) => {
+    if (!row.report_download_url) return;
+    setOpeningReportId(row.id);
+    try {
+      const response = await fetch(row.report_download_url, {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+      });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = objectUrl;
-      anchor.download = buildCrashReportDownloadFileName(row);
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(objectUrl);
+      const text = await response.text();
+      setLogViewerTitle(buildCrashReportDownloadFileName(row));
+      setLogViewerContent(text);
+      setLogViewerOpen(true);
     } catch {
       window.open(row.report_download_url, '_blank', 'noopener,noreferrer');
     } finally {
-      setDownloadingReportId((current) => (current === row.id ? null : current));
+      setOpeningReportId((current) => (current === row.id ? null : current));
     }
   }, [buildCrashReportDownloadFileName]);
 
@@ -2454,13 +2497,13 @@ export function CrashReportsTab({
                       </span>
                     </div>
                     <div className={`text-xs break-all ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                      {row.user_profile?.display_name || 'Unknown User'} • {row.user_profile?.email || 'No email'}
+                      {row.user_profile?.display_name || 'Unknown User'} â€¢ {row.user_profile?.email || 'No email'}
                     </div>
                     <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                      {row.platform || 'unknown platform'} • {row.app_version || 'unknown version'} • repeats {row.repeat_count}
+                      {row.platform || 'unknown platform'} â€¢ {row.app_version || 'unknown version'} â€¢ repeats {row.repeat_count}
                     </div>
                     <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                      Last seen {row.last_seen_at ? new Date(row.last_seen_at).toLocaleString() : '-'} • size {formatCrashReportSize(row.report_size_bytes)}
+                      Last seen {row.last_seen_at ? new Date(row.last_seen_at).toLocaleString() : '-'} â€¢ size {formatCrashReportSize(row.report_size_bytes)}
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -2483,12 +2526,18 @@ export function CrashReportsTab({
                         >
                           {downloadingReportId === row.id ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-1" />}
                           Download Log
-                        </Button>
-                        <Button size="sm" variant="outline" asChild>
-                          <a href={row.report_download_url} target="_blank" rel="noreferrer">Open Log</a>
-                        </Button>
-                      </>
-                    ) : (
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void handleOpenCrashReport(row)}
+                            disabled={openingReportId === row.id}
+                          >
+                            {openingReportId === row.id ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null}
+                            Open Log
+                          </Button>
+                        </>
+                      ) : (
                       <span
                         className={`inline-flex items-center rounded border px-2.5 py-1.5 text-xs font-medium ${
                           theme === 'dark'
@@ -2519,11 +2568,25 @@ export function CrashReportsTab({
                 </div>
               </div>
             ))}
-          </div>
-          <Pagination page={page} totalPages={totalPages} onPageChange={onPageChange} />
-        </>
-      )}
-    </div>
+            </div>
+            <Pagination page={page} totalPages={totalPages} onPageChange={onPageChange} />
+            <Dialog open={logViewerOpen} onOpenChange={setLogViewerOpen} useHistory={false}>
+              <DialogContent className={`${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : ''} sm:max-w-5xl`}>
+                <DialogHeader>
+                  <DialogTitle>Crash Log</DialogTitle>
+                  <DialogDescription>{logViewerTitle || 'Crash report log'}</DialogDescription>
+                </DialogHeader>
+                <div className={`max-h-[70vh] overflow-auto rounded-md border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950 text-gray-100' : 'border-gray-200 bg-gray-50 text-gray-900'}`}>
+                  <pre className="whitespace-pre-wrap break-words text-xs leading-5 font-mono">{logViewerContent || 'Log content is empty.'}</pre>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setLogViewerOpen(false)}>Close</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </>
+        )}
+      </div>
   );
 }
 
@@ -2570,6 +2633,10 @@ export function StoreCatalogTab({
   const [bundleComingSoon, setBundleComingSoon] = React.useState(false);
   const [bundlePinned, setBundlePinned] = React.useState(false);
   const [bundleBankIds, setBundleBankIds] = React.useState<string[]>([]);
+  const [bundleThumbFile, setBundleThumbFile] = React.useState<File | null>(null);
+  const [bundleThumbPreviewUrl, setBundleThumbPreviewUrl] = React.useState<string | null>(null);
+  const [bundleSubmitting, setBundleSubmitting] = React.useState(false);
+  const bundleThumbInputRef = React.useRef<HTMLInputElement | null>(null);
   const currentMaintenanceMessage = String(storeConfig.store_maintenance_message || '').trim();
   const isDark = theme === 'dark';
   const bundleBankChoices = React.useMemo(() => {
@@ -2591,7 +2658,21 @@ export function StoreCatalogTab({
     setBundleComingSoon(false);
     setBundlePinned(false);
     setBundleBankIds([]);
+    setBundleThumbFile(null);
+    setBundleThumbPreviewUrl(null);
+    if (bundleThumbInputRef.current) bundleThumbInputRef.current.value = '';
   }, []);
+  React.useEffect(() => {
+    if (!bundleThumbFile) {
+      setBundleThumbPreviewUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(bundleThumbFile);
+    setBundleThumbPreviewUrl(objectUrl);
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [bundleThumbFile]);
   const openMaintenanceDialog = React.useCallback((mode: 'start' | 'edit') => {
     setMaintenanceDraft(currentMaintenanceMessage);
     setMaintenanceDialogMode(mode);
@@ -2623,19 +2704,41 @@ export function StoreCatalogTab({
       pushNotice({ variant: 'error', message: 'Set a valid bundle price before creating a live bundle draft.' });
       return;
     }
-    const succeeded = await onCreateBundle({
-      title: trimmedTitle,
-      description: bundleDescription.trim(),
-      bundle_bank_ids: bundleBankIds,
-      price_php: bundleComingSoon ? null : Number(parsedPrice),
-      coming_soon: bundleComingSoon,
-      is_pinned: bundlePinned,
-    });
-    if (succeeded) {
-      resetBundleDialog();
-      setBundleDialogOpen(false);
+    let uploadedThumb: { cleanup: () => Promise<void>; url: string } | null = null;
+    setBundleSubmitting(true);
+    try {
+      if (bundleThumbFile) {
+        const preparedThumb = await prepareManagedImageUpload(bundleThumbFile, 'thumbnail');
+        uploadedThumb = await uploadManagedStoreAsset(preparedThumb, {
+          kind: 'thumbnail',
+          bankId: bundleBankIds[0] || null,
+        });
+      }
+      const succeeded = await onCreateBundle({
+        title: trimmedTitle,
+        description: bundleDescription.trim(),
+        bundle_bank_ids: bundleBankIds,
+        price_php: bundleComingSoon ? null : Number(parsedPrice),
+        coming_soon: bundleComingSoon,
+        is_pinned: bundlePinned,
+        thumbnail_path: uploadedThumb?.url || null,
+      });
+      if (succeeded) {
+        uploadedThumb = null;
+        resetBundleDialog();
+        setBundleDialogOpen(false);
+      }
+    } catch (error: any) {
+      pushNotice({ variant: 'error', message: error?.message || 'Bundle thumbnail upload failed.' });
+    } finally {
+      if (uploadedThumb) {
+        try {
+          await uploadedThumb.cleanup();
+        } catch {}
+      }
+      setBundleSubmitting(false);
     }
-  }, [bundleBankIds, bundleComingSoon, bundleDescription, bundlePinned, bundlePrice, bundleTitle, onCreateBundle, pushNotice, resetBundleDialog]);
+  }, [bundleBankIds, bundleComingSoon, bundleDescription, bundlePinned, bundlePrice, bundleThumbFile, bundleTitle, onCreateBundle, pushNotice, resetBundleDialog]);
 
   return (
     <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
@@ -2800,11 +2903,66 @@ export function StoreCatalogTab({
                   <Input type="number" min="0" step="0.01" value={bundlePrice} onChange={(event) => setBundlePrice(event.target.value)} disabled={bundleComingSoon} placeholder={bundleComingSoon ? 'Disabled while Coming Soon is on' : 'e.g. 199.00'} className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />
                 </div>
               </div>
-              <div className="space-y-1">
-                <Label>Description</Label>
-                <textarea value={bundleDescription} onChange={(event) => setBundleDescription(event.target.value)} placeholder="Includes multiple banks in one discounted package." className={`w-full min-h-[88px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`} />
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1">
+                  <Label>Description</Label>
+                  <textarea value={bundleDescription} onChange={(event) => setBundleDescription(event.target.value)} placeholder="Includes multiple banks in one discounted package." className={`w-full min-h-[88px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`} />
+                </div>
+                <div className={`rounded-lg border px-3 py-2.5 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-start gap-3">
+                    <div className="shrink-0">
+                      {bundleThumbPreviewUrl ? (
+                        <img src={bundleThumbPreviewUrl} alt="" className="w-16 h-16 rounded-lg object-cover border" />
+                      ) : (
+                        <div className={`w-16 h-16 rounded-lg border-2 border-dashed flex items-center justify-center ${theme === 'dark' ? 'border-gray-600 text-gray-600' : 'border-gray-300 text-gray-400'}`}>
+                          <Upload className="w-5 h-5" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="text-sm font-medium">Optional Thumbnail</div>
+                      <div className="text-[11px] opacity-70">Bundles can have their own Bank Store thumbnail. Leave it empty if you want to add or replace it later.</div>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => bundleThumbInputRef.current?.click()}
+                          disabled={loading || bundleSubmitting}
+                          className="h-8"
+                        >
+                          <Upload className="w-3.5 h-3.5 mr-2" />
+                          {bundleThumbFile ? 'Replace Thumbnail' : 'Choose Thumbnail'}
+                        </Button>
+                        {bundleThumbFile && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setBundleThumbFile(null);
+                              setBundleThumbPreviewUrl(null);
+                              if (bundleThumbInputRef.current) bundleThumbInputRef.current.value = '';
+                            }}
+                            disabled={loading || bundleSubmitting}
+                            className="h-8"
+                          >
+                            <X className="w-3.5 h-3.5 mr-2" />
+                            Remove
+                          </Button>
+                        )}
+                      </div>
+                      <input
+                        ref={bundleThumbInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(event) => setBundleThumbFile(event.target.files?.[0] || null)}
+                        disabled={loading || bundleSubmitting}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
                 <div className={`rounded-lg border px-3 py-2.5 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -2851,12 +3009,13 @@ export function StoreCatalogTab({
               </div>
             </div>
             <DialogFooter className="gap-2">
-              <Button type="button" variant="outline" onClick={() => setBundleDialogOpen(false)} disabled={loading}>
-                Cancel
-              </Button>
-              <Button type="button" onClick={() => void submitBundleDialog()} disabled={loading} className={theme === 'dark' ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}>
-                Create Bundle
-              </Button>
+                <Button type="button" variant="outline" onClick={() => setBundleDialogOpen(false)} disabled={loading || bundleSubmitting}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={() => void submitBundleDialog()} disabled={loading || bundleSubmitting} className={theme === 'dark' ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}>
+                  {bundleSubmitting ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : null}
+                  Create Bundle
+                </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -2979,7 +3138,6 @@ export function StorePromotionsTab({
   onSave,
   onDelete,
 }: StorePromotionsTabProps) {
-  const isDark = theme === 'dark';
   const [editorOpen, setEditorOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<StorePromotion | null>(null);
   const bankOptions = React.useMemo(() => {
@@ -3003,12 +3161,6 @@ export function StorePromotionsTab({
     () => new Map(promotionUserOptions.map((user) => [user.id, user.label])),
     [promotionUserOptions],
   );
-  const selectedBankCount = form.target_bank_ids.length;
-  const isFlashSale = form.promotion_type === 'flash_sale';
-  const mutedToneClass = isDark ? 'text-gray-400' : 'text-gray-500';
-  const selectedModeToneClass = isFlashSale
-    ? (isDark ? 'border-rose-500/40 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700')
-    : (isDark ? 'border-sky-500/35 bg-sky-500/10 text-sky-100' : 'border-sky-200 bg-sky-50 text-sky-700');
 
   const handleEditorOpenChange = React.useCallback((open: boolean) => {
     setEditorOpen(open);
@@ -3058,181 +3210,8 @@ export function StorePromotionsTab({
       onDelete={onDelete}
     />
   );
-
-  return (
-    <div className={`border rounded p-3 space-y-3 overflow-visible lg:h-full lg:min-h-0 lg:flex lg:flex-col lg:overflow-hidden ${panelClass}`}>
-      <div className="flex flex-wrap gap-1.5 text-[11px]">
-        <span className={`px-2 py-0.5 rounded border ${isDark ? 'border-gray-700 text-gray-300' : 'border-gray-300 text-gray-700'}`}>Total {stats.total}</span>
-        <span className={`px-2 py-0.5 rounded border ${isDark ? 'border-emerald-700/60 text-emerald-300' : 'border-emerald-300 text-emerald-700'}`}>Active {stats.active}</span>
-        <span className={`px-2 py-0.5 rounded border ${isDark ? 'border-blue-700/60 text-blue-300' : 'border-blue-300 text-blue-700'}`}>Scheduled {stats.scheduled}</span>
-        <span className={`px-2 py-0.5 rounded border ${isDark ? 'border-amber-700/60 text-amber-300' : 'border-amber-300 text-amber-700'}`}>Expired {stats.expired}</span>
-        <span className={`px-2 py-0.5 rounded border ${isDark ? 'border-rose-700/60 text-rose-300' : 'border-rose-300 text-rose-700'}`}>Inactive {stats.inactive}</span>
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-[380px_minmax(0,1fr)] gap-3 flex-1 min-h-0">
-        <div className={`rounded-xl border p-3 space-y-3 min-h-0 overflow-auto ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-sm font-semibold">{editingPromotionId ? 'Edit Promotion' : 'New Promotion'}</div>
-              <div className="text-xs opacity-70">Discounts stay separate from base catalog price.</div>
-            </div>
-            {editingPromotionId && (
-              <Button size="sm" variant="outline" onClick={onReset}>
-                <RotateCcw className="w-3.5 h-3.5 mr-1" />
-                Reset
-              </Button>
-            )}
-          </div>
-
-          <div className="space-y-1">
-            <Label>Name</Label>
-            <Input value={form.name} onChange={(event) => onFormChange({ ...form, name: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-          </div>
-          <div className="space-y-1">
-            <Label>Description</Label>
-            <textarea value={form.description} onChange={(event) => onFormChange({ ...form, description: event.target.value })} className={`w-full min-h-[80px] rounded-md border p-2 text-sm outline-none resize-y ${isDark ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>Mode</Label>
-              <select value={form.promotion_type} onChange={(event) => onFormChange({ ...form, promotion_type: event.target.value === 'standard' ? 'standard' : 'flash_sale' })} className={`h-9 w-full rounded-md border px-2 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
-                <option value="flash_sale">Flash Sale</option>
-                <option value="standard">Standard</option>
-              </select>
-            </div>
-            <div className="space-y-1">
-              <Label>Discount Type</Label>
-              <select value={form.discount_type} onChange={(event) => onFormChange({ ...form, discount_type: event.target.value === 'fixed' ? 'fixed' : 'percent' })} className={`h-9 w-full rounded-md border px-2 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
-                <option value="percent">Percent</option>
-                <option value="fixed">Fixed PHP</option>
-              </select>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>Discount Value</Label>
-              <Input type="number" min={0} step={form.discount_type === 'percent' ? '0.01' : '1'} value={form.discount_value} onChange={(event) => onFormChange({ ...form, discount_value: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
-            <div className="space-y-1">
-              <Label>Priority</Label>
-              <Input type="number" min={0} step="1" value={form.priority} onChange={(event) => onFormChange({ ...form, priority: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>Start</Label>
-              <Input type="datetime-local" value={form.starts_at} onChange={(event) => onFormChange({ ...form, starts_at: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
-            <div className="space-y-1">
-              <Label>End</Label>
-              <Input type="datetime-local" value={form.ends_at} onChange={(event) => onFormChange({ ...form, ends_at: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>Timezone</Label>
-              <Input value={form.timezone} onChange={(event) => onFormChange({ ...form, timezone: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
-            <div className="space-y-1">
-              <Label>Badge</Label>
-              <Input value={form.badge_text} onChange={(event) => onFormChange({ ...form, badge_text: event.target.value })} placeholder="FLASH SALE" className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
-          </div>
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input type="checkbox" checked={form.is_active} onChange={(event) => onFormChange({ ...form, is_active: event.target.checked })} />
-            <span>Promotion enabled</span>
-          </label>
-
-          <div className="space-y-2">
-            <div className="text-sm font-semibold">Target Banks</div>
-            <div className={`max-h-28 overflow-auto rounded-md border p-2 space-y-1 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
-              {bankOptions.length === 0 ? (
-                <div className="text-xs opacity-70">No catalog banks available yet.</div>
-              ) : bankOptions.map((bank) => (
-                <label key={bank.id} className="flex items-center gap-2 text-xs cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form.target_bank_ids.includes(bank.id)}
-                    onChange={(event) => onFormChange({
-                      ...form,
-                      target_bank_ids: event.target.checked
-                        ? [...form.target_bank_ids, bank.id]
-                        : form.target_bank_ids.filter((id) => id !== bank.id),
-                    })}
-                  />
-                  <span>{bank.label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <Button onClick={onSave} disabled={loading} className="flex-1">
-              {loading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1" />}
-              {editingPromotionId ? 'Save Promotion' : 'Create Promotion'}
-            </Button>
-            <Button type="button" variant="outline" onClick={onReset} disabled={loading}>
-              Clear
-            </Button>
-          </div>
-        </div>
-
-        <div className={`rounded-xl border p-3 min-h-0 overflow-auto ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
-          <div className="text-sm font-semibold mb-3">Existing Promotions</div>
-          {promotions.length === 0 ? (
-            <div className="text-sm opacity-70">No promotions created yet.</div>
-          ) : (
-            <div className="space-y-3">
-              {promotions.map((promotion) => (
-                <div key={promotion.id} className={`rounded-lg border p-3 space-y-2 ${isDark ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="font-semibold">{promotion.name}</div>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${promotion.status === 'active'
-                          ? (isDark ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-100 text-emerald-700')
-                          : promotion.status === 'scheduled'
-                            ? (isDark ? 'bg-blue-500/20 text-blue-300' : 'bg-blue-100 text-blue-700')
-                            : promotion.status === 'expired'
-                              ? (isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700')
-                              : (isDark ? 'bg-rose-500/20 text-rose-300' : 'bg-rose-100 text-rose-700')}`}>
-                          {promotion.status}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${isDark ? 'bg-fuchsia-500/20 text-fuchsia-300' : 'bg-fuchsia-100 text-fuchsia-700'}`}>
-                          {promotion.promotion_type === 'flash_sale' ? 'Flash Sale' : 'Standard'}
-                        </span>
-                      </div>
-                      <div className="text-xs opacity-70 mt-1">
-                        {promotion.discount_type === 'percent' ? `${promotion.discount_value}% off` : `PHP ${promotion.discount_value} off`}
-                        {' • '}
-                        {new Date(promotion.starts_at).toLocaleString()} to {new Date(promotion.ends_at).toLocaleString()}
-                      </div>
-                      {promotion.description ? <div className="text-xs opacity-80 mt-1">{promotion.description}</div> : null}
-                    </div>
-                    <div className="flex gap-2">
-                      <Button size="sm" variant="outline" onClick={() => onEdit(promotion)}>
-                        Edit
-                      </Button>
-                      <Button size="sm" variant="destructive" onClick={() => onDelete(promotion.id)}>
-                        Delete
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {(promotion.target_labels || []).map((target) => (
-                      <span key={`${target.type}-${target.id}`} className={`px-2 py-0.5 rounded border text-[11px] ${isDark ? 'border-gray-700 text-gray-300' : 'border-gray-300 text-gray-700'}`}>
-                        {target.type === 'catalog' ? 'Item' : 'Bank'}: {target.label}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
 }
+
 
 function StorePromotionsSurface({
   theme,
@@ -3284,11 +3263,16 @@ function StorePromotionsSurface({
   deleteTarget: StorePromotion | null;
   onDeleteTargetChange: (promotion: StorePromotion | null) => void;
   onDelete: (promotionId: string) => void;
-}) {
-  const isDark = theme === 'dark';
-  const selectedBankCount = form.target_bank_ids.length;
-  const selectedCatalogCount = form.target_catalog_item_ids.length;
-  const selectedUserCount = form.target_user_ids.length;
+  }) {
+    const isDark = theme === 'dark';
+    const allBankIds = React.useMemo(
+      () => bankOptions.map((bank) => bank.id),
+      [bankOptions],
+    );
+    const selectedBankCount = form.target_bank_ids.length;
+    const allBanksSelected = allBankIds.length > 0 && allBankIds.every((bankId) => form.target_bank_ids.includes(bankId));
+    const selectedCatalogCount = form.target_catalog_item_ids.length;
+    const selectedUserCount = form.target_user_ids.length;
   const isFlashSale = form.promotion_type === 'flash_sale';
   const isSpecificUsers = form.audience_type === 'specific_users';
   const isNewUsersWindow = form.audience_type === 'new_users_window';
@@ -3395,8 +3379,12 @@ function StorePromotionsSurface({
                         )}
                       </div>
                       <div className={`text-xs mt-1 ${mutedToneClass}`}>
-                        {promotion.discount_type === 'percent' ? `${promotion.discount_value}% off` : `PHP ${promotion.discount_value} off`}
-                        {' • '}
+                        {promotion.discount_type === 'free'
+                          ? 'Free access'
+                          : promotion.discount_type === 'percent'
+                            ? `${promotion.discount_value}% off`
+                            : `PHP ${promotion.discount_value} off`}
+                        {' â€¢ '}
                         {new Date(promotion.starts_at).toLocaleString()} to {new Date(promotion.ends_at).toLocaleString()}
                       </div>
                       {promotion.description ? <div className={`text-xs mt-2 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>{promotion.description}</div> : null}
@@ -3437,7 +3425,7 @@ function StorePromotionsSurface({
           <DialogHeader>
             <DialogTitle>{editingPromotionId ? 'Edit Promotion' : 'Create Promotion'}</DialogTitle>
             <DialogDescription className={isDark ? 'text-gray-400' : 'text-gray-500'}>
-              Promotions apply on top of the bank catalog price. Flash sales get stronger urgency in the storefront, while standard promotions keep the presentation softer.
+              Promotions apply on top of the bank catalog price. You can run regular discounts, flash sales, or temporary free-access claims without changing the base catalog item.
             </DialogDescription>
           </DialogHeader>
 
@@ -3496,16 +3484,22 @@ function StorePromotionsSurface({
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-1">
                 <Label>Discount Type</Label>
-                <select value={form.discount_type} onChange={(event) => onFormChange({ ...form, discount_type: event.target.value === 'fixed' ? 'fixed' : 'percent' })} className={`h-9 w-full rounded-md border px-2 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
+                <select value={form.discount_type} onChange={(event) => onFormChange({ ...form, discount_type: event.target.value === 'fixed' ? 'fixed' : event.target.value === 'free' ? 'free' : 'percent', discount_value: event.target.value === 'free' ? '0' : form.discount_value || '10' })} className={`h-9 w-full rounded-md border px-2 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
                   <option value="percent">Percent</option>
                   <option value="fixed">Fixed PHP</option>
+                  <option value="free">Free Access</option>
                 </select>
               </div>
               <div className="space-y-1">
                 <Label>Discount Value</Label>
-                <Input type="number" min={0} step={form.discount_type === 'percent' ? '0.01' : '1'} value={form.discount_value} onChange={(event) => onFormChange({ ...form, discount_value: event.target.value })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
+                <Input type="number" min={0} step={form.discount_type === 'percent' ? '0.01' : '1'} value={form.discount_value} onChange={(event) => onFormChange({ ...form, discount_value: event.target.value })} disabled={form.discount_type === 'free'} placeholder={form.discount_type === 'free' ? 'Fixed at 0 for free claims' : undefined} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
               </div>
             </div>
+            {form.discount_type === 'free' && (
+              <div className={`rounded-xl border p-3 text-xs ${isDark ? 'border-emerald-700/50 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+                Eligible users will see a free-claim action instead of the normal purchase flow. Updated apps can claim instantly, and older apps can still complete through the compatibility fallback.
+              </div>
+            )}
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-1">
@@ -3647,16 +3641,36 @@ function StorePromotionsSurface({
               ) : null}
             </div>
 
-            <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
-              <div className="flex items-center justify-between gap-3 mb-2">
-                <div>
-                  <div className="text-sm font-semibold">Target Banks</div>
-                  <div className={`text-xs ${mutedToneClass}`}>Pick the banks that should receive this promotion.</div>
+              <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <div>
+                    <div className="text-sm font-semibold">Target Banks</div>
+                    <div className={`text-xs ${mutedToneClass}`}>Pick the banks that should receive this promotion.</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className={`text-xs font-semibold ${selectedBankCount > 0 ? (isDark ? 'text-teal-300' : 'text-teal-700') : mutedToneClass}`}>
+                      {selectedBankCount} selected
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={loading || bankOptions.length === 0 || allBanksSelected}
+                      onClick={() => onFormChange({ ...form, target_bank_ids: [...allBankIds] })}
+                    >
+                      Select All Banks
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={loading || form.target_bank_ids.length === 0}
+                      onClick={() => onFormChange({ ...form, target_bank_ids: [] })}
+                    >
+                      Clear
+                    </Button>
+                  </div>
                 </div>
-                <div className={`text-xs font-semibold ${selectedBankCount > 0 ? (isDark ? 'text-teal-300' : 'text-teal-700') : mutedToneClass}`}>
-                  {selectedBankCount} selected
-                </div>
-              </div>
               <div className={`max-h-44 overflow-auto rounded-md border p-2 space-y-1 ${isDark ? 'border-gray-700 bg-gray-900/60' : 'border-gray-200 bg-white'}`}>
                 {bankOptions.length === 0 ? (
                   <div className="text-xs opacity-70">No catalog banks available yet.</div>
@@ -4323,7 +4337,7 @@ export function StoreConfigTab({
               </div>
               <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
                 <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-amber-300' : 'text-amber-700'}`}>Checkout Support</div>
-                <div className="mt-1 text-xs font-medium">{hasQrImage ? 'QR ready' : 'No QR uploaded'}{hasMessengerConfig ? ' • Messenger ready' : ''}</div>
+                <div className="mt-1 text-xs font-medium">{hasQrImage ? 'QR ready' : 'No QR uploaded'}{hasMessengerConfig ? ' â€¢ Messenger ready' : ''}</div>
               </div>
             </div>
           </div>

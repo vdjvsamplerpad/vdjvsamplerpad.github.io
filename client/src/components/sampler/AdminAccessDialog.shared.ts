@@ -401,7 +401,7 @@ export interface StorePromotion {
   name: string;
   description?: string | null;
   promotion_type: 'standard' | 'flash_sale';
-  discount_type: 'percent' | 'fixed';
+  discount_type: 'percent' | 'fixed' | 'free';
   discount_value: number;
   starts_at: string;
   ends_at: string;

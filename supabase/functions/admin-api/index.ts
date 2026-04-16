@@ -482,9 +482,36 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
     last_sign_in_at: (a, b) => compareNullableDate(a.last_sign_in_at, b.last_sign_in_at),
     ban_status: (a, b) => Number(a.is_banned) - Number(b.is_banned),
   });
+  const pagedUsers = paginateRows(sorted, page, perPage);
+  const pagedUserIds = pagedUsers.map((row) => row.id).filter(Boolean);
+  const latestSessionByUser = new Map<string, { device_name: string | null; platform: string | null }>();
+  if (pagedUserIds.length > 0) {
+    const { data: sessionRows, error: sessionError } = await admin
+      .from("active_sessions")
+      .select("user_id,device_name,platform,last_seen_at")
+      .in("user_id", pagedUserIds)
+      .order("last_seen_at", { ascending: false })
+      .limit(Math.max(200, Math.min(5000, pagedUserIds.length * 8)));
+    if (sessionError) return fail(500, sessionError.message);
+    for (const row of sessionRows || []) {
+      const rowUserId = asUuid((row as any)?.user_id);
+      if (!rowUserId || latestSessionByUser.has(rowUserId)) continue;
+      latestSessionByUser.set(rowUserId, {
+        device_name: asString((row as any)?.device_name, 200) || null,
+        platform: asString((row as any)?.platform, 120) || null,
+      });
+    }
+  }
 
   return ok({
-    users: paginateRows(sorted, page, perPage),
+    users: pagedUsers.map((row) => {
+      const latestSession = latestSessionByUser.get(row.id);
+      return {
+        ...row,
+        last_sign_in_device_name: latestSession?.device_name || null,
+        last_sign_in_platform: latestSession?.platform || null,
+      };
+    }),
     page,
     perPage,
     total: sorted.length,

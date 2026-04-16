@@ -624,6 +624,22 @@ export function OnlineBankStoreDialog({
         setSelectedItem(retriableItem);
     };
 
+    const dismissRejectedBadge = React.useCallback((item: StoreItem) => {
+        setRetryUnlockedBankIds((prev) => {
+            const next = new Set(prev);
+            next.add(item.bank_id);
+            return next;
+        });
+        setItems((prev) =>
+            prev.map((entry) =>
+                entry.id === item.id
+                    ? { ...entry, status: 'buy', rejection_message: null }
+                    : entry,
+            ),
+        );
+        setRejectedOverlay(null);
+    }, [setItems]);
+
     const cartItems = React.useMemo(
         () => Array.from(cartItemIds).map((id) => cartItemRegistry[id]).filter((item): item is StoreItem => Boolean(item)),
         [cartItemIds, cartItemRegistry],
@@ -642,6 +658,25 @@ export function OnlineBankStoreDialog({
 
     const renderCatalogPrice = React.useCallback((item: StoreItem) => {
         if (item.price_php === null) return <span className="text-amber-300 text-sm">Price to be announced</span>;
+        if (item.is_promotion_free_claim) {
+            return (
+                <div className="flex flex-col items-start leading-tight min-w-0 overflow-hidden">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        {typeof item.original_price_php === 'number' && item.original_price_php > 0 ? (
+                            <span className="text-[10px] line-through opacity-60">PHP {Number(item.original_price_php).toLocaleString()}</span>
+                        ) : null}
+                        <span className="text-emerald-300 font-semibold">FREE</span>
+                    </div>
+                    {item.promotion_badge && item.promotion_type !== 'flash_sale' ? (
+                        <div className="flex items-center gap-1.5 flex-wrap mt-1 w-full">
+                            <span className="shrink-0 inline-flex items-center h-4 px-1.5 rounded text-[9px] font-bold uppercase tracking-wide border bg-sky-500/20 text-sky-100 border-sky-200/30">
+                                {item.promotion_badge}
+                            </span>
+                        </div>
+                    ) : null}
+                </div>
+            );
+        }
         const hasPromotion = Boolean(
             item.has_active_promotion
             && typeof item.original_price_php === 'number'
@@ -1172,6 +1207,18 @@ export function OnlineBankStoreDialog({
                                                                 >
                                                                     <AlertCircle className="w-3.5 h-3.5 mr-1" />Not Approved
                                                                 </Button>
+                                                            ) : item.is_promotion_free_claim ? (
+                                                                <Button
+                                                                    size="sm"
+                                                                    onClick={() => {
+                                                                        if (!effectiveUser) { requestLogin(); return; }
+                                                                        setSelectedItem(item);
+                                                                    }}
+                                                                    disabled={!isOnline}
+                                                                    className={`h-8 px-4 text-xs font-semibold rounded-full disabled:opacity-50 shadow-lg transition-all ${isDark ? 'bg-emerald-500 hover:bg-emerald-400 text-white border-0' : 'bg-emerald-600 hover:bg-emerald-700 text-white border-0'}`}
+                                                                >
+                                                                    Get Free
+                                                                </Button>
                                                             ) : (
                                                                 <>
                                                                     <Button
@@ -1418,7 +1465,7 @@ export function OnlineBankStoreDialog({
                             isDark={isDark}
                             item={rejectedOverlay.item}
                             isOnline={isOnline}
-                            onClose={() => setRejectedOverlay(null)}
+                            onClose={() => dismissRejectedBadge(rejectedOverlay.item)}
                             onRetry={() => handleRetry(rejectedOverlay.item)}
                         />
                     )}

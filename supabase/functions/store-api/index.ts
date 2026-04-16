@@ -1352,8 +1352,18 @@ const getCatalogBundleBankEntries = (
       const title = asString(bank?.title, 255) || "";
       const deleted = Boolean(bank?.deleted_at);
       return { bankId, title, deleted };
-    })
-    .filter((entry) => Boolean(entry.bankId) && (includeDeleted || !entry.deleted));
+      })
+      .filter((entry) => Boolean(entry.bankId) && (includeDeleted || !entry.deleted));
+};
+
+const getPrimaryCatalogBankId = (
+  item: any,
+  options?: { includeDeleted?: boolean },
+): string => {
+  const directBankId = asString(item?.bank_id, 80) || "";
+  if (directBankId) return directBankId;
+  const [firstBundleEntry] = getCatalogBundleBankEntries(item, options);
+  return firstBundleEntry?.bankId || "";
 };
 
 const getCatalogDisplayBank = (item: any) => {
@@ -1377,6 +1387,7 @@ const normalizeAdminCatalogItem = (item: any) => {
   const bundleEntries = getCatalogBundleBankEntries(item, { includeDeleted: true });
   return {
     ...item,
+    bank_id: getPrimaryCatalogBankId(item, { includeDeleted: true }),
     item_type: itemType,
     bundle_title: asString(item?.bundle_title, 255) || "",
     bundle_description: asString(item?.bundle_description, 2000) || "",
@@ -1411,9 +1422,9 @@ const normalizeStoreCatalogItem = (
 ) => {
   const itemType = normalizeCatalogItemType(item?.item_type);
   const displayBank = getCatalogDisplayBank(item);
-  const bankId = asString(item?.bank_id, 80) || "";
-  const catalogItemId = asString(item?.id, 80) || "";
   const bundleEntries = getCatalogBundleBankEntries(item);
+  const bankId = getPrimaryCatalogBankId(item);
+  const catalogItemId = asString(item?.id, 80) || "";
   const bundleBankIds = bundleEntries.map((entry) => entry.bankId);
   const bundleBankTitles = bundleEntries.map((entry) => entry.title || "Unknown Bank");
   if (itemType === "bank_bundle" && bundleBankIds.length === 0) return null;
@@ -1428,6 +1439,13 @@ const normalizeStoreCatalogItem = (
   }
 
   const isComingSoon = Boolean(item?.coming_soon);
+  const isPromotionFreeClaim = Boolean(
+    item?.has_active_promotion
+    && item?.promotion_discount_type === "free"
+    && item?.is_paid
+    && item?.requires_grant
+    && asPriceNumber(item?.price_php) === 0,
+  );
   let status = "buy";
   let rejectionMessage: string | null = null;
   if (isComingSoon) status = "pending";
@@ -1475,6 +1493,7 @@ const normalizeStoreCatalogItem = (
       : input.rejectedRequests.has(bankId),
     is_downloadable: itemType === "bank_bundle" ? false : (status === "free_download" || status === "granted_download"),
     is_purchased: itemType === "bank_bundle" ? false : status === "granted_download",
+    is_promotion_free_claim: isPromotionFreeClaim,
     price_php: isComingSoon ? null : resolveCatalogPrice(item),
     original_price_php: asPriceNumber(item?.original_price_php),
     discount_amount_php: asPriceNumber(item?.discount_amount_php) || 0,
@@ -1612,7 +1631,7 @@ const normalizeBannerRotationMs = (value: unknown): number | null => {
 };
 
 type PromotionType = "standard" | "flash_sale";
-type PromotionDiscountType = "percent" | "fixed";
+type PromotionDiscountType = "percent" | "fixed" | "free";
 type PromotionTargetType = "catalog" | "bank";
 type PromotionAudienceType = "all" | "specific_users" | "new_users_window";
 
@@ -1663,7 +1682,10 @@ const normalizePromotionType = (value: unknown): PromotionType => {
 };
 
 const normalizePromotionDiscountType = (value: unknown): PromotionDiscountType => {
-  return String(value || "").trim().toLowerCase() === "fixed" ? "fixed" : "percent";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "fixed") return "fixed";
+  if (normalized === "free") return "free";
+  return "percent";
 };
 
 const normalizePromotionAudienceType = (value: unknown): PromotionAudienceType => {
@@ -1731,6 +1753,12 @@ const getPromotionLifecycleStatus = (promotion: PromotionRow, nowIso = new Date(
 
 const resolvePromotionDiscount = (basePrice: number, promotion: PromotionRow): { discountAmountPhp: number; effectivePricePhp: number } | null => {
   if (!Number.isFinite(basePrice) || basePrice <= 0) return null;
+  if (promotion.discount_type === "free") {
+    return {
+      discountAmountPhp: roundMoney(basePrice),
+      effectivePricePhp: 0,
+    };
+  }
   let discountAmountPhp = promotion.discount_type === "fixed"
     ? roundMoney(promotion.discount_value)
     : roundMoney(basePrice * (promotion.discount_value / 100));
@@ -1827,6 +1855,7 @@ const attachPromotionToCatalogItem = (
       promotion_name: null,
       promotion_badge: null,
       promotion_type: null,
+      promotion_discount_type: null,
       promotion_starts_at: null,
       promotion_ends_at: null,
       has_active_promotion: false,
@@ -1841,6 +1870,7 @@ const attachPromotionToCatalogItem = (
     promotion_name: resolvedPromotion.promotion.name,
     promotion_badge: resolvedPromotion.promotion.badge_text || resolvedPromotion.promotion.name,
     promotion_type: resolvedPromotion.promotion.promotion_type,
+    promotion_discount_type: resolvedPromotion.promotion.discount_type,
     promotion_starts_at: resolvedPromotion.promotion.starts_at,
     promotion_ends_at: resolvedPromotion.promotion.ends_at,
     has_active_promotion: true,
@@ -2024,6 +2054,9 @@ const validatePromotionDefinition = async (
   }
   if (input.discountType === "fixed" && !(input.discountValue > 0)) {
     return { ok: false, error: "Fixed discounts must be greater than 0" };
+  }
+  if (input.discountType === "free" && input.discountValue !== 0) {
+    return { ok: false, error: "Free promotions must use a discount value of 0" };
   }
   if (input.bankIds.length === 0 && input.catalogItemIds.length === 0) {
     return { ok: false, error: "Select at least one bank or catalog item target" };
@@ -5159,6 +5192,7 @@ const executeStoreDecision = async (input: {
   reviewedBy: string | null;
   decisionSource: "manual" | "automation";
   automationResult?: string | null;
+  freeClaim?: boolean;
 }) => {
   const rowIds = input.batchRows.map((row) => row.id);
   const rpc = await input.admin.rpc("apply_store_request_decision", {
@@ -5203,8 +5237,10 @@ const executeStoreDecision = async (input: {
       severity: input.nextStatus === "rejected" ? "warning" : (input.decisionSource === "automation" ? "warning" : "info"),
       colorOverride: input.nextStatus === "approved" ? 0x16a34a : null,
       title: input.nextStatus === "approved" ? "Store Request Approved" : "Store Request Rejected",
-      description: input.decisionSource === "automation"
-        ? `Store request was ${input.nextStatus} automatically.`
+      description: input.freeClaim
+        ? "Store free promotion claim was granted automatically."
+        : input.decisionSource === "automation"
+          ? `Store request was ${input.nextStatus} automatically.`
         : `Store request was ${input.nextStatus} by admin.`,
       requestId: String(rowIds[0] || ""),
       userId: asString(input.batchRows[0]?.user_id, 80) || null,
@@ -5236,6 +5272,7 @@ const executeStoreDecision = async (input: {
     decision_email_status: emailResults.aggregate.status,
     decision_email_error: emailResults.aggregate.error,
     auto_approved: input.decisionSource === "automation",
+    free_claim: Boolean(input.freeClaim),
     payer_name: asString(input.batchRows[0]?.payer_name, 160) || null,
     reference_no: asString(input.batchRows[0]?.ocr_reference_no, 160) || asString(input.batchRows[0]?.reference_no, 160) || null,
     receipt_reference: asString(input.batchRows[0]?.receipt_reference, 160) || null,
@@ -5579,43 +5616,6 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
   ) {
     return badRequest("proofPath must be an image file");
   }
-  if (normalizedPaymentChannel === "image_proof" && !normalizedProofPath) {
-    return badRequest("proofPath is required for image_proof");
-  }
-
-  const automationSettings = await getStoreAutomationSettings(admin);
-  let ocrDetected: ReceiptOcrDetection | null = null;
-  let ocrErrorCode: string | null = null;
-  let ocrProvider: string | null = null;
-  const shouldRunServerOcr = normalizedPaymentChannel === "image_proof"
-    && Boolean(normalizedProofPath)
-    && automationSettings.store.enabled;
-  if (shouldRunServerOcr && normalizedProofPath) {
-    const attempt = await extractReceiptFieldsFromStoragePath(
-      admin,
-      "payment-proof",
-      normalizedProofPath,
-      "bank_store",
-    ).catch(() => ({ detected: null, errorCode: "OCR_FAILED", provider: OCR_SPACE_PROVIDER, elapsedMs: 0 } satisfies ReceiptOcrAttempt));
-    if (attempt.detected) {
-      ocrDetected = attempt.detected;
-      ocrProvider = attempt.detected.provider;
-      if (!normalizedPayerName && attempt.detected.payerName) normalizedPayerName = attempt.detected.payerName;
-      if (!normalizedReferenceNo && attempt.detected.referenceNo) normalizedReferenceNo = attempt.detected.referenceNo;
-    } else {
-      ocrErrorCode = attempt.errorCode || (String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE");
-      ocrProvider = attempt.provider;
-    }
-  } else if (normalizedPaymentChannel === "image_proof" && normalizedProofPath) {
-    ocrErrorCode = "MANUAL_REVIEW_MODE";
-  }
-  const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode, ocrProvider);
-  const { data: paymentSettings, error: paymentSettingsError } = await admin
-    .from("store_payment_settings")
-    .select("gcash_number,maya_number")
-    .eq("id", "default")
-    .maybeSingle();
-  if (paymentSettingsError) return fail(500, paymentSettingsError.message);
 
   const itemList: Array<{ bankId: string; catalogItemId?: string }> = Array.isArray(items) && items.length > 0
     ? items
@@ -5668,6 +5668,54 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
     if (!catalogRow.is_published) return fail(400, `Catalog item is not published: ${item.catalogItemId}`);
     if (catalogRow.coming_soon) return fail(409, "COMING_SOON");
   }
+  const allFreePromotionClaim = normalizedItems.length > 0 && normalizedItems.every((item) => {
+    const catalogRow = enrichedCatalogById.get(item.catalogItemId) || catalogById.get(item.catalogItemId);
+    return Boolean(
+      catalogRow?.has_active_promotion
+      && catalogRow?.promotion_discount_type === "free"
+      && catalogRow?.is_paid
+      && catalogRow?.requires_grant
+      && asPriceNumber(catalogRow?.price_php) === 0,
+    );
+  });
+  if (!allFreePromotionClaim && normalizedPaymentChannel === "image_proof" && !normalizedProofPath) {
+    return badRequest("proofPath is required for image_proof");
+  }
+
+  const automationSettings = await getStoreAutomationSettings(admin);
+  const { data: paymentSettings, error: paymentSettingsError } = await admin
+    .from("store_payment_settings")
+    .select("gcash_number,maya_number")
+    .eq("id", "default")
+    .maybeSingle();
+  if (paymentSettingsError) return fail(500, paymentSettingsError.message);
+  let ocrDetected: ReceiptOcrDetection | null = null;
+  let ocrErrorCode: string | null = allFreePromotionClaim ? "FREE_PROMOTION_CLAIM" : null;
+  let ocrProvider: string | null = null;
+  const shouldRunServerOcr = !allFreePromotionClaim
+    && normalizedPaymentChannel === "image_proof"
+    && Boolean(normalizedProofPath)
+    && automationSettings.store.enabled;
+  if (shouldRunServerOcr && normalizedProofPath) {
+    const attempt = await extractReceiptFieldsFromStoragePath(
+      admin,
+      "payment-proof",
+      normalizedProofPath,
+      "bank_store",
+    ).catch(() => ({ detected: null, errorCode: "OCR_FAILED", provider: OCR_SPACE_PROVIDER, elapsedMs: 0 } satisfies ReceiptOcrAttempt));
+    if (attempt.detected) {
+      ocrDetected = attempt.detected;
+      ocrProvider = attempt.detected.provider;
+      if (!normalizedPayerName && attempt.detected.payerName) normalizedPayerName = attempt.detected.payerName;
+      if (!normalizedReferenceNo && attempt.detected.referenceNo) normalizedReferenceNo = attempt.detected.referenceNo;
+    } else {
+      ocrErrorCode = attempt.errorCode || (String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE");
+      ocrProvider = attempt.provider;
+    }
+  } else if (!allFreePromotionClaim && normalizedPaymentChannel === "image_proof" && normalizedProofPath) {
+    ocrErrorCode = "MANUAL_REVIEW_MODE";
+  }
+  const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode, ocrProvider);
 
   const requestedBankIds = [...new Set(normalizedItems.map((item) => item.bankId))];
   const { data: bankRows, error: bankRowsError } = await admin
@@ -5697,11 +5745,11 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       promotion_snapshot: buildPromotionSnapshot(resolvedPromotion),
       batch_id: batchId,
       status: "pending",
-      payment_channel: normalizedPaymentChannel || null,
-      payer_name: normalizedPayerName || null,
-      reference_no: normalizedReferenceNo || null,
+      payment_channel: allFreePromotionClaim ? null : (normalizedPaymentChannel || null),
+      payer_name: allFreePromotionClaim ? null : (normalizedPayerName || null),
+      reference_no: allFreePromotionClaim ? null : (normalizedReferenceNo || null),
       receipt_reference: receiptReference,
-      proof_path: normalizedProofPath || null,
+      proof_path: allFreePromotionClaim ? null : (normalizedProofPath || null),
       notes: normalizedNotes || null,
       ocr_reference_no: ocrMetadata.referenceNo,
       ocr_payer_name: ocrMetadata.payerName,
@@ -5784,7 +5832,10 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
 
   let automationResult: AutomationReason = "not_image_proof";
   let autoApproved = false;
-  if (normalizedPaymentChannel === "image_proof") {
+  if (allFreePromotionClaim) {
+    automationResult = "approved";
+    autoApproved = true;
+  } else if (normalizedPaymentChannel === "image_proof") {
     if (!automationSettings.store.enabled) {
       automationResult = "manual_review_disabled";
     } else if (!ocrDetected) {
@@ -5847,6 +5898,7 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       reviewedBy: null,
       decisionSource: "automation",
       automationResult,
+      freeClaim: allFreePromotionClaim,
     });
     if (decisionResponse.ok || decisionResponse.status < 500) {
       return decisionResponse;
@@ -7341,9 +7393,8 @@ const createAdminStoreBundle = async (body: any, adminUserId: string) => {
     return badRequest("Bundle price must be set before creating a live bundle draft");
   }
 
-  const firstBankId = bundleBankIds[0];
   const row = {
-    bank_id: firstBankId,
+    bank_id: null,
     item_type: "bank_bundle",
     bundle_title: title,
     bundle_description: description,
@@ -7387,7 +7438,7 @@ const createAdminStoreBundle = async (body: any, adminUserId: string) => {
     title: "Store Bundle Created",
     description: "Admin created a new bundle catalog draft.",
     actorUserId: adminUserId,
-    bankId: firstBankId,
+    bankId: bundleBankIds[0] || null,
     catalogItemId,
     extraFields: [
       { name: "Bundle", value: title, inline: false },
@@ -7511,7 +7562,7 @@ const patchAdminStoreCatalog = async (catalogItemId: string, body: any, adminUse
     nextBundleBankIds = normalizeBundleBankIds(body);
     const bundleValidation = await validateBundleBanks(admin, nextBundleBankIds);
     if (!bundleValidation.ok) return bundleValidation.response;
-    updates.bank_id = nextBundleBankIds[0];
+    updates.bank_id = null;
   }
   if (Object.keys(updates).length === 0 && Object.keys(bankUpdates).length === 0 && nextBundleBankIds === null) {
     return badRequest("No valid fields to update");

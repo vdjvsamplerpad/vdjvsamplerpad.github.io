@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cleanupStagedExportEntries: (payload) => ipcRenderer.invoke('vdjv-export-cleanup-staged', payload),
   exportArchiveJob: (payload) => ipcRenderer.invoke('vdjv-export-archive-job', payload),
   importArchiveJob: (payload) => ipcRenderer.invoke('vdjv-import-archive-job', payload),
+  saveFile: (payload) => ipcRenderer.invoke('vdjv-save-file', payload),
   resolveNativeMedia: (payload) => ipcRenderer.invoke('vdjv-native-media-resolve', payload),
   writeNativeMedia: (payload) => ipcRenderer.invoke('vdjv-native-media-write', payload),
   readNativeMedia: (payload) => ipcRenderer.invoke('vdjv-native-media-read', payload),

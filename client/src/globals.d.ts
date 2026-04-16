@@ -130,6 +130,20 @@ interface Window {
         audioRejectedReason?: string | null;
       }>;
     }>;
+    saveFile?: (payload: {
+      title?: string;
+      fileName: string;
+      data: Uint8Array | ArrayBuffer;
+      filters?: Array<{
+        name: string;
+        extensions: string[];
+      }>;
+    }) => Promise<{
+      ok: boolean;
+      canceled?: boolean;
+      reason?: string;
+      savedPath?: string;
+    }>;
     resolveNativeMedia?: (payload: {
       storageKey: string;
     }) => Promise<{

@@ -135,7 +135,7 @@ type StorePromotionForm = {
   name: string;
   description: string;
   promotion_type: 'standard' | 'flash_sale';
-  discount_type: 'percent' | 'fixed';
+  discount_type: 'percent' | 'fixed' | 'free';
   discount_value: string;
   starts_at: string;
   ends_at: string;
@@ -648,7 +648,7 @@ export function useAdminAccessStoreManager({
       description: promotion.description || '',
       promotion_type: promotion.promotion_type,
       discount_type: promotion.discount_type,
-      discount_value: String(promotion.discount_value ?? ''),
+      discount_value: promotion.discount_type === 'free' ? '0' : String(promotion.discount_value ?? ''),
       starts_at: toDateTimeLocalValue(promotion.starts_at),
       ends_at: toDateTimeLocalValue(promotion.ends_at),
       timezone: promotion.timezone || 'Asia/Manila',
@@ -668,12 +668,13 @@ export function useAdminAccessStoreManager({
     const newUserWindowHours = storePromotionForm.new_user_window_hours.trim()
       ? Number(storePromotionForm.new_user_window_hours)
       : null;
+    const isFreePromotion = storePromotionForm.discount_type === 'free';
     const payload = {
       name: storePromotionForm.name.trim(),
       description: storePromotionForm.description.trim() || null,
       promotion_type: storePromotionForm.promotion_type,
       discount_type: storePromotionForm.discount_type,
-      discount_value: Number(storePromotionForm.discount_value),
+      discount_value: isFreePromotion ? 0 : Number(storePromotionForm.discount_value),
       starts_at: storePromotionForm.starts_at ? new Date(storePromotionForm.starts_at).toISOString() : null,
       ends_at: storePromotionForm.ends_at ? new Date(storePromotionForm.ends_at).toISOString() : null,
       timezone: storePromotionForm.timezone.trim() || 'Asia/Manila',
@@ -694,7 +695,7 @@ export function useAdminAccessStoreManager({
       pushNotice({ variant: 'error', message: 'Start and end dates are required.' });
       return false;
     }
-    if (!Number.isFinite(payload.discount_value) || payload.discount_value <= 0) {
+    if (!isFreePromotion && (!Number.isFinite(payload.discount_value) || payload.discount_value <= 0)) {
       pushNotice({ variant: 'error', message: 'Discount value must be greater than zero.' });
       return false;
     }

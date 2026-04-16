@@ -25,9 +25,11 @@ export interface StoreItem {
     promotion_name?: string | null;
     promotion_badge?: string | null;
     promotion_type?: 'standard' | 'flash_sale' | null;
+    promotion_discount_type?: 'percent' | 'fixed' | 'free' | null;
     promotion_starts_at?: string | null;
     promotion_ends_at?: string | null;
     has_active_promotion?: boolean;
+    is_promotion_free_claim?: boolean;
     sha256?: string | null;
     thumbnail_path?: string | null;
     status: 'free_download' | 'buy' | 'pending' | 'granted_download' | 'rejected';
@@ -156,7 +158,7 @@ export interface StorePromotion {
     name: string;
     description?: string | null;
     promotion_type: 'standard' | 'flash_sale';
-    discount_type: 'percent' | 'fixed';
+    discount_type: 'percent' | 'fixed' | 'free';
     discount_value: number;
     starts_at: string;
     ends_at: string;

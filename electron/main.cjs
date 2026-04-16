@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -163,6 +163,41 @@ function normalizeInputBytes(inputBytes) {
     return Buffer.from(inputBytes.buffer, inputBytes.byteOffset, inputBytes.byteLength);
   }
   return null;
+}
+
+function sanitizeSuggestedFileName(rawValue, fallback = 'download.bin') {
+  const normalized = sanitizeFileName(String(rawValue || '').trim());
+  return normalized || fallback;
+}
+
+async function saveFileElectron(payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, reason: 'window_unavailable' };
+  }
+
+  const inputBytes = normalizeInputBytes(payload?.data);
+  if (!inputBytes || inputBytes.length === 0) {
+    return { ok: false, reason: 'missing_data' };
+  }
+
+  const fileName = sanitizeSuggestedFileName(payload?.fileName, 'download.bin');
+  const defaultDirectory = app.getPath('downloads');
+  const defaultPath = path.join(defaultDirectory, fileName);
+  const filters = Array.isArray(payload?.filters) ? payload.filters : [];
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: String(payload?.title || 'Save File'),
+    defaultPath,
+    buttonLabel: 'Save',
+    filters,
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { ok: false, canceled: true };
+  }
+
+  await fs.promises.mkdir(path.dirname(result.filePath), { recursive: true });
+  await fs.promises.writeFile(result.filePath, inputBytes);
+  return { ok: true, savedPath: result.filePath };
 }
 
 function sanitizeNativeMediaStorageKey(rawValue) {
@@ -1352,6 +1387,9 @@ function createMainWindow() {
   });
   ipcMain.handle('vdjv-import-archive-job', async (event, payload) => {
     return await importArchiveJobElectron(event.sender, payload);
+  });
+  ipcMain.handle('vdjv-save-file', async (_event, payload) => {
+    return await saveFileElectron(payload);
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

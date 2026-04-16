@@ -138,27 +138,32 @@ export function useOnlineStorePurchaseFlow({
         if (!effectiveUser) return;
         if (checkoutMode && cartItemIds.size === 0) return;
 
-        if (formChannel === 'image_proof' && !formProofFile) {
+        const purchaseItems: Array<{ bankId: string; catalogItemId: string }> = [];
+        const requestedItems: StoreItem[] = [];
+        if (checkoutMode) {
+            cartItems.filter((item) => item.status === 'buy').forEach((item) => {
+                purchaseItems.push({ bankId: item.bank_id, catalogItemId: item.id });
+                requestedItems.push(item);
+            });
+        } else if (selectedItem) {
+            purchaseItems.push({ bankId: selectedItem.bank_id, catalogItemId: selectedItem.id });
+            requestedItems.push(selectedItem);
+        }
+        if (purchaseItems.length === 0) return;
+        const allFreePromotionClaim = requestedItems.length > 0
+            && requestedItems.every((item) => item.status === 'buy' && item.is_promotion_free_claim);
+
+        if (!allFreePromotionClaim && formChannel === 'image_proof' && !formProofFile) {
             showToast('Please upload proof of payment to continue.', 'error');
             return;
         }
-        if (formProofFile) {
+        if (!allFreePromotionClaim && formProofFile) {
             const proofError = validateProofFile(formProofFile);
             if (proofError) {
                 showToast(proofError, 'error');
                 return;
             }
         }
-
-        const purchaseItems: Array<{ bankId: string; catalogItemId: string }> = [];
-        if (checkoutMode) {
-            cartItems.filter((item) => item.status === 'buy').forEach((item) => {
-                purchaseItems.push({ bankId: item.bank_id, catalogItemId: item.id });
-            });
-        } else if (selectedItem) {
-            purchaseItems.push({ bankId: selectedItem.bank_id, catalogItemId: selectedItem.id });
-        }
-        if (purchaseItems.length === 0) return;
 
         setSubmitLoading(true);
         let uploadedFileName = '';
@@ -171,7 +176,7 @@ export function useOnlineStorePurchaseFlow({
 
             if (!token) throw new Error('Please sign in to continue.');
 
-            if (formProofFile) {
+            if (!allFreePromotionClaim && formProofFile) {
                 const ext = formProofFile.name.split('.').pop();
                 uploadedFileName = `${effectiveUser.id}/payment-proof-${Date.now()}.${ext}`;
 
@@ -191,10 +196,10 @@ export function useOnlineStorePurchaseFlow({
                 },
                 body: JSON.stringify({
                     items: purchaseItems,
-                    paymentChannel: formChannel,
-                    payerName: formName,
-                    referenceNo: formRef,
-                    proofPath: finalProofPath,
+                    paymentChannel: allFreePromotionClaim ? null : formChannel,
+                    payerName: allFreePromotionClaim ? '' : formName,
+                    referenceNo: allFreePromotionClaim ? '' : formRef,
+                    proofPath: allFreePromotionClaim ? '' : finalProofPath,
                     notes: formNotes
                 })
             });
@@ -208,6 +213,7 @@ export function useOnlineStorePurchaseFlow({
             const fallbackRequestId = requestIds.length > 0 ? String(requestIds[0]) : '';
             const submitStatus = String(submitData.status || 'pending');
             const isApproved = submitStatus === 'approved';
+            const isFreeClaim = Boolean(submitData.free_claim) || allFreePromotionClaim;
             const count = purchaseItems.length;
             const totalPaid = purchaseItems.reduce((sum, item) => {
                 const storeItem = checkoutMode
@@ -216,34 +222,52 @@ export function useOnlineStorePurchaseFlow({
                 const amount = storeItem?.price_php;
                 return sum + (typeof amount === 'number' && Number.isFinite(amount) ? amount : 0);
             }, 0);
-            captureProductEvent('payment_proof_submitted', {
-                request_type: 'store',
-                payment_channel: formChannel,
-                item_count: count,
-                total_php: totalPaid,
-                status: submitStatus,
-                has_bundle: purchaseItems.some((item) => {
-                    const storeItem = checkoutMode
-                        ? cartItems.find((row) => row.id === item.catalogItemId)
-                        : items.find((row) => row.id === item.catalogItemId);
-                    return storeItem?.item_type === 'bank_bundle';
-                }),
+            const hasBundle = purchaseItems.some((item) => {
+                const storeItem = checkoutMode
+                    ? cartItems.find((row) => row.id === item.catalogItemId)
+                    : items.find((row) => row.id === item.catalogItemId);
+                return storeItem?.item_type === 'bank_bundle';
             });
+            if (isFreeClaim) {
+                captureProductEvent('store_free_claim_submitted', {
+                    request_type: 'store',
+                    payment_channel: 'free_promotion',
+                    item_count: count,
+                    total_php: totalPaid,
+                    status: submitStatus,
+                    has_bundle: hasBundle,
+                });
+            } else {
+                captureProductEvent('payment_proof_submitted', {
+                    request_type: 'store',
+                    payment_channel: formChannel,
+                    item_count: count,
+                    total_php: totalPaid,
+                    status: submitStatus,
+                    has_bundle: hasBundle,
+                });
+            }
             setPurchaseReceipt({
-                amountText: totalPaid > 0 ? formatPhp(totalPaid) : 'To be confirmed',
+                amountText: isFreeClaim ? 'FREE' : totalPaid > 0 ? formatPhp(totalPaid) : 'To be confirmed',
                 itemCount: count,
                 submittedAt: new Date().toISOString(),
                 receiptNo: String(submitData.receipt_reference || submitData.batchId || fallbackRequestId || 'Pending verification'),
-                paymentReference: String(
-                    submitData.reference_no ||
-                    formRef ||
-                    (formChannel === 'image_proof' ? 'Not detected' : 'Not provided')
-                ),
-                message: isApproved
-                    ? 'Your payment passed verification and your bank access is now approved.'
-                    : 'Your payment was received and is now waiting for admin review. We will email you after the approval check.',
+                paymentReference: isFreeClaim
+                    ? 'Free promotion claim'
+                    : String(
+                        submitData.reference_no ||
+                        formRef ||
+                        (formChannel === 'image_proof' ? 'Not detected' : 'Not provided')
+                    ),
+                message: isFreeClaim
+                    ? (isApproved
+                        ? 'Your free promotion was claimed and your bank access is now active.'
+                        : 'Your free promotion claim was received and is being verified.')
+                    : (isApproved
+                        ? 'Your payment passed verification and your bank access is now approved.'
+                        : 'Your payment was received and is now waiting for admin review. We will email you after the approval check.'),
                 status: isApproved ? 'success' : 'pending',
-                statusLabel: isApproved ? 'Approved' : 'Pending Approval',
+                statusLabel: isApproved ? 'Approved' : (isFreeClaim ? 'Pending Claim' : 'Pending Approval'),
             });
             await loadData();
             setSelectedItem(null);
