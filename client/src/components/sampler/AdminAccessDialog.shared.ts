@@ -50,6 +50,7 @@ export type AssignmentBankSortBy = 'title' | 'status' | 'access_count';
 export type ActiveSortBy = 'user_id' | 'email' | 'device_name' | 'platform' | 'last_seen_at';
 export type ActivitySortBy = 'created_at' | 'event_type' | 'status' | 'email' | 'bank_name';
 export type StoreCatalogSort = 'title_asc' | 'title_desc' | 'price_high' | 'price_low' | 'status' | 'pinned_first' | 'newest';
+export type StoreCatalogTypeFilter = 'all' | 'single_bank' | 'bank_bundle';
 export type RequestListFilter = 'pending' | 'history';
 export type RequestStatusFilter = 'all' | 'pending' | 'approved' | 'rejected';
 export type RequestChannelFilter = 'all' | 'image_proof' | 'gcash_manual' | 'maya_manual';
@@ -356,6 +357,9 @@ export interface PurchaseRequest {
   automation_result?: string | null;
   created_at: string;
   bank_catalog_items?: {
+    item_type?: 'single_bank' | 'bank_bundle' | null;
+    bundle_title?: string | null;
+    bundle_bank_titles?: string[] | null;
     is_paid?: boolean | null;
     price_php?: number | string | null;
     banks?: { title: string } | null;

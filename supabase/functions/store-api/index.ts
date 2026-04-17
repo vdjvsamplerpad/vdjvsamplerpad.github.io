@@ -5617,36 +5617,36 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
     return badRequest("proofPath must be an image file");
   }
 
-  const itemList: Array<{ bankId: string; catalogItemId?: string }> = Array.isArray(items) && items.length > 0
+  const itemList: Array<{ bankId?: string; catalogItemId?: string }> = Array.isArray(items) && items.length > 0
     ? items
-    : bankId
+    : catalogItemId
       ? [{ bankId, catalogItemId }]
       : [];
-  if (itemList.length === 0) return badRequest("Missing bankId or items");
+  if (itemList.length === 0) return badRequest("Missing catalogItemId or items");
   if (itemList.length > STORE_MAX_PURCHASE_ITEMS) {
     return fail(413, "TOO_MANY_ITEMS", { max_items: STORE_MAX_PURCHASE_ITEMS });
   }
 
-  const normalizedItems: Array<{ bankId: string; catalogItemId: string }> = [];
+  const requestedItems: Array<{ bankId: string; catalogItemId: string }> = [];
   const seenCatalogItemIds = new Set<string>();
   for (const item of itemList) {
-    const normalizedBankId = asUuid(item?.bankId);
+    const normalizedBankId = asUuid(item?.bankId) || "";
     const normalizedCatalogItemId = asUuid(item?.catalogItemId);
-    if (!normalizedBankId || !normalizedCatalogItemId) return badRequest("Each item must include valid bankId and catalogItemId");
+    if (!normalizedCatalogItemId) return badRequest("Each item must include a valid catalogItemId");
     if (seenCatalogItemIds.has(normalizedCatalogItemId)) return badRequest("Duplicate catalog item in purchase request is not allowed");
     seenCatalogItemIds.add(normalizedCatalogItemId);
-    normalizedItems.push({ bankId: normalizedBankId, catalogItemId: normalizedCatalogItemId });
+    requestedItems.push({ bankId: normalizedBankId, catalogItemId: normalizedCatalogItemId });
   }
 
-  const catalogItemIds = [...new Set(normalizedItems.map((item) => item.catalogItemId))];
+  const catalogItemIds = [...new Set(requestedItems.map((item) => item.catalogItemId))];
   let catalogQuery: any = await admin
     .from("bank_catalog_items")
-    .select("id, bank_id, item_type, bundle_title, bundle_description, is_paid, price_label, price_php, is_published, coming_soon, banks ( title, description, color )")
+    .select("id, bank_id, item_type, bundle_title, bundle_description, is_paid, requires_grant, price_label, price_php, is_published, coming_soon, bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title, description, color )")
     .in("id", catalogItemIds);
   if (catalogQuery.error && /price_php/i.test(catalogQuery.error.message || "")) {
     catalogQuery = await admin
       .from("bank_catalog_items")
-      .select("id, bank_id, item_type, bundle_title, bundle_description, is_paid, price_label, is_published, coming_soon, banks ( title, description, color )")
+      .select("id, bank_id, item_type, bundle_title, bundle_description, is_paid, requires_grant, price_label, is_published, coming_soon, bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title, description, color )")
       .in("id", catalogItemIds);
   }
   if (catalogQuery.error) return fail(500, catalogQuery.error.message);
@@ -5661,12 +5661,16 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
     if (!rowId) continue;
     enrichedCatalogById.set(rowId, attachPromotionToCatalogItem(row, promotionMap.get(rowId) || null));
   }
-  for (const item of normalizedItems) {
+  const normalizedItems: Array<{ bankId: string; catalogItemId: string }> = [];
+  for (const item of requestedItems) {
     const catalogRow = enrichedCatalogById.get(item.catalogItemId) || catalogById.get(item.catalogItemId);
     if (!catalogRow) return fail(400, `Catalog item not found: ${item.catalogItemId}`);
-    if (catalogRow.bank_id !== item.bankId) return fail(400, `Catalog item ${item.catalogItemId} does not match bank ${item.bankId}`);
+    const resolvedBankId = getPrimaryCatalogBankId(catalogRow, { includeDeleted: true });
+    if (!resolvedBankId) return fail(400, `Catalog item ${item.catalogItemId} has no linked bank`);
+    if (item.bankId && resolvedBankId !== item.bankId) return fail(400, `Catalog item ${item.catalogItemId} does not match bank ${item.bankId}`);
     if (!catalogRow.is_published) return fail(400, `Catalog item is not published: ${item.catalogItemId}`);
     if (catalogRow.coming_soon) return fail(409, "COMING_SOON");
+    normalizedItems.push({ bankId: resolvedBankId, catalogItemId: item.catalogItemId });
   }
   const allFreePromotionClaim = normalizedItems.length > 0 && normalizedItems.every((item) => {
     const catalogRow = enrichedCatalogById.get(item.catalogItemId) || catalogById.get(item.catalogItemId);
@@ -7078,12 +7082,12 @@ const listAdminStoreRequests = async (req: Request) => {
   if (catalogItemIds.length > 0) {
     let catalogQuery: any = await admin
       .from("bank_catalog_items")
-      .select("id, bank_id, is_published, is_paid, price_label, price_php, banks ( title )")
+      .select("id, bank_id, item_type, bundle_title, is_published, is_paid, price_label, price_php, bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title )")
       .in("id", catalogItemIds);
     if (catalogQuery.error && /price_php/i.test(catalogQuery.error.message || "")) {
       catalogQuery = await admin
         .from("bank_catalog_items")
-        .select("id, bank_id, is_published, is_paid, price_label, banks ( title )")
+        .select("id, bank_id, item_type, bundle_title, is_published, is_paid, price_label, bank_catalog_bundle_items ( bank_id, position, banks ( title, deleted_at ) ), banks ( title )")
         .in("id", catalogItemIds);
     }
     if (catalogQuery.error) return fail(500, catalogQuery.error.message);
@@ -7114,7 +7118,13 @@ const listAdminStoreRequests = async (req: Request) => {
     const catalogItem = catalogItemMap[row.catalog_item_id] || catalogByBankMap[row.bank_id] || null;
     const catalogBank = getFirstRelationRow(catalogItem?.banks);
     const fallbackBank = getFirstRelationRow(row.banks);
-    const bankTitle = catalogBank?.title || fallbackBank?.title || "Unknown Bank";
+    const itemType = normalizeCatalogItemType(catalogItem?.item_type);
+    const bundleBankTitles = itemType === "bank_bundle"
+      ? getCatalogBundleBankEntries(catalogItem, { includeDeleted: true }).map((entry) => entry.title || "Unknown Bank")
+      : [];
+    const bankTitle = itemType === "bank_bundle"
+      ? (asString(catalogItem?.bundle_title, 255) || catalogBank?.title || fallbackBank?.title || "Untitled Bundle")
+      : (catalogBank?.title || fallbackBank?.title || "Unknown Bank");
     const parsedSnapshotPrice = asPriceNumber(row.price_php_snapshot ?? row.price_label_snapshot);
     const parsedCatalogPrice = resolveCatalogPrice(catalogItem);
     const parsedPrice = parsedSnapshotPrice ?? parsedCatalogPrice;
@@ -7123,7 +7133,14 @@ const listAdminStoreRequests = async (req: Request) => {
       : (Boolean(catalogItem?.is_paid) || (parsedPrice !== null && parsedPrice > 0));
     return {
       ...row,
-      bank_catalog_items: { is_paid: isPaid, price_php: parsedPrice, banks: { title: bankTitle } },
+      bank_catalog_items: {
+        item_type: itemType,
+        bundle_title: itemType === "bank_bundle" ? bankTitle : null,
+        bundle_bank_titles: bundleBankTitles,
+        is_paid: isPaid,
+        price_php: parsedPrice,
+        banks: { title: bankTitle },
+      },
       user_profile: userProfiles[row.user_id] || null,
     };
   });

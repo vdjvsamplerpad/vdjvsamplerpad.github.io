@@ -233,6 +233,7 @@ export function useAdminAccessStoreManager({
   const [storeReqHistoryCount, setStoreReqHistoryCount] = React.useState(0);
   const [storeCatalogPage, setStoreCatalogPage] = React.useState(1);
   const [storeCatalogSearch, setStoreCatalogSearch] = React.useState('');
+  const [storeCatalogTypeFilter, setStoreCatalogTypeFilter] = React.useState<'all' | 'single_bank' | 'bank_bundle'>('all');
   const [storeCatalogBankFilter, setStoreCatalogBankFilter] = React.useState('all');
   const [storeCatalogStatusFilter, setStoreCatalogStatusFilter] = React.useState<'all' | 'published' | 'draft' | 'coming_soon'>('all');
   const [storeCatalogPaidFilter, setStoreCatalogPaidFilter] = React.useState<'all' | 'paid' | 'free'>('all');
@@ -1409,7 +1410,10 @@ export function useAdminAccessStoreManager({
     });
 
     const getItemMeta = (request: PurchaseRequest) => {
-      const title = request.bank_catalog_items?.banks?.title || request.banks?.title || 'Unknown Bank';
+      const itemType = request.bank_catalog_items?.item_type;
+      const title = itemType === 'bank_bundle'
+        ? (request.bank_catalog_items?.bundle_title || request.bank_catalog_items?.banks?.title || request.banks?.title || 'Untitled Bundle')
+        : (request.bank_catalog_items?.banks?.title || request.banks?.title || 'Unknown Bank');
       const rawPrice = request.bank_catalog_items?.price_php;
       let parsedPrice: number | null = null;
       if (typeof rawPrice === 'number' && Number.isFinite(rawPrice)) {
@@ -1550,6 +1554,7 @@ export function useAdminAccessStoreManager({
           const bundleBanks = Array.isArray(draft.bundle_bank_titles) ? draft.bundle_bank_titles.join(' ').toLowerCase() : '';
           if (!title.includes(query) && !description.includes(query) && !asset.includes(query) && !bundleBanks.includes(query)) return false;
         }
+        if (storeCatalogTypeFilter !== 'all' && draft.item_type !== storeCatalogTypeFilter) return false;
         const filterLabel = String(draft.item_type === 'bank_bundle' ? (draft.bundle_title || draft.bank?.title || '') : (draft.bank?.title || ''));
         if (storeCatalogBankFilter !== 'all' && filterLabel !== storeCatalogBankFilter) return false;
         if (storeCatalogStatusFilter === 'coming_soon' && !draft.coming_soon) return false;
@@ -1591,6 +1596,7 @@ export function useAdminAccessStoreManager({
     storeCatalogSearch,
     storeCatalogSort,
     storeCatalogStatusFilter,
+    storeCatalogTypeFilter,
     storeDrafts,
   ]);
 
@@ -1609,12 +1615,14 @@ export function useAdminAccessStoreManager({
   const hasStoreCatalogFilters = React.useMemo(
     () =>
       storeCatalogSearch.trim().length > 0
+      || storeCatalogTypeFilter !== 'all'
       || storeCatalogBankFilter !== 'all'
       || storeCatalogStatusFilter !== 'all'
       || storeCatalogPaidFilter !== 'all'
       || storeCatalogPinnedFilter !== 'all'
       || storeCatalogSort !== 'pinned_first',
     [
+      storeCatalogTypeFilter,
       storeCatalogBankFilter,
       storeCatalogPaidFilter,
       storeCatalogPinnedFilter,
@@ -1626,6 +1634,7 @@ export function useAdminAccessStoreManager({
 
   const resetStoreCatalogFilters = React.useCallback(() => {
     setStoreCatalogSearch('');
+    setStoreCatalogTypeFilter('all');
     setStoreCatalogBankFilter('all');
     setStoreCatalogStatusFilter('all');
     setStoreCatalogPaidFilter('all');
@@ -1750,6 +1759,7 @@ export function useAdminAccessStoreManager({
     setStoreCatalogSearch,
     setStoreCatalogSort,
     setStoreCatalogStatusFilter,
+    setStoreCatalogTypeFilter,
     setStoreConfig,
     setStorePublishDialog,
     setStoreReqPage,
@@ -1774,6 +1784,7 @@ export function useAdminAccessStoreManager({
     storeCatalogSort,
     storeCatalogStats,
     storeCatalogStatusFilter,
+    storeCatalogTypeFilter,
     storeConfig,
     storeDrafts,
     storeLoading,

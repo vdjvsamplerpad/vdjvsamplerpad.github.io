@@ -2352,30 +2352,22 @@ export function SamplerPadApp() {
     const isVisible =
       (!isDualMode && currentBankId === pendingSearchPadScroll.bankId) ||
       (isDualMode && (primaryBankId === pendingSearchPadScroll.bankId || secondaryBankId === pendingSearchPadScroll.bankId));
-    if (!isVisible) return;
+    if (!isVisible) {
+      const timeoutId = window.setTimeout(() => {
+        setPendingSearchPadScroll((current) => (
+          current?.bankId === pendingSearchPadScroll.bankId && current.padId === pendingSearchPadScroll.padId
+            ? null
+            : current
+        ));
+      }, 260);
+      return () => window.clearTimeout(timeoutId);
+    }
 
     setHighlightedPadTarget((current) => (
       current?.bankId === pendingSearchPadScroll.bankId && current.padId === pendingSearchPadScroll.padId
         ? current
         : pendingSearchPadScroll
     ));
-    const targetBank = banks.find((entry) => entry.id === pendingSearchPadScroll.bankId);
-    const provisionalColorHex = normalizeSearchLocatorHex(targetBank?.defaultColor, '#22d3ee');
-    const provisionalKey = Date.now() + Math.floor(Math.random() * 1000);
-    const provisionalContainer = resolveSearchScrollContainer(pendingSearchPadScroll.bankId);
-    if (provisionalContainer) {
-      const containerRect = provisionalContainer.getBoundingClientRect();
-      setSearchSpotlight({
-        key: provisionalKey,
-        x: containerRect.left + containerRect.width / 2,
-        y: containerRect.top + Math.min(containerRect.height / 2, 220),
-        colorRgb: searchLocatorRgb(provisionalColorHex),
-        tier: effectiveGraphicsTier,
-      });
-    }
-    const clearProvisionalSpotlight = () => {
-      setSearchSpotlight((current) => (current?.key === provisionalKey ? null : current));
-    };
 
     let cancelled = false;
     let attempt = 0;
@@ -2415,7 +2407,6 @@ export function SamplerPadApp() {
           if (cancelled) return;
           const settledElement = document.getElementById(anchorId) as HTMLElement | null;
           if (!settledElement) {
-            clearProvisionalSpotlight();
             setPendingSearchPadScroll(null);
             return;
           }
@@ -2439,7 +2430,7 @@ export function SamplerPadApp() {
           previousScrollLeft = activeContainer?.scrollLeft ?? window.scrollX;
           settleAttempts += 1;
           const elapsed = window.performance.now() - settleStart;
-          if ((elapsed >= 180 && stableFrames >= 4) || elapsed >= 520 || settleAttempts >= 28) {
+          if ((elapsed >= 80 && stableFrames >= 2) || elapsed >= 240 || settleAttempts >= 14) {
             launchSearchLocator(settledElement, pendingSearchPadScroll);
             setPendingSearchPadScroll(null);
             return;
@@ -2449,14 +2440,13 @@ export function SamplerPadApp() {
         settleTimeoutId = window.setTimeout(() => {
           if (cancelled) return;
           settleFrameId = window.requestAnimationFrame(settleAndLaunch);
-        }, 120);
+        }, 40);
         return;
       }
       attempt += 1;
       if (attempt < 90) {
         window.requestAnimationFrame(tryScroll);
       } else {
-        clearProvisionalSpotlight();
         setPendingSearchPadScroll(null);
       }
     };
@@ -2464,7 +2454,6 @@ export function SamplerPadApp() {
     window.requestAnimationFrame(tryScroll);
     return () => {
       cancelled = true;
-      clearProvisionalSpotlight();
       if (settleTimeoutId !== null) {
         window.clearTimeout(settleTimeoutId);
       }
@@ -2473,6 +2462,26 @@ export function SamplerPadApp() {
       }
     };
   }, [banks, currentBankId, effectiveGraphicsTier, isDualMode, launchSearchLocator, pendingSearchPadScroll, primaryBankId, resolveSearchScrollContainer, secondaryBankId]);
+
+  React.useEffect(() => {
+    const activeTarget = highlightedPadTarget;
+    if (!activeTarget) return;
+    const isVisible =
+      (!isDualMode && currentBankId === activeTarget.bankId) ||
+      (isDualMode && (primaryBankId === activeTarget.bankId || secondaryBankId === activeTarget.bankId));
+    if (isVisible) return;
+    clearSearchLocator();
+    setPendingSearchPadScroll((current) => (
+      current?.bankId === activeTarget.bankId && current.padId === activeTarget.padId
+        ? null
+        : current
+    ));
+    setHighlightedPadTarget((current) => (
+      current?.bankId === activeTarget.bankId && current.padId === activeTarget.padId
+        ? null
+        : current
+    ));
+  }, [clearSearchLocator, currentBankId, highlightedPadTarget, isDualMode, primaryBankId, secondaryBankId]);
 
   React.useEffect(() => {
     if (!highlightedPadTarget) return;

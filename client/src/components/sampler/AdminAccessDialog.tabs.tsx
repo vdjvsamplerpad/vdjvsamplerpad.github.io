@@ -24,7 +24,8 @@ import type {
   StoreMarketingBanner,
   StorePromotionAudienceType,
   StorePromotion,
-  StoreCatalogSort
+  StoreCatalogSort,
+  StoreCatalogTypeFilter,
 } from './AdminAccessDialog.shared';
 import { CatalogCard, Pagination, ProofImagePreview } from './AdminAccessDialog.widgets';
 
@@ -189,6 +190,7 @@ interface StoreCatalogTabProps {
   page: number;
   totalPages: number;
   search: string;
+  typeFilter: StoreCatalogTypeFilter;
   bankFilter: string;
   statusFilter: 'all' | 'published' | 'draft' | 'coming_soon';
   paidFilter: 'all' | 'paid' | 'free';
@@ -199,6 +201,7 @@ interface StoreCatalogTabProps {
   stats: StoreCatalogStats;
   hasFilters: boolean;
   onSearchChange: (value: string) => void;
+  onTypeFilterChange: (value: StoreCatalogTypeFilter) => void;
   onBankFilterChange: (value: string) => void;
   onStatusFilterChange: (value: 'all' | 'published' | 'draft' | 'coming_soon') => void;
   onPaidFilterChange: (value: 'all' | 'paid' | 'free') => void;
@@ -1700,7 +1703,7 @@ export function StoreRequestsTab({
                         <h4 className="font-bold text-sm truncate">{req.count > 1 ? `${req.bankNames[0]} +${req.count - 1} more` : req.bankNames[0]}</h4>
                         {req.user_profile && (
                           <div className={`mt-0.5 flex items-center gap-1 text-[11px] ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-600'}`}>
-                            <span className="shrink-0">{req.user_profile.display_name || 'No Name'} -</span>
+                            <span className="shrink-0">{req.user_profile.display_name || 'No Name'} {' | '}</span>
                             <CopyableValue
                               value={req.user_profile.email || '-'}
                               label="store request email"
@@ -1762,7 +1765,7 @@ export function StoreRequestsTab({
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="min-w-0">
                               <div className="text-sm font-semibold">{req.count > 1 ? `${req.bankNames[0]} +${req.count - 1} more` : req.bankNames[0]}</div>
-                              {req.user_profile && <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.user_profile.display_name || 'No Name'} â€¢ {req.user_profile.email || '-'}</div>}
+                              {req.user_profile && <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.user_profile.display_name || 'No Name'} {' | '} {req.user_profile.email || '-'}</div>}
                             </div>
                             <div className="flex flex-wrap gap-1.5">
                               <RequestSummaryChip theme={theme} label="Decision" value={req.decision_source ? formatAutomationLabel(req.decision_source) : 'Pending'} tone="decision" />
@@ -2120,7 +2123,7 @@ export function InstallerRequestsTab({
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="text-sm font-semibold">{req.itemCount > 1 ? `${req.items[0]?.displayNameSnapshot || req.versions.join('/')} +${req.itemCount - 1} more` : (req.items[0]?.displayNameSnapshot || req.versions.join('/'))}</div>
-                          <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.versions.join(' / ')} â€¢ {req.email || '-'}</div>
+                          <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.versions.join(' / ')} {' | '} {req.email || '-'}</div>
                         </div>
                         <div className="flex flex-wrap gap-1.5">
                           <RequestSummaryChip theme={theme} label="Decision" value={req.decisionSource ? formatAutomationLabel(req.decisionSource) : 'Pending'} tone="decision" />
@@ -2157,7 +2160,7 @@ export function InstallerRequestsTab({
                               <div key={item.id} className={`flex items-center justify-between gap-3 text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
                                 <div className="min-w-0">
                                   <div className="truncate font-medium">{item.displayNameSnapshot}</div>
-                                  <div className="text-[11px] opacity-70">{item.version} â€¢ {item.skuCode}</div>
+                                  <div className="text-[11px] opacity-70">{item.version} {' | '} {item.skuCode}</div>
                                 </div>
                                 <span className="shrink-0 font-medium">{typeof item.pricePhpSnapshot === 'number' ? `PHP ${item.pricePhpSnapshot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'TBD'}</span>
                               </div>
@@ -2497,13 +2500,13 @@ export function CrashReportsTab({
                       </span>
                     </div>
                     <div className={`text-xs break-all ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                      {row.user_profile?.display_name || 'Unknown User'} â€¢ {row.user_profile?.email || 'No email'}
+                      {row.user_profile?.display_name || 'Unknown User'} {' | '} {row.user_profile?.email || 'No email'}
                     </div>
                     <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                      {row.platform || 'unknown platform'} â€¢ {row.app_version || 'unknown version'} â€¢ repeats {row.repeat_count}
+                      {row.platform || 'unknown platform'} {' | '} {row.app_version || 'unknown version'} {' | '} repeats {row.repeat_count}
                     </div>
                     <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                      Last seen {row.last_seen_at ? new Date(row.last_seen_at).toLocaleString() : '-'} â€¢ size {formatCrashReportSize(row.report_size_bytes)}
+                      Last seen {row.last_seen_at ? new Date(row.last_seen_at).toLocaleString() : '-'} {' | '} size {formatCrashReportSize(row.report_size_bytes)}
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -2600,6 +2603,7 @@ export function StoreCatalogTab({
   page,
   totalPages,
   search,
+  typeFilter,
   bankFilter,
   statusFilter,
   paidFilter,
@@ -2610,6 +2614,7 @@ export function StoreCatalogTab({
   stats,
   hasFilters,
   onSearchChange,
+  onTypeFilterChange,
   onBankFilterChange,
   onStatusFilterChange,
   onPaidFilterChange,
@@ -2633,6 +2638,7 @@ export function StoreCatalogTab({
   const [bundleComingSoon, setBundleComingSoon] = React.useState(false);
   const [bundlePinned, setBundlePinned] = React.useState(false);
   const [bundleBankIds, setBundleBankIds] = React.useState<string[]>([]);
+  const [bundleBankSearch, setBundleBankSearch] = React.useState('');
   const [bundleThumbFile, setBundleThumbFile] = React.useState<File | null>(null);
   const [bundleThumbPreviewUrl, setBundleThumbPreviewUrl] = React.useState<string | null>(null);
   const [bundleSubmitting, setBundleSubmitting] = React.useState(false);
@@ -2651,6 +2657,11 @@ export function StoreCatalogTab({
     });
     return Array.from(byId.values()).sort((left, right) => left.label.localeCompare(right.label));
   }, [storeDrafts]);
+  const filteredBundleBankChoices = React.useMemo(() => {
+    const query = bundleBankSearch.trim().toLowerCase();
+    if (!query) return bundleBankChoices;
+    return bundleBankChoices.filter((bank) => bank.label.toLowerCase().includes(query));
+  }, [bundleBankChoices, bundleBankSearch]);
   const resetBundleDialog = React.useCallback(() => {
     setBundleTitle('');
     setBundleDescription('');
@@ -2658,6 +2669,7 @@ export function StoreCatalogTab({
     setBundleComingSoon(false);
     setBundlePinned(false);
     setBundleBankIds([]);
+    setBundleBankSearch('');
     setBundleThumbFile(null);
     setBundleThumbPreviewUrl(null);
     if (bundleThumbInputRef.current) bundleThumbInputRef.current.value = '';
@@ -2992,10 +3004,23 @@ export function StoreCatalogTab({
                     {bundleBankIds.length} selected
                   </div>
                 </div>
+                <div className="mb-2">
+                  <div className="relative">
+                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-50" />
+                    <Input
+                      value={bundleBankSearch}
+                      onChange={(event) => setBundleBankSearch(event.target.value)}
+                      placeholder="Search included banks..."
+                      className={`h-8 pl-8 text-xs ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
+                    />
+                  </div>
+                </div>
                 <div className={`max-h-52 overflow-auto rounded-md border p-2 space-y-1 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-white'}`}>
                   {bundleBankChoices.length === 0 ? (
                     <div className="text-xs opacity-70">Create or export normal bank drafts first before building a bundle.</div>
-                  ) : bundleBankChoices.map((bank) => (
+                  ) : filteredBundleBankChoices.length === 0 ? (
+                    <div className="text-xs opacity-70">No matching banks found.</div>
+                  ) : filteredBundleBankChoices.map((bank) => (
                     <label key={bank.id} className="flex items-center gap-2 text-xs cursor-pointer rounded px-1.5 py-1 hover:bg-black/5 dark:hover:bg-white/5">
                       <input
                         type="checkbox"
@@ -3020,13 +3045,21 @@ export function StoreCatalogTab({
           </DialogContent>
         </Dialog>
         <div className={`rounded-lg border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50/70'}`}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-7 gap-2">
             <div className="xl:col-span-2">
               <div className="text-[10px] uppercase tracking-wide opacity-70 mb-1">Search</div>
               <div className="relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
                 <Input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Title or asset name..." className={`h-9 pl-8 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`} />
               </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide opacity-70 mb-1">Type</div>
+              <select value={typeFilter} onChange={(event) => onTypeFilterChange(event.target.value as StoreCatalogTypeFilter)} className={`h-9 w-full rounded-md border px-2 text-sm outline-none ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300'}`}>
+                <option value="all">All types</option>
+                <option value="single_bank">Single Banks</option>
+                <option value="bank_bundle">Bundles</option>
+              </select>
             </div>
             <div>
               <div className="text-[10px] uppercase tracking-wide opacity-70 mb-1">Bank</div>
@@ -3143,6 +3176,7 @@ export function StorePromotionsTab({
   const bankOptions = React.useMemo(() => {
     const byId = new Map<string, string>();
     catalogDrafts.forEach((draft) => {
+      if (draft.item_type === 'bank_bundle') return;
       if (!draft.bank_id) return;
       if (!byId.has(draft.bank_id)) byId.set(draft.bank_id, draft.bank?.title || 'Unknown Bank');
     });
@@ -3265,10 +3299,16 @@ function StorePromotionsSurface({
   onDelete: (promotionId: string) => void;
   }) {
     const isDark = theme === 'dark';
+    const [targetBankSearch, setTargetBankSearch] = React.useState('');
     const allBankIds = React.useMemo(
       () => bankOptions.map((bank) => bank.id),
       [bankOptions],
     );
+    const filteredBankOptions = React.useMemo(() => {
+      const query = targetBankSearch.trim().toLowerCase();
+      if (!query) return bankOptions;
+      return bankOptions.filter((bank) => bank.label.toLowerCase().includes(query));
+    }, [bankOptions, targetBankSearch]);
     const selectedBankCount = form.target_bank_ids.length;
     const allBanksSelected = allBankIds.length > 0 && allBankIds.every((bankId) => form.target_bank_ids.includes(bankId));
     const selectedCatalogCount = form.target_catalog_item_ids.length;
@@ -3280,6 +3320,9 @@ function StorePromotionsSurface({
   const selectedModeToneClass = isFlashSale
     ? (isDark ? 'border-rose-500/40 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700')
     : (isDark ? 'border-sky-500/35 bg-sky-500/10 text-sky-100' : 'border-sky-200 bg-sky-50 text-sky-700');
+  React.useEffect(() => {
+    if (!editorOpen) setTargetBankSearch('');
+  }, [editorOpen]);
   const [userSearch, setUserSearch] = React.useState('');
   const filteredPromotionUserOptions = React.useMemo(() => {
     const query = userSearch.trim().toLowerCase();
@@ -3384,7 +3427,7 @@ function StorePromotionsSurface({
                           : promotion.discount_type === 'percent'
                             ? `${promotion.discount_value}% off`
                             : `PHP ${promotion.discount_value} off`}
-                        {' â€¢ '}
+                        {' | '}
                         {new Date(promotion.starts_at).toLocaleString()} to {new Date(promotion.ends_at).toLocaleString()}
                       </div>
                       {promotion.description ? <div className={`text-xs mt-2 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>{promotion.description}</div> : null}
@@ -3671,10 +3714,23 @@ function StorePromotionsSurface({
                     </Button>
                   </div>
                 </div>
+              <div className="mb-2">
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-50" />
+                  <Input
+                    value={targetBankSearch}
+                    onChange={(event) => setTargetBankSearch(event.target.value)}
+                    placeholder="Search target banks..."
+                    className={`h-8 pl-8 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`}
+                  />
+                </div>
+              </div>
               <div className={`max-h-44 overflow-auto rounded-md border p-2 space-y-1 ${isDark ? 'border-gray-700 bg-gray-900/60' : 'border-gray-200 bg-white'}`}>
                 {bankOptions.length === 0 ? (
                   <div className="text-xs opacity-70">No catalog banks available yet.</div>
-                ) : bankOptions.map((bank) => (
+                ) : filteredBankOptions.length === 0 ? (
+                  <div className="text-xs opacity-70">No matching banks found.</div>
+                ) : filteredBankOptions.map((bank) => (
                   <label key={bank.id} className="flex items-center gap-2 text-xs cursor-pointer rounded px-1.5 py-1 hover:bg-black/5 dark:hover:bg-white/5">
                     <input
                       type="checkbox"
@@ -4337,7 +4393,7 @@ export function StoreConfigTab({
               </div>
               <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
                 <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-amber-300' : 'text-amber-700'}`}>Checkout Support</div>
-                <div className="mt-1 text-xs font-medium">{hasQrImage ? 'QR ready' : 'No QR uploaded'}{hasMessengerConfig ? ' â€¢ Messenger ready' : ''}</div>
+                <div className="mt-1 text-xs font-medium">{hasQrImage ? 'QR ready' : 'No QR uploaded'}{hasMessengerConfig ? ' | Messenger ready' : ''}</div>
               </div>
             </div>
           </div>

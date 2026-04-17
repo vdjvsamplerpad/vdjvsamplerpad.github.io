@@ -984,7 +984,7 @@ export function OnlineBankStoreDialog({
                                             {displayedItems.map((item) => {
                                                 const { hasImportedCopy, hasUpdateAvailable } = getImportedVersionState(item);
                                                 return (
-                                                <div key={item.id} className={`group relative h-[160px] sm:h-[180px] flex flex-col rounded-2xl border transition-all duration-300 overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 ${isDark ? 'border-white/5 bg-gray-800/30 hover:border-indigo-500/40 hover:bg-gray-800/50' : 'border-gray-200 hover:border-indigo-300 hover:shadow-indigo-900/10 bg-white'}`}>
+                                                <div key={item.id} className={`group relative h-[190px] sm:h-[210px] flex flex-col rounded-2xl border transition-all duration-300 overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 ${isDark ? 'border-white/5 bg-gray-800/30 hover:border-indigo-500/40 hover:bg-gray-800/50' : 'border-gray-200 hover:border-indigo-300 hover:shadow-indigo-900/10 bg-white'}`}>
                                                     <div className="absolute inset-0 overflow-hidden">
                                                         <StoreCardThumbnail
                                                             src={item.thumbnail_path}
@@ -994,23 +994,25 @@ export function OnlineBankStoreDialog({
                                                         <div className="absolute inset-0 mix-blend-multiply opacity-40 transition-opacity duration-300 group-hover:opacity-60" style={{ backgroundColor: item.bank.color || '#1e1b4b' }} />
                                                         <div className="absolute inset-0 bg-gradient-to-b from-black/0 via-black/40 to-black/95 transition-opacity duration-300 group-hover:via-black/50 group-hover:to-black" />
                                                     </div>
-                                                    {/* Flash Sale Top Banner */}
-                                                    {item.has_active_promotion && item.promotion_type === 'flash_sale' && item.promotion_ends_at && !(item.status === 'granted_download' || hasImportedCopy) && (
-                                                        <div className="relative z-20 shrink-0 bg-gradient-to-r from-rose-600/90 to-rose-500/90 backdrop-blur-md border-b border-rose-400/30 px-3 py-1.5 flex items-center justify-between text-[10px] sm:text-[11px] font-bold text-white tracking-wide shadow-lg">
-                                                            <div className="flex items-center gap-1.5 shrink-0 uppercase tracking-wider">
-                                                                <Timer className="w-3 h-3 sm:w-3.5 sm:h-3.5 animate-pulse" />
-                                                                <span className="hidden sm:inline">{item.promotion_badge || 'Flash Sale'}</span>
-                                                                <span className="sm:hidden">Sale</span>
+                                                    {/* Flash Sale Top Banner Slot */}
+                                                    <div className="relative z-20 shrink-0 h-8 sm:h-9">
+                                                        {item.has_active_promotion && item.promotion_type === 'flash_sale' && item.promotion_ends_at && !(item.status === 'granted_download' || hasImportedCopy) && (
+                                                            <div className="absolute inset-0 bg-gradient-to-r from-rose-600/90 to-rose-500/90 backdrop-blur-md border-b border-rose-400/30 px-3 py-1.5 flex items-center justify-between text-[10px] sm:text-[11px] font-bold text-white tracking-wide shadow-lg">
+                                                                <div className="flex items-center gap-1.5 shrink-0 uppercase tracking-wider">
+                                                                    <Timer className="w-3 h-3 sm:w-3.5 sm:h-3.5 animate-pulse" />
+                                                                    <span className="hidden sm:inline">{item.promotion_badge || 'Flash Sale'}</span>
+                                                                    <span className="sm:hidden">Sale</span>
+                                                                </div>
+                                                                <span className="truncate ml-2 text-right opacity-95 text-[9px] sm:text-[10px]">Ends {new Date(item.promotion_ends_at).toLocaleString(undefined, { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
                                                             </div>
-                                                            <span className="truncate ml-2 text-right opacity-95 text-[9px] sm:text-[10px]">Ends {new Date(item.promotion_ends_at).toLocaleString(undefined, { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
-                                                        </div>
-                                                    )}
+                                                        )}
+                                                    </div>
                                                     {/* Transfer Progress Overlay */}
                                                     {(transfers[item.id]?.phase === 'downloading' || transfers[item.id]?.phase === 'importing') && (
                                                         <div className="absolute inset-y-0 left-0 bg-indigo-500/25 pointer-events-none transition-all duration-300 z-0 backdrop-blur-[1px]" style={{ width: `${normalizeProgress(transfers[item.id].progress)}%` }} />
                                                     )}
                                                     {/* Info */}
-                                                    <div className="flex-1 p-4 pb-2 relative z-10 flex flex-col justify-end pointer-events-none">
+                                                    <div className="flex-1 min-h-0 p-4 pb-2 relative z-10 flex flex-col justify-end pointer-events-none">
                                                         {(() => {
                                                             const ownsItem = item.status === 'granted_download' || importedOrDownloadedBankIds.has(item.bank_id);
                                                             return (

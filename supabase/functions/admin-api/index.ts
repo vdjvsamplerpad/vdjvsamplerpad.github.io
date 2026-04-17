@@ -1893,14 +1893,6 @@ const publishCatalogItem = async (
     return badRequest("Bundle catalog items must stay paid unless they are Coming Soon");
   }
 
-  const { data: bankData, error: bankError } = await admin
-    .from("banks")
-    .select("id, deleted_at")
-    .eq("id", item.bank_id)
-    .maybeSingle();
-  if (bankError) return fail(500, bankError.message);
-  if (!bankData) return fail(404, "Target bank not found");
-  if (bankData.deleted_at) return fail(400, "Cannot publish catalog for archived bank");
   if (itemType === "bank_bundle") {
     const { data: bundleRows, error: bundleError } = await admin
       .from("bank_catalog_bundle_items")
@@ -1915,6 +1907,15 @@ const publishCatalogItem = async (
       return Boolean(bank?.deleted_at);
     });
     if (hasDeletedBundleBank) return badRequest("Bundles cannot publish while one of the included banks is archived");
+  } else {
+    const { data: bankData, error: bankError } = await admin
+      .from("banks")
+      .select("id, deleted_at")
+      .eq("id", item.bank_id)
+      .maybeSingle();
+    if (bankError) return fail(500, bankError.message);
+    if (!bankData) return fail(404, "Target bank not found");
+    if (bankData.deleted_at) return fail(400, "Cannot publish catalog for archived bank");
   }
 
   const storageProvider = asString(item?.storage_provider, 40);
@@ -2023,15 +2024,18 @@ const startUploadPublishCatalogItem = async (
 
   const { data: item, error: itemError } = await admin.from("bank_catalog_items").select("*").eq("id", catalogItemId).single();
   if (itemError || !item) return fail(404, "Catalog item not found");
+  const itemType = String(item?.item_type || "").trim().toLowerCase() === "bank_bundle" ? "bank_bundle" : "single_bank";
 
-  const { data: bankData, error: bankError } = await admin
-    .from("banks")
-    .select("id, deleted_at")
-    .eq("id", item.bank_id)
-    .maybeSingle();
-  if (bankError) return fail(500, bankError.message);
-  if (!bankData) return fail(404, "Target bank not found");
-  if (bankData.deleted_at) return fail(400, "Cannot publish catalog for archived bank");
+  if (itemType !== "bank_bundle") {
+    const { data: bankData, error: bankError } = await admin
+      .from("banks")
+      .select("id, deleted_at")
+      .eq("id", item.bank_id)
+      .maybeSingle();
+    if (bankError) return fail(500, bankError.message);
+    if (!bankData) return fail(404, "Target bank not found");
+    if (bankData.deleted_at) return fail(400, "Cannot publish catalog for archived bank");
+  }
 
   const targetAsset = asString(body?.assetName, 500) || asString(body?.asset_name, 500) || item.expected_asset_name;
   const operationType = asString(body?.operationType ?? body?.operation_type, 40) === "update" ? "update" : "create";
@@ -2062,7 +2066,7 @@ const startUploadPublishCatalogItem = async (
     scope: "admin_catalog",
     actorUserId: adminUserId,
     catalogItemId,
-    bankId: item.bank_id,
+    bankId: itemType === "bank_bundle" ? null : item.bank_id,
     storageBucket: target.bucket,
     storageKey: target.objectKey,
     expectedFileSizeBytes: fileSize,
@@ -2152,15 +2156,18 @@ const completeUploadPublishCatalogItem = async (
 
   const { data: item, error: itemError } = await admin.from("bank_catalog_items").select("*").eq("id", catalogItemId).single();
   if (itemError || !item) return fail(404, "Catalog item not found");
+  const itemType = String(item?.item_type || "").trim().toLowerCase() === "bank_bundle" ? "bank_bundle" : "single_bank";
 
-  const { data: bankData, error: bankError } = await admin
-    .from("banks")
-    .select("id, deleted_at")
-    .eq("id", item.bank_id)
-    .maybeSingle();
-  if (bankError) return fail(500, bankError.message);
-  if (!bankData) return fail(404, "Target bank not found");
-  if (bankData.deleted_at) return fail(400, "Cannot publish catalog for archived bank");
+  if (itemType !== "bank_bundle") {
+    const { data: bankData, error: bankError } = await admin
+      .from("banks")
+      .select("id, deleted_at")
+      .eq("id", item.bank_id)
+      .maybeSingle();
+    if (bankError) return fail(500, bankError.message);
+    if (!bankData) return fail(404, "Target bank not found");
+    if (bankData.deleted_at) return fail(400, "Cannot publish catalog for archived bank");
+  }
 
   let objectInfo: Awaited<ReturnType<typeof headObject>>;
   try {

@@ -186,6 +186,7 @@ export function AdminAccessDialog({
     setStoreCatalogSearch,
     setStoreCatalogSort,
     setStoreCatalogStatusFilter,
+    setStoreCatalogTypeFilter,
     setStoreConfig,
     setStorePromotionForm,
     setStorePublishDialog,
@@ -210,6 +211,7 @@ export function AdminAccessDialog({
     storeCatalogSort,
     storeCatalogStats,
     storeCatalogStatusFilter,
+    storeCatalogTypeFilter,
     storeConfig,
     storeDrafts,
     storeLoading,
@@ -2221,6 +2223,7 @@ export function AdminAccessDialog({
                   page={storeCatalogPage}
                   totalPages={catalogTotalPages}
                   search={storeCatalogSearch}
+                  typeFilter={storeCatalogTypeFilter}
                   bankFilter={storeCatalogBankFilter}
                   statusFilter={storeCatalogStatusFilter}
                   paidFilter={storeCatalogPaidFilter}
@@ -2232,6 +2235,10 @@ export function AdminAccessDialog({
                   hasFilters={hasStoreCatalogFilters}
                   onSearchChange={(value) => {
                     setStoreCatalogSearch(value);
+                    setStoreCatalogPage(1);
+                  }}
+                  onTypeFilterChange={(value) => {
+                    setStoreCatalogTypeFilter(value);
                     setStoreCatalogPage(1);
                   }}
                   onBankFilterChange={(value) => {
