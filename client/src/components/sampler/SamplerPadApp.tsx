@@ -29,6 +29,12 @@ import { getSamplerRuntimeTuningProfile } from '@/lib/sampler-runtime-profile';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { getAudioTelemetry } from '@/lib/audio-telemetry';
+import {
+  consumeGuestDefaultBankTrialPlay,
+  loadGuestDefaultBankTrialState,
+  persistGuestDefaultBankTrialState,
+  readGuestDefaultBankTrialStateSync,
+} from '@/lib/guest-default-bank-trial';
 import { getLatestUserSamplerMetadataSnapshot } from '@/lib/user-sampler-snapshot-api';
 import {
   summarizeRemoteSnapshotPrompt,
@@ -318,6 +324,7 @@ export function SamplerPadApp() {
     updateStoreBank,
     adminExportUploadQueueSummary,
     retryPendingAdminExportUploads,
+    clearPendingAdminExportUploads,
     listLinkableStoreBanks,
     linkExistingStoreBank,
     publishDefaultBankRelease,
@@ -360,6 +367,10 @@ export function SamplerPadApp() {
     byId: () => createFallbackMidiDeviceProfile(),
   });
   const effectiveAuthUser = user || getCachedUser();
+  const [guestDefaultBankTrialState, setGuestDefaultBankTrialState] = React.useState(() =>
+    readGuestDefaultBankTrialStateSync()
+  );
+  const guestDefaultBankTrialStateRef = React.useRef(guestDefaultBankTrialState);
   const defaultSettings = React.useMemo(
     () => createDefaultSettings(DECK_LAYOUT_SCHEMA_VERSION, samplerConfig),
     [samplerConfig]
@@ -376,6 +387,37 @@ export function SamplerPadApp() {
   React.useEffect(() => {
     banksRef.current = banks;
   }, [banks]);
+
+  React.useEffect(() => {
+    guestDefaultBankTrialStateRef.current = guestDefaultBankTrialState;
+  }, [guestDefaultBankTrialState]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    void loadGuestDefaultBankTrialState().then((nextState) => {
+      if (cancelled) return;
+      guestDefaultBankTrialStateRef.current = nextState;
+      setGuestDefaultBankTrialState(nextState);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const isGuestTrialEligibleDefaultBank = React.useCallback((bank: SamplerBank | null | undefined) => {
+    if (effectiveAuthUser || !bank) return false;
+    if (bank.isLocalDuplicate) return false;
+    return bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(bank);
+  }, [effectiveAuthUser]);
+
+  const isDefaultBankPlaybackLocked = React.useCallback(
+    (bank: SamplerBank | null | undefined) => {
+      if (effectiveAuthUser || !bank) return false;
+      if (bank.isLocalDuplicate && isExplicitDefaultBankIdentity(bank)) return true;
+      return isGuestTrialEligibleDefaultBank(bank) && guestDefaultBankTrialState.exhausted;
+    },
+    [effectiveAuthUser, guestDefaultBankTrialState.exhausted, isGuestTrialEligibleDefaultBank]
+  );
 
   const buildPlaybackReadyPad = React.useCallback((pad: PadData): PadData => {
     const playbackWindow = resolvePadPlaybackWindow(pad);
@@ -1344,9 +1386,7 @@ export function SamplerPadApp() {
         seen.add(key);
         const missingMediaState = getPadMissingMediaState(pad);
         const audioUrl = typeof pad.audioUrl === 'string' ? pad.audioUrl.trim() : '';
-        const requiresAuthToLoad =
-          !effectiveAuthUser &&
-          (bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(bank));
+        const requiresAuthToLoad = isDefaultBankPlaybackLocked(bank);
         const canRecoverAudioOnDemand = Boolean(
           pad.audioStorageKey ||
           pad.audioBackend ||
@@ -1381,7 +1421,7 @@ export function SamplerPadApp() {
         }];
       });
     });
-  }, [banks, effectiveAuthUser]);
+  }, [banks, isDefaultBankPlaybackLocked]);
   const flattenedSearchBanks = React.useMemo<SamplerBankSearchResult[]>(() => {
     return banks.map((bank) => ({
       key: `bank-${bank.id}`,
@@ -1817,12 +1857,77 @@ export function SamplerPadApp() {
     }
   }, [armedLoadChannelId, settings.channelCount]);
 
-  const requestDefaultBankLogin = React.useCallback(() => {
+  const requestDefaultBankLogin = React.useCallback((reason = 'Please sign in to play default bank pads.') => {
     window.dispatchEvent(new Event('vdjv-login-request'));
     window.dispatchEvent(new CustomEvent('vdjv-require-login', {
-      detail: { reason: 'Please sign in to play default bank pads.' }
+      detail: { reason }
     }));
   }, []);
+
+  const handleConsumeGuestTrialPlayback = React.useCallback((pad: PadData, bankId: string, bankName: string) => {
+    const bank = banksRef.current.find((entry) => entry.id === bankId);
+    if (!isGuestTrialEligibleDefaultBank(bank)) return true;
+
+    const current = guestDefaultBankTrialStateRef.current;
+    if (current.exhausted) {
+      requestDefaultBankLogin('Guest trial finished. Sign in to keep playing Default Bank.');
+      return false;
+    }
+
+    const nextState = consumeGuestDefaultBankTrialPlay(current);
+    guestDefaultBankTrialStateRef.current = nextState;
+    setGuestDefaultBankTrialState(nextState);
+    void persistGuestDefaultBankTrialState(nextState);
+    return true;
+  }, [isGuestTrialEligibleDefaultBank, requestDefaultBankLogin]);
+
+  const handleConsumeGuestTrialPlaybackForBank = React.useCallback((bankId: string) => {
+    const bank = banksRef.current.find((entry) => entry.id === bankId);
+    if (!isGuestTrialEligibleDefaultBank(bank)) return true;
+
+    const current = guestDefaultBankTrialStateRef.current;
+    if (current.exhausted) {
+      requestDefaultBankLogin('Guest trial finished. Sign in to keep playing Default Bank.');
+      return false;
+    }
+
+    const nextState = consumeGuestDefaultBankTrialPlay(current);
+    guestDefaultBankTrialStateRef.current = nextState;
+    setGuestDefaultBankTrialState(nextState);
+    void persistGuestDefaultBankTrialState(nextState);
+    return true;
+  }, [isGuestTrialEligibleDefaultBank, requestDefaultBankLogin]);
+
+  const allowGuestDeckPlaybackStart = React.useCallback((channelId: number) => {
+    if (effectiveAuthUser) return true;
+
+    const channelState = playbackManager
+      .getChannelStates()
+      .find((entry) => entry.channelId === channelId);
+    if (!channelState) return true;
+
+    const sourceBankId = channelState.loadedPadRef?.bankId || channelState.pad?.bankId || null;
+    if (!sourceBankId) return true;
+
+    const sourceBank = banksRef.current.find((entry) => entry.id === sourceBankId);
+    if (!sourceBank) return true;
+
+    if (isDefaultBankPlaybackLocked(sourceBank)) {
+      requestDefaultBankLogin('Guest trial finished. Sign in to keep playing Default Bank.');
+      return false;
+    }
+
+    if (!isGuestTrialEligibleDefaultBank(sourceBank)) return true;
+
+    return handleConsumeGuestTrialPlaybackForBank(sourceBank.id);
+  }, [
+    effectiveAuthUser,
+    handleConsumeGuestTrialPlaybackForBank,
+    isDefaultBankPlaybackLocked,
+    isGuestTrialEligibleDefaultBank,
+    playbackManager,
+    requestDefaultBankLogin,
+  ]);
 
   const handleFileUpload = React.useCallback(async (file: File, targetBankId?: string) => {
     try {
@@ -1918,8 +2023,9 @@ export function SamplerPadApp() {
   }, [playbackManager]);
 
   const handlePlayChannel = React.useCallback((channelId: number) => {
+    if (!allowGuestDeckPlaybackStart(channelId)) return;
     playbackManager.playChannel(channelId);
-  }, [playbackManager]);
+  }, [allowGuestDeckPlaybackStart, playbackManager]);
 
   const handleSeekChannel = React.useCallback((channelId: number, ms: number) => {
     playbackManager.seekChannel(channelId, ms);
@@ -1930,8 +2036,11 @@ export function SamplerPadApp() {
   }, [playbackManager]);
 
   const handleTriggerChannelHotcue = React.useCallback((channelId: number, slotIndex: number) => {
+    const channelState = playbackManager.getChannelStates().find((entry) => entry.channelId === channelId);
+    if (!channelState) return;
+    if (!channelState.isPlaying && !allowGuestDeckPlaybackStart(channelId)) return;
     playbackManager.triggerChannelHotcue(channelId, slotIndex);
-  }, [playbackManager]);
+  }, [allowGuestDeckPlaybackStart, playbackManager]);
 
   const persistChannelHotcuesToPad = React.useCallback((channelId: number) => {
     const result = playbackManager.saveChannelHotcuesToPad(channelId);
@@ -1997,12 +2106,17 @@ export function SamplerPadApp() {
         const liveBank = banksRef.current.find((entry) => entry.id === bankId);
         const livePad = liveBank?.pads.find((entry) => entry.id === pad.id);
         return {
+          bank: liveBank || null,
           bankName: liveBank?.name || bankName,
           pad: livePad || pad,
         };
       };
 
       let next = readLatestPad();
+      if (isDefaultBankPlaybackLocked(next.bank)) {
+        requestDefaultBankLogin('Guest trial finished. Sign in to keep playing Default Bank.');
+        return false;
+      }
       const canAttemptPadRecovery =
         !next.pad.audioUrl &&
         Boolean(
@@ -2049,7 +2163,7 @@ export function SamplerPadApp() {
       setShowErrorDialog(true);
       return false;
     }
-  }, [buildPlaybackReadyPad, playbackManager, rehydratePadMedia, shouldFocusPadsForChannelLoad, updateSetting]);
+  }, [buildPlaybackReadyPad, isDefaultBankPlaybackLocked, playbackManager, rehydratePadMedia, requestDefaultBankLogin, shouldFocusPadsForChannelLoad, updateSetting]);
 
   const handleSelectPadForChannelLoad = React.useCallback((pad: PadData, bankId: string, bankName: string) => {
     if (armedLoadChannelId === null) return;
@@ -2694,10 +2808,32 @@ export function SamplerPadApp() {
   }, [secondaryBankId, restoreBankScroll, saveBankScroll]);
 
   const ensureRegisteredAndTrigger = React.useCallback(
-    (pad: PadData, bankId: string, bankName: string, trigger: () => void) => {
+    (
+      pad: PadData,
+      bankId: string,
+      bankName: string,
+      trigger: () => void,
+      mode: 'play' | 'toggle' | 'hold-start' | 'hold-stop' | 'stutter' | 'unmute' = 'play'
+    ) => {
+      const targetBank = banksRef.current.find((entry) => entry.id === bankId);
+      if (mode !== 'hold-stop' && isDefaultBankPlaybackLocked(targetBank)) {
+        requestDefaultBankLogin('Guest trial finished. Sign in to keep playing Default Bank.');
+        return false;
+      }
+      const shouldConsumeGuestTrial = (() => {
+        if (mode === 'hold-stop') return false;
+        if (mode === 'hold-start' || mode === 'stutter' || mode === 'play') return true;
+        const padState = playbackManager.getPadState(pad.id);
+        if (mode === 'toggle' || mode === 'unmute') return !padState?.isPlaying;
+        return false;
+      })();
+      if (shouldConsumeGuestTrial && !handleConsumeGuestTrialPlayback(pad, bankId, bankName)) {
+        return false;
+      }
+
       if (playbackManager.isPadRegistered(pad.id)) {
         trigger();
-        return;
+        return true;
       }
 
       const runtimePad = buildPlaybackReadyPad(pad);
@@ -2706,8 +2842,9 @@ export function SamplerPadApp() {
         .then(() => trigger())
         .catch((error) => {
         });
+      return true;
     },
-    [buildPlaybackReadyPad, playbackManager]
+    [buildPlaybackReadyPad, handleConsumeGuestTrialPlayback, isDefaultBankPlaybackLocked, playbackManager, requestDefaultBankLogin]
   );
 
   const activeHoldKeysRef = React.useRef<Map<string, string>>(new Map());
@@ -3250,26 +3387,32 @@ export function SamplerPadApp() {
         switch (mapped.pad.triggerMode) {
           case 'toggle':
             ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-              playbackManager.triggerToggle(mapped.pad.id)
+              playbackManager.triggerToggle(mapped.pad.id),
+              'toggle'
             );
             break;
           case 'hold': {
             const holdKey = `${mapped.bankId}:${lookupKey}`;
-            activeHoldKeysRef.current.set(holdKey, mapped.pad.id);
-            ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-              playbackManager.triggerHoldStart(mapped.pad.id)
+            const started = ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
+              playbackManager.triggerHoldStart(mapped.pad.id),
+              'hold-start'
             );
+            if (started) {
+              activeHoldKeysRef.current.set(holdKey, mapped.pad.id);
+            }
             break;
           }
           case 'stutter':
             ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-              playbackManager.triggerStutter(mapped.pad.id)
+              playbackManager.triggerStutter(mapped.pad.id),
+              'stutter'
             );
             break;
           case 'unmute':
           default:
             ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-              playbackManager.triggerUnmuteToggle(mapped.pad.id)
+              playbackManager.triggerUnmuteToggle(mapped.pad.id),
+              'unmute'
             );
             break;
         }
@@ -3574,7 +3717,8 @@ export function SamplerPadApp() {
           const activeHoldPadId = midiHoldPadByNoteRef.current.get(message.note);
           if (activeHoldPadId === mapped.pad.id) {
             ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-              playbackManager.triggerHoldStop(mapped.pad.id)
+              playbackManager.triggerHoldStop(mapped.pad.id),
+              'hold-stop'
             );
             midiHoldPadByNoteRef.current.delete(message.note);
           }
@@ -3596,24 +3740,29 @@ export function SamplerPadApp() {
       switch (mapped.pad.triggerMode) {
         case 'toggle':
           ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-            playbackManager.triggerToggle(mapped.pad.id)
+            playbackManager.triggerToggle(mapped.pad.id),
+            'toggle'
           );
           break;
         case 'hold':
-          ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-            playbackManager.triggerHoldStart(mapped.pad.id)
-          );
-          midiHoldPadByNoteRef.current.set(message.note, mapped.pad.id);
+          if (ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
+            playbackManager.triggerHoldStart(mapped.pad.id),
+            'hold-start'
+          )) {
+            midiHoldPadByNoteRef.current.set(message.note, mapped.pad.id);
+          }
           break;
         case 'stutter':
           ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-            playbackManager.triggerStutter(mapped.pad.id)
+            playbackManager.triggerStutter(mapped.pad.id),
+            'stutter'
           );
           break;
         case 'unmute':
         default:
           ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-            playbackManager.triggerUnmuteToggle(mapped.pad.id)
+            playbackManager.triggerUnmuteToggle(mapped.pad.id),
+            'unmute'
           );
           break;
       }
@@ -3682,23 +3831,27 @@ export function SamplerPadApp() {
       switch (mapped.pad.triggerMode) {
         case 'toggle':
           ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-            playbackManager.triggerToggle(mapped.pad.id)
+            playbackManager.triggerToggle(mapped.pad.id),
+            'toggle'
           );
           break;
         case 'hold':
           ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-            playbackManager.triggerHoldStart(mapped.pad.id)
+            playbackManager.triggerHoldStart(mapped.pad.id),
+            'hold-start'
           );
           break;
         case 'stutter':
           ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-            playbackManager.triggerStutter(mapped.pad.id)
+              playbackManager.triggerStutter(mapped.pad.id),
+              'stutter'
           );
           break;
         case 'unmute':
         default:
           ensureRegisteredAndTrigger(mapped.pad, mapped.bankId, mapped.bankName, () =>
-            playbackManager.triggerUnmuteToggle(mapped.pad.id)
+            playbackManager.triggerUnmuteToggle(mapped.pad.id),
+            'unmute'
           );
           break;
       }
@@ -4006,6 +4159,7 @@ export function SamplerPadApp() {
     onUpdateStoreBank: canUseAdminExport ? updateStoreBank : undefined,
     adminExportUploadQueueSummary: canUseAdminExport ? adminExportUploadQueueSummary : undefined,
     onRetryPendingAdminExportUploads: canUseAdminExport ? retryPendingAdminExportUploads : undefined,
+    onClearPendingAdminExportUploads: canUseAdminExport ? clearPendingAdminExportUploads : undefined,
     onListLinkableStoreBanks: canUseAdminExport ? listLinkableStoreBanks : undefined,
     onLinkExistingStoreBank: canUseAdminExport ? linkExistingStoreBank : undefined,
     midiEnabled: midi.enabled && midi.accessGranted,
@@ -4222,9 +4376,14 @@ export function SamplerPadApp() {
         blockedMidiCCs={blockedMidiCCs}
         channelLoadArmed={armedLoadChannelId !== null}
         onSelectPadForChannelLoad={handleSelectPadForChannelLoad}
-        hasEffectiveAuthUser={Boolean(effectiveAuthUser)}
-        defaultBankSourceId={DEFAULT_BANK_SOURCE_ID}
+        isBankPlaybackLocked={isDefaultBankPlaybackLocked}
         onRequireLogin={requestDefaultBankLogin}
+        onGuestTrialConsumePlayback={handleConsumeGuestTrialPlayback}
+        guestTrialSummary={{
+          visible: !effectiveAuthUser,
+          remainingCount: guestDefaultBankTrialState.remainingCount,
+          exhausted: guestDefaultBankTrialState.exhausted,
+        }}
         restoreBackupInputRef={restoreBackupInputRef}
         recoverBankInputRef={recoverBankInputRef}
         onRestoreBackupFile={handleRestoreBackupFile}

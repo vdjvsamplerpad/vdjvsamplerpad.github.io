@@ -1495,7 +1495,11 @@ export function AboutDialog({
                         onClick={handleInstallAppUpdate}
                         disabled={!onInstallAppUpdate || effectiveAppUpdateBusy}
                       >
-                        {appUpdatePlatform === 'electron' ? 'Restart to Install' : 'Restart to Update'}
+                        {appUpdatePlatform === 'electron'
+                          ? 'Restart to Install'
+                          : appUpdatePlatform === 'web'
+                            ? 'Reload to Update'
+                            : 'Restart to Update'}
                       </Button>
                     ) : null}
                   </div>

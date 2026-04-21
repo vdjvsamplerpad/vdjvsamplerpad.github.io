@@ -52,7 +52,8 @@ interface SamplerPadProps {
   channelLoadArmed?: boolean;
   onSelectPadForChannelLoad?: (pad: PadData, bankId: string, bankName: string) => void;
   requiresAuthToPlay?: boolean;
-  onRequireLogin?: () => void;
+  onRequireLogin?: (reason?: string) => void;
+  onGuestTrialConsumePlayback?: (pad: PadData, bankId: string, bankName: string) => boolean;
 }
 
 const PLAY_GREEN_HEX = '#4ade80';
@@ -61,9 +62,19 @@ const PLAY_AMBER_BORDER_HEX = '#b45309';
 const PLAY_COLOR_DISTANCE_THRESHOLD = 90;
 const FORCE_WARM_LONG_DURATION_MS = 90_000;
 const TOUCH_TRIGGER_CLICK_SUPPRESS_MS = 700;
+const TOUCH_TRIGGER_SCROLL_CANCEL_PX = 10;
+const TOUCH_TRIGGER_COMMIT_MS = 45;
 const TRIGGER_DOT_SYNC_SETTLE_MS = 420;
 
 type RgbColor = { r: number; g: number; b: number };
+type PendingTouchTriggerMode = 'hold' | 'stutter';
+type PendingTouchTriggerState = {
+  pointerId: number;
+  mode: PendingTouchTriggerMode;
+  startX: number;
+  startY: number;
+  timer: ReturnType<typeof setTimeout> | null;
+};
 
 const normalizeHexColor = (value: string | undefined, fallback = '#4f46e5'): string => {
   if (!value) return fallback;
@@ -140,7 +151,8 @@ export const SamplerPad = React.memo(function SamplerPad({
   channelLoadArmed = false,
   onSelectPadForChannelLoad,
   requiresAuthToPlay = false,
-  onRequireLogin
+  onRequireLogin,
+  onGuestTrialConsumePlayback
 }: SamplerPadProps) {
   const audioPlayer = useAudioPlayer(
     pad,
@@ -168,11 +180,13 @@ export const SamplerPad = React.memo(function SamplerPad({
   const lastEditTokenRef = React.useRef<number | undefined>(undefined);
   const autoRehydrateRef = React.useRef<Promise<boolean> | null>(null);
   const queuedPlaybackIntentRef = React.useRef(false);
+  const queuedGuestTrialConsumeRef = React.useRef(false);
   const autoWarmIssuedRef = React.useRef(false);
   const autoPlayIssuedRef = React.useRef(false);
   const syncSettleTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevPassiveSyncingRef = React.useRef(false);
   const holdPointerIdRef = React.useRef<number | null>(null);
+  const pendingTouchTriggerRef = React.useRef<PendingTouchTriggerState | null>(null);
   const suppressClickUntilRef = React.useRef(0);
   const relinkInputRef = React.useRef<HTMLInputElement>(null);
   const [missingPadAction, setMissingPadAction] = React.useState<'custom_link' | 'official_sync' | null>(null);
@@ -200,18 +214,27 @@ export const SamplerPad = React.memo(function SamplerPad({
     return normalizeStoredShortcutKey(pad.shortcutKey) || normalizeShortcutKey(pad.shortcutKey) || pad.shortcutKey;
   }, [pad.shortcutKey]);
 
-  const requestLoginForPlayback = React.useCallback(() => {
+  const requestLoginForPlayback = React.useCallback((reason = 'Please sign in to play default bank pads.') => {
     if (!requiresAuthToPlay) return false;
     if (onRequireLogin) {
-      onRequireLogin();
+      onRequireLogin(reason);
       return true;
     }
     window.dispatchEvent(new Event('vdjv-login-request'));
     window.dispatchEvent(new CustomEvent('vdjv-require-login', {
-      detail: { reason: 'Please sign in to play default bank pads.' }
+      detail: { reason }
     }));
     return true;
   }, [requiresAuthToPlay, onRequireLogin]);
+
+  const consumeGuestTrialPlayback = React.useCallback(() => {
+    if (typeof onGuestTrialConsumePlayback !== 'function') return true;
+    return onGuestTrialConsumePlayback(pad, bankId, bankName);
+  }, [bankId, bankName, onGuestTrialConsumePlayback, pad]);
+
+  const armQueuedGuestTrialPlayback = React.useCallback(() => {
+    queuedGuestTrialConsumeRef.current = typeof onGuestTrialConsumePlayback === 'function';
+  }, [onGuestTrialConsumePlayback]);
 
   const triggerPadMediaRehydrate = React.useCallback(() => {
     if (requiresAuthToPlay) return;
@@ -235,8 +258,14 @@ export const SamplerPad = React.memo(function SamplerPad({
     requiresAuthToPlay,
   ]);
 
+  const ensureAudioReadyForImmediatePlayback = React.useCallback(() => {
+    triggerPadMediaRehydrate();
+    return typeof pad.audioUrl === 'string' && pad.audioUrl.trim().length > 0;
+  }, [pad.audioUrl, triggerPadMediaRehydrate]);
+
   const clearQueuedPlaybackIntent = React.useCallback((options?: { stopPending?: boolean }) => {
     queuedPlaybackIntentRef.current = false;
+    queuedGuestTrialConsumeRef.current = false;
     autoWarmIssuedRef.current = false;
     autoPlayIssuedRef.current = false;
     setQueuedPlaybackIntent(false);
@@ -249,6 +278,104 @@ export const SamplerPad = React.memo(function SamplerPad({
     setMissingPadError(null);
     setMissingPadAction(pad.restoreAssetKind === 'custom_local_media' ? 'custom_link' : 'official_sync');
   }, [pad.restoreAssetKind]);
+
+  const clearPendingTouchTrigger = React.useCallback(() => {
+    const pending = pendingTouchTriggerRef.current;
+    if (pending?.timer) {
+      clearTimeout(pending.timer);
+    }
+    pendingTouchTriggerRef.current = null;
+  }, []);
+
+  const startStutterPlayback = (preventDefault?: () => void) => {
+    if (requestLoginForPlayback()) return;
+    if (queuedPlaybackIntentRef.current) {
+      clearQueuedPlaybackIntent({ stopPending: true });
+      return;
+    }
+    if (isPadMediaRehydrating) {
+      armQueuedGuestTrialPlayback();
+      queuedPlaybackIntentRef.current = true;
+      autoWarmIssuedRef.current = false;
+      autoPlayIssuedRef.current = false;
+      setQueuedPlaybackIntent(true);
+      triggerPadMediaRehydrate();
+      return;
+    }
+    if (shouldAutoWarmBeforePlay && !isQuarantined) {
+      suppressClickUntilRef.current = Date.now() + TOUCH_TRIGGER_CLICK_SUPPRESS_MS;
+      preventDefault?.();
+      armQueuedGuestTrialPlayback();
+      queuedPlaybackIntentRef.current = true;
+      autoWarmIssuedRef.current = false;
+      autoPlayIssuedRef.current = false;
+      setQueuedPlaybackIntent(true);
+      forceWarmAudio();
+      return;
+    }
+    if (!ensureAudioReadyForImmediatePlayback()) return;
+    if (!consumeGuestTrialPlayback()) return;
+    suppressClickUntilRef.current = Date.now() + TOUCH_TRIGGER_CLICK_SUPPRESS_MS;
+    preventDefault?.();
+    playAudio();
+  };
+
+  const startHoldPlayback = (pointerId: number, preventDefault?: () => void) => {
+    if (requestLoginForPlayback()) return false;
+    if (isPadMediaRehydrating) {
+      triggerPadMediaRehydrate();
+      return false;
+    }
+    if (holdPointerIdRef.current !== null && holdPointerIdRef.current !== pointerId) return false;
+
+    holdPointerIdRef.current = pointerId;
+    preventDefault?.();
+    if (!ensureAudioReadyForImmediatePlayback()) {
+      holdPointerIdRef.current = null;
+      return false;
+    }
+    if (!consumeGuestTrialPlayback()) {
+      holdPointerIdRef.current = null;
+      return false;
+    }
+    setIsHolding(true);
+    playAudio();
+    return true;
+  };
+
+  const commitPendingTouchTrigger = (pointerId: number, reason: 'timer' | 'release' = 'timer') => {
+    const pending = pendingTouchTriggerRef.current;
+    if (!pending || pending.pointerId !== pointerId) return;
+
+    clearPendingTouchTrigger();
+    if (pending.mode === 'stutter') {
+      startStutterPlayback();
+      return;
+    }
+    if (reason === 'release') {
+      return;
+    }
+    startHoldPlayback(pointerId);
+  };
+
+  const queueTouchTriggerIntent = (e: React.PointerEvent<HTMLButtonElement>, mode: PendingTouchTriggerMode) => {
+    clearPendingTouchTrigger();
+    pendingTouchTriggerRef.current = {
+      pointerId: e.pointerId,
+      mode,
+      startX: e.clientX,
+      startY: e.clientY,
+      timer: setTimeout(() => {
+        commitPendingTouchTrigger(e.pointerId, 'timer');
+      }, TOUCH_TRIGGER_COMMIT_MS),
+    };
+  };
+
+  React.useEffect(() => {
+    return () => {
+      clearPendingTouchTrigger();
+    };
+  }, [clearPendingTouchTrigger]);
 
   const handlePadClick = (e: React.MouseEvent) => {
     if (Date.now() < suppressClickUntilRef.current) {
@@ -280,6 +407,7 @@ export const SamplerPad = React.memo(function SamplerPad({
       return;
     }
     if (!editMode && isPadMediaRehydrating) {
+      armQueuedGuestTrialPlayback();
       queuedPlaybackIntentRef.current = true;
       autoWarmIssuedRef.current = false;
       autoPlayIssuedRef.current = false;
@@ -298,6 +426,7 @@ export const SamplerPad = React.memo(function SamplerPad({
       if (isPlaying) stopAudio();
       else {
         if (shouldAutoWarmBeforePlay && !isQuarantined) {
+          armQueuedGuestTrialPlayback();
           queuedPlaybackIntentRef.current = true;
           autoWarmIssuedRef.current = false;
           autoPlayIssuedRef.current = false;
@@ -305,11 +434,13 @@ export const SamplerPad = React.memo(function SamplerPad({
           forceWarmAudio();
           return;
         }
-        triggerPadMediaRehydrate();
+        if (!ensureAudioReadyForImmediatePlayback()) return;
+        if (!consumeGuestTrialPlayback()) return;
         playAudio();
       }
     } else if (pad.triggerMode !== 'hold') {
       if (shouldAutoWarmBeforePlay && !isQuarantined) {
+        armQueuedGuestTrialPlayback();
         queuedPlaybackIntentRef.current = true;
         autoWarmIssuedRef.current = false;
         autoPlayIssuedRef.current = false;
@@ -317,7 +448,8 @@ export const SamplerPad = React.memo(function SamplerPad({
         forceWarmAudio();
         return;
       }
-      triggerPadMediaRehydrate();
+      if (!ensureAudioReadyForImmediatePlayback()) return;
+      if (!consumeGuestTrialPlayback()) return;
       playAudio();
     }
   };
@@ -346,52 +478,53 @@ export const SamplerPad = React.memo(function SamplerPad({
     }
     if (pad.triggerMode === 'stutter') {
       if (e.pointerType === 'mouse') return;
-      if (requestLoginForPlayback()) return;
-      if (queuedPlaybackIntentRef.current) {
-        clearQueuedPlaybackIntent({ stopPending: true });
+      if (e.pointerType === 'touch') {
+        queueTouchTriggerIntent(e, 'stutter');
         return;
       }
-      if (isPadMediaRehydrating) {
-        queuedPlaybackIntentRef.current = true;
-        autoWarmIssuedRef.current = false;
-        autoPlayIssuedRef.current = false;
-        setQueuedPlaybackIntent(true);
-        triggerPadMediaRehydrate();
-        return;
-      }
-      if (shouldAutoWarmBeforePlay && !isQuarantined) {
-        suppressClickUntilRef.current = Date.now() + TOUCH_TRIGGER_CLICK_SUPPRESS_MS;
-        e.preventDefault();
-        queuedPlaybackIntentRef.current = true;
-        autoWarmIssuedRef.current = false;
-        autoPlayIssuedRef.current = false;
-        setQueuedPlaybackIntent(true);
-        forceWarmAudio();
-        return;
-      }
-      suppressClickUntilRef.current = Date.now() + TOUCH_TRIGGER_CLICK_SUPPRESS_MS;
-      e.preventDefault();
-      triggerPadMediaRehydrate();
-      playAudio();
+      startStutterPlayback(() => e.preventDefault());
       return;
     }
     if (pad.triggerMode !== 'hold') return;
-    if (requestLoginForPlayback()) return;
-    if (isPadMediaRehydrating) {
-      triggerPadMediaRehydrate();
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.pointerType === 'touch') {
+      queueTouchTriggerIntent(e, 'hold');
       return;
     }
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (holdPointerIdRef.current !== null && holdPointerIdRef.current !== e.pointerId) return;
-
-    holdPointerIdRef.current = e.pointerId;
-    e.preventDefault();
-    setIsHolding(true);
-    triggerPadMediaRehydrate();
-    playAudio();
+    startHoldPlayback(e.pointerId, () => e.preventDefault());
   };
 
-  const handlePointerRelease = (e: React.PointerEvent<HTMLButtonElement>) => {
+  const handlePointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const pending = pendingTouchTriggerRef.current;
+    if (!pending || pending.pointerId !== e.pointerId) return;
+
+    const deltaX = Math.abs(e.clientX - pending.startX);
+    const deltaY = Math.abs(e.clientY - pending.startY);
+    if (Math.max(deltaX, deltaY) < TOUCH_TRIGGER_SCROLL_CANCEL_PX) return;
+
+    clearPendingTouchTrigger();
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const pending = pendingTouchTriggerRef.current;
+    if (pending && pending.pointerId === e.pointerId) {
+      commitPendingTouchTrigger(e.pointerId, 'release');
+      return;
+    }
+    if (editMode || channelLoadArmed) return;
+    if (pad.triggerMode !== 'hold') return;
+    if (holdPointerIdRef.current !== null && holdPointerIdRef.current !== e.pointerId) return;
+
+    holdPointerIdRef.current = null;
+    setIsHolding(false);
+    releaseAudio();
+  };
+
+  const handlePointerCancel = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const pending = pendingTouchTriggerRef.current;
+    if (pending && pending.pointerId === e.pointerId) {
+      clearPendingTouchTrigger();
+    }
     if (editMode || channelLoadArmed) return;
     if (pad.triggerMode !== 'hold') return;
     if (holdPointerIdRef.current !== null && holdPointerIdRef.current !== e.pointerId) return;
@@ -605,8 +738,19 @@ export const SamplerPad = React.memo(function SamplerPad({
         ? 'bg-amber-500/85 text-amber-950 border-amber-200/60 hover:bg-amber-400/90'
         : 'bg-amber-500 text-white border-amber-700 hover:bg-amber-600')
       : (theme === 'dark'
-        ? 'bg-amber-500/85 text-amber-950 border-amber-200/60 hover:bg-amber-400/90'
-        : 'bg-amber-500 text-white border-amber-700 hover:bg-amber-600');
+      ? 'bg-amber-500/85 text-amber-950 border-amber-200/60 hover:bg-amber-400/90'
+      : 'bg-amber-500 text-white border-amber-700 hover:bg-amber-600');
+
+  const warmStateGlyph = warmStateMode === 'blocked'
+    ? <Ban className="w-2 h-2 sm:w-2.5 sm:h-2.5" />
+    : warmStateMode === 'syncing'
+      ? (
+        <span className="relative flex h-2 w-2 sm:h-2.5 sm:w-2.5 items-center justify-center">
+          <span className="absolute inline-flex h-full w-full rounded-full bg-current opacity-30 animate-pulse" />
+          <span className="relative inline-flex h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-current" />
+        </span>
+      )
+      : <Loader2 className={`w-2 h-2 sm:w-2.5 sm:h-2.5 ${warmStateMode === 'warming' ? 'animate-spin' : ''}`} />;
   const handleWarmStateIconClick = React.useCallback((event: React.MouseEvent | React.PointerEvent) => {
     event.stopPropagation();
     event.preventDefault();
@@ -686,6 +830,11 @@ export const SamplerPad = React.memo(function SamplerPad({
       }
       if (isWarmReady) {
         if (!autoPlayIssuedRef.current) {
+          if (queuedGuestTrialConsumeRef.current && !consumeGuestTrialPlayback()) {
+            clearQueuedPlaybackIntent();
+            return;
+          }
+          queuedGuestTrialConsumeRef.current = false;
           autoPlayIssuedRef.current = true;
           playAudio();
           clearQueuedPlaybackIntent();
@@ -699,6 +848,11 @@ export const SamplerPad = React.memo(function SamplerPad({
       return;
     }
     if (!autoPlayIssuedRef.current) {
+      if (queuedGuestTrialConsumeRef.current && !consumeGuestTrialPlayback()) {
+        clearQueuedPlaybackIntent();
+        return;
+      }
+      queuedGuestTrialConsumeRef.current = false;
       autoPlayIssuedRef.current = true;
       playAudio();
       clearQueuedPlaybackIntent();
@@ -720,6 +874,8 @@ export const SamplerPad = React.memo(function SamplerPad({
     requiresAuthToPlay,
     shouldAutoWarmBeforePlay,
     triggerPadMediaRehydrate,
+    consumeGuestTrialPlayback,
+    ensureAudioReadyForImmediatePlayback,
   ]);
 
   const getEditModeClasses = () => {
@@ -830,8 +986,9 @@ export const SamplerPad = React.memo(function SamplerPad({
       <Button
         onClick={handlePadClick}
         onPointerDown={!editMode ? handlePointerDown : undefined}
-        onPointerUp={pad.triggerMode === 'hold' && !editMode ? handlePointerRelease : undefined}
-        onPointerCancel={pad.triggerMode === 'hold' && !editMode ? handlePointerRelease : undefined}
+        onPointerMove={!editMode ? handlePointerMove : undefined}
+        onPointerUp={!editMode ? handlePointerUp : undefined}
+        onPointerCancel={!editMode ? handlePointerCancel : undefined}
         onPointerLeave={pad.triggerMode === 'hold' && !editMode ? handlePointerLeave : undefined}
         draggable={editMode && !adminColorPaintActive}
         onDragStart={handleDragStart}
@@ -1053,11 +1210,7 @@ export const SamplerPad = React.memo(function SamplerPad({
               onClick={handleWarmStateIconClick}
               onKeyDown={handleWarmStateIconKeyDown}
             >
-              {warmStateMode === 'blocked' ? (
-                <Ban className="w-2 h-2 sm:w-2.5 sm:h-2.5" />
-              ) : (
-                <Loader2 className={`w-2 h-2 sm:w-2.5 sm:h-2.5 ${(warmStateMode === 'warming' || warmStateMode === 'syncing') ? 'animate-spin' : ''}`} />
-              )}
+              {warmStateGlyph}
             </div>
           ) : shouldShowTriggerIndicator ? (
             <div
@@ -1083,11 +1236,7 @@ export const SamplerPad = React.memo(function SamplerPad({
                 onClick={handleWarmStateIconClick}
                 onKeyDown={handleWarmStateIconKeyDown}
               >
-                {warmStateMode === 'blocked' ? (
-                  <Ban className="w-2 h-2 sm:w-2.5 sm:h-2.5" />
-                ) : (
-                  <Loader2 className={`w-2 h-2 sm:w-2.5 sm:h-2.5 ${(warmStateMode === 'warming' || warmStateMode === 'syncing') ? 'animate-spin' : ''}`} />
-                )}
+                {warmStateGlyph}
               </div>
             ) : shouldShowTriggerIndicator ? (
               <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 flex items-center justify-center">

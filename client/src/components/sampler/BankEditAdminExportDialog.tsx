@@ -27,6 +27,8 @@ interface BankEditAdminExportDialogProps {
   setAdminComingSoonOnly: (value: boolean) => void;
   adminExportMode: ExportAudioMode;
   setAdminExportMode: (value: ExportAudioMode) => void;
+  adminGenerateLowMemoryVariant: boolean;
+  setAdminGenerateLowMemoryVariant: (value: boolean) => void;
   onExport: () => void;
 }
 
@@ -49,6 +51,8 @@ export function BankEditAdminExportDialog({
   setAdminComingSoonOnly,
   adminExportMode,
   setAdminExportMode,
+  adminGenerateLowMemoryVariant,
+  setAdminGenerateLowMemoryVariant,
   onExport,
 }: BankEditAdminExportDialogProps) {
   const isNativeCapacitor = typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
@@ -172,6 +176,22 @@ export function BankEditAdminExportDialog({
                 <p className={`text-xs ${theme === 'dark' ? 'text-amber-300' : 'text-amber-700'}`}>
                   Teaser publish skips audio/image export and immediately publishes a non-buyable Store listing for older clients.
                 </p>
+              ) : null}
+
+              {!adminComingSoonOnly ? (
+                <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                  <div>
+                    <Label htmlFor="adminGenerateLowMemoryVariant">Generate Low-Memory Variant</Label>
+                    <p className={`mt-1 text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                      For banks over 250 MB, also uploads segmented parts for old iPad and low-memory devices. Disable to avoid roughly double upload/storage.
+                    </p>
+                  </div>
+                  <Switch
+                    id="adminGenerateLowMemoryVariant"
+                    checked={adminGenerateLowMemoryVariant}
+                    onCheckedChange={setAdminGenerateLowMemoryVariant}
+                  />
+                </div>
               ) : null}
             </div>
           )}

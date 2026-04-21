@@ -2451,6 +2451,7 @@ export function AdminAccessDialog({
         }}
         bankEdit={{
           open: editBankOpen,
+          bank: editBank,
           title: editBankTitle,
           description: editBankDesc,
           color: editBankColor,
@@ -2460,6 +2461,17 @@ export function AdminAccessDialog({
           onDescriptionChange: setEditBankDesc,
           onColorChange: setEditBankColor,
           onSave: saveBank,
+          onOpenCatalog: () => {
+            const catalogId = editBank?.store_catalog?.id;
+            setEditBankOpen(false);
+            setTab('store_catalog');
+            setStoreCatalogPage(1);
+            if (catalogId) {
+              setStoreCatalogSearch(catalogId);
+            } else if (editBank?.title) {
+              setStoreCatalogSearch(editBank.title);
+            }
+          },
         }}
         bankAccess={{
           open: bankAccessOpen,

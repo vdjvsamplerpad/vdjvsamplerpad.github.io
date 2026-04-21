@@ -291,10 +291,10 @@ function HomeTab({
 
   const rolling24hCards = [
     { label: 'Revenue (24h)', value: formatMoney(Number(homeData?.counts?.totalRevenue24h || 0)), tone: 'text-yellow-500' },
-    { label: 'Exports (24h)', value: Number(homeData?.counts?.exports24h || 0), tone: 'text-blue-500' },
-    { label: 'Export Failures (24h)', value: Number(homeData?.counts?.exportFailures24h || 0), tone: 'text-red-500' },
-    { label: 'No Change Uploads (24h)', value: Number(homeData?.counts?.duplicateNoChange24h || 0), tone: 'text-amber-500' },
-    { label: 'Auth Failures (24h)', value: Number(homeData?.counts?.authFailures24h || 0), tone: 'text-fuchsia-500' },
+    { label: 'Total User', value: Number(homeData?.counts?.totalRegisteredUsers || 0), tone: 'text-blue-500' },
+    { label: 'Total Installer License', value: Number(homeData?.counts?.totalInstallerLicenses || 0), tone: 'text-red-500' },
+    { label: 'Total Store Request', value: Number(homeData?.counts?.approvedStoreRequestsTotal || 0), tone: 'text-amber-500' },
+    { label: 'Import Failures (24h)', value: Number(homeData?.counts?.importFailures24h || 0), tone: 'text-fuchsia-500' },
     { label: 'Imports (24h)', value: Number(homeData?.counts?.imports24h || 0), tone: 'text-indigo-500' },
   ];
 

@@ -255,7 +255,7 @@ export const runNativeAndroidImportPipeline = async (
         entitlementToken: options?.entitlementToken || null,
         userId: effectiveUser?.id || null,
       }, handleNativeProgress);
-    } else if (electronFilePath && isElectronImportBridgeAvailable()) {
+    } else if (electronFilePath && isElectronImportBridgeAvailable() && source instanceof File) {
       nativeResult = await runElectronImportArchiveJob({
         jobId: `electron-import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
         source: {

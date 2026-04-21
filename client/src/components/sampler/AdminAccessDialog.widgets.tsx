@@ -4,8 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import type { SortDirection } from '@/lib/admin-api';
-import { ChevronLeft, ChevronRight, EyeOff, Globe, ImageIcon, Loader2, Upload } from 'lucide-react';
+import { adminApi, type AdminCatalogAssetVariant, type AdminCatalogUploadSession, type SortDirection } from '@/lib/admin-api';
+import { ChevronLeft, ChevronRight, EyeOff, Globe, ImageIcon, Loader2, RefreshCw, Trash2, Upload } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -589,6 +589,13 @@ export function CatalogCard({
   const [thumbUploading, setThumbUploading] = React.useState(false);
   const [thumbPreviewUrl, setThumbPreviewUrl] = React.useState<string | null>(null);
   const [editorOpen, setEditorOpen] = React.useState(false);
+  const [uploadSessionsLoading, setUploadSessionsLoading] = React.useState(false);
+  const [uploadSessions, setUploadSessions] = React.useState<AdminCatalogUploadSession[]>([]);
+  const [uploadSessionsLoadedFor, setUploadSessionsLoadedFor] = React.useState<string | null>(null);
+  const [assetVariantsLoading, setAssetVariantsLoading] = React.useState(false);
+  const [assetVariants, setAssetVariants] = React.useState<AdminCatalogAssetVariant[]>([]);
+  const [assetVariantsLoadedFor, setAssetVariantsLoadedFor] = React.useState<string | null>(null);
+  const [sessionActionId, setSessionActionId] = React.useState<string | null>(null);
   const thumbInputRef = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
@@ -613,6 +620,58 @@ export function CatalogCard({
       URL.revokeObjectURL(url);
     };
   }, [thumbFile]);
+
+  const formatFileSize = React.useCallback((value: number | null | undefined) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let next = value;
+    let unitIndex = 0;
+    while (next >= 1024 && unitIndex < units.length - 1) {
+      next /= 1024;
+      unitIndex += 1;
+    }
+    return `${next.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+  }, []);
+
+  const loadUploadSessions = React.useCallback(async () => {
+    if (isBundle) {
+      setUploadSessions([]);
+      setUploadSessionsLoadedFor(draft.id);
+      return;
+    }
+    setUploadSessionsLoading(true);
+    try {
+      const response = await adminApi.listCatalogUploadSessions(draft.id);
+      setUploadSessions(
+        Array.isArray(response.sessions)
+          ? response.sessions.filter((session) => session.failure_reason !== 'ASSET_DELETED_BY_ADMIN')
+          : [],
+      );
+      setUploadSessionsLoadedFor(draft.id);
+    } catch (error: any) {
+      pushNotice({ variant: 'error', message: error?.message || 'Could not load staged upload assets.' });
+    } finally {
+      setUploadSessionsLoading(false);
+    }
+  }, [draft.id, isBundle, pushNotice]);
+
+  const loadAssetVariants = React.useCallback(async () => {
+    if (isBundle) {
+      setAssetVariants([]);
+      setAssetVariantsLoadedFor(draft.id);
+      return;
+    }
+    setAssetVariantsLoading(true);
+    try {
+      const response = await adminApi.listCatalogAssetVariants(draft.id);
+      setAssetVariants(Array.isArray(response.variants) ? response.variants : []);
+      setAssetVariantsLoadedFor(draft.id);
+    } catch (error: any) {
+      pushNotice({ variant: 'error', message: error?.message || 'Could not load low-memory asset variants.' });
+    } finally {
+      setAssetVariantsLoading(false);
+    }
+  }, [draft.id, isBundle, pushNotice]);
 
   const normalizedPrice = String(pricePhp || '').trim();
   const parsedPrice = normalizedPrice === '' ? null : Number(normalizedPrice);
@@ -659,6 +718,18 @@ export function CatalogCard({
     setEditorOpen(true);
   }, [resetEditorState]);
 
+  React.useEffect(() => {
+    if (!editorOpen || isBundle) return;
+    if (uploadSessionsLoadedFor === draft.id) return;
+    void loadUploadSessions();
+  }, [draft.id, editorOpen, isBundle, loadUploadSessions, uploadSessionsLoadedFor]);
+
+  React.useEffect(() => {
+    if (!editorOpen || isBundle) return;
+    if (assetVariantsLoadedFor === draft.id) return;
+    void loadAssetVariants();
+  }, [assetVariantsLoadedFor, draft.id, editorOpen, isBundle, loadAssetVariants]);
+
   const handleSubmit = React.useCallback(async (action: 'publish' | 'save') => {
     if (!hasValidPrice) {
       pushNotice({ variant: 'error', message: 'Enter a valid price before publishing or saving a paid catalog item.' });
@@ -684,6 +755,48 @@ export function CatalogCard({
       setEditorOpen(false);
     }
   }, [draft, onApplyAction]);
+
+  const handlePromoteUploadSession = React.useCallback(async (sessionId: string) => {
+    setSessionActionId(sessionId);
+    try {
+      await adminApi.promoteCatalogUploadSession(draft.id, sessionId);
+      pushNotice({ variant: 'success', message: 'Staged asset promoted to this catalog item.' });
+      onReload();
+      await loadUploadSessions();
+    } catch (error: any) {
+      pushNotice({ variant: 'error', message: error?.message || 'Could not promote staged asset.' });
+    } finally {
+      setSessionActionId(null);
+    }
+  }, [draft.id, loadUploadSessions, onReload, pushNotice]);
+
+  const handleDeleteUploadSession = React.useCallback(async (sessionId: string) => {
+    setSessionActionId(sessionId);
+    try {
+      await adminApi.deleteCatalogUploadSession(draft.id, sessionId);
+      setUploadSessions((prev) => prev.filter((session) => session.id !== sessionId));
+      pushNotice({ variant: 'success', message: 'Staged asset deleted.' });
+      await loadUploadSessions();
+    } catch (error: any) {
+      pushNotice({ variant: 'error', message: error?.message || 'Could not delete staged asset.' });
+    } finally {
+      setSessionActionId(null);
+    }
+  }, [draft.id, loadUploadSessions, pushNotice]);
+
+  const handleDeleteAssetVariant = React.useCallback(async (variantId: string) => {
+    setSessionActionId(variantId);
+    try {
+      await adminApi.deleteCatalogAssetVariant(draft.id, variantId, 'low_memory_segmented');
+      setAssetVariants((prev) => prev.filter((variant) => variant.id !== variantId));
+      pushNotice({ variant: 'success', message: 'Low-memory variant deleted.' });
+      await loadAssetVariants();
+    } catch (error: any) {
+      pushNotice({ variant: 'error', message: error?.message || 'Could not delete low-memory variant.' });
+    } finally {
+      setSessionActionId(null);
+    }
+  }, [draft.id, loadAssetVariants, pushNotice]);
 
   const handleThumbUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -789,6 +902,126 @@ export function CatalogCard({
                   : draft.expected_asset_name}
               </div>
             </div>
+            {!isBundle && (
+              <div className={`rounded-lg border px-3 py-2.5 space-y-2 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-medium">Store Asset Summary</div>
+                    <div className="text-[11px] opacity-70">Current linked object plus the last staged uploads for fast recovery.</div>
+                  </div>
+                  <Button type="button" size="sm" variant="outline" onClick={() => void loadUploadSessions()} disabled={uploadSessionsLoading || sessionActionId !== null}>
+                    {uploadSessionsLoading ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-2" />}
+                    Refresh
+                  </Button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2 text-[11px]">
+                  <div>
+                    <div className="font-semibold opacity-70">Protection</div>
+                    <div>{draft.asset_protection || 'encrypted'}</div>
+                  </div>
+                  <div>
+                    <div className="font-semibold opacity-70">File Size</div>
+                    <div>{formatFileSize(draft.file_size_bytes)}</div>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <div className="font-semibold opacity-70">Storage Key</div>
+                    <div className="font-mono break-all">{draft.storage_key || '-'}</div>
+                  </div>
+                </div>
+                <div className={`rounded-md border p-2 space-y-2 ${isDark ? 'border-gray-700 bg-gray-900/60' : 'border-gray-200 bg-white'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Low-Memory Variant</div>
+                      <div className="text-[11px] opacity-70">Segmented asset variant used by newer clients on risky devices.</div>
+                    </div>
+                    <Button type="button" size="sm" variant="outline" onClick={() => void loadAssetVariants()} disabled={assetVariantsLoading || sessionActionId !== null}>
+                      {assetVariantsLoading ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-2" />}
+                      Refresh
+                    </Button>
+                  </div>
+                  {assetVariantsLoading ? (
+                    <div className="flex items-center justify-center py-4"><Loader2 className="w-4 h-4 animate-spin" /></div>
+                  ) : assetVariants.filter((variant) => variant.variant_type === 'low_memory_segmented').length === 0 ? (
+                    <div className="text-xs opacity-70">No low-memory segmented variant is linked yet. Updating a large store bank now generates it automatically.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {assetVariants.filter((variant) => variant.variant_type === 'low_memory_segmented').map((variant) => {
+                        const busy = sessionActionId === variant.id;
+                        return (
+                          <div key={variant.id} className={`rounded border p-2 text-[11px] space-y-1.5 ${isDark ? 'border-gray-700 bg-gray-800/50' : 'border-gray-200 bg-gray-50/70'}`}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="font-semibold">Status: {variant.status}</div>
+                                <div className="opacity-70">{variant.part_count} parts | {formatFileSize(variant.total_file_size_bytes)} | {variant.object_exists ? 'Manifest ready' : 'Manifest missing'}</div>
+                              </div>
+                              <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => void handleDeleteAssetVariant(variant.id)}>
+                                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                              </Button>
+                            </div>
+                            <div className="font-mono break-all opacity-80">{variant.manifest_storage_key || '-'}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                <div className={`rounded-md border p-2 space-y-2 ${isDark ? 'border-gray-700 bg-gray-900/60' : 'border-gray-200 bg-white'}`}>
+                  <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Recent Staged Uploads</div>
+                  {uploadSessionsLoading ? (
+                    <div className="flex items-center justify-center py-4"><Loader2 className="w-4 h-4 animate-spin" /></div>
+                  ) : uploadSessions.length === 0 ? (
+                    <div className="text-xs opacity-70">No staged upload sessions found for this catalog item.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {uploadSessions.map((session) => {
+                        const busy = sessionActionId === session.id;
+                        return (
+                          <div key={session.id} className={`rounded border p-2 text-[11px] space-y-1.5 ${isDark ? 'border-gray-700 bg-gray-800/50' : 'border-gray-200 bg-gray-50/70'}`}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="font-semibold break-all">{session.asset_name || session.storage_key}</div>
+                                <div className="opacity-70">
+                                  {session.operation_type === 'update' ? 'Update' : 'Create'} | {session.status} | {session.asset_protection}
+                                  {session.is_current_catalog_asset ? ' | Current asset' : ''}
+                                </div>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <div>{formatFileSize(session.actual_file_size_bytes ?? session.expected_file_size_bytes)}</div>
+                                <div className="opacity-70">{session.object_exists ? 'Object ready' : 'Object missing'}</div>
+                              </div>
+                            </div>
+                            <div className="font-mono break-all opacity-80">{session.storage_key}</div>
+                            {session.failure_reason && <div className="text-amber-600 dark:text-amber-300">Reason: {session.failure_reason}</div>}
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void handlePromoteUploadSession(session.id)}
+                                disabled={busy || !session.object_exists || session.is_current_catalog_asset}
+                              >
+                                {busy ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : null}
+                                Promote
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void handleDeleteUploadSession(session.id)}
+                                disabled={busy || session.is_current_catalog_asset}
+                              >
+                                <Trash2 className="w-3.5 h-3.5 mr-2" />
+                                Delete
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             {isBundle && (
               <div className="grid gap-3">
                 <div className="space-y-1">

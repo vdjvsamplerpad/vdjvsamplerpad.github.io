@@ -1,5 +1,5 @@
 ﻿
-const CACHE_NAME = 'vdjv-shell-cache-v6';
+const CACHE_NAME = '__VDJV_SHELL_CACHE__';
 const APP_SHELL_URLS = [
   '/',
   '/index.html',

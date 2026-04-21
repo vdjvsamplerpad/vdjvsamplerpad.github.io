@@ -188,6 +188,32 @@ function formatPhp(value: number): string {
   return `PHP ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+function resolveGoogleOAuthRedirectUrl(appReturnUrl?: string): string | undefined {
+  const configured = String((import.meta as any).env?.VITE_GOOGLE_OAUTH_REDIRECT_URL || '').trim()
+  if (configured) return configured
+  if (appReturnUrl) return appReturnUrl
+  if (typeof window === 'undefined') return undefined
+  try {
+    const url = new URL(window.location.href)
+    url.search = ''
+    url.hash = ''
+    const host = url.hostname.toLowerCase()
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === 'vdjvsamplerpad.online' ||
+      host.endsWith('.vdjvsamplerpad.online')
+    ) {
+      url.pathname = '/vdjv/'
+    } else if (url.pathname === '/vdjv') {
+      url.pathname = '/vdjv/'
+    }
+    return url.toString()
+  } catch {
+    return undefined
+  }
+}
+
 export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, pushNotice }: LoginModalProps) {
   const [signInError, setSignInError] = React.useState<string | null>(null)
   const [signInCooldownSeconds, setSignInCooldownSeconds] = React.useState(0)
@@ -197,6 +223,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [confirmPassword, setConfirmPassword] = React.useState('')
   const [mode, setMode] = React.useState<Mode>('signin')
   const [loading, setLoading] = React.useState(false)
+  const [googleLoading, setGoogleLoading] = React.useState(false)
   const [awaitingSignInSync, setAwaitingSignInSync] = React.useState(false)
   const [resetCooldown, setResetCooldown] = React.useState<number>(0)
   const [allowLoginWhileBanned, setAllowLoginWhileBanned] = React.useState(false)
@@ -233,6 +260,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   } = useAuthState()
   const {
     signIn,
+    signInWithGoogle,
     requestPasswordReset,
     verifyPasswordResetCode,
     updatePassword,
@@ -243,7 +271,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const panelClass = `sm:max-w-xl ${theme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'}`
   const isDark = theme === 'dark'
   const isSignInSyncing = authTransition.status === 'signing_in'
-  const isSignInBusy = loading || awaitingSignInSync || isSignInSyncing
+  const isSignInBusy = loading || googleLoading || awaitingSignInSync || isSignInSyncing
   const isLoginSubmitting = mode === 'signin' && isSignInBusy
   const isBuySubmitting = mode === 'buy' && buyStep === 'payment' && loading
 
@@ -655,6 +683,22 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       if (!waitForAuthSync) {
         setLoading(false)
       }
+    }
+  }
+
+  const handleGoogleSignIn = async () => {
+    setSignInError(null)
+    setSignInPendingState(null)
+    setGoogleLoading(true)
+    try {
+      const { error } = await signInWithGoogle(resolveGoogleOAuthRedirectUrl(appReturnUrl))
+      if (error) {
+        setGoogleLoading(false)
+        pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(error.message) })
+      }
+    } catch {
+      setGoogleLoading(false)
+      pushNotice?.({ variant: 'error', message: 'We could not open Google sign-in. Please try again.' })
     }
   }
 
@@ -1246,6 +1290,25 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               onSubmit={handleSignIn}
               className="relative space-y-4"
             >
+              <Button
+                type="button"
+                variant="outline"
+                className={`w-full justify-center gap-2 ${isDark ? 'border-gray-600 bg-gray-900 text-white hover:bg-gray-800' : 'border-gray-300 bg-white text-gray-900 hover:bg-gray-50'}`}
+                onClick={handleGoogleSignIn}
+                disabled={isSignInBusy}
+              >
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-sm font-bold text-gray-900 shadow-sm">
+                  G
+                </span>
+                {googleLoading ? 'Opening Google...' : 'Continue with Google'}
+              </Button>
+
+              <div className="flex items-center gap-3">
+                <div className={`h-px flex-1 ${isDark ? 'bg-gray-700' : 'bg-gray-200'}`} />
+                <span className={`text-[11px] font-medium uppercase tracking-[0.2em] ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>or</span>
+                <div className={`h-px flex-1 ${isDark ? 'bg-gray-700' : 'bg-gray-200'}`} />
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="signinEmail" className={colorText}>
                   Email

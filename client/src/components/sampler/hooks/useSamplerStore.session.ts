@@ -69,6 +69,7 @@ export const useSamplerStoreSession = () => {
     quotaPolicy,
     authSessionMode: authSession.mode,
     authSessionUserId: authSession.user?.id || null,
+    hasAuthenticatedAccess: authSession.mode === 'authenticated' || authSession.mode === 'trusted_offline',
     isGuestLockedSession: authSession.mode === 'guest_locked',
   };
 };

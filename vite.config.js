@@ -27,6 +27,39 @@ const getCommitBasedVersion = () => {
   return process.env.VITE_APP_VERSION || fallbackVersion();
 };
 
+const sanitizeVersionToken = (value) => String(value || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '-');
+
+const writeVersionManifest = (distPublicDir, appVersion) => {
+  fs.mkdirSync(distPublicDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(distPublicDir, 'version.json'),
+    JSON.stringify(
+      {
+        appVersion,
+        builtAt: new Date().toISOString(),
+      },
+      null,
+      2
+    )
+  );
+};
+
+const copySamplerEntryShell = (distPublicDir) => {
+  const sourceIndexPath = path.join(distPublicDir, 'index.html');
+  if (!fs.existsSync(sourceIndexPath)) return;
+  const samplerDir = path.join(distPublicDir, 'vdjv');
+  fs.mkdirSync(samplerDir, { recursive: true });
+  fs.copyFileSync(sourceIndexPath, path.join(samplerDir, 'index.html'));
+};
+
+const rewriteServiceWorkerCacheName = (distPublicDir, appVersion) => {
+  const serviceWorkerPath = path.join(distPublicDir, 'sw.js');
+  if (!fs.existsSync(serviceWorkerPath)) return;
+  const raw = fs.readFileSync(serviceWorkerPath, 'utf8');
+  const next = raw.replace(/__VDJV_SHELL_CACHE__/g, `vdjv-shell-cache-${sanitizeVersionToken(appVersion)}`);
+  fs.writeFileSync(serviceWorkerPath, next);
+};
+
 const resolveDevHttps = (env) => {
   const wantsHttps = env.VITE_DEV_HTTPS === 'true' || env.HTTPS === 'true';
   if (!wantsHttps) return undefined;
@@ -167,6 +200,16 @@ export default defineConfig(({ mode }) => {
               fs.rmSync(targetPath, { recursive: true, force: true });
             }
           }
+        },
+      },
+      {
+        name: 'vdjv-web-build-metadata',
+        apply: 'build',
+        closeBundle() {
+          writeVersionManifest(distPublicDir, appVersion);
+          if (!includeLanding) return;
+          copySamplerEntryShell(distPublicDir);
+          rewriteServiceWorkerCacheName(distPublicDir, appVersion);
         },
       },
     ],

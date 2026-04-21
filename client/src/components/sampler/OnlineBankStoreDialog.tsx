@@ -10,7 +10,7 @@ import { Loader2, Download, ShoppingCart, LockIcon, ExternalLink, Check, X, Chev
 import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { Input } from '@/components/ui/input';
 import { useOnlineStoreDebugLog } from '@/components/sampler/hooks/useOnlineStoreDebugLog';
-import { useOnlineStoreDownloadTransfer } from '@/components/sampler/hooks/useOnlineStoreDownloadTransfer';
+import { useOnlineStoreDownloadTransfer, type StoreHandleDownloadOptions } from '@/components/sampler/hooks/useOnlineStoreDownloadTransfer';
 import { useOnlineStoreCatalogData } from '@/components/sampler/hooks/useOnlineStoreCatalogData';
 import { useOnlineStorePurchaseFlow } from '@/components/sampler/hooks/useOnlineStorePurchaseFlow';
 import { captureProductEvent } from '@/lib/productAnalytics';
@@ -25,6 +25,7 @@ import {
     StoreMaintenanceState,
     TransferState,
 } from '@/components/sampler/onlineStore.types';
+import type { ImportBankSource } from '@/components/sampler/hooks/nativeBankImport.types';
 
 interface OnlineBankStoreDialogProps {
     open: boolean;
@@ -34,7 +35,7 @@ interface OnlineBankStoreDialogProps {
     runtimeBankIdsBySource?: Record<string, string[]>;
     runtimeCatalogShasBySource?: Record<string, string[]>;
     onImportBankFromStore: (
-        file: File,
+        file: ImportBankSource,
         meta: OnlineBankStoreImportMeta,
         onProgress?: (progress: number) => void
     ) => Promise<void>;
@@ -100,6 +101,31 @@ function StoreCardThumbnail({
 
 const formatPhp = (value: number): string =>
     `PHP ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const LARGE_WEB_STORE_DOWNLOAD_WARNING_BYTES = 250 * 1024 * 1024;
+
+const formatFileSizeLabel = (value: number | null | undefined): string => {
+    const bytes = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
+    if (bytes <= 0) return 'Unknown size';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let size = bytes;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex += 1;
+    }
+    const decimals = size >= 100 || unitIndex === 0 ? 0 : 1;
+    return `${size.toFixed(decimals)} ${units[unitIndex]}`;
+};
+
+const isLikelyIOSWebRuntime = (): boolean => {
+    if (typeof navigator === 'undefined') return false;
+    const userAgent = navigator.userAgent || '';
+    const platform = navigator.platform || '';
+    const touchPoints = Number((navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints || 0);
+    return /iPad|iPhone|iPod/i.test(userAgent)
+        || (/Mac/i.test(platform) && touchPoints > 1);
+};
 
 const normalizeBannerRotationMs = (value: unknown): number | null => {
     const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
@@ -200,6 +226,7 @@ export function OnlineBankStoreDialog({
     const [expandedQrUrl, setExpandedQrUrl] = React.useState<string | null>(null);
     const [purchaseReceipt, setPurchaseReceipt] = React.useState<PurchaseReceiptState | null>(null);
     const [refreshAssetsItem, setRefreshAssetsItem] = React.useState<StoreItem | null>(null);
+    const [downloadConfirmState, setDownloadConfirmState] = React.useState<{ item: StoreItem; options?: StoreHandleDownloadOptions } | null>(null);
     const dialogScrollRef = React.useRef<HTMLDivElement | null>(null);
     const proofOcrSeqRef = React.useRef(0);
     const loadSeqRef = React.useRef(0);
@@ -210,6 +237,7 @@ export function OnlineBankStoreDialog({
     const storeTotalPagesRef = React.useRef(1);
     const lastCountQueryRef = React.useRef('');
     const downloadedArtifactsRef = React.useRef<Record<string, StoreDownloadedArtifact>>({});
+    const confirmedLargeDownloadIdsRef = React.useRef<Set<string>>(new Set());
 
     const showToast = (message: string, type: 'success' | 'error') => {
         setToastMessage({ message, type });
@@ -407,6 +435,8 @@ export function OnlineBankStoreDialog({
             setExpandedQrUrl(null);
             setPurchaseReceipt(null);
             setBannerIndex(0);
+            setDownloadConfirmState(null);
+            confirmedLargeDownloadIdsRef.current.clear();
         }
     }, [open, isOnline, loadData]);
 
@@ -639,6 +669,27 @@ export function OnlineBankStoreDialog({
         );
         setRejectedOverlay(null);
     }, [setItems]);
+
+    const shouldWarnForLargeBrowserDownload = React.useCallback((item: StoreItem) => {
+        if (typeof window === 'undefined') return false;
+        if (window.electronAPI) return false;
+        if (Boolean((window as any).Capacitor?.isNativePlatform?.())) return false;
+        const fileSizeBytes = Number.isFinite(Number(item.file_size_bytes))
+            ? Math.max(0, Math.floor(Number(item.file_size_bytes)))
+            : 0;
+        return fileSizeBytes >= LARGE_WEB_STORE_DOWNLOAD_WARNING_BYTES;
+    }, []);
+
+    const startStoreDownload = React.useCallback((item: StoreItem, options?: StoreHandleDownloadOptions) => {
+        if (
+            shouldWarnForLargeBrowserDownload(item)
+            && !confirmedLargeDownloadIdsRef.current.has(item.id)
+        ) {
+            setDownloadConfirmState({ item, options });
+            return;
+        }
+        void handleDownload(item, options);
+    }, [handleDownload, shouldWarnForLargeBrowserDownload]);
 
     const cartItems = React.useMemo(
         () => Array.from(cartItemIds).map((id) => cartItemRegistry[id]).filter((item): item is StoreItem => Boolean(item)),
@@ -1128,7 +1179,7 @@ export function OnlineBankStoreDialog({
                                                                     <div className="flex flex-wrap justify-end gap-2">
                                                                         <Button
                                                                             size="sm"
-                                                                            onClick={() => handleDownload(item)}
+                                                                            onClick={() => startStoreDownload(item)}
                                                                             disabled={!isOnline}
                                                                             className="h-8 px-3 text-xs font-medium rounded-full bg-red-500/90 hover:bg-red-500 text-white border-0 disabled:opacity-50 shadow-lg"
                                                                             title={transfers[item.id].error}
@@ -1141,25 +1192,29 @@ export function OnlineBankStoreDialog({
                                                                                     size="sm"
                                                                                     variant="outline"
                                                                                     onClick={() => void copyDownloadSupportLog()}
-                                                                                    className={`h-8 px-3 text-xs rounded-full font-medium backdrop-blur-sm ${
+                                                                                    className={`h-8 w-8 p-0 rounded-full backdrop-blur-sm ${
                                                                                         isDark
                                                                                             ? 'border-white/15 text-gray-200 hover:bg-white/10'
                                                                                             : 'border-gray-300 text-gray-700 hover:bg-gray-100'
                                                                                     }`}
+                                                                                    title="Copy log"
+                                                                                    aria-label="Copy log"
                                                                                 >
-                                                                                    <Copy className="w-3.5 h-3.5 mr-1" />Copy Log
+                                                                                    <Copy className="w-3.5 h-3.5" />
                                                                                 </Button>
                                                                                 <Button
                                                                                     size="sm"
                                                                                     variant="outline"
                                                                                     onClick={exportDownloadSupportLog}
-                                                                                    className={`h-8 px-3 text-xs rounded-full font-medium backdrop-blur-sm ${
+                                                                                    className={`h-8 w-8 p-0 rounded-full backdrop-blur-sm ${
                                                                                         isDark
                                                                                             ? 'border-white/15 text-gray-200 hover:bg-white/10'
                                                                                             : 'border-gray-300 text-gray-700 hover:bg-gray-100'
                                                                                     }`}
+                                                                                    title="Export log"
+                                                                                    aria-label="Export log"
                                                                                 >
-                                                                                    <Download className="w-3.5 h-3.5 mr-1" />Export Log
+                                                                                    <Download className="w-3.5 h-3.5" />
                                                                                 </Button>
                                                                             </>
                                                                         )}
@@ -1175,7 +1230,7 @@ export function OnlineBankStoreDialog({
                                                                 ) : (
                                                                     <Button
                                                                         size="sm"
-                                                                        onClick={() => handleDownload(item)}
+                                                                        onClick={() => startStoreDownload(item)}
                                                                         disabled={!isOnline || transfers[item.id]?.phase === 'importing'}
                                                                         className={`h-8 transition-all text-xs font-medium rounded-full text-white border-0 disabled:opacity-50 shadow-lg ${transfers[item.id] ? 'bg-indigo-600 px-4' : 'bg-green-500 hover:bg-green-400 px-3'
                                                                             }`}
@@ -1446,7 +1501,7 @@ export function OnlineBankStoreDialog({
                                                 snapshot_target_bank_id: targetBankId,
                                             };
                                             setRefreshAssetsItem(null);
-                                            await handleDownload(nextItem, {
+                                            startStoreDownload(nextItem, {
                                                 preferCachedImportRetry: false,
                                                 refreshAssetsOnly: true,
                                             });
@@ -1455,6 +1510,59 @@ export function OnlineBankStoreDialog({
                                         {refreshAssetsVersionState?.hasUpdateAvailable ? 'Update Assets' : 'Redownload Assets'}
                                     </Button>
                                     <Button variant="ghost" onClick={() => setRefreshAssetsItem(null)}>
+                                        Cancel
+                                    </Button>
+                                </div>
+                            </div>
+                        </DialogContent>
+                    </Dialog>
+
+                    <Dialog
+                        open={Boolean(downloadConfirmState)}
+                        onOpenChange={(nextOpen) => {
+                            if (!nextOpen) setDownloadConfirmState(null);
+                        }}
+                        useHistory={false}
+                    >
+                        <DialogContent
+                            overlayClassName="z-[159]"
+                            className="z-[160] sm:max-w-md"
+                            aria-describedby={undefined}
+                            onOpenAutoFocus={(event) => event.preventDefault()}
+                        >
+                            <DialogHeader>
+                                <DialogTitle>Large Bank Download</DialogTitle>
+                                <DialogDescription>
+                                    {downloadConfirmState
+                                        ? `${downloadConfirmState.item.bank.title} is ${formatFileSizeLabel(downloadConfirmState.item.file_size_bytes)}.`
+                                        : 'This bank is large.'}
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4 text-sm">
+                                <p className={isDark ? 'text-gray-300' : 'text-gray-600'}>
+                                    Large banks can take longer to download and may fail during browser import if local memory or storage becomes unstable.
+                                </p>
+                                {isLikelyIOSWebRuntime() && (
+                                    <p className={isDark ? 'text-amber-200' : 'text-amber-700'}>
+                                        On older iPad or iPhone Safari, very large banks are more likely to fail after download even when the file exists on the server.
+                                    </p>
+                                )}
+                                <p className={isDark ? 'text-gray-400' : 'text-gray-500'}>
+                                    You can still continue and try it anyway.
+                                </p>
+                                <div className="grid grid-cols-1 gap-2">
+                                    <Button
+                                        onClick={() => {
+                                            if (!downloadConfirmState) return;
+                                            confirmedLargeDownloadIdsRef.current.add(downloadConfirmState.item.id);
+                                            const next = downloadConfirmState;
+                                            setDownloadConfirmState(null);
+                                            void handleDownload(next.item, next.options);
+                                        }}
+                                    >
+                                        Continue Anyway
+                                    </Button>
+                                    <Button variant="ghost" onClick={() => setDownloadConfirmState(null)}>
                                         Cancel
                                     </Button>
                                 </div>

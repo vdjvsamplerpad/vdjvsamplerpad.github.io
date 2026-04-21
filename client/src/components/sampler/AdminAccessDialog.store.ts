@@ -1548,11 +1548,13 @@ export function useAdminAccessStoreManager({
     return storeDrafts
       .filter((draft) => {
         if (query) {
+          const id = String(draft.id || '').toLowerCase();
           const title = String(draft.item_type === 'bank_bundle' ? (draft.bundle_title || draft.bank?.title || '') : (draft.bank?.title || '')).toLowerCase();
           const description = String(draft.item_type === 'bank_bundle' ? (draft.bundle_description || '') : (draft.bank?.description || '')).toLowerCase();
           const asset = String(draft.expected_asset_name || '').toLowerCase();
+          const storageKey = String(draft.storage_key || '').toLowerCase();
           const bundleBanks = Array.isArray(draft.bundle_bank_titles) ? draft.bundle_bank_titles.join(' ').toLowerCase() : '';
-          if (!title.includes(query) && !description.includes(query) && !asset.includes(query) && !bundleBanks.includes(query)) return false;
+          if (!id.includes(query) && !title.includes(query) && !description.includes(query) && !asset.includes(query) && !storageKey.includes(query) && !bundleBanks.includes(query)) return false;
         }
         if (storeCatalogTypeFilter !== 'all' && draft.item_type !== storeCatalogTypeFilter) return false;
         const filterLabel = String(draft.item_type === 'bank_bundle' ? (draft.bundle_title || draft.bank?.title || '') : (draft.bank?.title || ''));

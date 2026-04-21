@@ -87,7 +87,7 @@ type UploadAdminAssetFn = (input: {
   assetProtection: 'encrypted' | 'public';
 }) => Promise<{ releaseTag?: string | null; assetName: string; fileSize: number }>;
 
-const getRetryBlobStorageId = (scope: 'user' | 'admin', exportOperationId: string): string =>
+export const getRetryBlobStorageId = (scope: 'user' | 'admin', exportOperationId: string): string =>
   `upload_retry_${scope}_${exportOperationId}`;
 
 export const getUserExportJobBlob = async (

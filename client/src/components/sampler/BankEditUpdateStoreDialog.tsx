@@ -23,6 +23,10 @@ interface BankEditUpdateStoreDialogProps {
   setAssetProtection: (value: 'encrypted' | 'public') => void;
   exportMode: ExportAudioMode;
   setExportMode: (value: ExportAudioMode) => void;
+  updateMode: 'full' | 'low_memory_only';
+  setUpdateMode: (value: 'full' | 'low_memory_only') => void;
+  generateLowMemoryVariant: boolean;
+  setGenerateLowMemoryVariant: (value: boolean) => void;
   onSubmit: () => void;
 }
 
@@ -41,10 +45,15 @@ export function BankEditUpdateStoreDialog({
   setAssetProtection,
   exportMode,
   setExportMode,
+  updateMode,
+  setUpdateMode,
+  generateLowMemoryVariant,
+  setGenerateLowMemoryVariant,
   onSubmit,
 }: BankEditUpdateStoreDialogProps) {
   const catalogItemId = typeof bank.bankMetadata?.catalogItemId === 'string' ? bank.bankMetadata.catalogItemId.trim() : '';
   const protectionLabel = assetProtection === 'public' ? 'Unencrypted' : 'Encrypted';
+  const lowMemoryOnly = updateMode === 'low_memory_only';
   const isDark = theme === 'dark';
   const isNativeCapacitor = typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
   const isElectronDesktop = typeof window !== 'undefined' && /Electron/i.test(window.navigator.userAgent || '');
@@ -71,7 +80,38 @@ export function BankEditUpdateStoreDialog({
             <div><span className="font-medium">Linked bank:</span> {bank.name}</div>
             <div className="mt-1"><span className="font-medium">Catalog item:</span> <span className="font-mono text-xs">{catalogItemId || 'Not linked'}</span></div>
             <div className="mt-1"><span className="font-medium">Current output:</span> {protectionLabel}</div>
-            <div className="mt-2 text-xs opacity-80">This always saves a local <span className="font-mono">.bank</span> file first, then uploads a new draft asset for the same catalog item.</div>
+            <div className="mt-2 text-xs opacity-80">
+              {lowMemoryOnly
+                ? 'Low-memory only uploads segmented variant parts and does not replace the current full store asset.'
+                : <>This saves a local <span className="font-mono">.bank</span> file first, then uploads a new draft asset for the same catalog item.</>}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Update Mode</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                variant={updateMode === 'full' ? 'default' : 'outline'}
+                onClick={() => setUpdateMode('full')}
+              >
+                Full Asset
+              </Button>
+              <Button
+                type="button"
+                variant={lowMemoryOnly ? 'default' : 'outline'}
+                onClick={() => {
+                  setUpdateMode('low_memory_only');
+                  setSyncMetadata(false);
+                  setGenerateLowMemoryVariant(true);
+                }}
+              >
+                Low-Memory Only
+              </Button>
+            </div>
+            <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+              Low-Memory Only is for backfilling existing large catalog items. Use it only when this local bank matches the current store version.
+            </p>
           </div>
 
           <div className="space-y-2">
@@ -112,6 +152,7 @@ export function BankEditUpdateStoreDialog({
               id="updateStoreSync"
               checked={syncMetadata}
               onCheckedChange={setSyncMetadata}
+              disabled={lowMemoryOnly}
             />
           </div>
 
@@ -144,6 +185,7 @@ export function BankEditUpdateStoreDialog({
             </div>
           )}
 
+          {!lowMemoryOnly ? (
           <div className="space-y-2">
             <Label>Audio Processing</Label>
             <div className={`grid gap-2 ${hasElectronMp3Bridge ? 'grid-cols-3' : 'grid-cols-2'}`}>
@@ -189,17 +231,38 @@ export function BankEditUpdateStoreDialog({
               </p>
             ) : null}
           </div>
+          ) : null}
 
           <div className={`rounded-lg border p-3 text-sm ${isDark ? 'border-blue-900/60 bg-blue-950/30 text-blue-100' : 'border-blue-200 bg-blue-50 text-blue-900'}`}>
             <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <p>The upload only updates the draft asset. Buyers keep access, but they receive the new version only after you publish it and they redownload or refresh assets.</p>
+              <p>
+                {lowMemoryOnly
+                  ? 'This does not change the current full asset, version, price, or catalog metadata. It only replaces the low-memory segmented variant.'
+                  : 'The upload only updates the draft asset. Buyers keep access, but they receive the new version only after you publish it and they redownload or refresh assets.'}
+              </p>
             </div>
           </div>
 
+          {!lowMemoryOnly ? (
+          <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+            <div>
+              <Label htmlFor="updateStoreGenerateLowMemoryVariant">Generate Low-Memory Variant</Label>
+              <p className={`mt-1 text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                For banks over 250 MB, also uploads segmented parts for old iPad and low-memory devices. Disable to avoid roughly double upload/storage.
+              </p>
+            </div>
+            <Switch
+              id="updateStoreGenerateLowMemoryVariant"
+              checked={generateLowMemoryVariant}
+              onCheckedChange={setGenerateLowMemoryVariant}
+            />
+          </div>
+          ) : null}
+
           <div className="flex gap-2 pt-1">
             <Button onClick={onSubmit} className="flex-1" disabled={!title.trim() || !catalogItemId}>
-              Update Store Bank
+              {lowMemoryOnly ? 'Upload Low-Memory Variant' : 'Update Store Bank'}
             </Button>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel

@@ -29,6 +29,7 @@ const MAX_IMPORT_ARCHIVE_ENTRY_COUNT = 2000;
 const MAX_IMPORT_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_IMPORT_ARCHIVE_ENTRY_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
 const WINDOW_STATE_FILE_NAME = 'window-state.json';
+const GUEST_DEFAULT_BANK_TRIAL_FILE_NAME = 'guest-default-bank-trial.json';
 const DEFAULT_WINDOW_STATE = Object.freeze({
   width: 1200,
   height: 800,
@@ -84,6 +85,10 @@ function getWindowStateFilePath() {
   return path.join(app.getPath('userData'), WINDOW_STATE_FILE_NAME);
 }
 
+function getGuestDefaultBankTrialFilePath() {
+  return path.join(app.getPath('userData'), GUEST_DEFAULT_BANK_TRIAL_FILE_NAME);
+}
+
 function sanitizeWindowState(rawValue) {
   if (!rawValue || typeof rawValue !== 'object') return null;
   const nextState = {};
@@ -123,6 +128,29 @@ function writeWindowState(bounds) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify(safeBounds, null, 2), 'utf8');
   } catch {
+  }
+}
+
+function readGuestDefaultBankTrialState() {
+  try {
+    const filePath = getGuestDefaultBankTrialFilePath();
+    if (!fs.existsSync(filePath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeGuestDefaultBankTrialState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return { ok: false, reason: 'invalid_state' };
+  try {
+    const filePath = getGuestDefaultBankTrialFilePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(state, null, 2), 'utf8');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : 'write_failed' };
   }
 }
 
@@ -1330,6 +1358,8 @@ function createMainWindow() {
 
   ipcMain.removeHandler('vdjv-window-toggle-fullscreen');
   ipcMain.removeHandler('vdjv-window-get-fullscreen-state');
+  ipcMain.removeHandler('vdjv-guest-default-bank-trial-get');
+  ipcMain.removeHandler('vdjv-guest-default-bank-trial-set');
   ipcMain.removeHandler('vdjv-audio-transcode-mp3');
   ipcMain.removeHandler('vdjv-zip-create');
   ipcMain.removeHandler('vdjv-zip-create-save');
@@ -1347,6 +1377,12 @@ function createMainWindow() {
   ipcMain.handle('vdjv-window-get-fullscreen-state', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return false;
     return windowStateControls.getFullscreenState();
+  });
+  ipcMain.handle('vdjv-guest-default-bank-trial-get', () => {
+    return readGuestDefaultBankTrialState();
+  });
+  ipcMain.handle('vdjv-guest-default-bank-trial-set', (_event, payload) => {
+    return writeGuestDefaultBankTrialState(payload);
   });
   ipcMain.handle('vdjv-audio-transcode-mp3', async (_event, payload) => {
     return await transcodeAudioToMp3Electron(payload);
@@ -1403,6 +1439,8 @@ function createMainWindow() {
     windowStateControls.dispose();
     ipcMain.removeHandler('vdjv-window-toggle-fullscreen');
     ipcMain.removeHandler('vdjv-window-get-fullscreen-state');
+    ipcMain.removeHandler('vdjv-guest-default-bank-trial-get');
+    ipcMain.removeHandler('vdjv-guest-default-bank-trial-set');
     ipcMain.removeHandler('vdjv-audio-transcode-mp3');
     ipcMain.removeHandler('vdjv-zip-create');
     ipcMain.removeHandler('vdjv-zip-create-save');

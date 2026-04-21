@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   toggleFullscreen: () => ipcRenderer.invoke('vdjv-window-toggle-fullscreen'),
   getFullscreenState: () => ipcRenderer.invoke('vdjv-window-get-fullscreen-state'),
+  getGuestDefaultBankTrialState: () => ipcRenderer.invoke('vdjv-guest-default-bank-trial-get'),
+  setGuestDefaultBankTrialState: (payload) => ipcRenderer.invoke('vdjv-guest-default-bank-trial-set', payload),
   transcodeAudioToMp3: (payload) => ipcRenderer.invoke('vdjv-audio-transcode-mp3', payload),
   createZipArchive: (payload) => ipcRenderer.invoke('vdjv-zip-create', payload),
   createAndSaveZipArchive: (payload) => ipcRenderer.invoke('vdjv-zip-create-save', payload),

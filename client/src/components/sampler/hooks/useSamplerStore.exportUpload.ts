@@ -55,6 +55,11 @@ export interface AdminCatalogUploadPublishResult {
   fileSize: number;
 }
 
+export interface LowMemoryCatalogVariantUploadResult {
+  variantId: string;
+  partCount: number;
+}
+
 export interface DefaultBankReleaseUploadResult {
   version: number;
   assetName: string;
@@ -260,6 +265,117 @@ export const uploadAdminCatalogAsset = async (input: {
     releaseTag: null,
     assetName: typeof data?.assetName === 'string' ? data.assetName : expectedAssetName,
     fileSize: Number(data?.fileSize || input.exportBlob.size),
+  };
+};
+
+export const uploadLowMemoryCatalogVariant = async (input: {
+  catalogItemId: string;
+  totalFileSizeBytes: number;
+  sourceAssetSha256?: string | null;
+  minClientVersion?: string | null;
+  manifest: {
+    blob: Blob;
+    sha256?: string | null;
+    assetName?: string | null;
+  };
+  parts: Array<{
+    partIndex: number;
+    blob: Blob;
+    sha256?: string | null;
+    padStartIndex: number;
+    padEndIndex: number;
+    assetName?: string | null;
+  }>;
+}): Promise<LowMemoryCatalogVariantUploadResult> => {
+  const headers = await getAuthHeaders(true);
+  const startResponse = await fetch(edgeFunctionUrl('admin-api', `store/catalog/${input.catalogItemId}/start-low-memory-upload`), {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'omit',
+    headers: {
+      ...headers,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      totalFileSizeBytes: input.totalFileSizeBytes,
+      sourceAssetSha256: input.sourceAssetSha256 || null,
+      minClientVersion: input.minClientVersion || null,
+      manifest: {
+        fileSizeBytes: input.manifest.blob.size,
+        sha256: input.manifest.sha256 || null,
+        assetName: input.manifest.assetName || null,
+      },
+      parts: input.parts.map((part) => ({
+        partIndex: part.partIndex,
+        fileSizeBytes: part.blob.size,
+        sha256: part.sha256 || null,
+        padStartIndex: part.padStartIndex,
+        padEndIndex: part.padEndIndex,
+        assetName: part.assetName || null,
+      })),
+    }),
+  });
+  const startPayload = await startResponse.json().catch(() => ({} as { ok?: boolean; error?: string; data?: any }));
+  if (!startResponse.ok || startPayload?.ok === false) {
+    throw new Error(startPayload?.error || `Low-memory variant upload start failed (${startResponse.status})`);
+  }
+  const startData = startPayload?.data && typeof startPayload.data === 'object' ? startPayload.data : startPayload;
+  const variantId = typeof startData?.variant?.id === 'string'
+    ? startData.variant.id
+    : typeof startData?.variantId === 'string'
+      ? startData.variantId
+      : typeof startData?.variant_id === 'string'
+        ? startData.variant_id
+        : '';
+  const manifestUpload = startData?.manifestUpload || startData?.manifest_upload || startData?.manifest;
+  const partUploads = Array.isArray(startData?.partUploads)
+    ? startData.partUploads
+    : Array.isArray(startData?.part_uploads)
+      ? startData.part_uploads
+      : Array.isArray(startData?.parts)
+        ? startData.parts
+        : [];
+  if (!variantId || !manifestUpload?.uploadUrl || partUploads.length !== input.parts.length) {
+    const responseKeys = startData && typeof startData === 'object' ? Object.keys(startData).join(', ') : 'none';
+    throw new Error(`Invalid low-memory upload start response (keys: ${responseKeys || 'none'}, parts: ${partUploads.length}/${input.parts.length})`);
+  }
+
+  await uploadDirectAsset({
+    uploadUrl: manifestUpload.uploadUrl,
+    uploadMethod: 'PUT',
+    uploadHeaders: null,
+    exportBlob: input.manifest.blob,
+  });
+  for (const part of input.parts) {
+    const upload = partUploads.find((entry: any) => Number(entry?.partIndex) === part.partIndex);
+    if (!upload?.uploadUrl) {
+      throw new Error(`Missing upload target for low-memory part ${part.partIndex}`);
+    }
+    await uploadDirectAsset({
+      uploadUrl: upload.uploadUrl,
+      uploadMethod: 'PUT',
+      uploadHeaders: null,
+      exportBlob: part.blob,
+    });
+  }
+
+  const completeResponse = await fetch(edgeFunctionUrl('admin-api', `store/catalog/${input.catalogItemId}/complete-low-memory-upload`), {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'omit',
+    headers: {
+      ...headers,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ variantId }),
+  });
+  const completePayload = await completeResponse.json().catch(() => ({} as { ok?: boolean; error?: string }));
+  if (!completeResponse.ok || completePayload?.ok === false) {
+    throw new Error(completePayload?.error || `Low-memory variant upload complete failed (${completeResponse.status})`);
+  }
+  return {
+    variantId,
+    partCount: input.parts.length,
   };
 };
 

@@ -1,7 +1,12 @@
 import JSZip from 'jszip';
 import type { BankMetadata, SamplerBank } from '../types/sampler';
-import type { AdminCatalogUploadPublishResult } from './useSamplerStore.exportUpload';
+import type { AdminCatalogUploadPublishResult, LowMemoryCatalogVariantUploadResult } from './useSamplerStore.exportUpload';
 import type { ExportAudioMode } from './useSamplerStore.types';
+import {
+  buildLowMemorySegmentedVariant,
+  LOW_MEMORY_SEGMENTED_VARIANT_THRESHOLD_BYTES,
+  type LowMemoryPartUploadInput,
+} from './useSamplerStore.updateStoreBank';
 import { ensureManagedStoreThumbnail } from './storeThumbnailUpload';
 import { stripPreparedAudioForExport } from './preparedAudio';
 import {
@@ -93,6 +98,7 @@ export interface RunExportAdminBankInput {
   publicCatalogAsset: boolean;
   comingSoonOnly?: boolean;
   exportMode: ExportAudioMode;
+  generateLowMemoryVariant?: boolean;
   thumbnailPath?: string;
   onProgress?: (progress: number) => void;
   banks: SamplerBank[];
@@ -183,6 +189,18 @@ export interface RunExportAdminBankDeps {
     exportBlob: Blob;
     assetProtection: 'encrypted' | 'public';
   }) => Promise<AdminCatalogUploadPublishResult>;
+  uploadLowMemoryCatalogVariant: (input: {
+    catalogItemId: string;
+    totalFileSizeBytes: number;
+    sourceAssetSha256?: string | null;
+    minClientVersion?: string | null;
+    manifest: {
+      blob: Blob;
+      sha256?: string | null;
+      assetName?: string | null;
+    };
+    parts: LowMemoryPartUploadInput[];
+  }) => Promise<LowMemoryCatalogVariantUploadResult>;
   isNonRetryableGithubUploadError: (error: unknown) => boolean;
   enqueueAdminExportUpload: (input: EnqueueAdminExportUploadInput) => void;
   writeOperationDiagnosticsLog: (diagnostics: ExportDiagnosticsLike, error: unknown) => Promise<string | null>;
@@ -213,6 +231,7 @@ export const runExportAdminBankPipeline = async (
     publicCatalogAsset,
     comingSoonOnly = false,
     exportMode,
+    generateLowMemoryVariant = true,
     thumbnailPath,
     onProgress,
     banks,
@@ -255,6 +274,7 @@ export const runExportAdminBankPipeline = async (
     issueSignedAdminExportToken,
     saveExportFile,
     uploadAdminCatalogAsset,
+    uploadLowMemoryCatalogVariant,
     isNonRetryableGithubUploadError,
     enqueueAdminExportUpload,
     writeOperationDiagnosticsLog,
@@ -1263,6 +1283,7 @@ export const runExportAdminBankPipeline = async (
     addOperationStage(diagnostics, 'saved', { path: saveResult.savedPath || fileName });
     saveCompletedAt = preSavedJobResult ? archiveCompletedAt : getNowMs();
     let uploadWarningMessage = '';
+    let lowMemoryWarningMessage = '';
     if (addToDatabase) {
       if (catalogDraftId) {
         try {
@@ -1280,6 +1301,55 @@ export const runExportAdminBankPipeline = async (
             assetName: uploadResult.assetName,
             fileSize: uploadResult.fileSize,
           });
+          if (generateLowMemoryVariant && outputBlob.size >= LOW_MEMORY_SEGMENTED_VARIANT_THRESHOLD_BYTES) {
+            try {
+              const lowMemoryVariant = await buildLowMemorySegmentedVariant({
+                bankSnapshot: bank,
+                title: normalizedTitle,
+                description,
+                catalogItemId: catalogDraftId,
+                sourceBankId: uploadBankId,
+                assetProtection: publicCatalogAsset ? 'public' : 'encrypted',
+                thumbnailPath: durableThumbnailPath,
+              }, {
+                padHasExpectedImageAsset,
+                loadPadMediaBlob,
+                yieldToMainThread,
+                extFromMime,
+                inferImageExtFromPath,
+                addBankMetadata,
+                encryptZip,
+                sha256HexFromBlob,
+              });
+              if (lowMemoryVariant) {
+                const lowMemoryUpload = await uploadLowMemoryCatalogVariant({
+                  catalogItemId: catalogDraftId,
+                  totalFileSizeBytes: lowMemoryVariant.totalFileSizeBytes,
+                  sourceAssetSha256: await sha256HexFromBlob(outputBlob),
+                  minClientVersion: '0.1.5',
+                  manifest: {
+                    blob: lowMemoryVariant.manifestBlob,
+                    sha256: lowMemoryVariant.manifestSha256,
+                    assetName: lowMemoryVariant.manifestAssetName,
+                  },
+                  parts: lowMemoryVariant.parts,
+                });
+                addOperationStage(diagnostics, 'catalog-low-memory-uploaded', {
+                  catalogItemId: catalogDraftId,
+                  variantId: lowMemoryUpload.variantId,
+                  partCount: lowMemoryUpload.partCount,
+                });
+              }
+            } catch (lowMemoryError) {
+              lowMemoryWarningMessage = ` Low-memory segmented variant upload failed. (${
+                lowMemoryError instanceof Error ? lowMemoryError.message : String(lowMemoryError)
+              })`;
+              addOperationStage(diagnostics, 'catalog-low-memory-warning', {
+                catalogItemId: catalogDraftId,
+                reason: lowMemoryError instanceof Error ? lowMemoryError.message : String(lowMemoryError),
+              });
+            }
+          }
           onProgress?.(99);
         } catch (uploadError) {
           const reason = uploadError instanceof Error ? uploadError.message : String(uploadError);
@@ -1344,7 +1414,7 @@ export const runExportAdminBankPipeline = async (
     });
     onProgress?.(100);
     return {
-      message: `${saveResult.message || 'Admin bank exported successfully.'}${uploadWarningMessage}${signedTokenWarningMessage}`,
+      message: `${saveResult.message || 'Admin bank exported successfully.'}${uploadWarningMessage}${lowMemoryWarningMessage}${signedTokenWarningMessage}`,
       linkedStoreBank: addToDatabase
         ? {
             bankId: uploadBankId,

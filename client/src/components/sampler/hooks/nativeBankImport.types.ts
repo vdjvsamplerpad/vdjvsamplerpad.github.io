@@ -23,11 +23,41 @@ export interface NativeElectronStoreImportSource {
   expectedSha256?: string;
 }
 
+export interface SegmentedStoreImportSource {
+  kind: 'segmented-store';
+  catalogItemId: string;
+  bankId: string;
+  variantId: string;
+  fileName?: string;
+  fileSizeBytes?: number | null;
+  derivedKey?: string | null;
+  entitlementToken?: string | null;
+  entitlementTokenKid?: string | null;
+  entitlementTokenIssuedAt?: string | null;
+  entitlementTokenExpiresAt?: string | null;
+  manifest: {
+    downloadUrl: string;
+    urlExpiresAt?: string | null;
+  };
+  parts: Array<{
+    partIndex: number;
+    storageBucket: string;
+    storageKey: string;
+    fileSizeBytes: number;
+    sha256?: string | null;
+    padStartIndex: number;
+    padEndIndex: number;
+    downloadUrl: string;
+    urlExpiresAt?: string | null;
+  }>;
+}
+
 export type ImportBankSource =
   | File
   | NativeAndroidStoreImportSource
   | NativeAndroidSharedImportSource
-  | NativeElectronStoreImportSource;
+  | NativeElectronStoreImportSource
+  | SegmentedStoreImportSource;
 
 export const isNativeAndroidStoreImportSource = (value: unknown): value is NativeAndroidStoreImportSource =>
   Boolean(
@@ -51,4 +81,14 @@ export const isNativeElectronStoreImportSource = (value: unknown): value is Nati
     typeof value === 'object' &&
     (value as { kind?: string }).kind === 'electron-store' &&
     typeof (value as { signedUrl?: string }).signedUrl === 'string'
+  );
+
+export const isSegmentedStoreImportSource = (value: unknown): value is SegmentedStoreImportSource =>
+  Boolean(
+    value &&
+    typeof value === 'object' &&
+    (value as { kind?: string }).kind === 'segmented-store' &&
+    typeof (value as { catalogItemId?: string }).catalogItemId === 'string' &&
+    typeof (value as { variantId?: string }).variantId === 'string' &&
+    Array.isArray((value as { parts?: unknown[] }).parts)
   );

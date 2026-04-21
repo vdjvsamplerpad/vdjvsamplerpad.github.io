@@ -379,6 +379,10 @@ export interface CatalogDraft {
   is_pinned: boolean;
   price_php: number | null;
   expected_asset_name: string;
+  asset_protection?: 'encrypted' | 'public' | null;
+  file_size_bytes?: number | null;
+  storage_key?: string | null;
+  storage_uploaded_at?: string | null;
   thumbnail_path?: string | null;
   bundle_title?: string;
   bundle_description?: string;

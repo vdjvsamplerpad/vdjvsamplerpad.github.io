@@ -62,6 +62,7 @@ interface BankEditDialogProps {
     publicCatalogAsset: boolean,
     comingSoonOnly: boolean,
     exportMode: ExportAudioMode,
+    generateLowMemoryVariant?: boolean,
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
   ) => Promise<string>;
@@ -129,6 +130,7 @@ export function BankEditDialog({
   const [adminPublicCatalogAsset, setAdminPublicCatalogAsset] = React.useState(false);
   const [adminComingSoonOnly, setAdminComingSoonOnly] = React.useState(false);
   const [adminExportMode, setAdminExportMode] = React.useState<ExportAudioMode>('fast');
+  const [adminGenerateLowMemoryVariant, setAdminGenerateLowMemoryVariant] = React.useState(true);
   const [showAdminExportProgress, setShowAdminExportProgress] = React.useState(false);
   const [adminExportProgress, setAdminExportProgress] = React.useState(0);
   const [adminExportStatus, setAdminExportStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
@@ -141,6 +143,8 @@ export function BankEditDialog({
     bank.bankMetadata?.password ? 'encrypted' : 'public'
   );
   const [storeUpdateExportMode, setStoreUpdateExportMode] = React.useState<ExportAudioMode>('fast');
+  const [storeUpdateMode, setStoreUpdateMode] = React.useState<'full' | 'low_memory_only'>('full');
+  const [storeUpdateGenerateLowMemoryVariant, setStoreUpdateGenerateLowMemoryVariant] = React.useState(true);
   const [showStoreUpdateProgress, setShowStoreUpdateProgress] = React.useState(false);
   const [storeUpdateProgress, setStoreUpdateProgress] = React.useState(0);
   const [storeUpdateStatus, setStoreUpdateStatus] = React.useState<'loading' | 'success' | 'error'>('loading');
@@ -254,6 +258,7 @@ export function BankEditDialog({
       setAdminPublicCatalogAsset(false);
       setAdminComingSoonOnly(false);
       setAdminExportMode('fast');
+      setAdminGenerateLowMemoryVariant(true);
       setShowStoreUpdateDialog(false);
       setShowStoreLinkDialog(false);
       setStoreUpdateTitle(bank.name);
@@ -261,6 +266,8 @@ export function BankEditDialog({
       setStoreUpdateSyncMetadata(true);
       setStoreUpdateProtection(bank.bankMetadata?.password ? 'encrypted' : 'public');
       setStoreUpdateExportMode('fast');
+      setStoreUpdateMode('full');
+      setStoreUpdateGenerateLowMemoryVariant(true);
       setShowStoreUpdateProgress(false);
       setStoreUpdateProgress(0);
       setStoreUpdateStatus('loading');
@@ -582,6 +589,7 @@ export function BankEditDialog({
         adminPublicCatalogAsset,
         adminComingSoonOnly,
         adminExportMode,
+        adminGenerateLowMemoryVariant,
         bank.bankMetadata?.thumbnailUrl || undefined,
         (progress) => {
           setAdminExportProgress(progress);
@@ -615,12 +623,16 @@ export function BankEditDialog({
     if (!onUpdateStoreBank) return;
     if (shortcutError) return;
 
+    const lowMemoryOnly = storeUpdateMode === 'low_memory_only';
+    const shouldSyncMetadata = !lowMemoryOnly && storeUpdateSyncMetadata;
     const pendingUpdates = buildPendingBankUpdates({
-      includeStoreMetadata: storeUpdateSyncMetadata,
+      includeStoreMetadata: shouldSyncMetadata,
       description: storeUpdateDescription,
       title: storeUpdateTitle,
     });
-    (onApplyLocalBankUpdates || onSave)(pendingUpdates);
+    if (!lowMemoryOnly) {
+      (onApplyLocalBankUpdates || onSave)(pendingUpdates);
+    }
 
     setShowStoreUpdateProgress(true);
     setStoreUpdateStatus('loading');
@@ -636,15 +648,17 @@ export function BankEditDialog({
     try {
       const updateMessage = await onUpdateStoreBank({
         bankSnapshot: buildPendingBankSnapshot({
-          includeStoreMetadata: storeUpdateSyncMetadata,
+          includeStoreMetadata: shouldSyncMetadata,
           description: storeUpdateDescription,
           title: storeUpdateTitle,
         }),
         title: storeUpdateTitle,
         description: storeUpdateDescription,
-        syncMetadata: storeUpdateSyncMetadata,
+        syncMetadata: shouldSyncMetadata,
         assetProtection: storeUpdateProtection,
         exportMode: storeUpdateExportMode,
+        updateMode: storeUpdateMode,
+        generateLowMemoryVariant: storeUpdateGenerateLowMemoryVariant,
         thumbnailPath: bank.bankMetadata?.thumbnailUrl || undefined,
         onProgress: (progress) => {
           setStoreUpdateProgress(progress);
@@ -660,7 +674,7 @@ export function BankEditDialog({
           }
         },
       });
-      if (storeUpdateSyncMetadata) {
+      if (shouldSyncMetadata) {
         (onApplyLocalBankUpdates || onSave)({
           ...pendingUpdates,
           bankMetadata: buildPendingBankMetadata({
@@ -968,7 +982,7 @@ export function BankEditDialog({
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent className={`grid h-[100dvh] max-h-[100dvh] w-[calc(100vw-1rem)] grid-rows-[auto_1fr] overflow-hidden backdrop-blur-md sm:h-auto sm:max-h-[80vh] sm:w-full sm:max-w-md ${theme === 'dark' ? 'bg-gray-800/90' : 'bg-white/90'
-          }`} aria-describedby={undefined}>
+          }`} aria-describedby={undefined} onOpenAutoFocus={(event) => event.preventDefault()}>
           <DialogHeader>
             <DialogTitle>Edit Bank</DialogTitle>
           </DialogHeader>
@@ -1145,6 +1159,8 @@ export function BankEditDialog({
         setAdminComingSoonOnly={setAdminComingSoonOnly}
         adminExportMode={adminExportMode}
         setAdminExportMode={setAdminExportMode}
+        adminGenerateLowMemoryVariant={adminGenerateLowMemoryVariant}
+        setAdminGenerateLowMemoryVariant={setAdminGenerateLowMemoryVariant}
         onExport={handleAdminExport}
       />
 
@@ -1163,6 +1179,10 @@ export function BankEditDialog({
         setAssetProtection={setStoreUpdateProtection}
         exportMode={storeUpdateExportMode}
         setExportMode={setStoreUpdateExportMode}
+        updateMode={storeUpdateMode}
+        setUpdateMode={setStoreUpdateMode}
+        generateLowMemoryVariant={storeUpdateGenerateLowMemoryVariant}
+        setGenerateLowMemoryVariant={setStoreUpdateGenerateLowMemoryVariant}
         onSubmit={handleStoreUpdate}
       />
 

@@ -23,6 +23,7 @@ import {
   isNonRetryableGithubUploadError,
   patchAdminCatalogItem,
   uploadAdminCatalogAsset,
+  uploadLowMemoryCatalogVariant,
   uploadDefaultBankReleaseArchive,
   uploadUserExportAsset,
 } from './useSamplerStore.exportUpload';
@@ -73,6 +74,7 @@ import {
 } from './useSamplerStore.mediaRuntime';
 import {
   clearAdminUpdateRetryJobsForCatalogItem,
+  getRetryBlobStorageId,
   type AdminExportUploadJob,
   type UserExportUploadJob,
 } from './useSamplerStore.uploadQueue';
@@ -187,6 +189,7 @@ import {
   type UpdateStoreBankInput,
 } from './useSamplerStore.types';
 import {
+  deleteBlobFromDB,
   saveBatchBlobsToDB,
 } from './useSamplerStore.idbStorage';
 import type {
@@ -656,6 +659,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     quotaPolicy,
     authSessionMode,
     authSessionUserId,
+    hasAuthenticatedAccess,
     isGuestLockedSession,
   } = useSamplerStoreSession();
   const [banks, setBanks] = React.useState<SamplerBank[]>([]);
@@ -1745,6 +1749,38 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       : `Retry requested for ${pendingCount} pending Store uploads.`;
   }, [processAdminExportUploadQueue, profile?.role]);
 
+  const clearPendingAdminExportUploads = React.useCallback(async (): Promise<string> => {
+    if (profile?.role !== 'admin') {
+      throw new Error('Only admins can clear Store uploads.');
+    }
+    const effectiveUser = user || getCachedUser();
+    const effectiveUserId = typeof effectiveUser?.id === 'string' ? effectiveUser.id : '';
+    if (!effectiveUserId) {
+      return 'No pending Store uploads.';
+    }
+
+    let removedJobs: AdminExportUploadJob[] = [];
+    setAdminExportUploadQueue((prev) => {
+      removedJobs = prev.filter((job) => job.userId === effectiveUserId);
+      if (!removedJobs.length) return prev;
+      const removedIds = new Set(removedJobs.map((job) => job.exportOperationId));
+      return prev.filter((job) => !removedIds.has(job.exportOperationId));
+    });
+
+    if (!removedJobs.length) {
+      return 'No pending Store uploads.';
+    }
+
+    removedJobs.forEach((job) => {
+      adminExportUploadBlobCacheRef.current.delete(job.exportOperationId);
+      void deleteBlobFromDB(getRetryBlobStorageId('admin', job.exportOperationId), false).catch(() => undefined);
+    });
+
+    return removedJobs.length === 1
+      ? 'Cleared 1 pending Store upload.'
+      : `Cleared ${removedJobs.length} pending Store uploads.`;
+  }, [profile?.role, setAdminExportUploadQueue, adminExportUploadBlobCacheRef, user]);
+
   const hideProtectedBanks = React.useCallback(() => {
     runHideProtectedBanksPipeline(
       {
@@ -1850,6 +1886,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     setSecondaryBankIdState,
     setCurrentBankIdState,
     authSessionUserId,
+    hasAuthenticatedAccess,
     isGuestLockedSession,
     defaultBankSourceRevision,
     setDefaultBankSourceRevision,
@@ -1889,7 +1926,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     await runRestoreAllFilesPipeline(
       {
         user: getCachedUser(),
-        allowDefaultBankAudio: Boolean(authSessionUserId) && !isGuestLockedSession,
+        allowDefaultBankAudio: hasAuthenticatedAccess && !isGuestLockedSession,
       },
       {
         setIsBanksHydrated,
@@ -1927,6 +1964,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     setStartupRestoreCompleted(true);
   }, [
     authSessionUserId,
+    hasAuthenticatedAccess,
     isGuestLockedSession,
     getDefaultBankPadImagePreference,
     readLastOpenBankId,
@@ -1997,10 +2035,10 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
 
   React.useEffect(() => {
     if (loading) return;
-    if (authSessionMode !== 'authenticated' || !authSessionUserId) return;
+    if (!hasAuthenticatedAccess || !authSessionUserId) return;
     if (isProtectedBanksLockActive()) return;
     restoreHiddenProtectedBanks(authSessionUserId);
-  }, [authSessionMode, authSessionUserId, loading, isProtectedBanksLockActive, restoreHiddenProtectedBanks]);
+  }, [authSessionUserId, hasAuthenticatedAccess, loading, isProtectedBanksLockActive, restoreHiddenProtectedBanks]);
 
   React.useEffect(() => {
     if (!sessionConflictReason) return;
@@ -2627,6 +2665,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     publicCatalogAsset: boolean,
     comingSoonOnly: boolean,
     exportMode: ExportAudioMode,
+    generateLowMemoryVariant?: boolean,
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
   ) => {
@@ -2642,6 +2681,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         publicCatalogAsset,
         comingSoonOnly,
         exportMode,
+        generateLowMemoryVariant,
         thumbnailPath,
         onProgress,
         banks,
@@ -2684,6 +2724,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         issueSignedAdminExportToken,
         saveExportFile,
         uploadAdminCatalogAsset,
+        uploadLowMemoryCatalogVariant,
         isNonRetryableGithubUploadError,
         enqueueAdminExportUpload,
         writeOperationDiagnosticsLog,
@@ -2806,6 +2847,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         resolveCurrentCatalogItemIdForBank,
         persistResolvedCatalogItemId,
         uploadAdminCatalogAsset,
+        uploadLowMemoryCatalogVariant,
         isNonRetryableGithubUploadError,
         enqueueAdminExportUpload,
         clearQueuedAdminUpdateJobsForCatalogItem: (catalogItemId, options) => {
@@ -2969,6 +3011,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
           };
         },
         uploadAdminCatalogAsset,
+        uploadLowMemoryCatalogVariant,
         isNonRetryableGithubUploadError,
         enqueueAdminExportUpload,
         writeOperationDiagnosticsLog,
@@ -3494,7 +3537,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
 
   return {
     banks, startupRestoreCompleted, primaryBankId, secondaryBankId, currentBankId, primaryBank, secondaryBank, currentBank, isDualMode,
-    addPad, addPads, updatePad, removePad, createBank, setPrimaryBank, setSecondaryBank, setVisibleBanks, setCurrentBank, updateBank, deleteBank, duplicateBank, duplicatePad, importBank, exportBank, reorderPads, moveBankUp, moveBankDown, moveBankToPosition, transferPad, exportAdminBank, updateStoreBank, adminExportUploadQueueSummary, retryPendingAdminExportUploads, publishDefaultBankRelease, canTransferFromBank,
+    addPad, addPads, updatePad, removePad, createBank, setPrimaryBank, setSecondaryBank, setVisibleBanks, setCurrentBank, updateBank, deleteBank, duplicateBank, duplicatePad, importBank, exportBank, reorderPads, moveBankUp, moveBankDown, moveBankToPosition, transferPad, exportAdminBank, updateStoreBank, adminExportUploadQueueSummary, retryPendingAdminExportUploads, clearPendingAdminExportUploads, publishDefaultBankRelease, canTransferFromBank,
     listLinkableStoreBanks, linkExistingStoreBank, exportAppBackup, restoreAppBackup, applySamplerMetadataSnapshot, relinkPadAudioFromFile, rehydratePadMedia, rehydrateMissingMediaInBank, prefetchOfficialBankMediaForOffline, getBankPreparedSummary, prepareBankForLive, cancelPrepareBankForLive, recoverMissingMediaFromBanks, resolveStoreRecoveryCatalogItem,
   };
 }

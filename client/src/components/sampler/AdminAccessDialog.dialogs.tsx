@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import { CopyableValue } from '@/components/ui/copyable-value';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -63,12 +64,14 @@ interface AdminAccessDialogModalsProps {
     title: string;
     description: string;
     color: string;
+    bank: AdminBank | null;
     saving: boolean;
     onOpenChange: (open: boolean) => void;
     onTitleChange: (value: string) => void;
     onDescriptionChange: (value: string) => void;
     onColorChange: (value: string) => void;
     onSave: () => void;
+    onOpenCatalog: () => void;
   };
   bankAccess: {
     open: boolean;
@@ -136,6 +139,17 @@ export function AdminAccessDialogModals({
   accountRequestReject,
   accountAssist,
 }: AdminAccessDialogModalsProps) {
+  const formatBytes = (value: number | null | undefined) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let next = value;
+    let unitIndex = 0;
+    while (next >= 1024 && unitIndex < units.length - 1) {
+      next /= 1024;
+      unitIndex += 1;
+    }
+    return `${next.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+  };
   return (
     <>
       <Dialog open={create.open} onOpenChange={create.onOpenChange} useHistory={false}>
@@ -301,22 +315,151 @@ export function AdminAccessDialogModals({
       </Dialog>
 
       <Dialog open={bankEdit.open} onOpenChange={bankEdit.onOpenChange} useHistory={false}>
-        <DialogContent overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
-          <DialogHeader><DialogTitle>Edit Bank</DialogTitle></DialogHeader>
-          <div className="space-y-2">
-            <div><Label>Title</Label><Input value={bankEdit.title} onChange={(event) => bankEdit.onTitleChange(event.target.value)} /></div>
-            <div><Label>Description</Label><textarea className={`w-full min-h-[120px] rounded border p-2 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`} value={bankEdit.description} onChange={(event) => bankEdit.onDescriptionChange(event.target.value)} /></div>
-            <div className="space-y-1">
-              <Label>Bank Color</Label>
-              <div className="flex flex-wrap gap-1">
-                {colorOptions.map((option) => (
-                  <button key={option.value} type="button" title={option.label} className={`w-6 h-6 rounded-full border-2 ${bankEdit.color === option.value ? 'border-white scale-110' : 'border-gray-500'}`} style={{ backgroundColor: option.value }} onClick={() => bankEdit.onColorChange(option.value)} />
-                ))}
+        <DialogContent
+          overlayClassName="z-[110]"
+          aria-describedby={undefined}
+          className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120] max-w-4xl overflow-x-hidden p-4 sm:p-6`}
+        >
+          <DialogHeader>
+            <DialogTitle>Edit Bank</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+              <div className="min-w-0 space-y-4">
+                <div className={`rounded border p-3 space-y-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/30' : 'border-gray-200 bg-gray-50/70'}`}>
+                  <div className="space-y-1">
+                    <Label>Title</Label>
+                    <Input value={bankEdit.title} onChange={(event) => bankEdit.onTitleChange(event.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Description</Label>
+                    <textarea
+                      className={`w-full min-h-[160px] rounded border p-2 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
+                      value={bankEdit.description}
+                      onChange={(event) => bankEdit.onDescriptionChange(event.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className={`rounded border p-3 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/30' : 'border-gray-200 bg-gray-50/70'}`}>
+                  <div className="text-sm font-semibold">Bank Color</div>
+                  <div className="flex flex-wrap gap-2">
+                    {colorOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        title={option.label}
+                        className={`h-8 w-8 rounded-full border-2 transition ${bankEdit.color === option.value ? 'border-white scale-110 shadow-md' : 'border-gray-500'}`}
+                        style={{ backgroundColor: option.value }}
+                        onClick={() => bankEdit.onColorChange(option.value)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="min-w-0">
+                <div className={`rounded border p-3 space-y-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50/70'}`}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold">Store Catalog Summary</div>
+                      <div className="text-xs opacity-70">Read-only store metadata for this bank. Edit pricing and publish state in Catalog.</div>
+                    </div>
+                    {bankEdit.bank?.store_catalog?.id && (
+                      <Button size="sm" variant="outline" onClick={bankEdit.onOpenCatalog} className="shrink-0">
+                        Open Catalog
+                      </Button>
+                    )}
+                  </div>
+
+                  {bankEdit.bank?.store_catalog ? (
+                    <div className="space-y-3 text-xs min-w-0">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <div className={`min-w-0 rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white'}`}>
+                          <Label>Catalog Item ID</Label>
+                          <CopyableValue
+                            value={bankEdit.bank.store_catalog.id}
+                            label="catalog item id"
+                            className="mt-1 w-full font-mono text-[11px]"
+                            wrap
+                          />
+                        </div>
+                        <div className={`min-w-0 rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white'}`}>
+                          <Label>Status</Label>
+                          <div className="mt-1 text-sm">
+                            {bankEdit.bank.store_catalog.is_published
+                              ? (bankEdit.bank.store_catalog.coming_soon ? 'Published | Coming Soon' : 'Published')
+                              : 'Draft'}
+                          </div>
+                        </div>
+                        <div className={`min-w-0 rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white'}`}>
+                          <Label>Protection</Label>
+                          <div className="mt-1 text-sm">{bankEdit.bank.store_catalog.asset_protection || '-'}</div>
+                        </div>
+                        <div className={`min-w-0 rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white'}`}>
+                          <Label>File Size</Label>
+                          <div className="mt-1 text-sm">{formatBytes(bankEdit.bank.store_catalog.file_size_bytes)}</div>
+                        </div>
+                        <div className={`min-w-0 rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white'}`}>
+                          <Label>Price</Label>
+                          <div className="mt-1 text-sm">{typeof bankEdit.bank.store_catalog.price_php === 'number' ? `PHP ${bankEdit.bank.store_catalog.price_php}` : '-'}</div>
+                        </div>
+                        <div className={`min-w-0 rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white'}`}>
+                          <Label>Updated</Label>
+                          <div className="mt-1 text-sm break-words">
+                            {bankEdit.bank.store_catalog.updated_at ? new Date(bankEdit.bank.store_catalog.updated_at).toLocaleString() : '-'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={`min-w-0 rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white'}`}>
+                        <Label>Expected Asset</Label>
+                        <CopyableValue
+                          value={bankEdit.bank.store_catalog.expected_asset_name || '-'}
+                          label="expected asset name"
+                          className="mt-1 w-full font-mono text-[11px]"
+                          wrap
+                        />
+                      </div>
+
+                      <div className={`min-w-0 rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white'}`}>
+                        <Label>Storage Key</Label>
+                        <CopyableValue
+                          value={bankEdit.bank.store_catalog.storage_key || '-'}
+                          label="catalog storage key"
+                          className="mt-1 w-full font-mono text-[11px]"
+                          wrap
+                        />
+                      </div>
+
+                      <div className={`min-w-0 rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white'}`}>
+                        <Label>Thumbnail</Label>
+                        {bankEdit.bank.store_catalog.thumbnail_path ? (
+                          <CopyableValue
+                            value={bankEdit.bank.store_catalog.thumbnail_path}
+                            label="catalog thumbnail path"
+                            className="mt-1 w-full font-mono text-[11px]"
+                            wrap
+                          />
+                        ) : (
+                          <div className="mt-1 text-sm">-</div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs opacity-70">This bank does not currently have a linked store catalog item.</div>
+                  )}
+                </div>
               </div>
             </div>
-            <div className="flex gap-2">
-              <Button className="flex-1" disabled={bankEdit.saving} onClick={bankEdit.onSave}>{bankEdit.saving ? 'Saving...' : 'Save'}</Button>
-              <Button variant="outline" onClick={() => bankEdit.onOpenChange(false)}>Cancel</Button>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button className="sm:flex-1" disabled={bankEdit.saving} onClick={bankEdit.onSave}>
+                {bankEdit.saving ? 'Saving...' : 'Save'}
+              </Button>
+              <Button variant="outline" onClick={() => bankEdit.onOpenChange(false)} className="sm:flex-1">
+                Cancel
+              </Button>
             </div>
           </div>
         </DialogContent>

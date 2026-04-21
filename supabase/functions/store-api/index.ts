@@ -1381,6 +1381,27 @@ const getCatalogDisplayBank = (item: any) => {
   return { title, description, color };
 };
 
+const loadReadyLowMemoryVariantsByCatalogItem = async (
+  admin: ReturnType<typeof createServiceClient>,
+  catalogItemIds: string[],
+): Promise<Map<string, any>> => {
+  const next = new Map<string, any>();
+  if (catalogItemIds.length === 0) return next;
+  const { data, error } = await admin
+    .from("bank_catalog_asset_variants")
+    .select("id,catalog_item_id,variant_type,status,total_file_size_bytes,part_count,min_client_version,source_asset_sha256")
+    .eq("variant_type", "low_memory_segmented")
+    .eq("status", "ready")
+    .in("catalog_item_id", catalogItemIds);
+  if (error) throw new Error(error.message);
+  for (const row of data || []) {
+    const catalogItemId = asString(row?.catalog_item_id, 80) || "";
+    if (!catalogItemId || next.has(catalogItemId)) continue;
+    next.set(catalogItemId, row);
+  }
+  return next;
+};
+
 const normalizeAdminCatalogItem = (item: any) => {
   const displayBank = getCatalogDisplayBank(item);
   const itemType = normalizeCatalogItemType(item?.item_type);
@@ -1470,6 +1491,18 @@ const normalizeStoreCatalogItem = (
     id: catalogItemId,
     bank_id: bankId,
     item_type: itemType,
+    file_size_bytes: Number.isFinite(Number(item?.file_size_bytes))
+      ? Math.max(0, Math.floor(Number(item?.file_size_bytes)))
+      : null,
+    has_low_memory_variant: Boolean(item?.has_low_memory_variant),
+    low_memory_variant_id: asString(item?.low_memory_variant_id, 80) || null,
+    low_memory_part_count: Number.isFinite(Number(item?.low_memory_part_count))
+      ? Math.max(0, Math.floor(Number(item?.low_memory_part_count)))
+      : 0,
+    low_memory_total_bytes: Number.isFinite(Number(item?.low_memory_total_bytes))
+      ? Math.max(0, Math.floor(Number(item?.low_memory_total_bytes)))
+      : null,
+    low_memory_min_client_version: asString(item?.low_memory_min_client_version, 64) || null,
     bundle_bank_ids: bundleBankIds,
     bundle_bank_titles: bundleBankTitles,
     bundle_count: bundleBankIds.length,
@@ -2472,6 +2505,26 @@ const getStoreCatalog = async (req: Request) => {
     catalogError = fallback.error;
   }
   if (catalogError) return fail(500, catalogError.message);
+
+  const lowMemoryVariantMap = await loadReadyLowMemoryVariantsByCatalogItem(
+    admin,
+    Array.from(new Set((catalogItems || []).map((item: any) => asString(item?.id, 80)).filter(Boolean) as string[])),
+  );
+  catalogItems = (catalogItems || []).map((item: any) => {
+    const itemId = asString(item?.id, 80) || "";
+    const lowMemoryVariant = itemId ? lowMemoryVariantMap.get(itemId) : null;
+    if (!lowMemoryVariant) return item;
+    return {
+      ...item,
+      has_low_memory_variant: true,
+      low_memory_variant_id: asString(lowMemoryVariant?.id, 80) || null,
+      low_memory_part_count: Math.max(0, Math.floor(Number(lowMemoryVariant?.part_count || 0))),
+      low_memory_total_bytes: Number.isFinite(Number(lowMemoryVariant?.total_file_size_bytes))
+        ? Math.max(0, Math.floor(Number(lowMemoryVariant.total_file_size_bytes)))
+        : null,
+      low_memory_min_client_version: asString(lowMemoryVariant?.min_client_version, 64) || null,
+    };
+  });
 
   let userGrants = new Set<string>();
   let pendingRequests = new Set<string>();
@@ -5682,6 +5735,67 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       && asPriceNumber(catalogRow?.price_php) === 0,
     );
   });
+  let existingFreeClaimRowsByCatalogItemId = new Map<string, any>();
+  let itemsToProcess = normalizedItems;
+  if (allFreePromotionClaim) {
+    const freeClaimCatalogItemIds = [...new Set(normalizedItems.map((item) => item.catalogItemId))];
+    const freeClaimBankIds = [...new Set(normalizedItems.map((item) => item.bankId))];
+    const [existingAccessResult, existingRequestResult] = await Promise.all([
+      admin
+        .from("user_bank_access")
+        .select("bank_id, granted_at")
+        .eq("user_id", userId)
+        .in("bank_id", freeClaimBankIds),
+      admin
+        .from("bank_purchase_requests")
+        .select("id, bank_id, catalog_item_id, status, batch_id, receipt_reference, created_at")
+        .eq("user_id", userId)
+        .in("catalog_item_id", freeClaimCatalogItemIds)
+        .in("status", ["pending", "approved"])
+        .order("created_at", { ascending: false }),
+    ]);
+    if (existingAccessResult.error) return fail(500, existingAccessResult.error.message);
+    if (existingRequestResult.error) return fail(500, existingRequestResult.error.message);
+
+    const grantedBankIds = new Set((existingAccessResult.data || []).map((row: any) => asString(row?.bank_id, 80) || "").filter(Boolean));
+    const pendingCatalogItemIds = new Set<string>();
+    const approvedCatalogItemIds = new Set<string>();
+    for (const row of existingRequestResult.data || []) {
+      const catalogItemId = asString(row?.catalog_item_id, 80) || "";
+      if (!catalogItemId || existingFreeClaimRowsByCatalogItemId.has(catalogItemId)) continue;
+      existingFreeClaimRowsByCatalogItemId.set(catalogItemId, row);
+      if (row.status === "pending") pendingCatalogItemIds.add(catalogItemId);
+      if (row.status === "approved") approvedCatalogItemIds.add(catalogItemId);
+    }
+
+    itemsToProcess = normalizedItems.filter((item) =>
+      !grantedBankIds.has(item.bankId)
+      && !pendingCatalogItemIds.has(item.catalogItemId)
+      && !approvedCatalogItemIds.has(item.catalogItemId)
+    );
+
+    if (itemsToProcess.length === 0) {
+      const existingRows = normalizedItems
+        .map((item) => existingFreeClaimRowsByCatalogItemId.get(item.catalogItemId))
+        .filter(Boolean);
+      const hasPending = existingRows.some((row: any) => row.status === "pending");
+      const firstRow = existingRows[0] || null;
+      return ok({
+        batchId: asString(firstRow?.batch_id, 80) || null,
+        requestIds: existingRows.map((row: any) => row.id).filter(Boolean),
+        status: hasPending ? "pending" : "approved",
+        auto_approved: !hasPending,
+        payer_name: null,
+        reference_no: null,
+        receipt_reference: asString(firstRow?.receipt_reference, 160) || null,
+        decision_email_status: null,
+        decision_email_error: null,
+        pending_email_status: null,
+        pending_email_error: null,
+        reused_existing_claim: true,
+      });
+    }
+  }
   if (!allFreePromotionClaim && normalizedPaymentChannel === "image_proof" && !normalizedProofPath) {
     return badRequest("proofPath is required for image_proof");
   }
@@ -5721,7 +5835,7 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
   }
   const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode, ocrProvider);
 
-  const requestedBankIds = [...new Set(normalizedItems.map((item) => item.bankId))];
+  const requestedBankIds = [...new Set(itemsToProcess.map((item) => item.bankId))];
   const { data: bankRows, error: bankRowsError } = await admin
     .from("banks")
     .select("id, deleted_at")
@@ -5734,7 +5848,7 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
 
   const batchId = crypto.randomUUID();
   const receiptReference = buildStoreReceiptReference(batchId);
-  const rowsToInsert = normalizedItems.map((item) => {
+  const rowsToInsert = itemsToProcess.map((item) => {
     const catalogRow = enrichedCatalogById.get(item.catalogItemId) || catalogById.get(item.catalogItemId);
     const resolvedPromotion = promotionMap.get(item.catalogItemId) || null;
     return {
@@ -5805,10 +5919,10 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       requestId: String(insertedRows[0]?.id || ""),
       userId,
       userEmail: user?.email || null,
-      bankIds: normalizedItems.map((item) => item.bankId),
+      bankIds: itemsToProcess.map((item) => item.bankId),
       bankTitles: insertedRows.map((row) => asString((row as any)?.banks?.title, 240) || "").filter(Boolean),
       itemLabels: insertedRows.map((row) => asString((row as any)?.banks?.title, 240) || "").filter(Boolean),
-      catalogItemIds: normalizedItems.map((item) => item.catalogItemId),
+      catalogItemIds: itemsToProcess.map((item) => item.catalogItemId),
       batchId,
       receiptReference,
       paymentChannel: normalizedPaymentChannel || null,
@@ -5828,8 +5942,8 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
         provider: ocrMetadata.provider,
         receiptReference,
         requestId: String(insertedRows[0]?.id || ""),
-        bankIds: normalizedItems.map((item) => item.bankId),
-        catalogItemIds: normalizedItems.map((item) => item.catalogItemId),
+        bankIds: itemsToProcess.map((item) => item.bankId),
+        catalogItemIds: itemsToProcess.map((item) => item.catalogItemId),
       })
     );
   }
@@ -5937,11 +6051,256 @@ type StoreDownloadContext = {
   transport: "web" | "native" | "electron";
 };
 
+type StoreDownloadAccessMaterialPayload = {
+  protected: boolean;
+  derivedKey: string | null;
+  entitlementToken: string | null;
+  entitlementTokenKeyId: string | null;
+  entitlementTokenIssuedAt: string | null;
+  entitlementTokenExpiresAt: string | null;
+};
+
+type StoreLowMemoryVariantPartPayload = {
+  partIndex: number;
+  storageBucket: string;
+  storageKey: string;
+  fileSizeBytes: number;
+  sha256: string | null;
+  padStartIndex: number;
+  padEndIndex: number;
+};
+
+type StoreDownloadPlanResponse =
+  | {
+      mode: "full";
+      catalogItemId: string;
+      bankId: string | null;
+      variantId: null;
+      fileSizeBytes: number | null;
+      protected: boolean;
+      derivedKey: string | null;
+      entitlementToken: string | null;
+      entitlementTokenKeyId: string | null;
+      entitlementTokenIssuedAt: string | null;
+      entitlementTokenExpiresAt: string | null;
+      downloadUrl: string;
+      urlExpiresAt: string | null;
+    }
+  | {
+      mode: "low_memory_segmented";
+      catalogItemId: string;
+      bankId: string | null;
+      variantId: string;
+      fileSizeBytes: number | null;
+      protected: boolean;
+      derivedKey: string | null;
+      entitlementToken: string | null;
+      entitlementTokenKeyId: string | null;
+      entitlementTokenIssuedAt: string | null;
+      entitlementTokenExpiresAt: string | null;
+      manifest: {
+        downloadUrl: string;
+        urlExpiresAt: string | null;
+      };
+      parts: Array<StoreLowMemoryVariantPartPayload & {
+        downloadUrl: string;
+        urlExpiresAt: string | null;
+      }>;
+    };
+
 const normalizeStoreDownloadTransport = (value: string | null | undefined): "web" | "native" | "electron" => {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "electron") return "electron";
   if (normalized === "native" || normalized === "android" || normalized === "capacitor") return "native";
   return "web";
+};
+
+const resolveStoreDownloadAccessMaterialPayload = async (
+  admin: ReturnType<typeof createServiceClient>,
+  catalogItem: any,
+  userId: string,
+  catalogItemId: string,
+): Promise<StoreDownloadAccessMaterialPayload | { error: Response }> => {
+  const protectionMode = asString(catalogItem.asset_protection, 40)?.toLowerCase() || "";
+  let derivedKey: string | null = null;
+  if (protectionMode === "encrypted") {
+    const { data: bankRow, error: bankError } = await admin
+      .from("banks")
+      .select("id, derived_key, deleted_at")
+      .eq("id", catalogItem.bank_id)
+      .maybeSingle();
+    if (bankError) return { error: fail(500, bankError.message) };
+    if (!bankRow || bankRow.deleted_at) return { error: fail(410, "BANK_ARCHIVED") };
+
+    derivedKey = asString(bankRow.derived_key, 255);
+    if (!derivedKey) return { error: fail(503, "DERIVED_KEY_UNAVAILABLE") };
+  }
+
+  let entitlementToken: string | null = null;
+  let entitlementTokenKeyId: string | null = null;
+  let entitlementTokenIssuedAt: string | null = null;
+  let entitlementTokenExpiresAt: string | null = null;
+  if (isEntitlementTokenSigningEnabled()) {
+    try {
+      const signed = await createSignedEntitlementToken({
+        userId,
+        bankId: asString(catalogItem.bank_id, 80) || "",
+        catalogItemId,
+      });
+      entitlementToken = signed.token;
+      entitlementTokenKeyId = signed.keyId;
+      entitlementTokenIssuedAt = signed.issuedAt;
+      entitlementTokenExpiresAt = signed.expiresAt;
+    } catch {
+      // Best-effort only.
+    }
+  }
+
+  return {
+    protected: protectionMode === "encrypted",
+    derivedKey,
+    entitlementToken,
+    entitlementTokenKeyId,
+    entitlementTokenIssuedAt,
+    entitlementTokenExpiresAt,
+  };
+};
+
+const loadReadyLowMemoryVariantByCatalogItem = async (
+  admin: ReturnType<typeof createServiceClient>,
+  catalogItemId: string,
+) => {
+  const { data, error } = await admin
+    .from("bank_catalog_asset_variants")
+    .select("*, bank_catalog_asset_variant_parts (*)")
+    .eq("catalog_item_id", catalogItemId)
+    .eq("variant_type", "low_memory_segmented")
+    .eq("status", "ready")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return { error: fail(500, error.message) } as const;
+  return { data } as const;
+};
+
+const buildStoreLowMemoryPartPayloads = (variant: any): StoreLowMemoryVariantPartPayload[] => {
+  const rows = Array.isArray(variant?.bank_catalog_asset_variant_parts)
+    ? variant.bank_catalog_asset_variant_parts
+    : [];
+  return rows
+    .map((row: any) => ({
+      partIndex: Math.max(0, Math.floor(Number(asNumber(row?.part_index) || 0))),
+      storageBucket: asString(row?.storage_bucket, 300) || "",
+      storageKey: asString(row?.storage_key, 2000) || "",
+      fileSizeBytes: Math.max(0, Math.floor(Number(asNumber(row?.file_size_bytes) || 0))),
+      sha256: asString(row?.sha256, 128) || null,
+      padStartIndex: Math.max(0, Math.floor(Number(asNumber(row?.pad_start_index) || 0))),
+      padEndIndex: Math.max(0, Math.floor(Number(asNumber(row?.pad_end_index) || 0))),
+    }))
+    .filter((row) => row.storageBucket && row.storageKey && row.fileSizeBytes > 0)
+    .sort((left, right) => left.partIndex - right.partIndex);
+};
+
+const createSignedStoreDownloadUrl = async (
+  storageBucket: string,
+  storageKey: string,
+): Promise<{ url: string; expiresAt: string } | { error: Response }> => {
+  try {
+    const signed = await createPresignedGetUrl(storageBucket, storageKey, STORE_R2_SIGNED_DOWNLOAD_TTL_SECONDS);
+    return { url: signed.url, expiresAt: signed.expiresAt };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "R2_SIGNED_URL_FAILED";
+    return { error: fail(502, message) };
+  }
+};
+
+const getStoreCatalogItemDownloadPlan = async (req: Request, catalogItemId: string) => {
+  const resolved = await resolveStoreDownloadContext(req, catalogItemId, { consumeRateLimit: false });
+  if (!resolved.ok) return resolved.response;
+  const { admin, userId, catalogItem } = resolved.context;
+  const requestUrl = new URL(req.url);
+  const requestedMode = String(requestUrl.searchParams.get("mode") || "").trim().toLowerCase();
+  const accessMaterial = await resolveStoreDownloadAccessMaterialPayload(admin, catalogItem, userId, catalogItemId);
+  if ("error" in accessMaterial) return accessMaterial.error;
+
+  const storageProvider = asString(catalogItem.storage_provider, 40) || "";
+  const storageBucket = asString(catalogItem.storage_bucket, 300) || "";
+  const storageKey = asString(catalogItem.storage_key, 2000) || "";
+  if (storageProvider !== "r2" || !storageBucket || !storageKey) {
+    return fail(503, "CATALOG_STORAGE_NOT_READY");
+  }
+
+  if (requestedMode !== "full") {
+    const lowMemoryVariantResult = await loadReadyLowMemoryVariantByCatalogItem(admin, catalogItemId);
+    if ("error" in lowMemoryVariantResult) return lowMemoryVariantResult.error;
+    const lowMemoryVariant = lowMemoryVariantResult.data;
+    const lowMemoryVariantId = asString(lowMemoryVariant?.id, 80) || "";
+    const manifestStorageBucket = asString(lowMemoryVariant?.manifest_storage_bucket, 300) || "";
+    const manifestStorageKey = asString(lowMemoryVariant?.manifest_storage_key, 2000) || "";
+    const partPayloads = buildStoreLowMemoryPartPayloads(lowMemoryVariant);
+    if (
+      lowMemoryVariant &&
+      lowMemoryVariantId &&
+      manifestStorageBucket &&
+      manifestStorageKey &&
+      partPayloads.length > 0
+    ) {
+      const signedManifest = await createSignedStoreDownloadUrl(manifestStorageBucket, manifestStorageKey);
+      if ("error" in signedManifest) return signedManifest.error;
+      const signedParts: Array<StoreLowMemoryVariantPartPayload & { downloadUrl: string; urlExpiresAt: string | null }> = [];
+      for (const part of partPayloads) {
+        const signedPart = await createSignedStoreDownloadUrl(part.storageBucket, part.storageKey);
+        if ("error" in signedPart) return signedPart.error;
+        signedParts.push({
+          ...part,
+          downloadUrl: signedPart.url,
+          urlExpiresAt: signedPart.expiresAt || null,
+        });
+      }
+      const lowMemoryResponse: StoreDownloadPlanResponse = {
+        mode: "low_memory_segmented",
+        catalogItemId,
+        bankId: asString(catalogItem.bank_id, 80) || null,
+        variantId: lowMemoryVariantId,
+        fileSizeBytes: Number.isFinite(Number(asNumber(lowMemoryVariant?.total_file_size_bytes)))
+          ? Math.max(0, Math.floor(Number(asNumber(lowMemoryVariant?.total_file_size_bytes) || 0)))
+          : null,
+        protected: accessMaterial.protected,
+        derivedKey: accessMaterial.derivedKey,
+        entitlementToken: accessMaterial.entitlementToken,
+        entitlementTokenKeyId: accessMaterial.entitlementTokenKeyId,
+        entitlementTokenIssuedAt: accessMaterial.entitlementTokenIssuedAt,
+        entitlementTokenExpiresAt: accessMaterial.entitlementTokenExpiresAt,
+        manifest: {
+          downloadUrl: signedManifest.url,
+          urlExpiresAt: signedManifest.expiresAt || null,
+        },
+        parts: signedParts,
+      };
+      return ok(lowMemoryResponse);
+    }
+  }
+
+  const signedAsset = await createSignedStoreDownloadUrl(storageBucket, storageKey);
+  if ("error" in signedAsset) return signedAsset.error;
+  const fullResponse: StoreDownloadPlanResponse = {
+    mode: "full",
+    catalogItemId,
+    bankId: asString(catalogItem.bank_id, 80) || null,
+    variantId: null,
+    fileSizeBytes: Number.isFinite(Number(asNumber(catalogItem?.file_size_bytes)))
+      ? Math.max(0, Math.floor(Number(asNumber(catalogItem?.file_size_bytes) || 0)))
+      : null,
+    protected: accessMaterial.protected,
+    derivedKey: accessMaterial.derivedKey,
+    entitlementToken: accessMaterial.entitlementToken,
+    entitlementTokenKeyId: accessMaterial.entitlementTokenKeyId,
+    entitlementTokenIssuedAt: accessMaterial.entitlementTokenIssuedAt,
+    entitlementTokenExpiresAt: accessMaterial.entitlementTokenExpiresAt,
+    downloadUrl: signedAsset.url,
+    urlExpiresAt: signedAsset.expiresAt || null,
+  };
+  return ok(fullResponse);
 };
 
 const resolveStoreDownloadContext = async (
@@ -6099,51 +6458,18 @@ const getStoreCatalogItemDecryptKey = async (req: Request, catalogItemId: string
   const resolved = await resolveStoreDownloadContext(req, catalogItemId, { consumeRateLimit: false });
   if (!resolved.ok) return resolved.response;
   const { admin, catalogItem, userId } = resolved.context;
-
-  const protectionMode = asString(catalogItem.asset_protection, 40)?.toLowerCase() || "";
-  let derivedKey: string | null = null;
-  if (protectionMode === "encrypted") {
-    const { data: bankRow, error: bankError } = await admin
-      .from("banks")
-      .select("id, derived_key, deleted_at")
-      .eq("id", catalogItem.bank_id)
-      .maybeSingle();
-    if (bankError) return fail(500, bankError.message);
-    if (!bankRow || bankRow.deleted_at) return fail(410, "BANK_ARCHIVED");
-
-    derivedKey = asString(bankRow.derived_key, 255);
-    if (!derivedKey) return fail(503, "DERIVED_KEY_UNAVAILABLE");
-  }
-
-  let entitlementToken: string | null = null;
-  let entitlementTokenKeyId: string | null = null;
-  let entitlementTokenIssuedAt: string | null = null;
-  let entitlementTokenExpiresAt: string | null = null;
-  if (isEntitlementTokenSigningEnabled()) {
-    try {
-      const signed = await createSignedEntitlementToken({
-        userId,
-        bankId: asString(catalogItem.bank_id, 80) || "",
-        catalogItemId,
-      });
-      entitlementToken = signed.token;
-      entitlementTokenKeyId = signed.keyId;
-      entitlementTokenIssuedAt = signed.issuedAt;
-      entitlementTokenExpiresAt = signed.expiresAt;
-    } catch {
-      // Best-effort only: keep decrypt-key available even if token signing fails.
-    }
-  }
+  const accessMaterial = await resolveStoreDownloadAccessMaterialPayload(admin, catalogItem, userId, catalogItemId);
+  if ("error" in accessMaterial) return accessMaterial.error;
 
   return ok({
     catalogItemId,
     bankId: asString(catalogItem.bank_id, 80) || null,
-    protected: protectionMode === "encrypted",
-    derivedKey,
-    entitlementToken,
-    entitlementTokenKeyId,
-    entitlementTokenIssuedAt,
-    entitlementTokenExpiresAt,
+    protected: accessMaterial.protected,
+    derivedKey: accessMaterial.derivedKey,
+    entitlementToken: accessMaterial.entitlementToken,
+    entitlementTokenKeyId: accessMaterial.entitlementTokenKeyId,
+    entitlementTokenIssuedAt: accessMaterial.entitlementTokenIssuedAt,
+    entitlementTokenExpiresAt: accessMaterial.entitlementTokenExpiresAt,
   });
 };
 
@@ -8474,6 +8800,11 @@ Deno.serve(async (req) => {
       const catalogItemId = asUuid(scoped[1]);
       if (!catalogItemId) return badRequest("Invalid catalog item id");
       return await getStoreCatalogItemDecryptKey(req, catalogItemId);
+    }
+    if (req.method === "GET" && scoped[0] === "download-plan" && scoped.length === 2) {
+      const catalogItemId = asUuid(scoped[1]);
+      if (!catalogItemId) return badRequest("Invalid catalog item id");
+      return await getStoreCatalogItemDownloadPlan(req, catalogItemId);
     }
 
     if (scoped[0] === "admin" && scoped[1] === "account-registration") {

@@ -165,11 +165,6 @@ export function BankEditCoreForm({
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck="false"
-            onFocus={(e) => {
-              if (window.innerWidth <= 768) {
-                setTimeout(() => e.target.focus(), 100);
-              }
-            }}
           />
         </div>
 

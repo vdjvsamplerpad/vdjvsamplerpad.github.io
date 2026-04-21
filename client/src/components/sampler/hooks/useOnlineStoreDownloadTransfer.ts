@@ -3,6 +3,7 @@ import { edgeFunctionUrl } from '@/lib/edge-api';
 import { isElectronImportBridgeAvailable, isNativeBankImportAvailable } from '@/lib/native-bank-import';
 import {
     OnlineBankStoreImportMeta,
+    StoreDownloadPlan,
     StoreDownloadDebugLevel,
     StoreDownloadedArtifact,
     StoreItem,
@@ -38,6 +39,8 @@ type HandleDownloadOptions = {
     preferCachedImportRetry?: boolean;
     refreshAssetsOnly?: boolean;
 };
+
+export type StoreHandleDownloadOptions = HandleDownloadOptions;
 
 const toHex = (buffer: ArrayBuffer): string => {
     const bytes = new Uint8Array(buffer);
@@ -85,6 +88,109 @@ const shouldInvalidateArtifactAfterImportError = (message: string): boolean => {
         || lowered.includes('decrypt bank file')
         || lowered.includes('integrity check failed')
         || lowered.includes('no valid pads found');
+};
+
+const LARGE_WEB_STORE_DOWNLOAD_WARNING_BYTES = 250 * 1024 * 1024;
+
+const isLikelyIOSWebRuntime = (): boolean => {
+    if (typeof navigator === 'undefined') return false;
+    const userAgent = navigator.userAgent || '';
+    const platform = navigator.platform || '';
+    const touchPoints = Number((navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints || 0);
+    return /iPad|iPhone|iPod/i.test(userAgent)
+        || (/Mac/i.test(platform) && touchPoints > 1);
+};
+
+const isLikelySafariBrowser = (): boolean => {
+    if (typeof navigator === 'undefined') return false;
+    const userAgent = navigator.userAgent || '';
+    return /Safari/i.test(userAgent)
+        && !/Chrome|CriOS|FxiOS|EdgiOS|OPR|Opera|SamsungBrowser|Android/i.test(userAgent);
+};
+
+const shouldRecommendLowMemoryImport = (item: StoreItem): boolean => {
+    if (!item.has_low_memory_variant) return false;
+    const bytes = Number.isFinite(Number(item.low_memory_total_bytes ?? item.file_size_bytes))
+        ? Math.max(0, Number(item.low_memory_total_bytes ?? item.file_size_bytes))
+        : 0;
+    const isLarge = bytes >= LARGE_WEB_STORE_DOWNLOAD_WARNING_BYTES;
+    if (isLikelyIOSWebRuntime()) return true;
+    if (!isNativeBankImportAvailable() && !isElectronImportBridgeAvailable() && isLarge) return true;
+    if (isNativeBankImportAvailable() && isLarge) return true;
+    return false;
+};
+
+const normalizeStoreImportErrorMessage = (
+    rawMessage: string,
+    options?: { fileSizeBytes?: number | null }
+): string => {
+    const lowered = String(rawMessage || '').trim().toLowerCase();
+    const fileSizeBytes = Number.isFinite(Number(options?.fileSizeBytes))
+        ? Math.max(0, Math.floor(Number(options?.fileSizeBytes)))
+        : 0;
+    const isLargeArchive = fileSizeBytes >= LARGE_WEB_STORE_DOWNLOAD_WARNING_BYTES;
+    const isExplicitStorageFull =
+        lowered.includes('quotaexceedederror')
+        || lowered.includes('quota exceeded')
+        || lowered.includes('storage full')
+        || lowered.includes('storage is full')
+        || lowered.includes('out of space')
+        || lowered.includes('no space left')
+        || lowered.includes('disk full')
+        || lowered.includes('not enough space')
+        || lowered.includes('insufficient storage')
+        || lowered.includes('local image storage is full')
+        || lowered.includes('pad image storage is full');
+    const isBrowserStorageFailure =
+        lowered.includes('the object can not be found here')
+        || lowered.includes('notfounderror')
+        || lowered.includes('indexed database server lost')
+        || lowered.includes('failed to save files to storage')
+        || lowered.includes('indexeddb');
+    const isInterruptedNativeDownload =
+        lowered.includes('reason=download_interrupted')
+        || (
+            (lowered.includes('stage=download-progress') || lowered.includes('stage=download-start') || lowered.includes('reason=download_failed'))
+            && (
+                lowered.includes('socketexception')
+                || lowered.includes('software caused connection abort')
+                || lowered.includes('connection aborted')
+                || lowered.includes('connection reset')
+                || lowered.includes('broken pipe')
+                || lowered.includes('unexpected end of stream')
+                || lowered.includes('read timed out')
+            )
+        );
+
+    if (isInterruptedNativeDownload) {
+        return isLargeArchive
+            ? 'The network connection was interrupted while downloading this large bank. Try again on stable Wi-Fi or mobile data.'
+            : 'The network connection was interrupted while downloading this bank. Try again on stable Wi-Fi or mobile data.';
+    }
+
+    if (!isExplicitStorageFull && !isBrowserStorageFailure) return rawMessage;
+
+    if (isExplicitStorageFull) {
+        if (isLikelyIOSWebRuntime() && isLikelySafariBrowser()) {
+            return isLargeArchive
+                ? 'This iPad is low on browser or device storage for this large bank. Free up some space and try again, or use desktop/newer device.'
+                : 'This iPad is low on browser or device storage for this bank. Free up some space and try again.';
+        }
+
+        return isLargeArchive
+            ? 'Your device or browser is low on storage or import space for this large bank. Free up some space and try again, or use desktop if it keeps failing.'
+            : 'Your device or browser is low on storage or import space. Free up some space and try again.';
+    }
+
+    if (isLikelyIOSWebRuntime() && isLikelySafariBrowser()) {
+        return isLargeArchive
+            ? 'The bank finished downloading, but Safari could not finish importing this large bank on this iPad. Browser memory or local storage likely ran out. Close other tabs/apps and try again, or use desktop/newer device.'
+            : 'Safari could not finish importing this bank on this iPad. Browser storage or memory likely became unstable. Close other tabs/apps and try again.';
+    }
+
+    return isLargeArchive
+        ? 'The bank finished downloading, but your browser could not finish importing this large bank locally. Browser memory or storage likely ran out. Try again, or use desktop if it keeps failing.'
+        : 'Your browser could not finish importing this bank locally. Browser storage or memory likely became unstable. Try again.';
 };
 
 export function useOnlineStoreDownloadTransfer({
@@ -318,56 +424,135 @@ export function useOnlineStoreDownloadTransfer({
                     }
                 }
 
-                const downloadTransport = isNativeBankImportAvailable()
-                    ? 'native'
-                    : (isElectronImportBridgeAvailable() ? 'electron' : 'signed_url');
-                const ticketUrl = edgeFunctionUrl('store-api', `download/${item.id}?transport=${downloadTransport}`);
+                const preferLowMemory = shouldRecommendLowMemoryImport(item);
+                const requestedMode = preferLowMemory ? 'low_memory_segmented' : 'full';
+                const planUrl = edgeFunctionUrl('store-api', `download-plan/${item.id}?mode=${requestedMode}`);
                 emitOperationDebug({
                     operationId,
                     operation: 'bankstore_download',
                     phase: 'stage',
                     details: {
-                        stage: 'download-ticket-request',
+                        stage: 'download-plan-request',
                         bankId: item.bank_id,
                         catalogItemId: item.id,
-                        transport: downloadTransport,
+                        requestedMode,
                     },
                 });
-                pushDownloadDebugLog('info', 'download_ticket_request', {
+                pushDownloadDebugLog('info', 'download_plan_request', {
                     catalogItemId: item.id,
-                    transport: downloadTransport,
-                    ticketUrl: sanitizeUrlForLog(ticketUrl),
+                    requestedMode,
+                    planUrl: sanitizeUrlForLog(planUrl),
                 });
-                const ticketRes = await fetch(
-                    ticketUrl,
+                const planRes = await fetch(
+                    planUrl,
                     { headers: downloadHeaders, cache: 'no-store', credentials: 'omit', signal: controller.signal }
                 );
-                pushDownloadDebugLog('info', 'download_ticket_response', {
+                pushDownloadDebugLog('info', 'download_plan_response', {
                     catalogItemId: item.id,
-                    status: ticketRes.status,
-                    ok: ticketRes.ok,
-                    type: ticketRes.type,
-                    contentType: ticketRes.headers.get('content-type') || null,
+                    status: planRes.status,
+                    ok: planRes.ok,
+                    type: planRes.type,
+                    contentType: planRes.headers.get('content-type') || null,
                 });
-                if (!ticketRes.ok) {
-                    const errType = await ticketRes.json().catch(() => ({}));
+                if (!planRes.ok) {
+                    const errType = await planRes.json().catch(() => ({}));
                     const message = errType?.error || 'Download failed';
-                    pushDownloadDebugLog('error', 'download_ticket_failed', {
+                    pushDownloadDebugLog('error', 'download_plan_failed', {
                         catalogItemId: item.id,
-                        status: ticketRes.status,
+                        status: planRes.status,
                         error: message,
                     });
                     throw new Error(message);
                 }
-                const ticketPayload = await ticketRes.json().catch(() => ({}));
-                const signedDownloadUrl = typeof ticketPayload?.downloadUrl === 'string'
-                    ? ticketPayload.downloadUrl
-                    : (typeof ticketPayload?.data?.downloadUrl === 'string' ? ticketPayload.data.downloadUrl : '');
+                const planPayload = (await planRes.json().catch(() => ({}))) as Partial<StoreDownloadPlan> & { data?: Partial<StoreDownloadPlan> };
+                const resolvedPlan = (planPayload?.data && typeof planPayload.data === 'object'
+                    ? planPayload.data
+                    : planPayload) as StoreDownloadPlan;
+                if (!resolvedPlan || (resolvedPlan.mode !== 'full' && resolvedPlan.mode !== 'low_memory_segmented')) {
+                    throw new Error('Download plan missing');
+                }
+                importedBankDerivedKey = resolvedPlan.derivedKey || importedBankDerivedKey;
+                importedEntitlementToken = resolvedPlan.entitlementToken || importedEntitlementToken;
+                importedEntitlementTokenKid = resolvedPlan.entitlementTokenKeyId || importedEntitlementTokenKid;
+                importedEntitlementTokenIssuedAt = resolvedPlan.entitlementTokenIssuedAt || importedEntitlementTokenIssuedAt;
+                importedEntitlementTokenExpiresAt = resolvedPlan.entitlementTokenExpiresAt || importedEntitlementTokenExpiresAt;
+
+                if (resolvedPlan.mode === 'low_memory_segmented') {
+                    failedStage = 'import';
+                    heartbeatState.phase = 'importing';
+                    heartbeatState.progress = 6;
+                    setTransfers(prev => ({
+                        ...prev,
+                        [item.id]: {
+                            ...prev[item.id],
+                            phase: 'importing',
+                            progress: 6,
+                            message: 'Importing in low-memory mode...',
+                            error: undefined,
+                            errorStage: undefined,
+                            updatedAt: Date.now()
+                        }
+                    }));
+                    pushDownloadDebugLog('info', 'download_plan_segmented_selected', {
+                        catalogItemId: item.id,
+                        variantId: resolvedPlan.variantId,
+                        partCount: resolvedPlan.parts.length,
+                        recommended: preferLowMemory,
+                    });
+                    await onImportBankFromStore(
+                        {
+                            kind: 'segmented-store',
+                            catalogItemId: item.id,
+                            bankId: item.bank_id,
+                            variantId: resolvedPlan.variantId,
+                            fileName,
+                            fileSizeBytes: resolvedPlan.fileSizeBytes,
+                            derivedKey: importedBankDerivedKey || undefined,
+                            entitlementToken: importedEntitlementToken || undefined,
+                            entitlementTokenKid: importedEntitlementTokenKid || undefined,
+                            entitlementTokenIssuedAt: importedEntitlementTokenIssuedAt || undefined,
+                            entitlementTokenExpiresAt: importedEntitlementTokenExpiresAt || undefined,
+                            manifest: resolvedPlan.manifest,
+                            parts: resolvedPlan.parts,
+                        },
+                        {
+                            bankId: item.bank_id,
+                            bankName: item.bank.title,
+                            catalogItemId: item.id,
+                            targetBankId: item.snapshot_target_bank_id || undefined,
+                            refreshAssetsOnly: options?.refreshAssetsOnly === true,
+                            catalogSha256: item.sha256 || undefined,
+                            thumbnailUrl: item.thumbnail_path || undefined,
+                            derivedKey: importedBankDerivedKey || undefined,
+                            entitlementToken: importedEntitlementToken || undefined,
+                            entitlementTokenKid: importedEntitlementTokenKid || undefined,
+                            entitlementTokenIssuedAt: importedEntitlementTokenIssuedAt || undefined,
+                            entitlementTokenExpiresAt: importedEntitlementTokenExpiresAt || undefined,
+                        },
+                        (progress) => {
+                            const normalized = normalizeProgress(progress);
+                            heartbeatState.phase = 'importing';
+                            heartbeatState.progress = normalized;
+                            setTransfers(prev => ({
+                                ...prev,
+                                [item.id]: {
+                                    ...prev[item.id],
+                                    phase: 'importing',
+                                    progress: normalized,
+                                    updatedAt: Date.now()
+                                }
+                            }));
+                        }
+                    );
+                    blob = new Blob([], { type: 'application/octet-stream' });
+                } else {
+                const signedDownloadUrl = resolvedPlan.downloadUrl;
                 if (!signedDownloadUrl) throw new Error('Signed download URL missing');
                 pushDownloadDebugLog('info', 'download_signed_url_received', {
                     catalogItemId: item.id,
                     signedUrl: sanitizeUrlForLog(signedDownloadUrl),
-                    urlExpiresAt: String(ticketPayload?.urlExpiresAt || ticketPayload?.data?.urlExpiresAt || ''),
+                    urlExpiresAt: String(resolvedPlan.urlExpiresAt || ''),
+                    mode: 'full',
                 });
 
                 if (isNativeBankImportAvailable() || isElectronImportBridgeAvailable()) {
@@ -533,6 +718,7 @@ export function useOnlineStoreDownloadTransfer({
                     }
                 }));
                 }
+                }
             }
 
             if (!blob) throw new Error('Downloaded file is empty');
@@ -645,6 +831,11 @@ export function useOnlineStoreDownloadTransfer({
                 return;
             }
             const errorMessage = err?.message || 'Download failed';
+            const displayErrorMessage = failedStage === 'import'
+                ? normalizeStoreImportErrorMessage(errorMessage, {
+                    fileSizeBytes: (item as { file_size_bytes?: number | null }).file_size_bytes ?? null,
+                })
+                : errorMessage;
             emitOperationDebug({
                 operationId,
                 operation: 'bankstore_download',
@@ -655,6 +846,7 @@ export function useOnlineStoreDownloadTransfer({
                     catalogItemId: item.id,
                     failedStage,
                     message: errorMessage,
+                    displayMessage: displayErrorMessage,
                 },
             });
             pushDownloadDebugLog('error', 'download_failed', {
@@ -662,6 +854,7 @@ export function useOnlineStoreDownloadTransfer({
                 bankId: item.bank_id,
                 failedStage,
                 errorMessage,
+                displayErrorMessage,
                 ...toErrorDetails(err),
             });
             if (failedStage !== 'import' || shouldInvalidateArtifactAfterImportError(errorMessage)) {
@@ -673,13 +866,13 @@ export function useOnlineStoreDownloadTransfer({
                     ...prev[item.id],
                     phase: 'error',
                     progress: 0,
-                    error: errorMessage,
+                    error: displayErrorMessage,
                     errorStage: failedStage,
                     updatedAt: Date.now()
                 }
             }));
             if (failedStage === 'import') {
-                showToast('Import failed. Tap Try Again to retry import.', 'error');
+                showToast(displayErrorMessage, 'error');
             } else if (failedStage === 'checksum') {
                 showToast('Downloaded file failed integrity check. Re-download required.', 'error');
             } else {

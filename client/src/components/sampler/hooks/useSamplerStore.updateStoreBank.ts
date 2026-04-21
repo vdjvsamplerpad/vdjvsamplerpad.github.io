@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import type { BankMetadata, SamplerBank } from '../types/sampler';
-import type { AdminCatalogUploadPublishResult } from './useSamplerStore.exportUpload';
+import type { AdminCatalogUploadPublishResult, LowMemoryCatalogVariantUploadResult } from './useSamplerStore.exportUpload';
 import type { ExportAudioMode, StoreBankAssetProtection } from './useSamplerStore.types';
 import { derivePassword } from '@/lib/bank-utils';
 import { ensureManagedStoreThumbnail } from './storeThumbnailUpload';
@@ -62,6 +62,15 @@ type EnqueueAdminExportUploadInput = {
   blob: Blob;
 };
 
+export type LowMemoryPartUploadInput = {
+  partIndex: number;
+  blob: Blob;
+  sha256: string | null;
+  padStartIndex: number;
+  padEndIndex: number;
+  assetName: string;
+};
+
 const padHasExpectedAudioAsset = (pad: Partial<SamplerPad>): boolean =>
   Boolean((pad.audioStorageKey && pad.audioStorageKey.trim()) || (pad.audioUrl && pad.audioUrl.trim()));
 
@@ -72,6 +81,8 @@ export interface RunUpdateStoreBankInput {
   syncMetadata: boolean;
   assetProtection: StoreBankAssetProtection;
   exportMode: ExportAudioMode;
+  updateMode?: 'full' | 'low_memory_only';
+  generateLowMemoryVariant?: boolean;
   thumbnailPath?: string;
   onProgress?: (progress: number) => void;
   user: ImportableAdminUser | null;
@@ -160,6 +171,18 @@ export interface RunUpdateStoreBankDeps {
     exportBlob: Blob;
     assetProtection: 'encrypted' | 'public';
   }) => Promise<AdminCatalogUploadPublishResult>;
+  uploadLowMemoryCatalogVariant: (input: {
+    catalogItemId: string;
+    totalFileSizeBytes: number;
+    sourceAssetSha256?: string | null;
+    minClientVersion?: string | null;
+    manifest: {
+      blob: Blob;
+      sha256?: string | null;
+      assetName?: string | null;
+    };
+    parts: LowMemoryPartUploadInput[];
+  }) => Promise<LowMemoryCatalogVariantUploadResult>;
   isNonRetryableGithubUploadError: (error: unknown) => boolean;
   enqueueAdminExportUpload: (input: EnqueueAdminExportUploadInput) => void;
   clearQueuedAdminUpdateJobsForCatalogItem: (catalogItemId: string, options?: { excludeExportOperationId?: string }) => void;
@@ -170,6 +193,9 @@ const stripUndefined = <T extends Record<string, unknown>>(value: T): T => {
   const nextEntries = Object.entries(value).filter(([, entry]) => entry !== undefined);
   return Object.fromEntries(nextEntries) as T;
 };
+
+export const LOW_MEMORY_SEGMENTED_VARIANT_THRESHOLD_BYTES = 250 * 1024 * 1024;
+const LOW_MEMORY_SEGMENTED_TARGET_PART_BYTES = 120 * 1024 * 1024;
 
 const buildStoreReleaseMetadata = (input: {
   bank: SamplerBank;
@@ -203,6 +229,191 @@ const buildStoreUpdateFileName = (title: string, catalogItemId: string): string 
   return `${base}_${catalogItemId}_${suffix}.bank`;
 };
 
+const buildLowMemoryPartAssetName = (title: string, catalogItemId: string, partIndex: number): string => {
+  const base = (title || 'Bank').trim().replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '') || 'Bank';
+  return `${base}_${catalogItemId}.part${partIndex + 1}.bank`;
+};
+
+const buildLowMemoryManifestAssetName = (title: string, catalogItemId: string): string => {
+  const base = (title || 'Bank').trim().replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '') || 'Bank';
+  return `${base}_${catalogItemId}.low-memory.manifest.json`;
+};
+
+export const buildLowMemorySegmentedVariant = async (input: {
+  bankSnapshot: SamplerBank;
+  title: string;
+  description: string;
+  catalogItemId: string;
+  sourceBankId: string;
+  assetProtection: StoreBankAssetProtection;
+  thumbnailPath?: string;
+}, deps: Pick<
+  RunUpdateStoreBankDeps,
+  | 'padHasExpectedImageAsset'
+  | 'loadPadMediaBlob'
+  | 'yieldToMainThread'
+  | 'extFromMime'
+  | 'inferImageExtFromPath'
+  | 'addBankMetadata'
+  | 'encryptZip'
+  | 'sha256HexFromBlob'
+>): Promise<{
+  manifestBlob: Blob;
+  manifestSha256: string;
+  manifestAssetName: string;
+  totalFileSizeBytes: number;
+  parts: LowMemoryPartUploadInput[];
+} | null> => {
+  const exportPads = input.bankSnapshot.pads.map((pad) => ({
+    ...stripPreparedAudioForExport(pad),
+    audioUrl: undefined as string | undefined,
+    imageUrl: undefined as string | undefined,
+    imageData: undefined,
+  }));
+  const groupedPads: Array<Array<{
+    pad: typeof exportPads[number];
+    audioBlob: Blob | null;
+    imageBlob: Blob | null;
+    approxBytes: number;
+  }>> = [];
+  let currentGroup: typeof groupedPads[number] = [];
+  let currentGroupBytes = 0;
+  for (const pad of input.bankSnapshot.pads) {
+    const exportPad = exportPads.find((entry) => entry.id === pad.id);
+    if (!exportPad) continue;
+    const audioBlob = padHasExpectedAudioAsset(pad) ? await deps.loadPadMediaBlob(pad, 'audio') : null;
+    const imageBlob = deps.padHasExpectedImageAsset(pad) ? await deps.loadPadMediaBlob(pad, 'image') : null;
+    const approxBytes = (audioBlob?.size || 0) + (imageBlob?.size || 0);
+    if (currentGroup.length > 0 && (currentGroupBytes + approxBytes) > LOW_MEMORY_SEGMENTED_TARGET_PART_BYTES) {
+      groupedPads.push(currentGroup);
+      currentGroup = [];
+      currentGroupBytes = 0;
+    }
+    currentGroup.push({ pad: exportPad, audioBlob, imageBlob, approxBytes });
+    currentGroupBytes += approxBytes;
+    await deps.yieldToMainThread();
+  }
+  if (currentGroup.length > 0) groupedPads.push(currentGroup);
+  if (groupedPads.length <= 1) return null;
+
+  const partOutputs: LowMemoryPartUploadInput[] = [];
+  let totalFileSizeBytes = 0;
+  for (let groupIndex = 0; groupIndex < groupedPads.length; groupIndex += 1) {
+    const group = groupedPads[groupIndex];
+    const partZip = new JSZip();
+    const audioFolder = partZip.folder('audio');
+    const imageFolder = partZip.folder('images');
+    if (!audioFolder || !imageFolder) throw new Error('Could not prepare low-memory archive part.');
+    const partPads = group.map(({ pad }, localIndex) => ({
+      ...pad,
+      position: typeof pad.position === 'number' ? pad.position : localIndex,
+    }));
+    let padStartIndex = 0;
+    let padEndIndex = 0;
+    for (let localIndex = 0; localIndex < group.length; localIndex += 1) {
+      const entry = group[localIndex];
+      const exportPad = partPads[localIndex];
+      const globalPadIndex = exportPads.findIndex((candidate) => candidate.id === exportPad.id);
+      if (localIndex === 0) padStartIndex = Math.max(0, globalPadIndex);
+      padEndIndex = Math.max(padStartIndex, globalPadIndex);
+      if (entry.audioBlob) {
+        const audioExt = deps.extFromMime(entry.audioBlob.type, 'audio');
+        const audioPath = `audio/${exportPad.id}.${audioExt}`;
+        audioFolder.file(`${exportPad.id}.${audioExt}`, entry.audioBlob);
+        exportPad.audioUrl = audioPath;
+      }
+      if (entry.imageBlob) {
+        const imageExt = entry.imageBlob.type
+          ? deps.extFromMime(entry.imageBlob.type, 'image')
+          : deps.inferImageExtFromPath(exportPad.imageUrl);
+        const imagePath = `images/${exportPad.id}.${imageExt}`;
+        imageFolder.file(`${exportPad.id}.${imageExt}`, entry.imageBlob);
+        exportPad.imageUrl = imagePath;
+      } else {
+        exportPad.imageUrl = undefined;
+      }
+    }
+    const partBankData = {
+      ...input.bankSnapshot,
+      name: input.title,
+      defaultColor: input.bankSnapshot.defaultColor,
+      pads: partPads,
+    };
+    partZip.file('bank.json', JSON.stringify(partBankData));
+    deps.addBankMetadata(partZip, buildStoreReleaseMetadata({
+      bank: input.bankSnapshot,
+      title: input.title,
+      description: input.description,
+      assetProtection: input.assetProtection,
+      thumbnailPath: input.thumbnailPath,
+    }));
+    partZip.file('segment.json', JSON.stringify({
+      schemaVersion: 1,
+      catalogItemId: input.catalogItemId,
+      bankId: input.sourceBankId,
+      partIndex: groupIndex,
+      totalParts: groupedPads.length,
+      padStartIndex,
+      padEndIndex,
+    }));
+    const partBlob = input.assetProtection === 'encrypted'
+      ? await deps.encryptZip(partZip, await derivePassword(input.sourceBankId))
+      : await partZip.generateAsync({ type: 'blob', compression: 'STORE' });
+    const partSha256 = await deps.sha256HexFromBlob(partBlob);
+    totalFileSizeBytes += partBlob.size;
+    partOutputs.push({
+      partIndex: groupIndex,
+      blob: partBlob,
+      sha256: partSha256,
+      padStartIndex,
+      padEndIndex,
+      assetName: buildLowMemoryPartAssetName(input.title, input.catalogItemId, groupIndex),
+    });
+    await deps.yieldToMainThread();
+  }
+
+  const manifestBlob = new Blob([JSON.stringify({
+    schemaVersion: 1,
+    catalogItemId: input.catalogItemId,
+    bankId: input.sourceBankId,
+    totalPads: exportPads.length,
+    fileName: `${input.title}.bank`,
+    bankData: {
+      ...input.bankSnapshot,
+      name: input.title,
+      defaultColor: input.bankSnapshot.defaultColor,
+      pads: exportPads.map((pad) => ({
+        ...pad,
+        audioUrl: undefined,
+        imageUrl: undefined,
+        imageData: undefined,
+      })),
+    },
+    metadata: buildStoreReleaseMetadata({
+      bank: input.bankSnapshot,
+      title: input.title,
+      description: input.description,
+      assetProtection: input.assetProtection,
+      thumbnailPath: input.thumbnailPath,
+    }),
+    parts: partOutputs.map((part) => ({
+      partIndex: part.partIndex,
+      fileSizeBytes: part.blob.size,
+      sha256: part.sha256,
+      padStartIndex: part.padStartIndex,
+      padEndIndex: part.padEndIndex,
+    })),
+  }, null, 2)], { type: 'application/json' });
+  const manifestSha256 = await deps.sha256HexFromBlob(manifestBlob);
+  return {
+    manifestBlob,
+    manifestSha256,
+    manifestAssetName: buildLowMemoryManifestAssetName(input.title, input.catalogItemId),
+    totalFileSizeBytes,
+    parts: partOutputs,
+  };
+};
+
 export const runUpdateStoreBankPipeline = async (
   input: RunUpdateStoreBankInput,
   deps: RunUpdateStoreBankDeps,
@@ -214,6 +425,8 @@ export const runUpdateStoreBankPipeline = async (
     syncMetadata,
     assetProtection,
     exportMode,
+    updateMode = 'full',
+    generateLowMemoryVariant = true,
     thumbnailPath,
     onProgress,
     user,
@@ -252,6 +465,7 @@ export const runUpdateStoreBankPipeline = async (
     resolveCurrentCatalogItemIdForBank,
     persistResolvedCatalogItemId,
     uploadAdminCatalogAsset,
+    uploadLowMemoryCatalogVariant,
     isNonRetryableGithubUploadError,
     enqueueAdminExportUpload,
     clearQueuedAdminUpdateJobsForCatalogItem,
@@ -261,6 +475,7 @@ export const runUpdateStoreBankPipeline = async (
   const isHttpUrl = (value: string | null | undefined): value is string =>
     typeof value === 'string' && /^https?:\/\//i.test(value.trim());
   const shouldStoreArchive = isNativeCapacitorPlatform() || exportMode !== 'compact';
+  const lowMemoryOnly = updateMode === 'low_memory_only';
 
   if (!user || profileRole !== 'admin') throw new Error('Only admins can update store banks.');
   let catalogItemId = typeof bankSnapshot.bankMetadata?.catalogItemId === 'string'
@@ -281,6 +496,7 @@ export const runUpdateStoreBankPipeline = async (
       syncMetadata,
       assetProtection,
       exportMode,
+      updateMode,
     }),
   });
   addOperationStage(diagnostics, 'start', {
@@ -291,6 +507,7 @@ export const runUpdateStoreBankPipeline = async (
     syncMetadata,
     assetProtection,
     exportMode,
+    updateMode,
     operationType: 'update',
   });
 
@@ -319,6 +536,81 @@ export const runUpdateStoreBankPipeline = async (
 
     await ensureStorageHeadroom(Math.ceil(estimatedBytes * 0.35), 'store bank update');
     preflightCompletedAt = getNowMs();
+
+    if (lowMemoryOnly) {
+      onProgress?.(25);
+      const durableThumbnailPath = isHttpUrl(thumbnailPath) ? thumbnailPath : undefined;
+      const lowMemoryVariant = await buildLowMemorySegmentedVariant({
+        bankSnapshot,
+        title: normalizedTitle,
+        description,
+        catalogItemId,
+        sourceBankId,
+        assetProtection,
+        thumbnailPath: durableThumbnailPath,
+      }, {
+        padHasExpectedImageAsset,
+        loadPadMediaBlob,
+        yieldToMainThread,
+        extFromMime,
+        inferImageExtFromPath,
+        addBankMetadata,
+        encryptZip,
+        sha256HexFromBlob,
+      });
+      mediaCompletedAt = getNowMs();
+      archiveCompletedAt = mediaCompletedAt;
+      if (!lowMemoryVariant) {
+        throw new Error('Low-memory variant was not generated because this bank fits in one segment. Use normal Update Store Bank if you need to replace the full asset.');
+      }
+      onProgress?.(85);
+      const lowMemoryUpload = await uploadLowMemoryCatalogVariant({
+        catalogItemId,
+        totalFileSizeBytes: lowMemoryVariant.totalFileSizeBytes,
+        sourceAssetSha256: null,
+        minClientVersion: '0.1.5',
+        manifest: {
+          blob: lowMemoryVariant.manifestBlob,
+          sha256: lowMemoryVariant.manifestSha256,
+          assetName: lowMemoryVariant.manifestAssetName,
+        },
+        parts: lowMemoryVariant.parts,
+      });
+      saveCompletedAt = getNowMs();
+      exportedArchiveBytes = lowMemoryVariant.totalFileSizeBytes;
+      addOperationStage(diagnostics, 'catalog-low-memory-uploaded', {
+        catalogItemId,
+        variantId: lowMemoryUpload.variantId,
+        partCount: lowMemoryUpload.partCount,
+        updateMode,
+      });
+      const timing = {
+        totalMs: Math.round(saveCompletedAt - exportStartedAt),
+        preflightMs: Math.round(preflightCompletedAt - exportStartedAt),
+        mediaPrepareMs: Math.round(Math.max(0, mediaCompletedAt - preflightCompletedAt)),
+        archiveMs: Math.round(Math.max(0, archiveCompletedAt - mediaCompletedAt)),
+        saveMs: Math.round(Math.max(0, saveCompletedAt - archiveCompletedAt)),
+        archiveBytes: exportedArchiveBytes,
+      };
+      diagnostics.metrics.exportTotalMs = timing.totalMs;
+      diagnostics.metrics.exportPreflightMs = timing.preflightMs;
+      diagnostics.metrics.exportMediaPrepareMs = timing.mediaPrepareMs;
+      diagnostics.metrics.exportArchiveMs = timing.archiveMs;
+      diagnostics.metrics.exportSaveMs = timing.saveMs;
+      diagnostics.metrics.archiveBytes = exportedArchiveBytes;
+      addOperationStage(diagnostics, 'timings', timing);
+      finishOperationDiagnostics(diagnostics, {
+        bankId: bankSnapshot.id,
+        bankName: bankSnapshot.name,
+        catalogItemId,
+        archiveBytes: exportedArchiveBytes,
+        syncMetadata: false,
+        assetProtection,
+        updateMode,
+      });
+      onProgress?.(100);
+      return `Low-memory segmented variant uploaded (${lowMemoryUpload.partCount} parts). Full store asset was not changed.`;
+    }
 
     const canUseElectronArchiveJob =
       canUseElectronExportArchiveJob === true &&
@@ -875,6 +1167,57 @@ export const runUpdateStoreBankPipeline = async (
     }
 
     let metadataWarningMessage = '';
+    let lowMemoryWarningMessage = '';
+    if (generateLowMemoryVariant && uploadSucceeded && outputBlob.size >= LOW_MEMORY_SEGMENTED_VARIANT_THRESHOLD_BYTES) {
+      try {
+        const lowMemoryVariant = await buildLowMemorySegmentedVariant({
+          bankSnapshot,
+          title: normalizedTitle,
+          description,
+          catalogItemId,
+          sourceBankId,
+          assetProtection,
+          thumbnailPath: durableThumbnailPath,
+        }, {
+          padHasExpectedImageAsset,
+          loadPadMediaBlob,
+          yieldToMainThread,
+          extFromMime,
+          inferImageExtFromPath,
+          addBankMetadata,
+          encryptZip,
+          sha256HexFromBlob,
+        });
+        if (lowMemoryVariant) {
+          const lowMemoryUpload = await uploadLowMemoryCatalogVariant({
+            catalogItemId,
+            totalFileSizeBytes: lowMemoryVariant.totalFileSizeBytes,
+            sourceAssetSha256: await sha256HexFromBlob(outputBlob),
+            minClientVersion: '0.1.5',
+            manifest: {
+              blob: lowMemoryVariant.manifestBlob,
+              sha256: lowMemoryVariant.manifestSha256,
+              assetName: lowMemoryVariant.manifestAssetName,
+            },
+            parts: lowMemoryVariant.parts,
+          });
+          addOperationStage(diagnostics, 'catalog-low-memory-uploaded', {
+            catalogItemId,
+            variantId: lowMemoryUpload.variantId,
+            partCount: lowMemoryUpload.partCount,
+          });
+        }
+      } catch (lowMemoryError) {
+        lowMemoryWarningMessage = ` Low-memory segmented variant upload failed. (${
+          lowMemoryError instanceof Error ? lowMemoryError.message : String(lowMemoryError)
+        })`;
+        addOperationStage(diagnostics, 'catalog-low-memory-warning', {
+          catalogItemId,
+          reason: lowMemoryError instanceof Error ? lowMemoryError.message : String(lowMemoryError),
+        });
+      }
+    }
+
     if (uploadSucceeded && syncMetadata) {
       try {
         await patchAdminCatalogItem({
@@ -929,7 +1272,7 @@ export const runUpdateStoreBankPipeline = async (
     onProgress?.(100);
 
     const metadataMessage = metadataSynced ? ' Store metadata synced.' : '';
-    return `${saveResult.message || 'Store bank update exported successfully.'}${metadataMessage}${metadataWarningMessage}${uploadWarningMessage}${uploadWarningMessage ? '' : ' Draft asset uploaded. Publish it from Admin Access > Catalog when ready.'}`;
+    return `${saveResult.message || 'Store bank update exported successfully.'}${metadataMessage}${metadataWarningMessage}${lowMemoryWarningMessage}${uploadWarningMessage}${uploadWarningMessage ? '' : ' Draft asset uploaded. Publish it from Admin Access > Catalog when ready.'}`;
   } catch (error) {
     if (typeof managedThumbnailCleanup === 'function') {
       await managedThumbnailCleanup().catch(() => undefined);

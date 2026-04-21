@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readGuestDefaultBankTrialStateSync } from '@/lib/guest-default-bank-trial';
 import { getSamplerRuntimeTuningProfile } from '@/lib/sampler-runtime-profile';
 import { type PadData, type SamplerBank } from '../types/sampler';
 import { loadDefaultBankFromAssetsPipeline } from './useSamplerStore.defaultBankAssets';
@@ -93,6 +94,7 @@ interface UseSamplerStoreBankLifecycleParams {
   setSecondaryBankIdState: React.Dispatch<React.SetStateAction<string | null>>;
   setCurrentBankIdState: React.Dispatch<React.SetStateAction<string | null>>;
   authSessionUserId: string | null;
+  hasAuthenticatedAccess: boolean;
   isGuestLockedSession: boolean;
   defaultBankSourceRevision: number;
   setDefaultBankSourceRevision: React.Dispatch<React.SetStateAction<number>>;
@@ -143,6 +145,7 @@ export function useSamplerStoreBankLifecycle({
   setSecondaryBankIdState,
   setCurrentBankIdState,
   authSessionUserId,
+  hasAuthenticatedAccess,
   isGuestLockedSession,
   defaultBankSourceRevision,
   setDefaultBankSourceRevision,
@@ -635,7 +638,10 @@ export function useSamplerStoreBankLifecycle({
     let cancelled = false;
 
     const syncDefaultBankFromAssets = async () => {
-      const allowAudio = Boolean(authSessionUserId) && !isGuestLockedSession;
+      const guestTrialState = readGuestDefaultBankTrialStateSync();
+      const allowAudio =
+        (hasAuthenticatedAccess && !isGuestLockedSession) ||
+        (!authSessionUserId && !guestTrialState.exhausted);
       const defaultBank = banksRef.current.find(
         (bank) => isCanonicalDefaultBankIdentity(bank, banksRef.current) && Array.isArray(bank.pads) && bank.pads.length > 0
       );
@@ -698,6 +704,7 @@ export function useSamplerStoreBankLifecycle({
     };
   }, [
     authSessionUserId,
+    hasAuthenticatedAccess,
     banks,
     banksRef,
     defaultBankSourceForceApplyRef,

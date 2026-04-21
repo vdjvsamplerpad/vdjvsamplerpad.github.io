@@ -6,6 +6,7 @@ import {
   ensureActivityRuntime,
   SessionConflictError,
   checkSessionValidity,
+  logActivityEvent,
   logSignoutActivity,
   sendActivityHeartbeat,
   sendHeartbeatBeacon,
@@ -21,8 +22,11 @@ const SESSION_CONFLICT_REASON_KEY = 'vdjv-session-conflict-reason';
 const SESSION_ENFORCEMENT_EVENT_KEY = 'vdjv-session-enforcement-event';
 const HIDE_PROTECTED_BANKS_KEY = 'vdjv-hide-protected-banks';
 const PASSWORD_RECOVERY_MODE_KEY = 'vdjv-password-recovery-mode';
+const GOOGLE_OAUTH_LOGIN_PENDING_KEY = 'vdjv-google-oauth-login-pending';
+const GOOGLE_OAUTH_LOGIN_LOGGED_PREFIX = 'vdjv-google-oauth-login-logged:';
 const PROFILE_SELECT = 'id, role, display_name, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap';
 const AUTH_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+const GOOGLE_OAUTH_LOGIN_PENDING_MAX_AGE_MS = 10 * 60 * 1000;
 
 export const isPasswordRecoveryMode = (): boolean => {
   if (typeof window === 'undefined') return false
@@ -40,6 +44,46 @@ export const setPasswordRecoveryMode = (enabled: boolean): void => {
     else window.sessionStorage.removeItem(PASSWORD_RECOVERY_MODE_KEY)
   } catch {
   }
+}
+
+const setGoogleOAuthLoginPending = (pending: boolean): void => {
+  if (typeof window === 'undefined') return
+  try {
+    if (pending) window.sessionStorage.setItem(GOOGLE_OAUTH_LOGIN_PENDING_KEY, String(Date.now()))
+    else window.sessionStorage.removeItem(GOOGLE_OAUTH_LOGIN_PENDING_KEY)
+  } catch {
+  }
+}
+
+const isGoogleOAuthLoginPending = (): boolean => {
+  if (typeof window === 'undefined') return false
+  try {
+    const raw = window.sessionStorage.getItem(GOOGLE_OAUTH_LOGIN_PENDING_KEY)
+    if (!raw) return false
+    const createdAt = Number(raw)
+    if (Number.isFinite(createdAt) && Date.now() - createdAt <= GOOGLE_OAUTH_LOGIN_PENDING_MAX_AGE_MS) {
+      return true
+    }
+    window.sessionStorage.removeItem(GOOGLE_OAUTH_LOGIN_PENDING_KEY)
+    return false
+  } catch {
+    return false
+  }
+}
+
+const getAuthProvider = (user: User | null): string | null => {
+  if (!user) return null
+  const metadata = (user as any).app_metadata || {}
+  const provider = typeof metadata.provider === 'string' ? metadata.provider.toLowerCase() : ''
+  if (provider) return provider
+
+  const providers = Array.isArray(metadata.providers) ? metadata.providers : []
+  const googleProvider = providers.find((entry: unknown) => String(entry || '').toLowerCase() === 'google')
+  if (googleProvider) return 'google'
+
+  const identities = Array.isArray((user as any).identities) ? (user as any).identities : []
+  const googleIdentity = identities.find((identity: any) => String(identity?.provider || '').toLowerCase() === 'google')
+  return googleIdentity ? 'google' : null
 }
 
 export interface Profile {
@@ -130,6 +174,7 @@ function cacheBanState(banned: boolean): void {
 
 interface AuthActions {
   signIn: (email: string, password: string) => Promise<{ error?: AuthError | null; data?: { user: User | null } }>
+  signInWithGoogle: (redirectTo?: string) => Promise<{ error?: AuthError | null }>
   signOut: () => Promise<{ error?: AuthError | null }>
   requestPasswordReset: (email: string) => Promise<{ error?: AuthError | null }>
   verifyPasswordResetCode: (email: string, code: string) => Promise<{ error?: AuthError | null }>
@@ -184,6 +229,14 @@ const setCachedSessionConflictReason = (reason: string | null): void => {
   } catch {
   }
 };
+
+const canTrustCachedOfflineUser = (): boolean => {
+  if (!getCachedUser()?.id) return false
+  if (getCachedBan()) return false
+  if (getPendingOfflineSignout()) return false
+  if (getCachedSessionConflictReason()) return false
+  return true
+}
 
 const emitSessionEnforcementEvent = (reason: string): void => {
   if (typeof window === 'undefined') return;
@@ -291,6 +344,7 @@ function useAuthValue(): AuthProviderValue {
   // Track which user we've already refreshed cache for
   const cacheRefreshedForUserIdRef = React.useRef<string | null>(null)
   const sessionConflictLockedRef = React.useRef(false)
+  const signOutInProgressRef = React.useRef(false)
   const authTransitionStatusRef = React.useRef<AuthState['authTransition']['status']>('idle')
 
   React.useEffect(() => {
@@ -302,6 +356,38 @@ function useAuthValue(): AuthProviderValue {
   }, [])
 
   const lastAnalyticsUserIdRef = React.useRef<string | null>(null)
+  const lastGoogleOAuthLoginLoggedRef = React.useRef<string | null>(null)
+
+  const logGoogleOAuthLoginIfPending = React.useCallback((authUser: User) => {
+    if (!authUser?.id || !isGoogleOAuthLoginPending()) return
+    const provider = getAuthProvider(authUser) || 'google'
+    const logKey = `${GOOGLE_OAUTH_LOGIN_LOGGED_PREFIX}${authUser.id}:${provider}`
+    if (lastGoogleOAuthLoginLoggedRef.current === logKey) return
+
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage.getItem(logKey) === '1') {
+        setGoogleOAuthLoginPending(false)
+        return
+      }
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(logKey, '1')
+      }
+    } catch {
+    }
+
+    lastGoogleOAuthLoginLoggedRef.current = logKey
+    setGoogleOAuthLoginPending(false)
+    void logActivityEvent({
+      eventType: 'auth.login',
+      status: 'success',
+      userId: authUser.id,
+      email: authUser.email || null,
+      meta: {
+        source: 'useAuth.googleOAuth',
+        provider,
+      },
+    }).catch(() => {})
+  }, [])
 
   React.useEffect(() => {
     const currentUserId = state.user?.id || null
@@ -340,6 +426,29 @@ function useAuthValue(): AuthProviderValue {
             authTransition: { status, email },
           }
     ))
+  }, [])
+
+  const trustCachedOfflineSession = React.useCallback((): boolean => {
+    if (signOutInProgressRef.current) return false
+    if (!canTrustCachedOfflineUser()) return false
+    const fallbackUser = getCachedUser()
+    if (!fallbackUser?.id) return false
+    const fallbackProfile = getCachedProfile()
+    setHideProtectedBanksLock(false)
+    cacheUserData(fallbackUser, fallbackProfile)
+    cacheRefreshedForUserIdRef.current = fallbackUser.id
+    setState((s) => ({
+      ...s,
+      user: fallbackUser,
+      profile: fallbackProfile,
+      loading: false,
+      authTransition: {
+        status: 'idle',
+        email: null,
+      },
+      offlineTrustedSession: true,
+    }))
+    return true
   }, [])
 
   const enforceBan = React.useCallback(async () => {
@@ -477,6 +586,9 @@ function useAuthValue(): AuthProviderValue {
         const fallbackCachedUser = getCachedUser() || session.user
         const authUser = authData?.user || (transientAuthError ? fallbackCachedUser : null)
 
+        if (!authUser && transientAuthError && trustCachedOfflineSession()) {
+          return
+        }
         if (!authUser || authError?.status === 401 || authError?.status === 403) {
           cacheUserData(null, null)
           clearUserBankCache()
@@ -519,6 +631,7 @@ function useAuthValue(): AuthProviderValue {
           if (isTransientNetworkError(error)) {
             const fallbackProfile = getCachedProfile()
             cacheUserData(authUser, fallbackProfile)
+            cacheRefreshedForUserIdRef.current = authUser.id
             setState((s) => ({
               ...s,
               user: authUser,
@@ -530,6 +643,7 @@ function useAuthValue(): AuthProviderValue {
               },
               offlineTrustedSession: true
             }))
+            logGoogleOAuthLoginIfPending(authUser)
           } else {
             cacheUserData(null, null)
             clearUserBankCache()
@@ -562,6 +676,7 @@ function useAuthValue(): AuthProviderValue {
             offlineTrustedSession: false,
             lastSessionValidationAt: Date.now()
           }))
+          logGoogleOAuthLoginIfPending(authUser)
         }
         
         // Refresh accessible banks cache ONLY once per user session (not on every auth state change)
@@ -570,24 +685,10 @@ function useAuthValue(): AuthProviderValue {
           refreshAccessibleBanksCache(authUser.id).catch(() => {})
         }
       } else {
-        const fallbackUser = getCachedUser()
-        const fallbackProfile = getCachedProfile()
-        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine
-
-        if (isOffline && fallbackUser) {
-          setHideProtectedBanksLock(false)
-          cacheUserData(fallbackUser, fallbackProfile)
-          setState((s) => ({
-            ...s,
-            user: fallbackUser,
-            profile: fallbackProfile,
-            loading: false,
-            authTransition: {
-              status: 'idle',
-              email: null,
-            },
-            offlineTrustedSession: true
-          }))
+        // Native webviews and iOS A2HS can report "online" in deadspots while
+        // Supabase cannot restore a session. Do not hide downloaded banks unless
+        // an explicit enforcement path invalidated the cached user.
+        if (trustCachedOfflineSession()) {
           return
         }
 
@@ -615,24 +716,8 @@ function useAuthValue(): AuthProviderValue {
         fetchSessionAndProfile(session)
       })
       .catch((error) => {
-        if (isTransientNetworkError(error) || (typeof navigator !== 'undefined' && !navigator.onLine)) {
-          const fallbackUser = getCachedUser()
-          const fallbackProfile = getCachedProfile()
-          if (fallbackUser) {
-            setHideProtectedBanksLock(false)
-            setState((s) => ({
-              ...s,
-              user: fallbackUser,
-              profile: fallbackProfile,
-              loading: false,
-              authTransition: {
-                status: 'idle',
-                email: null,
-              },
-              offlineTrustedSession: true
-            }))
-            return
-          }
+        if (isTransientNetworkError(error) && trustCachedOfflineSession()) {
+          return
         }
         cacheUserData(null, null)
         setHideProtectedBanksLock(true)
@@ -657,7 +742,7 @@ function useAuthValue(): AuthProviderValue {
     })
 
     return () => subscription.unsubscribe()
-  }, [ensureProfile, enforceBan, setBannedState, setSessionConflictReason])
+  }, [ensureProfile, enforceBan, logGoogleOAuthLoginIfPending, setBannedState, setSessionConflictReason, trustCachedOfflineSession])
 
   React.useEffect(() => {
     if (!state.user || state.banned) return
@@ -870,6 +955,48 @@ function useAuthValue(): AuthProviderValue {
     return { error, data: { user: data.user } }
   }, [enforceBan, setAuthTransition, setSessionConflictReason])
 
+  const signInWithGoogle = React.useCallback(async (redirectTo?: string) => {
+    if (authTransitionStatusRef.current !== 'idle') {
+      return {
+        error: {
+          message: 'Authentication is already in progress. Please wait.',
+        } as AuthError,
+      }
+    }
+    setSessionConflictReason(null)
+    setPasswordRecoveryMode(false)
+    sessionConflictLockedRef.current = false
+    setAuthTransition('signing_in', 'Google')
+    setGoogleOAuthLoginPending(true)
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo,
+        queryParams: {
+          prompt: 'select_account',
+        },
+      },
+    })
+    if (error) {
+      setGoogleOAuthLoginPending(false)
+      setAuthTransition('idle')
+      void logActivityEvent({
+        eventType: 'auth.login',
+        status: 'failed',
+        email: null,
+        errorMessage: error.message,
+        meta: {
+          source: 'useAuth.googleOAuth',
+          provider: 'google',
+        },
+      }).catch(() => {})
+      if (isBanError(error)) {
+        await enforceBan()
+      }
+    }
+    return { error }
+  }, [enforceBan, setAuthTransition, setSessionConflictReason])
+
   const signOut = React.useCallback(async () => {
     if (authTransitionStatusRef.current === 'signing_out') {
       return { error: null }
@@ -879,6 +1006,21 @@ function useAuthValue(): AuthProviderValue {
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setPendingOfflineSignout(true)
       setHideProtectedBanksLock(true)
+      cacheUserData(null, null)
+      clearUserBankCache(activeUser?.id)
+      cacheRefreshedForUserIdRef.current = null
+      setState((s) => ({
+        ...s,
+        user: null,
+        profile: null,
+        loading: false,
+        authTransition: {
+          status: 'idle',
+          email: null,
+        },
+        offlineTrustedSession: false,
+        lastSessionValidationAt: null,
+      }))
       void logSignoutActivity({
         status: 'success',
         userId: activeUser?.id || null,
@@ -892,15 +1034,32 @@ function useAuthValue(): AuthProviderValue {
       return { error: null }
     }
     setAuthTransition('signing_out', activeUser?.email || null)
+    signOutInProgressRef.current = true
     const { error } = await supabase.auth.signOut()
     if (error) {
+      signOutInProgressRef.current = false
       setAuthTransition('idle')
+      return { error }
     }
     setPendingOfflineSignout(false)
     setHideProtectedBanksLock(true)
     // Clear cached user data on sign out
     cacheUserData(null, null)
     clearUserBankCache(activeUser?.id)
+    cacheRefreshedForUserIdRef.current = null
+    setState((s) => ({
+      ...s,
+      user: null,
+      profile: null,
+      loading: false,
+      authTransition: {
+        status: 'idle',
+        email: null,
+      },
+      offlineTrustedSession: false,
+      lastSessionValidationAt: null,
+    }))
+    signOutInProgressRef.current = false
     void logSignoutActivity({
       status: error ? 'failed' : 'success',
       userId: activeUser?.id || null,
@@ -1017,6 +1176,7 @@ function useAuthValue(): AuthProviderValue {
 
   const actions = React.useMemo<AuthActions>(() => ({
     signIn,
+    signInWithGoogle,
     signOut,
     requestPasswordReset,
     verifyPasswordResetCode,
@@ -1027,6 +1187,7 @@ function useAuthValue(): AuthProviderValue {
     clearSessionConflictReason,
     requestPasswordReset,
     signIn,
+    signInWithGoogle,
     signOut,
     updateDisplayName,
     updatePassword,

@@ -30,6 +30,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -66,7 +68,11 @@ public class NativeBankImportPlugin extends Plugin {
   private static final int ENCRYPTION_VERSION = 1;
   private static final String SHARED_EXPORT_DISABLED_PASSWORD = "vdjv-export-disabled-2024-secure";
   private static final String MEDIA_ROOT = "VDJV-Export/_media";
+  private static final String IMPORT_STAGING_ROOT = "VDJV-Import/_staging";
   private static final long PROGRESS_EMIT_MIN_INTERVAL_MS = 400L;
+  private static final long IMPORT_STAGING_FILE_TTL_MS = 24L * 60L * 60L * 1000L;
+  private static final int STORE_DOWNLOAD_MAX_ATTEMPTS = 2;
+  private static final long STORE_DOWNLOAD_RETRY_DELAY_MS = 1_200L;
 
   private final ExecutorService executor = Executors.newCachedThreadPool();
   private final Map<String, ImportJob> activeJobs = new ConcurrentHashMap<>();
@@ -297,6 +303,7 @@ public class NativeBankImportPlugin extends Plugin {
     List<String> candidateKeys
   ) throws Exception {
     ensureNotCancelled(job);
+    ensureReadableImportFile(inputFile);
     emitProgress(job, "validate-file", 8, "Validating bank archive...", null);
 
     File zipFile = null;
@@ -495,40 +502,96 @@ public class NativeBankImportPlugin extends Plugin {
   }
 
   private void downloadToFile(String signedUrl, File target, String jobId, ImportJob job) throws Exception {
-    HttpURLConnection connection = null;
-    try {
-      connection = (HttpURLConnection) new URL(signedUrl).openConnection();
-      connection.setRequestMethod("GET");
-      connection.setInstanceFollowRedirects(true);
-      connection.setConnectTimeout(30_000);
-      connection.setReadTimeout(120_000);
-      connection.connect();
-      int statusCode = connection.getResponseCode();
-      if (statusCode < 200 || statusCode >= 300) {
-        throw new IOException("Download failed with HTTP " + statusCode);
-      }
-      long totalBytes = connection.getContentLengthLong();
-      try (InputStream in = new BufferedInputStream(connection.getInputStream());
-           OutputStream out = new BufferedOutputStream(new FileOutputStream(target))) {
-        final long[] transferred = new long[]{0};
-        copyStream(in, out, job, bytesWritten -> {
-          transferred[0] += bytesWritten;
-          JSObject extra = new JSObject();
-          extra.put("downloadedBytes", transferred[0]);
-          if (totalBytes > 0) {
-            extra.put("totalBytes", totalBytes);
-          }
-          int progress = totalBytes > 0
-            ? 4 + Math.min(14, (int) Math.round((transferred[0] * 14.0d) / totalBytes))
-            : 12;
-          emitProgress(job, "download-progress", progress, "Downloading bank archive...", extra);
-        });
-      }
-    } finally {
-      if (connection != null) {
-        connection.disconnect();
+    for (int attempt = 1; attempt <= STORE_DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
+      final int attemptNumber = attempt;
+      ensureNotCancelled(job);
+      HttpURLConnection connection = null;
+      try {
+        deleteQuietly(target);
+        connection = (HttpURLConnection) new URL(signedUrl).openConnection();
+        connection.setRequestMethod("GET");
+        connection.setInstanceFollowRedirects(true);
+        connection.setConnectTimeout(30_000);
+        connection.setReadTimeout(120_000);
+        connection.connect();
+        int statusCode = connection.getResponseCode();
+        if (statusCode < 200 || statusCode >= 300) {
+          throw new IOException("Download failed with HTTP " + statusCode);
+        }
+        long totalBytes = connection.getContentLengthLong();
+        try (InputStream in = new BufferedInputStream(connection.getInputStream());
+             OutputStream out = new BufferedOutputStream(new FileOutputStream(target))) {
+          final long[] transferred = new long[]{0};
+          copyStream(in, out, job, bytesWritten -> {
+            transferred[0] += bytesWritten;
+            JSObject extra = new JSObject();
+            extra.put("downloadedBytes", transferred[0]);
+            if (totalBytes > 0) {
+              extra.put("totalBytes", totalBytes);
+            }
+            extra.put("attempt", attemptNumber);
+            int progress = totalBytes > 0
+              ? 4 + Math.min(14, (int) Math.round((transferred[0] * 14.0d) / totalBytes))
+              : 12;
+            emitProgress(job, "download-progress", progress, "Downloading bank archive...", extra);
+          });
+        }
+        return;
+      } catch (Throwable error) {
+        deleteQuietly(target);
+        boolean canRetry = attemptNumber < STORE_DOWNLOAD_MAX_ATTEMPTS && isRetriableDownloadException(error);
+        if (!canRetry) {
+          throw error;
+        }
+
+        JSObject retryDetails = new JSObject();
+        retryDetails.put("attempt", attemptNumber);
+        retryDetails.put("maxAttempts", STORE_DOWNLOAD_MAX_ATTEMPTS);
+        emitProgress(job, "download-progress", 5, "Download interrupted. Retrying...", retryDetails);
+        sleepDownloadRetry(job);
+      } finally {
+        if (connection != null) {
+          connection.disconnect();
+        }
       }
     }
+  }
+
+  private boolean isRetriableDownloadException(Throwable error) {
+    Throwable current = error;
+    while (current != null) {
+      if (current instanceof SocketException || current instanceof SocketTimeoutException) {
+        return true;
+      }
+      String message = trimToNull(current.getMessage());
+      if (message != null) {
+        String lowered = message.toLowerCase(Locale.US);
+        if (
+          lowered.contains("software caused connection abort")
+          || lowered.contains("connection reset")
+          || lowered.contains("connection aborted")
+          || lowered.contains("broken pipe")
+          || lowered.contains("unexpected end of stream")
+          || lowered.contains("read timed out")
+          || lowered.contains("timeout")
+        ) {
+          return true;
+        }
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
+  private void sleepDownloadRetry(ImportJob job) throws IOException {
+    ensureNotCancelled(job);
+    try {
+      Thread.sleep(STORE_DOWNLOAD_RETRY_DELAY_MS);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new IOException("Download retry interrupted.", interrupted);
+    }
+    ensureNotCancelled(job);
   }
 
   private void copyUriToFile(Uri uri, File target, String jobId, ImportJob job) throws Exception {
@@ -835,6 +898,16 @@ public class NativeBankImportPlugin extends Plugin {
       if (message == null) {
         message = "Android ran out of memory while importing this bank.";
       }
+    } else if (
+      ("FileNotFoundException".equals(errorClass) || "FileNotFoundException".equals(causeClass))
+      && ((message != null && message.contains("ENOENT")) || (causeMessage != null && causeMessage.contains("ENOENT")))
+    ) {
+      reason = "staging_file_missing";
+      if ("validate-file".equals(stage) || "download-start".equals(stage) || "download-progress".equals(stage)) {
+        message = "The downloaded bank file is missing from temporary app storage. Free device space and try again.";
+      } else if (message == null) {
+        message = "A required temporary import file is missing. Free device space and try again.";
+      }
     } else if ("decrypt-start".equals(stage)) {
       if (message != null && message.contains("Cannot decrypt bank file")) {
         reason = "decrypt_access_denied";
@@ -852,7 +925,12 @@ public class NativeBankImportPlugin extends Plugin {
     } else if ("pads-start".equals(stage) || "pads-progress".equals(stage)) {
       reason = "media_extract_failed";
     } else if ("download-start".equals(stage) || "download-progress".equals(stage)) {
-      reason = "download_failed";
+      if (isRetriableDownloadException(error)) {
+        reason = "download_interrupted";
+        message = "The network connection was interrupted while downloading this bank. Try again on stable Wi-Fi or mobile data.";
+      } else {
+        reason = "download_failed";
+      }
     }
 
     if (message == null) {
@@ -902,11 +980,59 @@ public class NativeBankImportPlugin extends Plugin {
   }
 
   private File createTempFile(String prefix, String suffix) throws IOException {
-    File cacheDir = getContext().getCacheDir();
-    if (cacheDir == null) {
-      throw new IOException("App cache directory is unavailable.");
+    File stagingDir = getImportStagingDirectory();
+    cleanupStaleImportStagingFiles(stagingDir);
+    return File.createTempFile(prefix, suffix, stagingDir);
+  }
+
+  private File getImportStagingDirectory() throws IOException {
+    File filesDir = getContext().getFilesDir();
+    if (filesDir == null) {
+      throw new IOException("App files directory is unavailable.");
     }
-    return File.createTempFile(prefix, suffix, cacheDir);
+    File stagingDir = new File(filesDir, IMPORT_STAGING_ROOT);
+    if (!stagingDir.exists() && !stagingDir.mkdirs()) {
+      throw new IOException("Failed to create import staging directory.");
+    }
+    if (!stagingDir.isDirectory()) {
+      throw new IOException("Import staging path is unavailable.");
+    }
+    return stagingDir;
+  }
+
+  private void cleanupStaleImportStagingFiles(File stagingDir) {
+    if (stagingDir == null || !stagingDir.exists() || !stagingDir.isDirectory()) {
+      return;
+    }
+    File[] children = stagingDir.listFiles();
+    if (children == null || children.length == 0) {
+      return;
+    }
+    long cutoffMs = System.currentTimeMillis() - IMPORT_STAGING_FILE_TTL_MS;
+    for (File child : children) {
+      if (child == null) {
+        continue;
+      }
+      long lastModified = child.lastModified();
+      if (lastModified <= 0 || lastModified < cutoffMs) {
+        deleteQuietly(child);
+      }
+    }
+  }
+
+  private void ensureReadableImportFile(File file) throws IOException {
+    if (file == null) {
+      throw new IOException("Temporary import file is unavailable.");
+    }
+    if (!file.exists() || !file.isFile()) {
+      throw new java.io.FileNotFoundException("Temporary import file is missing (ENOENT).");
+    }
+    if (!file.canRead()) {
+      throw new IOException("Temporary import file is not readable.");
+    }
+    if (file.length() <= 0) {
+      throw new IOException("Temporary import file is empty.");
+    }
   }
 
   private boolean hasZipMagic(File file) throws IOException {

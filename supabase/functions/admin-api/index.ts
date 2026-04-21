@@ -6,7 +6,7 @@ import {
   finalizeR2DirectUploadSession,
   readR2DirectUploadSession,
 } from "../_shared/r2-direct-upload.ts";
-import { createPresignedPutUrl, headObject } from "../_shared/r2-storage.ts";
+import { createPresignedPutUrl, deleteObject, headObject } from "../_shared/r2-storage.ts";
 import {
   createSignedAdminExportToken,
   isAdminExportTokenSigningEnabled,
@@ -36,6 +36,65 @@ type R2UploadTarget = {
   bucket: string;
   objectKey: string;
   assetName: string;
+};
+
+type AdminCatalogUploadSessionView = {
+  id: string;
+  catalog_item_id: string | null;
+  bank_id: string | null;
+  status: string;
+  failure_reason: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+  expires_at: string | null;
+  storage_bucket: string;
+  storage_key: string;
+  asset_name: string | null;
+  expected_file_size_bytes: number;
+  expected_sha256: string | null;
+  actual_file_size_bytes: number | null;
+  actual_etag: string | null;
+  object_exists: boolean;
+  asset_protection: CatalogAssetProtection;
+  operation_type: "create" | "update";
+  is_current_catalog_asset: boolean;
+};
+
+type CatalogAssetVariantType = "full" | "low_memory_segmented";
+type CatalogAssetVariantStatus = "uploading" | "ready" | "failed";
+
+type AdminCatalogAssetVariantPartView = {
+  id: string;
+  part_index: number;
+  storage_bucket: string;
+  storage_key: string;
+  asset_name: string | null;
+  file_size_bytes: number;
+  sha256: string | null;
+  pad_start_index: number;
+  pad_end_index: number;
+  object_exists: boolean;
+  actual_file_size_bytes: number | null;
+};
+
+type AdminCatalogAssetVariantView = {
+  id: string;
+  catalog_item_id: string;
+  variant_type: CatalogAssetVariantType;
+  status: CatalogAssetVariantStatus;
+  manifest_storage_bucket: string | null;
+  manifest_storage_key: string | null;
+  manifest_asset_name: string | null;
+  manifest_object_exists: boolean;
+  manifest_actual_file_size_bytes: number | null;
+  total_file_size_bytes: number | null;
+  part_count: number;
+  min_client_version: string | null;
+  source_asset_sha256: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  parts: AdminCatalogAssetVariantPartView[];
 };
 
 const readPositiveInt = (value: string | undefined, fallback: number): number => {
@@ -169,6 +228,29 @@ const normalizeCatalogAssetProtection = (
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "public" || normalized === "public_free" || normalized === "plain") return "public";
   if (normalized === "encrypted" || normalized === "protected") return "encrypted";
+  return fallback;
+};
+
+const normalizeCatalogAssetVariantType = (
+  value: unknown,
+  fallback: CatalogAssetVariantType = "low_memory_segmented",
+): CatalogAssetVariantType => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "full") return "full";
+  if (normalized === "low_memory_segmented" || normalized === "low-memory-segmented" || normalized === "segmented") {
+    return "low_memory_segmented";
+  }
+  return fallback;
+};
+
+const normalizeCatalogAssetVariantStatus = (
+  value: unknown,
+  fallback: CatalogAssetVariantStatus = "uploading",
+): CatalogAssetVariantStatus => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "ready") return "ready";
+  if (normalized === "failed") return "failed";
+  if (normalized === "uploading") return "uploading";
   return fallback;
 };
 
@@ -409,6 +491,123 @@ const getAssetNameFromStorageKey = (storageKey: string | null | undefined): stri
   if (!storageKey) return null;
   const segments = String(storageKey).split("/").filter(Boolean);
   return segments.length ? segments[segments.length - 1] : null;
+};
+
+const buildCatalogLowMemoryManifestObjectKey = (catalogItemId: string, variantId: string): string =>
+  `catalog/${catalogItemId}/low-memory/${variantId}/manifest.json`;
+
+const buildCatalogLowMemoryPartObjectKey = (
+  catalogItemId: string,
+  variantId: string,
+  partIndex: number,
+  assetName?: string | null,
+): string => {
+  const normalizedIndex = Math.max(0, Math.floor(partIndex));
+  const safeAssetName = (asString(assetName, 240) || `part-${String(normalizedIndex + 1).padStart(3, "0")}.bank`)
+    .replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return `catalog/${catalogItemId}/low-memory/${variantId}/${safeAssetName}`;
+};
+
+const mapAdminCatalogAssetVariantView = async (row: any): Promise<AdminCatalogAssetVariantView> => {
+  const manifestStorageBucket = asString(row?.manifest_storage_bucket, 300) || null;
+  const manifestStorageKey = asString(row?.manifest_storage_key, 2000) || null;
+  let manifestObjectInfo: Awaited<ReturnType<typeof headObject>> | null = null;
+  if (manifestStorageBucket && manifestStorageKey) {
+    try {
+      manifestObjectInfo = await headObject(manifestStorageBucket, manifestStorageKey);
+    } catch {
+      manifestObjectInfo = null;
+    }
+  }
+
+  const partRows = Array.isArray(row?.bank_catalog_asset_variant_parts)
+    ? row.bank_catalog_asset_variant_parts
+    : [];
+  const parts = await Promise.all(partRows.map(async (partRow: any): Promise<AdminCatalogAssetVariantPartView> => {
+    const storageBucket = asString(partRow?.storage_bucket, 300) || "";
+    const storageKey = asString(partRow?.storage_key, 2000) || "";
+    let objectInfo: Awaited<ReturnType<typeof headObject>> | null = null;
+    if (storageBucket && storageKey) {
+      try {
+        objectInfo = await headObject(storageBucket, storageKey);
+      } catch {
+        objectInfo = null;
+      }
+    }
+    return {
+      id: asUuid(partRow?.id) || "",
+      part_index: Math.max(0, Math.floor(Number(asNumber(partRow?.part_index) || 0))),
+      storage_bucket: storageBucket,
+      storage_key: storageKey,
+      asset_name: getAssetNameFromStorageKey(storageKey),
+      file_size_bytes: Math.max(0, Math.floor(Number(asNumber(partRow?.file_size_bytes) || 0))),
+      sha256: asString(partRow?.sha256, 128),
+      pad_start_index: Math.max(0, Math.floor(Number(asNumber(partRow?.pad_start_index) || 0))),
+      pad_end_index: Math.max(0, Math.floor(Number(asNumber(partRow?.pad_end_index) || 0))),
+      object_exists: Boolean(objectInfo),
+      actual_file_size_bytes: objectInfo?.sizeBytes ?? null,
+    };
+  }));
+
+  return {
+    id: asUuid(row?.id) || "",
+    catalog_item_id: asUuid(row?.catalog_item_id) || "",
+    variant_type: normalizeCatalogAssetVariantType(row?.variant_type, "low_memory_segmented"),
+    status: normalizeCatalogAssetVariantStatus(row?.status, "uploading"),
+    manifest_storage_bucket: manifestStorageBucket,
+    manifest_storage_key: manifestStorageKey,
+    manifest_asset_name: getAssetNameFromStorageKey(manifestStorageKey),
+    manifest_object_exists: Boolean(manifestObjectInfo),
+    manifest_actual_file_size_bytes: manifestObjectInfo?.sizeBytes ?? null,
+    total_file_size_bytes: Number.isFinite(Number(asNumber(row?.total_file_size_bytes)))
+      ? Math.max(0, Math.floor(Number(asNumber(row?.total_file_size_bytes) || 0)))
+      : null,
+    part_count: Math.max(0, Math.floor(Number(asNumber(row?.part_count) || parts.length))),
+    min_client_version: asString(row?.min_client_version, 64),
+    source_asset_sha256: asString(row?.source_asset_sha256, 128),
+    created_at: asString(row?.created_at, 80),
+    updated_at: asString(row?.updated_at, 80),
+    parts: parts.sort((left, right) => left.part_index - right.part_index),
+  };
+};
+
+const mapAdminCatalogUploadSessionView = async (
+  row: any,
+  currentStorageKey: string,
+): Promise<AdminCatalogUploadSessionView> => {
+  const storageBucket = asString(row?.storage_bucket, 300) || "";
+  const storageKey = asString(row?.storage_key, 2000) || "";
+  let objectInfo: Awaited<ReturnType<typeof headObject>> | null = null;
+  if (storageBucket && storageKey) {
+    try {
+      objectInfo = await headObject(storageBucket, storageKey);
+    } catch {
+      objectInfo = null;
+    }
+  }
+  const meta = typeof row?.meta === "object" && row.meta ? row.meta as Record<string, unknown> : {};
+  return {
+    id: asUuid(row?.id) || "",
+    catalog_item_id: asUuid(row?.catalog_item_id),
+    bank_id: asUuid(row?.bank_id),
+    status: asString(row?.status, 40) || "issued",
+    failure_reason: asString(row?.failure_reason, 2000),
+    created_at: asString(row?.created_at, 80),
+    updated_at: asString(row?.updated_at, 80),
+    completed_at: asString(row?.completed_at, 80),
+    expires_at: asString(row?.expires_at, 80),
+    storage_bucket: storageBucket,
+    storage_key: storageKey,
+    asset_name: getAssetNameFromStorageKey(storageKey),
+    expected_file_size_bytes: Math.max(0, Math.floor(Number(asNumber(row?.expected_file_size_bytes) || 0))),
+    expected_sha256: asString(row?.expected_sha256, 128),
+    actual_file_size_bytes: objectInfo?.sizeBytes ?? null,
+    actual_etag: objectInfo?.etag ?? null,
+    object_exists: Boolean(objectInfo),
+    asset_protection: normalizeCatalogAssetProtection(meta.assetProtection, "encrypted"),
+    operation_type: asString(meta.operationType, 40) === "update" ? "update" : "create",
+    is_current_catalog_asset: Boolean(currentStorageKey) && currentStorageKey === storageKey,
+  };
 };
 
 const listUsers = async (req: Request, admin: ReturnType<typeof createServiceClient>) => {
@@ -890,6 +1089,34 @@ const listBanks = async (req: Request, admin: ReturnType<typeof createServiceCli
     accessCountMap.set(bankId, (accessCountMap.get(bankId) || 0) + 1);
   }
 
+  const catalogSummaryByBankId = new Map<string, Record<string, unknown>>();
+  if (bankIds.length > 0) {
+    const { data: catalogRows, error: catalogError } = await admin
+      .from("bank_catalog_items")
+      .select("id,bank_id,item_type,is_published,coming_soon,asset_protection,file_size_bytes,thumbnail_path,storage_key,expected_asset_name,price_php,updated_at")
+      .in("bank_id", bankIds);
+    if (catalogError && !/bank_catalog_items/i.test(catalogError.message || "")) {
+      return fail(500, catalogError.message);
+    }
+    for (const row of catalogRows || []) {
+      const bankId = asUuid(row?.bank_id);
+      if (!bankId || catalogSummaryByBankId.has(bankId)) continue;
+      catalogSummaryByBankId.set(bankId, {
+        id: asUuid(row?.id) || "",
+        item_type: String(row?.item_type || "").trim().toLowerCase() === "bank_bundle" ? "bank_bundle" : "single_bank",
+        is_published: Boolean(row?.is_published),
+        coming_soon: Boolean(row?.coming_soon),
+        asset_protection: normalizeCatalogAssetProtection(row?.asset_protection, "encrypted"),
+        file_size_bytes: Number.isFinite(Number(row?.file_size_bytes)) ? Math.max(0, Math.floor(Number(row.file_size_bytes))) : null,
+        thumbnail_path: asString(row?.thumbnail_path, 2000) || null,
+        storage_key: asString(row?.storage_key, 2000) || "",
+        expected_asset_name: asString(row?.expected_asset_name, 500) || "",
+        price_php: Number.isFinite(Number(row?.price_php)) ? Number(row.price_php) : null,
+        updated_at: asString(row?.updated_at, 80) || null,
+      });
+    }
+  }
+
   const mapped = (banks || []).map((bank: any) => ({
     id: bank.id,
     title: bank.title || "",
@@ -900,6 +1127,7 @@ const listBanks = async (req: Request, admin: ReturnType<typeof createServiceCli
     deleted_at: includeSoftDelete ? (bank.deleted_at || null) : null,
     deleted_by: includeSoftDelete ? (bank.deleted_by || null) : null,
     access_count: accessCountMap.get(bank.id) || 0,
+    store_catalog: catalogSummaryByBankId.get(bank.id) || null,
   }));
 
   const filtered = q
@@ -1096,10 +1324,10 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     pendingInstallerCountResp,
     publishedCatalogCountResp,
     draftCatalogCountResp,
-    exports24hResp,
-    exportFailures24hResp,
-    duplicateNoChange24hResp,
-    authFailures24hResp,
+    totalRegisteredUsersResp,
+    totalInstallerLicensesResp,
+    approvedStoreRequestsResp,
+    importFailures24hResp,
     imports24hResp,
     storeRevenue24hResp,
     accountRevenue24hResp,
@@ -1134,26 +1362,23 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .select("id", { head: true, count: "exact" })
       .eq("is_published", false),
     admin
-      .from("activity_logs")
+      .from("profiles")
       .select("id", { head: true, count: "exact" })
-      .eq("event_type", "bank.export")
-      .gte("created_at", since24hIso),
+      .neq("role", "admin"),
+    admin
+      .from("installer_purchase_requests")
+      .select("issued_license_code")
+      .eq("status", "approved")
+      .not("issued_license_code", "is", null)
+      .limit(10000),
+    admin
+      .from("bank_purchase_requests")
+      .select("id", { head: true, count: "exact" })
+      .eq("status", "approved"),
     admin
       .from("activity_logs")
       .select("id", { head: true, count: "exact" })
-      .eq("event_type", "bank.export")
-      .eq("status", "failed")
-      .gte("created_at", since24hIso),
-    admin
-      .from("activity_logs")
-      .select("id", { head: true, count: "exact" })
-      .eq("event_type", "bank.export")
-      .contains("meta", { upload: { result: "duplicate_no_change" } })
-      .gte("created_at", since24hIso),
-    admin
-      .from("activity_logs")
-      .select("id", { head: true, count: "exact" })
-      .in("event_type", ["auth.login", "auth.signup", "auth.signout"])
+      .eq("event_type", "bank.import")
       .eq("status", "failed")
       .gte("created_at", since24hIso),
     admin
@@ -1201,10 +1426,10 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   if (pendingInstallerCountResp.error) return fail(500, pendingInstallerCountResp.error.message);
   if (publishedCatalogCountResp.error) return fail(500, publishedCatalogCountResp.error.message);
   if (draftCatalogCountResp.error) return fail(500, draftCatalogCountResp.error.message);
-  if (exports24hResp.error) return fail(500, exports24hResp.error.message);
-  if (exportFailures24hResp.error) return fail(500, exportFailures24hResp.error.message);
-  if (duplicateNoChange24hResp.error) return fail(500, duplicateNoChange24hResp.error.message);
-  if (authFailures24hResp.error) return fail(500, authFailures24hResp.error.message);
+  if (totalRegisteredUsersResp.error) return fail(500, totalRegisteredUsersResp.error.message);
+  if (totalInstallerLicensesResp.error) return fail(500, totalInstallerLicensesResp.error.message);
+  if (approvedStoreRequestsResp.error) return fail(500, approvedStoreRequestsResp.error.message);
+  if (importFailures24hResp.error) return fail(500, importFailures24hResp.error.message);
   if (imports24hResp.error) return fail(500, imports24hResp.error.message);
   if (storeRevenue24hResp.error) return fail(500, storeRevenue24hResp.error.message);
   if (accountRevenue24hResp.error) return fail(500, accountRevenue24hResp.error.message);
@@ -1470,6 +1695,11 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   const totalRevenueApproved = storeRevenueApprovedTotal + accountRevenueApprovedTotal + installerRevenueApprovedTotal;
   const storeBuyersApprovedTotal = Math.max(0, Math.floor(asFiniteNumber((totalRevenueRow as any).store_buyers_approved_total)));
   const accountBuyersApprovedTotal = Math.max(0, Math.floor(asFiniteNumber((totalRevenueRow as any).account_buyers_approved_total)));
+  const totalInstallerLicenses = new Set(
+    (totalInstallerLicensesResp.data || [])
+      .map((row: any) => asString((row as any)?.issued_license_code, 120) || "")
+      .filter(Boolean),
+  ).size;
   const activeTodayUsers = new Set(
     (activeTodayRowsResp.data || [])
       .map((row: any) => String(row?.user_id || ""))
@@ -1486,10 +1716,10 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       pendingAccountRequests: Number(pendingAccountCountResp.count || 0),
       pendingStoreRequests: Number(pendingStoreCountResp.count || 0),
       pendingInstallerRequests: Number(pendingInstallerCountResp.count || 0),
-      exports24h: Number(exports24hResp.count || 0),
-      exportFailures24h: Number(exportFailures24hResp.count || 0),
-      duplicateNoChange24h: Number(duplicateNoChange24hResp.count || 0),
-      authFailures24h: Number(authFailures24hResp.count || 0),
+      totalRegisteredUsers: Number(totalRegisteredUsersResp.count || 0),
+      totalInstallerLicenses,
+      approvedStoreRequestsTotal: Number(approvedStoreRequestsResp.count || 0),
+      importFailures24h: Number(importFailures24hResp.count || 0),
       imports24h: Number(imports24hResp.count || 0),
       storeRevenueApprovedTotal,
       accountRevenueApprovedTotal,
@@ -1854,6 +2084,534 @@ const createStoreDraft = async (bankId: string, body: any, admin: ReturnType<typ
   }).select("*").single();
   if (insertError) return fail(500, insertError.message);
   return ok({ item: newDraft });
+};
+
+const listCatalogUploadSessions = async (
+  catalogItemId: string,
+  admin: ReturnType<typeof createServiceClient>,
+) => {
+  const { data: item, error: itemError } = await admin
+    .from("bank_catalog_items")
+    .select("id,item_type,storage_key")
+    .eq("id", catalogItemId)
+    .maybeSingle();
+  if (itemError) return fail(500, itemError.message);
+  if (!item) return fail(404, "Catalog item not found");
+  if (String(item?.item_type || "").trim().toLowerCase() === "bank_bundle") {
+    return ok({ sessions: [], item });
+  }
+
+  const { data: rows, error } = await admin
+    .from("r2_direct_upload_sessions")
+    .select("id,catalog_item_id,bank_id,status,failure_reason,created_at,updated_at,completed_at,expires_at,storage_bucket,storage_key,expected_file_size_bytes,expected_sha256,meta")
+    .eq("scope", "admin_catalog")
+    .eq("catalog_item_id", catalogItemId)
+    .order("created_at", { ascending: false })
+    .limit(40);
+  if (error) return fail(500, error.message);
+
+  const currentStorageKey = asString(item?.storage_key, 2000) || "";
+  const visibleRows = (rows || [])
+    .filter((row: any) => asString(row?.failure_reason, 2000) !== "ASSET_DELETED_BY_ADMIN")
+    .slice(0, 12);
+  const sessions = await Promise.all(visibleRows.map((row: any) => mapAdminCatalogUploadSessionView(row, currentStorageKey)));
+  return ok({ sessions, item });
+};
+
+const promoteCatalogUploadSession = async (
+  catalogItemId: string,
+  body: any,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const sessionId = asUuid(body?.sessionId || body?.session_id);
+  if (!sessionId) return badRequest("Missing or invalid sessionId");
+
+  const { data: item, error: itemError } = await admin
+    .from("bank_catalog_items")
+    .select("*")
+    .eq("id", catalogItemId)
+    .maybeSingle();
+  if (itemError) return fail(500, itemError.message);
+  if (!item) return fail(404, "Catalog item not found");
+  if (String(item?.item_type || "").trim().toLowerCase() === "bank_bundle") {
+    return badRequest("Bundle catalog items do not support asset session promotion");
+  }
+
+  const { data: session, error: sessionError } = await admin
+    .from("r2_direct_upload_sessions")
+    .select("*")
+    .eq("id", sessionId)
+    .eq("scope", "admin_catalog")
+    .maybeSingle();
+  if (sessionError) return fail(500, sessionError.message);
+  if (!session) return fail(404, "Upload session not found");
+  if (asUuid(session?.catalog_item_id) !== catalogItemId) return badRequest("CATALOG_ITEM_MISMATCH");
+
+  const storageBucket = asString(session?.storage_bucket, 300) || "";
+  const storageKey = asString(session?.storage_key, 2000) || "";
+  if (!storageBucket || !storageKey) return fail(400, "SESSION_ASSET_MISSING");
+
+  let objectInfo: Awaited<ReturnType<typeof headObject>>;
+  try {
+    objectInfo = await headObject(storageBucket, storageKey);
+  } catch (error) {
+    return fail(502, error instanceof Error ? error.message : "R2_VERIFY_FAILED");
+  }
+  if (!objectInfo) return fail(404, "ASSET_NOT_FOUND");
+
+  const expectedFileSizeBytes = Math.max(0, Math.floor(Number(asNumber(session?.expected_file_size_bytes) || 0)));
+  if (expectedFileSizeBytes > 0 && objectInfo.sizeBytes !== expectedFileSizeBytes) {
+    return fail(409, "ASSET_SIZE_MISMATCH");
+  }
+
+  const meta = typeof session?.meta === "object" && session.meta ? session.meta as Record<string, unknown> : {};
+  const nextAssetProtection = normalizeCatalogAssetProtection(meta.assetProtection, normalizeCatalogAssetProtection(item?.asset_protection, "encrypted"));
+  const resolvedAssetName = getAssetNameFromStorageKey(storageKey) || asString(item?.expected_asset_name, 500) || null;
+  const nowIso = new Date().toISOString();
+
+  const { data: updatedItem, error: updateError } = await admin
+    .from("bank_catalog_items")
+    .update({
+      is_published: Boolean(item?.is_published),
+      coming_soon: Boolean(item?.coming_soon),
+      asset_protection: nextAssetProtection,
+      storage_provider: "r2",
+      storage_bucket: storageBucket,
+      storage_key: storageKey,
+      storage_etag: objectInfo.etag,
+      storage_uploaded_at: nowIso,
+      expected_asset_name: resolvedAssetName || item.expected_asset_name,
+      file_size_bytes: objectInfo.sizeBytes,
+    })
+    .eq("id", catalogItemId)
+    .select("*")
+    .single();
+  if (updateError) return fail(500, updateError.message);
+
+  await admin
+    .from("r2_direct_upload_sessions")
+    .update({
+      status: "completed",
+      failure_reason: null,
+      completed_at: nowIso,
+    })
+    .eq("id", sessionId);
+
+  await admin
+    .from("r2_direct_upload_sessions")
+    .update({
+      status: "failed",
+      failure_reason: "SUPERSEDED_BY_PROMOTED_ASSET",
+      completed_at: nowIso,
+    })
+    .eq("scope", "admin_catalog")
+    .eq("catalog_item_id", catalogItemId)
+    .eq("status", "issued")
+    .neq("id", sessionId);
+
+  await swallowDiscordError(() => sendDiscordAdminActionEvent({
+    severity: "info",
+    title: "Store Catalog Asset Promoted",
+    description: "Admin promoted a previously uploaded staged asset to the catalog row.",
+    actorUserId: adminUserId,
+    bankId: asString(item.bank_id, 80) || null,
+    catalogItemId,
+    extraFields: [
+      { name: "Asset", value: resolvedAssetName || storageKey, inline: false },
+      { name: "Protection", value: nextAssetProtection, inline: true },
+      { name: "Published", value: item?.is_published ? "Yes" : "No", inline: true },
+    ],
+  }));
+
+  const sessionView = await mapAdminCatalogUploadSessionView({ ...session, status: "completed", failure_reason: null, completed_at: nowIso }, storageKey);
+  return ok({ item: updatedItem, session: sessionView });
+};
+
+const deleteCatalogUploadSessionAsset = async (
+  catalogItemId: string,
+  body: any,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const sessionId = asUuid(body?.sessionId || body?.session_id);
+  if (!sessionId) return badRequest("Missing or invalid sessionId");
+
+  const { data: item, error: itemError } = await admin
+    .from("bank_catalog_items")
+    .select("id,bank_id,storage_key")
+    .eq("id", catalogItemId)
+    .maybeSingle();
+  if (itemError) return fail(500, itemError.message);
+  if (!item) return fail(404, "Catalog item not found");
+
+  const { data: session, error: sessionError } = await admin
+    .from("r2_direct_upload_sessions")
+    .select("*")
+    .eq("id", sessionId)
+    .eq("scope", "admin_catalog")
+    .maybeSingle();
+  if (sessionError) return fail(500, sessionError.message);
+  if (!session) return fail(404, "Upload session not found");
+  if (asUuid(session?.catalog_item_id) !== catalogItemId) return badRequest("CATALOG_ITEM_MISMATCH");
+
+  const storageBucket = asString(session?.storage_bucket, 300) || "";
+  const storageKey = asString(session?.storage_key, 2000) || "";
+  if (!storageBucket || !storageKey) return badRequest("SESSION_ASSET_MISSING");
+  if (storageKey === (asString(item?.storage_key, 2000) || "")) {
+    return fail(409, "CURRENT_CATALOG_ASSET");
+  }
+
+  try {
+    await deleteObject(storageBucket, storageKey);
+  } catch (error) {
+    return fail(502, error instanceof Error ? error.message : "R2_DELETE_FAILED");
+  }
+
+  await admin
+    .from("r2_direct_upload_sessions")
+    .update({
+      status: "failed",
+      failure_reason: "ASSET_DELETED_BY_ADMIN",
+      completed_at: asString(session?.completed_at, 80) || new Date().toISOString(),
+    })
+    .eq("id", sessionId);
+
+  await swallowDiscordError(() => sendDiscordAdminActionEvent({
+    severity: "critical",
+    title: "Staged Store Asset Deleted",
+    description: "Admin deleted a stale staged catalog upload asset.",
+    actorUserId: adminUserId,
+    bankId: asString(item.bank_id, 80) || null,
+    catalogItemId,
+    extraFields: [
+      { name: "Asset", value: getAssetNameFromStorageKey(storageKey) || storageKey, inline: false },
+    ],
+  }));
+
+  return ok({ deleted: true, sessionId });
+};
+
+const listCatalogAssetVariants = async (
+  catalogItemId: string,
+  admin: ReturnType<typeof createServiceClient>,
+) => {
+  const { data: item, error: itemError } = await admin
+    .from("bank_catalog_items")
+    .select("id,item_type")
+    .eq("id", catalogItemId)
+    .maybeSingle();
+  if (itemError) return fail(500, itemError.message);
+  if (!item) return fail(404, "Catalog item not found");
+  if (String(item?.item_type || "").trim().toLowerCase() === "bank_bundle") {
+    return ok({ variants: [], item });
+  }
+
+  const { data: rows, error } = await admin
+    .from("bank_catalog_asset_variants")
+    .select("*, bank_catalog_asset_variant_parts (*)")
+    .eq("catalog_item_id", catalogItemId)
+    .order("updated_at", { ascending: false });
+  if (error) return fail(500, error.message);
+
+  const variants = await Promise.all((rows || []).map((row: any) => mapAdminCatalogAssetVariantView(row)));
+  return ok({ variants, item });
+};
+
+const startLowMemoryCatalogVariantUpload = async (
+  catalogItemId: string,
+  body: any,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const { data: item, error: itemError } = await admin
+    .from("bank_catalog_items")
+    .select("id,bank_id,item_type")
+    .eq("id", catalogItemId)
+    .maybeSingle();
+  if (itemError) return fail(500, itemError.message);
+  if (!item) return fail(404, "Catalog item not found");
+  if (String(item?.item_type || "").trim().toLowerCase() === "bank_bundle") {
+    return badRequest("Bundle catalog items do not support low-memory variants");
+  }
+
+  const totalFileSizeBytes = Number(asNumber(body?.totalFileSizeBytes ?? body?.total_file_size_bytes) || 0);
+  const sourceAssetSha256 = asString(body?.sourceAssetSha256 ?? body?.source_asset_sha256, 128) || null;
+  const minClientVersion = asString(body?.minClientVersion ?? body?.min_client_version, 64) || null;
+  const manifestExpectedFileSizeBytes = Number(
+    asNumber(body?.manifest?.fileSizeBytes ?? body?.manifest?.file_size_bytes) || 0,
+  );
+  const manifestExpectedSha256 = asString(body?.manifest?.sha256 ?? body?.manifest?.expected_sha256, 128) || null;
+  const parts = Array.isArray(body?.parts) ? body.parts : [];
+  if (!Number.isFinite(totalFileSizeBytes) || totalFileSizeBytes <= 0) {
+    return badRequest("Missing or invalid totalFileSizeBytes");
+  }
+  if (!Number.isFinite(manifestExpectedFileSizeBytes) || manifestExpectedFileSizeBytes <= 0) {
+    return badRequest("Missing or invalid manifest.fileSizeBytes");
+  }
+  if (parts.length === 0) return badRequest("At least one low-memory part is required");
+  if (parts.length > 64) return badRequest("Too many low-memory parts");
+
+  const normalizedParts = parts.map((part: any, index: number) => {
+    const partIndex = Math.max(0, Math.floor(Number(asNumber(part?.partIndex ?? part?.part_index) ?? index)));
+    const fileSizeBytes = Number(asNumber(part?.fileSizeBytes ?? part?.file_size_bytes) || 0);
+    const sha256 = asString(part?.sha256, 128) || null;
+    const padStartIndex = Math.max(0, Math.floor(Number(asNumber(part?.padStartIndex ?? part?.pad_start_index) || 0)));
+    const padEndIndex = Math.max(padStartIndex, Math.floor(Number(asNumber(part?.padEndIndex ?? part?.pad_end_index) || padStartIndex)));
+    const assetName = asString(part?.assetName ?? part?.asset_name, 255) || null;
+    return {
+      partIndex,
+      fileSizeBytes,
+      sha256,
+      padStartIndex,
+      padEndIndex,
+      assetName,
+    };
+  }).sort((left, right) => left.partIndex - right.partIndex);
+
+  const distinctPartIndexes = new Set(normalizedParts.map((part) => part.partIndex));
+  if (distinctPartIndexes.size !== normalizedParts.length) return badRequest("Duplicate part indexes are not allowed");
+  if (normalizedParts.some((part) => !Number.isFinite(part.fileSizeBytes) || part.fileSizeBytes <= 0)) {
+    return badRequest("Every part must include a valid fileSizeBytes");
+  }
+
+  const existingVariantResult = await admin
+    .from("bank_catalog_asset_variants")
+    .select("id")
+    .eq("catalog_item_id", catalogItemId)
+    .eq("variant_type", "low_memory_segmented")
+    .maybeSingle();
+  if (existingVariantResult.error) return fail(500, existingVariantResult.error.message);
+
+  const variantId = asUuid(existingVariantResult.data?.id) || crypto.randomUUID();
+  const manifestStorageBucket = R2_BUCKET;
+  const manifestStorageKey = buildCatalogLowMemoryManifestObjectKey(catalogItemId, variantId);
+  if (!manifestStorageBucket) return fail(500, "R2_BUCKET is not configured");
+
+  const variantPayload = {
+    catalog_item_id: catalogItemId,
+    variant_type: "low_memory_segmented",
+    status: "uploading",
+    manifest_storage_bucket: manifestStorageBucket,
+    manifest_storage_key: manifestStorageKey,
+    total_file_size_bytes: Math.max(0, Math.floor(totalFileSizeBytes)),
+    part_count: normalizedParts.length,
+    min_client_version: minClientVersion,
+    source_asset_sha256: sourceAssetSha256,
+    created_by: adminUserId,
+    updated_by: adminUserId,
+  };
+
+  const upsertResult = existingVariantResult.data?.id
+    ? await admin
+      .from("bank_catalog_asset_variants")
+      .update(variantPayload)
+      .eq("id", variantId)
+      .select("*")
+      .single()
+    : await admin
+      .from("bank_catalog_asset_variants")
+      .insert({ id: variantId, ...variantPayload })
+      .select("*")
+      .single();
+  if (upsertResult.error || !upsertResult.data) return fail(500, upsertResult.error?.message || "Could not prepare low-memory variant");
+
+  const deletePartsResult = await admin
+    .from("bank_catalog_asset_variant_parts")
+    .delete()
+    .eq("variant_id", variantId);
+  if (deletePartsResult.error) return fail(500, deletePartsResult.error.message);
+
+  const partRows = normalizedParts.map((part) => ({
+    variant_id: variantId,
+    part_index: part.partIndex,
+    storage_bucket: manifestStorageBucket,
+    storage_key: buildCatalogLowMemoryPartObjectKey(catalogItemId, variantId, part.partIndex, part.assetName),
+    file_size_bytes: Math.max(1, Math.floor(part.fileSizeBytes)),
+    sha256: part.sha256,
+    pad_start_index: part.padStartIndex,
+    pad_end_index: part.padEndIndex,
+  }));
+  const insertPartsResult = await admin
+    .from("bank_catalog_asset_variant_parts")
+    .insert(partRows)
+    .select("*");
+  if (insertPartsResult.error) return fail(500, insertPartsResult.error.message);
+
+  const manifestSigned = await createPresignedPutUrl(
+    manifestStorageBucket,
+    manifestStorageKey,
+    Math.max(60, Math.min(R2_UPLOAD_URL_TTL_SECONDS, R2_DIRECT_UPLOAD_SESSION_TTL_SECONDS)),
+  );
+  const partUploads = await Promise.all(partRows.map(async (partRow) => {
+    const signed = await createPresignedPutUrl(
+      manifestStorageBucket,
+      partRow.storage_key,
+      Math.max(60, Math.min(R2_UPLOAD_URL_TTL_SECONDS, R2_DIRECT_UPLOAD_SESSION_TTL_SECONDS)),
+    );
+    return {
+      partIndex: partRow.part_index,
+      storageBucket: partRow.storage_bucket,
+      storageKey: partRow.storage_key,
+      fileSizeBytes: partRow.file_size_bytes,
+      sha256: partRow.sha256,
+      padStartIndex: partRow.pad_start_index,
+      padEndIndex: partRow.pad_end_index,
+      uploadUrl: signed.url,
+      urlExpiresAt: signed.expiresAt,
+      uploadMethod: "PUT",
+      uploadHeaders: {
+        "Content-Type": "application/octet-stream",
+      },
+    };
+  }));
+
+  return ok({
+    variantId,
+    variantType: "low_memory_segmented",
+    manifest: {
+      storageBucket: manifestStorageBucket,
+      storageKey: manifestStorageKey,
+      expectedFileSizeBytes: Math.max(1, Math.floor(manifestExpectedFileSizeBytes)),
+      expectedSha256: manifestExpectedSha256,
+      uploadUrl: manifestSigned.url,
+      urlExpiresAt: manifestSigned.expiresAt,
+      uploadMethod: "PUT",
+      uploadHeaders: {
+        "Content-Type": "application/json",
+      },
+    },
+    parts: partUploads,
+  });
+};
+
+const completeLowMemoryCatalogVariantUpload = async (
+  catalogItemId: string,
+  body: any,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const variantId = asUuid(body?.variantId ?? body?.variant_id);
+  if (!variantId) return badRequest("Missing or invalid variantId");
+
+  const { data: variant, error: variantError } = await admin
+    .from("bank_catalog_asset_variants")
+    .select("*, bank_catalog_asset_variant_parts (*)")
+    .eq("id", variantId)
+    .eq("catalog_item_id", catalogItemId)
+    .maybeSingle();
+  if (variantError) return fail(500, variantError.message);
+  if (!variant) return fail(404, "Low-memory variant not found");
+
+  const manifestStorageBucket = asString(variant?.manifest_storage_bucket, 300) || "";
+  const manifestStorageKey = asString(variant?.manifest_storage_key, 2000) || "";
+  if (!manifestStorageBucket || !manifestStorageKey) return fail(400, "LOW_MEMORY_MANIFEST_MISSING");
+
+  let manifestObjectInfo: Awaited<ReturnType<typeof headObject>>;
+  try {
+    manifestObjectInfo = await headObject(manifestStorageBucket, manifestStorageKey);
+  } catch (error) {
+    return fail(502, error instanceof Error ? error.message : "R2_VERIFY_FAILED");
+  }
+  if (!manifestObjectInfo) return fail(404, "LOW_MEMORY_MANIFEST_NOT_FOUND");
+
+  const partRows = Array.isArray(variant?.bank_catalog_asset_variant_parts)
+    ? variant.bank_catalog_asset_variant_parts
+    : [];
+  if (partRows.length === 0) return fail(400, "LOW_MEMORY_VARIANT_HAS_NO_PARTS");
+
+  for (const partRow of partRows) {
+    const storageBucket = asString(partRow?.storage_bucket, 300) || "";
+    const storageKey = asString(partRow?.storage_key, 2000) || "";
+    if (!storageBucket || !storageKey) return fail(400, "LOW_MEMORY_PART_STORAGE_MISSING");
+    let objectInfo: Awaited<ReturnType<typeof headObject>>;
+    try {
+      objectInfo = await headObject(storageBucket, storageKey);
+    } catch (error) {
+      return fail(502, error instanceof Error ? error.message : "R2_VERIFY_FAILED");
+    }
+    if (!objectInfo) return fail(404, `LOW_MEMORY_PART_NOT_FOUND_${Math.max(0, Math.floor(Number(asNumber(partRow?.part_index) || 0)))}`);
+    const expectedSize = Math.max(0, Math.floor(Number(asNumber(partRow?.file_size_bytes) || 0)));
+    if (expectedSize > 0 && objectInfo.sizeBytes !== expectedSize) {
+      return fail(409, `LOW_MEMORY_PART_SIZE_MISMATCH_${Math.max(0, Math.floor(Number(asNumber(partRow?.part_index) || 0)))}`);
+    }
+  }
+
+  const updateResult = await admin
+    .from("bank_catalog_asset_variants")
+    .update({
+      status: "ready",
+      updated_by: adminUserId,
+      part_count: partRows.length,
+    })
+    .eq("id", variantId)
+    .select("*, bank_catalog_asset_variant_parts (*)")
+    .single();
+  if (updateResult.error || !updateResult.data) {
+    return fail(500, updateResult.error?.message || "Could not finalize low-memory variant");
+  }
+
+  const mappedVariant = await mapAdminCatalogAssetVariantView(updateResult.data);
+  return ok({ variant: mappedVariant });
+};
+
+const deleteCatalogAssetVariant = async (
+  catalogItemId: string,
+  body: any,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const variantId = asUuid(body?.variantId ?? body?.variant_id);
+  if (!variantId) return badRequest("Missing or invalid variantId");
+  const variantType = normalizeCatalogAssetVariantType(body?.variantType ?? body?.variant_type, "low_memory_segmented");
+  if (variantType !== "low_memory_segmented") {
+    return badRequest("Only low-memory variants can be deleted from this action");
+  }
+
+  const { data: variant, error: variantError } = await admin
+    .from("bank_catalog_asset_variants")
+    .select("*, bank_catalog_asset_variant_parts (*)")
+    .eq("id", variantId)
+    .eq("catalog_item_id", catalogItemId)
+    .maybeSingle();
+  if (variantError) return fail(500, variantError.message);
+  if (!variant) return fail(404, "Low-memory variant not found");
+
+  const manifestStorageBucket = asString(variant?.manifest_storage_bucket, 300) || "";
+  const manifestStorageKey = asString(variant?.manifest_storage_key, 2000) || "";
+  if (manifestStorageBucket && manifestStorageKey) {
+    await deleteObject(manifestStorageBucket, manifestStorageKey).catch(() => undefined);
+  }
+  const partRows = Array.isArray(variant?.bank_catalog_asset_variant_parts)
+    ? variant.bank_catalog_asset_variant_parts
+    : [];
+  await Promise.allSettled(partRows.map((partRow: any) => {
+    const storageBucket = asString(partRow?.storage_bucket, 300) || "";
+    const storageKey = asString(partRow?.storage_key, 2000) || "";
+    if (!storageBucket || !storageKey) return Promise.resolve();
+    return deleteObject(storageBucket, storageKey);
+  }));
+
+  const deleteResult = await admin
+    .from("bank_catalog_asset_variants")
+    .delete()
+    .eq("id", variantId)
+    .eq("catalog_item_id", catalogItemId);
+  if (deleteResult.error) return fail(500, deleteResult.error.message);
+
+  await swallowDiscordError(() => sendDiscordAdminActionEvent({
+    severity: "warning",
+    title: "Low-Memory Variant Deleted",
+    description: "Admin deleted a segmented low-memory catalog asset variant.",
+    actorUserId: adminUserId,
+    catalogItemId,
+    extraFields: [
+      { name: "Variant", value: variantId, inline: true },
+      { name: "Type", value: "low_memory_segmented", inline: true },
+    ],
+  }));
+
+  return ok({ deleted: true, variantId });
 };
 
 const publishCatalogItem = async (
@@ -2643,6 +3401,22 @@ Deno.serve(async (req) => {
       return await listBanks(req, admin);
     }
 
+    if (req.method === "GET" && route.section === "store" && route.id === "catalog" && url.pathname.includes("/upload-sessions")) {
+      const segments = url.pathname.split("/").filter(Boolean);
+      const adminIndex = segments.findIndex((s) => s === "admin-api");
+      const catalogItemId = asUuid(segments[adminIndex + 3] || null);
+      if (!catalogItemId) return badRequest("Invalid catalog item id");
+      return await listCatalogUploadSessions(catalogItemId, admin);
+    }
+
+    if (req.method === "GET" && route.section === "store" && route.id === "catalog" && url.pathname.includes("/asset-variants")) {
+      const segments = url.pathname.split("/").filter(Boolean);
+      const adminIndex = segments.findIndex((s) => s === "admin-api");
+      const catalogItemId = asUuid(segments[adminIndex + 3] || null);
+      if (!catalogItemId) return badRequest("Invalid catalog item id");
+      return await listCatalogAssetVariants(catalogItemId, admin);
+    }
+
     if (req.method === "GET" && route.section === "access" && route.id === "user" && route.action) {
       const userId = asUuid(route.action);
       if (!userId) return badRequest("Invalid user id");
@@ -2689,6 +3463,46 @@ Deno.serve(async (req) => {
       const catalogItemId = asUuid(segments[adminIndex + 3] || null);
       if (!catalogItemId) return badRequest("Invalid catalog item id");
       return await completeUploadPublishCatalogItem(body, catalogItemId, admin, adminCheck.userId);
+    }
+
+    if (route.section === "store" && route.id === "catalog" && url.pathname.includes("/promote-upload-session")) {
+      const segments = url.pathname.split("/").filter(Boolean);
+      const adminIndex = segments.findIndex((s) => s === "admin-api");
+      const catalogItemId = asUuid(segments[adminIndex + 3] || null);
+      if (!catalogItemId) return badRequest("Invalid catalog item id");
+      return await promoteCatalogUploadSession(catalogItemId, body, admin, adminCheck.userId);
+    }
+
+    if (route.section === "store" && route.id === "catalog" && url.pathname.includes("/delete-upload-session")) {
+      const segments = url.pathname.split("/").filter(Boolean);
+      const adminIndex = segments.findIndex((s) => s === "admin-api");
+      const catalogItemId = asUuid(segments[adminIndex + 3] || null);
+      if (!catalogItemId) return badRequest("Invalid catalog item id");
+      return await deleteCatalogUploadSessionAsset(catalogItemId, body, admin, adminCheck.userId);
+    }
+
+    if (route.section === "store" && route.id === "catalog" && url.pathname.includes("/start-low-memory-upload")) {
+      const segments = url.pathname.split("/").filter(Boolean);
+      const adminIndex = segments.findIndex((s) => s === "admin-api");
+      const catalogItemId = asUuid(segments[adminIndex + 3] || null);
+      if (!catalogItemId) return badRequest("Invalid catalog item id");
+      return await startLowMemoryCatalogVariantUpload(catalogItemId, body, admin, adminCheck.userId);
+    }
+
+    if (route.section === "store" && route.id === "catalog" && url.pathname.includes("/complete-low-memory-upload")) {
+      const segments = url.pathname.split("/").filter(Boolean);
+      const adminIndex = segments.findIndex((s) => s === "admin-api");
+      const catalogItemId = asUuid(segments[adminIndex + 3] || null);
+      if (!catalogItemId) return badRequest("Invalid catalog item id");
+      return await completeLowMemoryCatalogVariantUpload(catalogItemId, body, admin, adminCheck.userId);
+    }
+
+    if (route.section === "store" && route.id === "catalog" && url.pathname.includes("/delete-asset-variant")) {
+      const segments = url.pathname.split("/").filter(Boolean);
+      const adminIndex = segments.findIndex((s) => s === "admin-api");
+      const catalogItemId = asUuid(segments[adminIndex + 3] || null);
+      if (!catalogItemId) return badRequest("Invalid catalog item id");
+      return await deleteCatalogAssetVariant(catalogItemId, body, admin, adminCheck.userId);
     }
 
     if (route.section === "default-bank" && route.id === "complete-upload") {

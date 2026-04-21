@@ -2,6 +2,12 @@ export interface StoreItem {
     id: string; // catalog item id
     bank_id: string;
     item_type?: 'single_bank' | 'bank_bundle';
+    file_size_bytes?: number | null;
+    has_low_memory_variant?: boolean;
+    low_memory_variant_id?: string | null;
+    low_memory_part_count?: number;
+    low_memory_total_bytes?: number | null;
+    low_memory_min_client_version?: string | null;
     bundle_bank_ids?: string[];
     bundle_bank_titles?: string[];
     bundle_count?: number;
@@ -84,6 +90,52 @@ export type StoreDownloadedArtifact = {
     savedAt: number;
     sha256?: string | null;
 };
+
+export type StoreDownloadPlanAccessMaterial = {
+    protected: boolean;
+    derivedKey: string | null;
+    entitlementToken: string | null;
+    entitlementTokenKeyId: string | null;
+    entitlementTokenIssuedAt: string | null;
+    entitlementTokenExpiresAt: string | null;
+};
+
+export type StoreDownloadPlanFull = StoreDownloadPlanAccessMaterial & {
+    mode: 'full';
+    catalogItemId: string;
+    bankId: string | null;
+    variantId: null;
+    fileSizeBytes: number | null;
+    downloadUrl: string;
+    urlExpiresAt: string | null;
+};
+
+export type StoreDownloadPlanSegmentPart = {
+    partIndex: number;
+    storageBucket: string;
+    storageKey: string;
+    fileSizeBytes: number;
+    sha256: string | null;
+    padStartIndex: number;
+    padEndIndex: number;
+    downloadUrl: string;
+    urlExpiresAt: string | null;
+};
+
+export type StoreDownloadPlanSegmented = StoreDownloadPlanAccessMaterial & {
+    mode: 'low_memory_segmented';
+    catalogItemId: string;
+    bankId: string | null;
+    variantId: string;
+    fileSizeBytes: number | null;
+    manifest: {
+        downloadUrl: string;
+        urlExpiresAt: string | null;
+    };
+    parts: StoreDownloadPlanSegmentPart[];
+};
+
+export type StoreDownloadPlan = StoreDownloadPlanFull | StoreDownloadPlanSegmented;
 
 export type StoreDownloadDebugLevel = 'info' | 'error';
 

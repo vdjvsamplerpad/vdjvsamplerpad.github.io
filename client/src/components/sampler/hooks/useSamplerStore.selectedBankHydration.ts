@@ -115,6 +115,20 @@ export const runSelectedBankHydrationPipeline = async (
 
     let hydrated = current;
     let improved = false;
+    let pendingVisualFlush = false;
+    let hydrationStepCount = 0;
+
+    const flushHydratedBank = () => {
+      if (!pendingVisualFlush) return;
+      pendingVisualFlush = false;
+      setBanks((prev) => {
+        const targetIndex = prev.findIndex((bank) => bank.id === hydrated.id);
+        if (targetIndex < 0) return prev;
+        const next = [...prev];
+        next[targetIndex] = hydrated;
+        return next;
+      });
+    };
 
     for (let index = 0; index < current.pads.length; index += 1) {
       const currentPad = hydrated.pads[index];
@@ -139,21 +153,23 @@ export const runSelectedBankHydrationPipeline = async (
 
       if (padChanged) {
         hydrated = replacePadInBank(hydrated, currentPad.id, restoredPad);
-        setBanks((prev) => {
-          const targetIndex = prev.findIndex((bank) => bank.id === hydrated.id);
-          if (targetIndex < 0) return prev;
-          const next = [...prev];
-          next[targetIndex] = hydrated;
-          return next;
-        });
+        pendingVisualFlush = true;
       }
 
       if (padImproved) {
         improved = true;
       }
 
-      await yieldToMainThread();
+      hydrationStepCount += 1;
+      if (pendingVisualFlush && hydrationStepCount % 4 === 0) {
+        flushHydratedBank();
+      }
+      if (hydrationStepCount % 3 === 0) {
+        await yieldToMainThread();
+      }
     }
+
+    flushHydratedBank();
 
     const missingAfter = hydrated.pads.filter((pad) => padNeedsMediaHydration(pad)).length;
 
@@ -175,15 +191,11 @@ export const runSelectedBankHydrationPipeline = async (
       });
       if (thumbnailImproved || preparedImproved) {
         improved = true;
-        setBanks((prev) => {
-          const targetIndex = prev.findIndex((bank) => bank.id === hydrated.id);
-          if (targetIndex < 0) return prev;
-          const next = [...prev];
-          next[targetIndex] = hydrated;
-          return next;
-        });
+        pendingVisualFlush = true;
       }
     }
+
+    flushHydratedBank();
 
     if (missingAfter <= 0) {
       delete retryAttemptsRef.current[bankId];

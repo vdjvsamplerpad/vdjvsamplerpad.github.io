@@ -112,12 +112,14 @@ interface SideMenuProps {
     publicCatalogAsset: boolean,
     comingSoonOnly: boolean,
     exportMode: ExportAudioMode,
+    generateLowMemoryVariant?: boolean,
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
   ) => Promise<string>;
   onUpdateStoreBank?: (input: UpdateStoreBankInput) => Promise<string>;
   adminExportUploadQueueSummary?: AdminStoreUploadQueueSummary;
   onRetryPendingAdminExportUploads?: () => Promise<string>;
+  onClearPendingAdminExportUploads?: () => Promise<string>;
   onListLinkableStoreBanks?: () => Promise<LinkExistingStoreBankCandidate[]>;
   onLinkExistingStoreBank?: (runtimeBankId: string, candidate: LinkExistingStoreBankCandidate) => Promise<string>;
   midiEnabled?: boolean;
@@ -177,6 +179,7 @@ export function SideMenu({
   onUpdateStoreBank,
   adminExportUploadQueueSummary,
   onRetryPendingAdminExportUploads,
+  onClearPendingAdminExportUploads,
   onListLinkableStoreBanks,
   onLinkExistingStoreBank,
   midiEnabled = false,
@@ -237,6 +240,7 @@ export function SideMenu({
     bankId: string;
   } | null>(null);
   const [adminUploadRetryBusy, setAdminUploadRetryBusy] = React.useState(false);
+  const [adminUploadClearBusy, setAdminUploadClearBusy] = React.useState(false);
   const [snapshotDownloadBusyBankId, setSnapshotDownloadBusyBankId] = React.useState<string | null>(null);
   const [snapshotRecoverBusyBankId, setSnapshotRecoverBusyBankId] = React.useState<string | null>(null);
   const [snapshotTransfers, setSnapshotTransfers] = React.useState<Record<string, TransferState>>({});
@@ -389,7 +393,7 @@ export function SideMenu({
   }, []);
   const effectiveUser = user || getCachedUser();
   const { storePreviewItems, showStoreNewBadge, markStorePreviewSeen } = useStorePreviewBadge({
-    effectiveUser,
+    effectiveUser: user,
     profileId: profile?.id,
   });
   const displayName = profile?.display_name?.trim() || effectiveUser?.email?.split('@')[0] || 'Guest';
@@ -1180,28 +1184,54 @@ export function SideMenu({
                           : 'Automatic retry is enabled while this app stays open.'}
                     </p>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className={`h-8 shrink-0 ${theme === 'dark' ? 'border-sky-700 text-sky-100 hover:bg-sky-900/60' : 'border-sky-300 text-sky-800 hover:bg-sky-100'}`}
-                    disabled={adminUploadRetryBusy}
-                    onClick={async () => {
-                      setAdminUploadRetryBusy(true);
-                      try {
-                        const message = await onRetryPendingAdminExportUploads();
-                        pushNotice({ variant: 'info', message });
-                      } catch (error) {
-                        pushNotice({
-                          variant: 'error',
-                          message: error instanceof Error ? error.message : 'Could not retry pending Store uploads.',
-                        });
-                      } finally {
-                        setAdminUploadRetryBusy(false);
-                      }
-                    }}
-                  >
-                    {adminUploadRetryBusy ? 'Retrying...' : 'Retry Now'}
-                  </Button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {onClearPendingAdminExportUploads && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className={`h-8 ${theme === 'dark' ? 'border-red-700 text-red-100 hover:bg-red-900/40' : 'border-red-300 text-red-700 hover:bg-red-50'}`}
+                        disabled={adminUploadRetryBusy || adminUploadClearBusy}
+                        onClick={async () => {
+                          setAdminUploadClearBusy(true);
+                          try {
+                            const message = await onClearPendingAdminExportUploads();
+                            pushNotice({ variant: 'info', message });
+                          } catch (error) {
+                            pushNotice({
+                              variant: 'error',
+                              message: error instanceof Error ? error.message : 'Could not clear pending Store uploads.',
+                            });
+                          } finally {
+                            setAdminUploadClearBusy(false);
+                          }
+                        }}
+                      >
+                        {adminUploadClearBusy ? 'Clearing...' : 'Clear Queue'}
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={`h-8 shrink-0 ${theme === 'dark' ? 'border-sky-700 text-sky-100 hover:bg-sky-900/60' : 'border-sky-300 text-sky-800 hover:bg-sky-100'}`}
+                      disabled={adminUploadRetryBusy || adminUploadClearBusy}
+                      onClick={async () => {
+                        setAdminUploadRetryBusy(true);
+                        try {
+                          const message = await onRetryPendingAdminExportUploads();
+                          pushNotice({ variant: 'info', message });
+                        } catch (error) {
+                          pushNotice({
+                            variant: 'error',
+                            message: error instanceof Error ? error.message : 'Could not retry pending Store uploads.',
+                          });
+                        } finally {
+                          setAdminUploadRetryBusy(false);
+                        }
+                      }}
+                    >
+                      {adminUploadRetryBusy ? 'Retrying...' : 'Retry Now'}
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}

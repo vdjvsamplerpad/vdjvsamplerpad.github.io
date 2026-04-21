@@ -14,6 +14,8 @@ interface Window {
   electronAPI?: {
     toggleFullscreen?: () => Promise<boolean>;
     getFullscreenState?: () => Promise<boolean>;
+    getGuestDefaultBankTrialState?: () => Promise<Record<string, unknown> | null>;
+    setGuestDefaultBankTrialState?: (payload: Record<string, unknown>) => Promise<{ ok?: boolean; reason?: string }>;
     transcodeAudioToMp3?: (payload: {
       audioBytes: Uint8Array | ArrayBuffer;
       mimeType?: string;

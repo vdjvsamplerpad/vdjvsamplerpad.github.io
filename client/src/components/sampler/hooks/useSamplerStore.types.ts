@@ -35,6 +35,8 @@ export type UpdateStoreBankInput = {
   syncMetadata: boolean;
   assetProtection: StoreBankAssetProtection;
   exportMode: ExportAudioMode;
+  updateMode?: 'full' | 'low_memory_only';
+  generateLowMemoryVariant?: boolean;
   thumbnailPath?: string;
   onProgress?: (progress: number) => void;
 };
@@ -116,12 +118,14 @@ export interface SamplerStore {
     publicCatalogAsset: boolean,
     comingSoonOnly: boolean,
     exportMode: ExportAudioMode,
+    generateLowMemoryVariant?: boolean,
     thumbnailPath?: string,
     onProgress?: (progress: number) => void
   ) => Promise<string>;
   updateStoreBank: (input: UpdateStoreBankInput) => Promise<string>;
   adminExportUploadQueueSummary: AdminStoreUploadQueueSummary;
   retryPendingAdminExportUploads: () => Promise<string>;
+  clearPendingAdminExportUploads: () => Promise<string>;
   listLinkableStoreBanks: () => Promise<LinkExistingStoreBankCandidate[]>;
   linkExistingStoreBank: (runtimeBankId: string, candidate: LinkExistingStoreBankCandidate) => Promise<string>;
   publishDefaultBankRelease: (

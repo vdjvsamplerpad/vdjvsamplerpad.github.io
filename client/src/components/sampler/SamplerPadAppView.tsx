@@ -4,7 +4,6 @@ import { HeaderControls } from './HeaderControls';
 import { Button } from '@/components/ui/button';
 import type { PerformanceTier } from '@/lib/performance-monitor';
 import type { PadData, SamplerBank, StopMode } from './types/sampler';
-import { isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import type { RemoteSnapshotPromptState } from './hooks/useSamplerStore.snapshotMetadata';
 import type { SideMenu as SideMenuType } from './SideMenu';
 import type { VolumeMixer as VolumeMixerType } from './VolumeMixer';
@@ -106,9 +105,14 @@ interface SamplerPadAppViewProps {
   blockedMidiCCs: Set<number>;
   channelLoadArmed: boolean;
   onSelectPadForChannelLoad: (pad: PadData, bankId: string, bankName: string) => void;
-  hasEffectiveAuthUser: boolean;
-  defaultBankSourceId: string;
-  onRequireLogin: () => void;
+  isBankPlaybackLocked: (bank: SamplerBank | null | undefined) => boolean;
+  onRequireLogin: (reason?: string) => void;
+  onGuestTrialConsumePlayback: (pad: PadData, bankId: string, bankName: string) => boolean;
+  guestTrialSummary: {
+    visible: boolean;
+    remainingCount: number;
+    exhausted: boolean;
+  };
   restoreBackupInputRef: React.RefObject<HTMLInputElement | null>;
   recoverBankInputRef: React.RefObject<HTMLInputElement | null>;
   onRestoreBackupFile: (event: React.ChangeEvent<HTMLInputElement>) => void | Promise<void>;
@@ -241,9 +245,10 @@ export function SamplerPadAppView({
   blockedMidiCCs,
   channelLoadArmed,
   onSelectPadForChannelLoad,
-  hasEffectiveAuthUser,
-  defaultBankSourceId,
+  isBankPlaybackLocked,
   onRequireLogin,
+  onGuestTrialConsumePlayback,
+  guestTrialSummary,
   restoreBackupInputRef,
   recoverBankInputRef,
   onRestoreBackupFile,
@@ -367,6 +372,13 @@ export function SamplerPadAppView({
       <div className={`flex-1 min-h-0 ${getMainContentMargin} ${getMainContentPadding}`}>
         <div className="max-w-full mx-auto py-2 relative z-10 h-full min-h-0 flex flex-col">
           <HeaderControls {...headerControlsProps} />
+          {guestTrialSummary.visible && (
+            <div className="mb-2 rounded-xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+              {guestTrialSummary.exhausted
+                ? 'Guest trial finished. Sign in to keep playing Default Bank.'
+                : `Guest trial: ${guestTrialSummary.remainingCount} plays left on Default Bank.`}
+            </div>
+          )}
 
           {isDualMode ? (
             <div className={`relative ${usePortraitDualStack ? 'flex flex-col gap-2' : 'flex gap-1 md:gap-2'} flex-1 min-h-0 min-w-0 ${padInteractionLockClass}`}>
@@ -420,11 +432,9 @@ export function SamplerPadAppView({
                     channelLoadArmed={channelLoadArmed}
                     onSelectPadForChannelLoad={onSelectPadForChannelLoad}
                     highlightedPadId={highlightedPadTarget?.bankId === (primaryBankId || '') ? highlightedPadTarget.padId : null}
-                    requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
-                      displayPrimary &&
-                      (displayPrimary.sourceBankId === defaultBankSourceId || isExplicitDefaultBankIdentity(displayPrimary))
-                    )}
+                    requiresAuthToPlay={isBankPlaybackLocked(displayPrimary)}
                     onRequireLogin={onRequireLogin}
+                    onGuestTrialConsumePlayback={onGuestTrialConsumePlayback}
                   />
                 </div>
               </div>
@@ -480,11 +490,9 @@ export function SamplerPadAppView({
                       channelLoadArmed={channelLoadArmed}
                       onSelectPadForChannelLoad={onSelectPadForChannelLoad}
                       highlightedPadId={highlightedPadTarget?.bankId === (secondaryBankId || '') ? highlightedPadTarget.padId : null}
-                      requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
-                        displaySecondary &&
-                        (displaySecondary.sourceBankId === defaultBankSourceId || isExplicitDefaultBankIdentity(displaySecondary))
-                      )}
+                      requiresAuthToPlay={isBankPlaybackLocked(displaySecondary)}
                       onRequireLogin={onRequireLogin}
+                      onGuestTrialConsumePlayback={onGuestTrialConsumePlayback}
                     />
                   </div>
                 ) : (
@@ -545,11 +553,9 @@ export function SamplerPadAppView({
                     channelLoadArmed={channelLoadArmed}
                     onSelectPadForChannelLoad={onSelectPadForChannelLoad}
                     highlightedPadId={highlightedPadTarget?.bankId === (currentBankId || '') ? highlightedPadTarget.padId : null}
-                    requiresAuthToPlay={!hasEffectiveAuthUser && Boolean(
-                      singleBank &&
-                      (singleBank.sourceBankId === defaultBankSourceId || isExplicitDefaultBankIdentity(singleBank))
-                    )}
+                    requiresAuthToPlay={isBankPlaybackLocked(singleBank)}
                     onRequireLogin={onRequireLogin}
+                    onGuestTrialConsumePlayback={onGuestTrialConsumePlayback}
                   />
                 </div>
                 {renderPadInteractionBlocker()}

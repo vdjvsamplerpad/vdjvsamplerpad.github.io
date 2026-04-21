@@ -96,10 +96,27 @@ const normalizeState = (
   };
 };
 
+const normalizeWebVersion = (value: unknown): string | null => {
+  const normalized = String(value || '').trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const fetchLatestWebBuildVersion = async (): Promise<string | null> => {
+  const response = await fetch(`/version.json?_vdjv=${Date.now()}`, {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`Version manifest request failed (${response.status})`);
+  }
+  const payload = await response.json().catch(() => null) as { appVersion?: unknown; version?: unknown } | null;
+  return normalizeWebVersion(payload?.appVersion ?? payload?.version);
+};
+
 export function useAppUpdate() {
   const [state, setState] = React.useState<AppUpdateViewState>(() => createBaseState());
   const webUpdateRegistrationRef = React.useRef<ServiceWorkerRegistration | null>(null);
   const webUpdateReadyRef = React.useRef(false);
+  const webDeployedVersionRef = React.useRef<string | null>(null);
   const androidSideloadReleaseRef = React.useRef<AndroidSideloadReleaseInfo | null>(null);
 
   React.useEffect(() => {
@@ -322,6 +339,7 @@ export function useAppUpdate() {
         setWebState({
           status: 'downloaded',
           message: message || 'A newer web app version is ready. Reload from Settings to apply it.',
+          nextVersion: webDeployedVersionRef.current,
           canInstall: true,
         });
       };
@@ -331,6 +349,7 @@ export function useAppUpdate() {
         setWebState({
           status: 'idle',
           message: message || 'Web app is up to date.',
+          nextVersion: webDeployedVersionRef.current,
           canInstall: false,
         });
       };
@@ -455,6 +474,7 @@ export function useAppUpdate() {
     if (state.platform === 'web') {
       const registration = webUpdateRegistrationRef.current;
       if (!registration) return;
+      const currentVersion = normalizeWebVersion(state.currentVersion);
       setState((prev) => createWebState({
         ...prev,
         status: 'checking',
@@ -463,13 +483,32 @@ export function useAppUpdate() {
         canCheck: false,
         lastCheckedAt: new Date().toISOString(),
       }));
+      let latestVersion: string | null = null;
+      let versionCheckError: string | null = null;
       try {
+        latestVersion = await fetchLatestWebBuildVersion();
+        webDeployedVersionRef.current = latestVersion;
         await registration.update();
+        const hasNewerDeployedVersion = Boolean(latestVersion && latestVersion !== currentVersion);
         if (registration.waiting || webUpdateReadyRef.current) {
           setState((prev) => createWebState({
             ...prev,
             status: 'downloaded',
-            message: 'A newer web app version is ready. Reload from Settings to apply it.',
+            message: latestVersion && latestVersion !== currentVersion
+              ? `Web app ${latestVersion} is ready. Reload from Settings to apply it.`
+              : 'A newer web app version is ready. Reload from Settings to apply it.',
+            nextVersion: latestVersion,
+            canInstall: true,
+            busy: false,
+            canCheck: true,
+            lastCheckedAt: new Date().toISOString(),
+          }));
+        } else if (hasNewerDeployedVersion) {
+          setState((prev) => createWebState({
+            ...prev,
+            status: 'available',
+            message: `Web app ${latestVersion} is deployed. Reload from Settings to update this installed copy.`,
+            nextVersion: latestVersion,
             canInstall: true,
             busy: false,
             canCheck: true,
@@ -480,6 +519,7 @@ export function useAppUpdate() {
             ...prev,
             status: 'idle',
             message: 'Web app is already up to date.',
+            nextVersion: latestVersion,
             canInstall: false,
             busy: false,
             canCheck: true,
@@ -487,11 +527,27 @@ export function useAppUpdate() {
           }));
         }
       } catch (error) {
+        versionCheckError = error instanceof Error ? error.message : String(error);
+        const hasNewerDeployedVersion = Boolean(latestVersion && latestVersion !== currentVersion);
+        if (hasNewerDeployedVersion) {
+          setState((prev) => createWebState({
+            ...prev,
+            status: 'available',
+            message: `Web app ${latestVersion} is deployed. Reload from Settings to update this installed copy.`,
+            nextVersion: latestVersion,
+            lastError: versionCheckError,
+            busy: false,
+            canCheck: true,
+            canInstall: true,
+            lastCheckedAt: new Date().toISOString(),
+          }));
+          return;
+        }
         setState((prev) => createWebState({
           ...prev,
           status: 'error',
           message: 'Could not check for the latest web app version.',
-          lastError: error instanceof Error ? error.message : String(error),
+          lastError: versionCheckError,
           busy: false,
           canCheck: true,
           canInstall: false,
@@ -517,10 +573,31 @@ export function useAppUpdate() {
     }
     if (state.platform === 'web') {
       const registration = webUpdateRegistrationRef.current;
+      const currentVersion = normalizeWebVersion(state.currentVersion);
+      let latestVersion: string | null = null;
+      try {
+        latestVersion = await fetchLatestWebBuildVersion();
+        webDeployedVersionRef.current = latestVersion;
+      } catch {
+      }
       if (registration?.waiting) {
         registration.waiting.postMessage({ type: 'SKIP_WAITING' });
       } else {
         await registration?.update().catch(() => undefined);
+        if (registration?.waiting) {
+          registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        }
+      }
+      if (latestVersion && latestVersion !== currentVersion) {
+        setState((prev) => createWebState({
+          ...prev,
+          status: 'installing',
+          message: `Reloading the web app to ${latestVersion}...`,
+          nextVersion: latestVersion,
+          busy: true,
+          canCheck: false,
+          canInstall: false,
+        }));
       }
       await forceFreshAppReload();
     }

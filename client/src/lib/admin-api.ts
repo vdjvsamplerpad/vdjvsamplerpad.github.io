@@ -29,6 +29,19 @@ export interface AdminBank {
   deleted_at?: string | null;
   deleted_by?: string | null;
   access_count: number;
+  store_catalog?: {
+    id: string;
+    item_type: 'single_bank' | 'bank_bundle';
+    is_published: boolean;
+    coming_soon: boolean;
+    asset_protection: 'encrypted' | 'public';
+    file_size_bytes: number | null;
+    thumbnail_path: string | null;
+    storage_key: string;
+    expected_asset_name: string;
+    price_php: number | null;
+    updated_at: string | null;
+  } | null;
 }
 
 export interface AccessEntry {
@@ -150,10 +163,10 @@ export interface AdminDashboardOverview {
     pendingAccountRequests: number;
     pendingStoreRequests: number;
     pendingInstallerRequests: number;
-    exports24h: number;
-    exportFailures24h: number;
-    duplicateNoChange24h: number;
-    authFailures24h: number;
+    totalRegisteredUsers: number;
+    totalInstallerLicenses: number;
+    approvedStoreRequestsTotal: number;
+    importFailures24h: number;
     imports24h: number;
     storeRevenueApprovedTotal: number;
     accountRevenueApprovedTotal: number;
@@ -228,6 +241,11 @@ export interface AdminStoreCatalogItem {
   status: 'published' | 'draft';
   coming_soon?: boolean;
   asset_protection?: 'encrypted' | 'public' | null;
+  file_size_bytes?: number | null;
+  storage_key?: string | null;
+  expected_asset_name?: string | null;
+  price_php?: number | null;
+  is_pinned?: boolean;
   thumbnail_path?: string | null;
   sha256?: string | null;
   created_at?: string | null;
@@ -242,6 +260,57 @@ export interface AdminStoreCatalogItem {
     description: string;
     color: string;
   };
+}
+
+export interface AdminCatalogUploadSession {
+  id: string;
+  catalog_item_id: string | null;
+  bank_id: string | null;
+  status: 'issued' | 'completed' | 'failed' | 'expired' | string;
+  failure_reason: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+  expires_at: string | null;
+  storage_bucket: string;
+  storage_key: string;
+  asset_name: string | null;
+  expected_file_size_bytes: number;
+  expected_sha256: string | null;
+  actual_file_size_bytes: number | null;
+  actual_etag: string | null;
+  object_exists: boolean;
+  asset_protection: 'encrypted' | 'public';
+  operation_type: 'create' | 'update';
+  is_current_catalog_asset: boolean;
+}
+
+export interface AdminCatalogAssetVariantPart {
+  id: string;
+  part_index: number;
+  storage_bucket: string;
+  storage_key: string;
+  file_size_bytes: number;
+  sha256: string | null;
+  pad_start_index: number;
+  pad_end_index: number;
+}
+
+export interface AdminCatalogAssetVariant {
+  id: string;
+  catalog_item_id: string;
+  variant_type: 'full' | 'low_memory_segmented';
+  status: 'uploading' | 'ready' | 'failed';
+  manifest_storage_bucket: string | null;
+  manifest_storage_key: string | null;
+  total_file_size_bytes: number | null;
+  part_count: number;
+  min_client_version: string | null;
+  source_asset_sha256: string | null;
+  object_exists: boolean;
+  parts: AdminCatalogAssetVariantPart[];
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export interface AdminClientCrashReport {
@@ -820,6 +889,79 @@ export const adminApi = {
       items: AdminStoreCatalogItem[];
       banners: Array<Record<string, unknown>>;
     }>('GET', 'admin/store/catalog');
+  },
+
+  async listCatalogUploadSessions(catalogItemId: string) {
+    return callAdmin<{
+      sessions: AdminCatalogUploadSession[];
+      item: AdminStoreCatalogItem | Record<string, unknown>;
+    }>('GET', `store/catalog/${catalogItemId}/upload-sessions`);
+  },
+
+  async promoteCatalogUploadSession(catalogItemId: string, sessionId: string) {
+    return callAdmin<{
+      item: AdminStoreCatalogItem;
+      session: AdminCatalogUploadSession;
+    }>('POST', `store/catalog/${catalogItemId}/promote-upload-session`, { sessionId });
+  },
+
+  async deleteCatalogUploadSession(catalogItemId: string, sessionId: string) {
+    return callAdmin<{ deleted: boolean; sessionId: string }>(
+      'POST',
+      `store/catalog/${catalogItemId}/delete-upload-session`,
+      { sessionId },
+    );
+  },
+
+  async listCatalogAssetVariants(catalogItemId: string) {
+    return callAdmin<{
+      variants: AdminCatalogAssetVariant[];
+      item: AdminStoreCatalogItem | Record<string, unknown>;
+    }>('GET', `store/catalog/${catalogItemId}/asset-variants`);
+  },
+
+  async startLowMemoryCatalogVariantUpload(
+    catalogItemId: string,
+    payload: {
+      totalFileSizeBytes: number;
+      sourceAssetSha256?: string | null;
+      minClientVersion?: string | null;
+      manifest: {
+        fileSizeBytes: number;
+        sha256?: string | null;
+        assetName?: string | null;
+      };
+      parts: Array<{
+        partIndex: number;
+        fileSizeBytes: number;
+        sha256?: string | null;
+        padStartIndex: number;
+        padEndIndex: number;
+        assetName?: string | null;
+      }>;
+    },
+  ) {
+    return callAdmin<{
+      variant: AdminCatalogAssetVariant;
+      manifestUpload: { storageBucket: string; storageKey: string; uploadUrl: string };
+      partUploads: Array<{ partIndex: number; storageBucket: string; storageKey: string; uploadUrl: string }>;
+    }>('POST', `store/catalog/${catalogItemId}/start-low-memory-upload`, payload);
+  },
+
+  async completeLowMemoryCatalogVariantUpload(catalogItemId: string, variantId: string) {
+    return callAdmin<{ variant: AdminCatalogAssetVariant }>(
+      'POST',
+      `store/catalog/${catalogItemId}/complete-low-memory-upload`,
+      { variantId },
+    );
+  },
+
+  async deleteCatalogAssetVariant(catalogItemId: string, variantId: string, variantType: 'full' | 'low_memory_segmented' = 'low_memory_segmented') {
+    return callAdmin<{ deleted: boolean; variantId: string }>(
+      'POST',
+      `store/catalog/${catalogItemId}/delete-asset-variant`,
+      { variantId, variantType },
+    );
   },
 
   async listClientCrashReports(input: {

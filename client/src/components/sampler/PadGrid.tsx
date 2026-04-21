@@ -5,6 +5,9 @@ import { buildPadSearchAnchorId } from './samplerSearch';
 import { parsePadDragTransferPayload } from './padDragTransfer';
 import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
 
+const EMPTY_BANKS: SamplerBank[] = [];
+const EMPTY_PADS: PadData[] = [];
+
 const normalizeSearchHitColor = (value: string | undefined, fallback = '#22d3ee'): string => {
   if (!value) return fallback;
   const trimmed = value.trim();
@@ -60,7 +63,8 @@ export interface PadGridProps {
   channelLoadArmed?: boolean;
   onSelectPadForChannelLoad?: (pad: PadData, bankId: string, bankName: string) => void;
   requiresAuthToPlay?: boolean;
-  onRequireLogin?: () => void;
+  onRequireLogin?: (reason?: string) => void;
+  onGuestTrialConsumePlayback?: (pad: PadData, bankId: string, bankName: string) => boolean;
   highlightedPadId?: string | null;
 }
 
@@ -104,6 +108,7 @@ export const PadGrid = React.memo(function PadGrid({
   onSelectPadForChannelLoad,
   requiresAuthToPlay = false,
   onRequireLogin,
+  onGuestTrialConsumePlayback,
   highlightedPadId = null
 }: PadGridProps) {
   const [draggedIndex, setDraggedIndex] = React.useState<number | null>(null);
@@ -111,6 +116,9 @@ export const PadGrid = React.memo(function PadGrid({
   const [isDragOverGrid, setIsDragOverGrid] = React.useState(false);
   const [dragOverPadTransfer, setDragOverPadTransfer] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const dialogBanks = editMode ? allBanks : EMPTY_BANKS;
+  const dialogAllPads = editMode ? allPads : EMPTY_PADS;
+  const dialogBankPads = editMode ? pads : EMPTY_PADS;
 
   // Handle drag and drop for file uploads
   const handleDrop = React.useCallback(async (e: React.DragEvent) => {
@@ -399,9 +407,9 @@ export const PadGrid = React.memo(function PadGrid({
             pad={pad}
             bankId={bankId}
             bankName={bankName}
-            allBanks={allBanks}
-            allPads={allPads}
-            bankPads={pads}
+            allBanks={dialogBanks}
+            allPads={dialogAllPads}
+            bankPads={dialogBankPads}
             editMode={editMode}
             globalMuted={globalMuted}
             masterVolume={masterVolume}
@@ -434,6 +442,7 @@ export const PadGrid = React.memo(function PadGrid({
             onSelectPadForChannelLoad={onSelectPadForChannelLoad}
             requiresAuthToPlay={requiresAuthToPlay}
             onRequireLogin={onRequireLogin}
+            onGuestTrialConsumePlayback={onGuestTrialConsumePlayback}
           />
         </div>
       ))}
