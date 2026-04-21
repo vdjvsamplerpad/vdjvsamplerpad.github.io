@@ -55,12 +55,6 @@ type BackupManifestResolveResult = {
   missingParts: string[];
 };
 
-type MediaReferenceSet = {
-  audioDb: Set<string>;
-  imageDb: Set<string>;
-  nativeKeys: Set<string>;
-};
-
 type LogExportActivityInput = {
   status: 'success' | 'failed';
   phase: 'backup_export' | 'backup_restore';
@@ -118,6 +112,7 @@ export interface RunBackupRestoreInput {
   companionFiles?: File[];
   user: { id: string } | null;
   previousBanksSnapshot: SamplerBank[];
+  previousState: BackupStateShape;
 }
 
 export interface RunBackupRestoreDeps {
@@ -149,8 +144,6 @@ export interface RunBackupRestoreDeps {
     type: 'audio' | 'image',
     options?: { storageId?: string; nativeStorageKeyHint?: string }
   ) => Promise<{ storageKey?: string; backend: MediaBackend }>;
-  collectMediaReferenceSet: (banks: SamplerBank[]) => MediaReferenceSet;
-  deletePadMediaArtifactsExcept: (pad: Partial<PadData> & { id: string }, keepRefs: MediaReferenceSet) => Promise<void>;
   setBanks: (banks: SamplerBank[]) => void;
   setPrimaryBankIdState: (value: string | null) => void;
   setSecondaryBankIdState: (value: string | null) => void;
@@ -164,6 +157,75 @@ export interface BackupRestoreResult {
   mappings: Record<string, unknown> | null;
   state: BackupStateShape | null;
 }
+
+const PRE_RESTORE_BANK_SNAPSHOTS_KEY = 'vdjv-pre-restore-bank-snapshots';
+const MAX_PRE_RESTORE_SNAPSHOTS = 5;
+
+const sanitizeBankForPreRestoreSnapshot = (bank: SamplerBank): SamplerBank => ({
+  ...bank,
+  pads: bank.pads.map((pad) => ({
+    ...pad,
+    audioUrl: undefined,
+    imageUrl: undefined,
+    preparedAudioUrl: undefined,
+  } as PadData)),
+});
+
+const writePreRestoreBankSnapshot = (input: {
+  userId: string;
+  operationId: string;
+  banks: SamplerBank[];
+  state: BackupStateShape;
+}): void => {
+  if (typeof window === 'undefined') return;
+  if (!Array.isArray(input.banks) || input.banks.length === 0) return;
+  try {
+    const raw = window.localStorage.getItem(PRE_RESTORE_BANK_SNAPSHOTS_KEY);
+    const existing = raw ? JSON.parse(raw) : [];
+    const snapshots = Array.isArray(existing) ? existing : [];
+    const nextSnapshot = {
+      version: 1,
+      createdAt: new Date().toISOString(),
+      userId: input.userId,
+      operationId: input.operationId,
+      state: input.state,
+      banks: input.banks.map(sanitizeBankForPreRestoreSnapshot),
+    };
+    window.localStorage.setItem(
+      PRE_RESTORE_BANK_SNAPSHOTS_KEY,
+      JSON.stringify([nextSnapshot, ...snapshots].slice(0, MAX_PRE_RESTORE_SNAPSHOTS))
+    );
+  } catch {
+    // Best-effort safety net. Restore remains non-destructive even if the snapshot is too large.
+  }
+};
+
+const mergeRestoredBanksWithCurrentBanks = (
+  previousBanks: SamplerBank[],
+  restoredBanks: SamplerBank[]
+): { banks: SamplerBank[]; preservedBanks: number; replacedBanks: number; addedBanks: number } => {
+  const nextBanks = [...previousBanks];
+  let replacedBanks = 0;
+  let addedBanks = 0;
+
+  restoredBanks.forEach((restoredBank) => {
+    const existingIndex = nextBanks.findIndex((bank) => bank.id === restoredBank.id);
+    if (existingIndex >= 0) {
+      nextBanks[existingIndex] = restoredBank;
+      replacedBanks += 1;
+      return;
+    }
+    nextBanks.push(restoredBank);
+    addedBanks += 1;
+  });
+
+  return {
+    banks: nextBanks,
+    preservedBanks: Math.max(0, previousBanks.length - replacedBanks),
+    replacedBanks,
+    addedBanks,
+  };
+};
 
 export const runBackupExportPipeline = async (
   input: RunBackupExportInput,
@@ -501,7 +563,7 @@ export const runBackupRestorePipeline = async (
   input: RunBackupRestoreInput,
   deps: RunBackupRestoreDeps
 ): Promise<BackupRestoreResult> => {
-  const { file, companionFiles = [], user, previousBanksSnapshot } = input;
+  const { file, companionFiles = [], user, previousBanksSnapshot, previousState } = input;
   const {
     getCachedUser,
     createOperationDiagnostics,
@@ -521,8 +583,6 @@ export const runBackupRestorePipeline = async (
     maxNativeAppBackupBytes,
     yieldToMainThread,
     storeFile,
-    collectMediaReferenceSet,
-    deletePadMediaArtifactsExcept,
     setBanks,
     setPrimaryBankIdState,
     setSecondaryBankIdState,
@@ -546,6 +606,12 @@ export const runBackupRestorePipeline = async (
     inputBytes: file.size,
     bankCount: previousBanksSnapshot.length,
     companionFiles: companionFiles.length,
+  });
+  writePreRestoreBankSnapshot({
+    userId: effectiveUser.id,
+    operationId: diagnostics.operationId,
+    banks: previousBanksSnapshot,
+    state: previousState,
   });
   logExportActivity({
     status: 'success',
@@ -825,46 +891,48 @@ export const runBackupRestorePipeline = async (
     diagnostics.metrics.restoredBanks = restoredBanks.length;
     diagnostics.metrics.restoredPads = restoredPadCount;
 
-    const keepRefs = collectMediaReferenceSet(restoredBanks);
-    addOperationStage(diagnostics, 'cleanup-old-media', {
+    const mergedRestore = mergeRestoredBanksWithCurrentBanks(previousBanksSnapshot, restoredBanks);
+    const mergedBanks = mergedRestore.banks;
+    addOperationStage(diagnostics, 'merge-with-current-banks', {
       previousBanks: previousBanksSnapshot.length,
-      keepAudioDbRefs: keepRefs.audioDb.size,
-      keepImageDbRefs: keepRefs.imageDb.size,
-      keepNativeRefs: keepRefs.nativeKeys.size,
+      restoredBanks: restoredBanks.length,
+      preservedBanks: mergedRestore.preservedBanks,
+      replacedBanks: mergedRestore.replacedBanks,
+      addedBanks: mergedRestore.addedBanks,
     });
-    for (const bank of previousBanksSnapshot) {
-      for (const pad of bank.pads) {
-        await deletePadMediaArtifactsExcept(pad, keepRefs);
-        if (pad.audioUrl?.startsWith('blob:')) {
-          URL.revokeObjectURL(pad.audioUrl);
-        }
-        if (pad.imageUrl?.startsWith('blob:')) {
-          URL.revokeObjectURL(pad.imageUrl);
-        }
-      }
-    }
 
-    setBanks(restoredBanks);
+    setBanks(mergedBanks);
 
     const restoredState = backupPayload.state || null;
     if (restoredState) {
-      const bankIds = new Set(restoredBanks.map((b) => b.id));
+      const bankIds = new Set(mergedBanks.map((b) => b.id));
       setPrimaryBankIdState(bankIds.has(restoredState.primaryBankId) ? restoredState.primaryBankId : null);
       setSecondaryBankIdState(bankIds.has(restoredState.secondaryBankId) ? restoredState.secondaryBankId : null);
       if (bankIds.has(restoredState.currentBankId)) {
         setCurrentBankIdState(restoredState.currentBankId);
       } else {
-        setCurrentBankIdState(restoredBanks[0]?.id || null);
+        setCurrentBankIdState(previousState.currentBankId && bankIds.has(previousState.currentBankId)
+          ? previousState.currentBankId
+          : mergedBanks[0]?.id || null);
       }
     } else {
-      setPrimaryBankIdState(null);
-      setSecondaryBankIdState(null);
-      setCurrentBankIdState(restoredBanks[0]?.id || null);
+      const bankIds = new Set(mergedBanks.map((b) => b.id));
+      setPrimaryBankIdState(previousState.primaryBankId && bankIds.has(previousState.primaryBankId) ? previousState.primaryBankId : null);
+      setSecondaryBankIdState(previousState.secondaryBankId && bankIds.has(previousState.secondaryBankId) ? previousState.secondaryBankId : null);
+      setCurrentBankIdState(previousState.currentBankId && bankIds.has(previousState.currentBankId)
+        ? previousState.currentBankId
+        : mergedBanks[0]?.id || null);
     }
 
-    addOperationStage(diagnostics, 'complete', { restoredBanks: restoredBanks.length });
+    addOperationStage(diagnostics, 'complete', {
+      restoredBanks: restoredBanks.length,
+      totalBanks: mergedBanks.length,
+      preservedBanks: mergedRestore.preservedBanks,
+    });
     finishOperationDiagnostics(diagnostics, {
       restoredBanks: restoredBanks.length,
+      totalBanks: mergedBanks.length,
+      preservedBanks: mergedRestore.preservedBanks,
       restoredPads: restoredPadCount,
       restoredMediaBytes,
     });
@@ -878,14 +946,18 @@ export const runBackupRestorePipeline = async (
       meta: {
         stage: 'complete',
         restoredBanks: restoredBanks.length,
+        totalBanks: mergedBanks.length,
+        preservedBanks: mergedRestore.preservedBanks,
+        replacedBanks: mergedRestore.replacedBanks,
+        addedBanks: mergedRestore.addedBanks,
         restoredPads: restoredPadCount,
         restoredMediaBytes,
       },
     });
     return {
       message: resolvedManifest
-        ? `Backup restored: ${restoredBanks.length} bank(s) from ${resolvedManifest.parts.length} part file(s).${officialReferencePadsNeedingRepair > 0 ? ` ${officialReferencePadsNeedingRepair} official pad(s) still need Store repair.` : ''}`
-        : `Backup restored: ${restoredBanks.length} bank(s).${officialReferencePadsNeedingRepair > 0 ? ` ${officialReferencePadsNeedingRepair} official pad(s) still need Store repair.` : ''}`,
+        ? `Backup restored: ${restoredBanks.length} bank(s) from ${resolvedManifest.parts.length} part file(s). Preserved ${mergedRestore.preservedBanks} existing bank(s).${officialReferencePadsNeedingRepair > 0 ? ` ${officialReferencePadsNeedingRepair} official pad(s) still need Store repair.` : ''}`
+        : `Backup restored: ${restoredBanks.length} bank(s). Preserved ${mergedRestore.preservedBanks} existing bank(s).${officialReferencePadsNeedingRepair > 0 ? ` ${officialReferencePadsNeedingRepair} official pad(s) still need Store repair.` : ''}`,
       settings: (backupPayload.settings || null) as Record<string, unknown> | null,
       mappings: (backupPayload.mappings || null) as Record<string, unknown> | null,
       state: (backupPayload.state || null) as BackupStateShape | null,

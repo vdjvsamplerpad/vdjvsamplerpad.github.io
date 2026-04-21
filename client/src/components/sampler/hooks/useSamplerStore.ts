@@ -3277,6 +3277,11 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         companionFiles,
         user,
         previousBanksSnapshot: banksRef.current,
+        previousState: {
+          primaryBankId,
+          secondaryBankId,
+          currentBankId,
+        },
       },
       {
         getCachedUser,
@@ -3297,8 +3302,6 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         maxNativeAppBackupBytes: MAX_NATIVE_APP_BACKUP_BYTES,
         yieldToMainThread,
         storeFile,
-        collectMediaReferenceSet,
-        deletePadMediaArtifactsExcept,
         setBanks: (nextBanks) => setBanks(nextBanks),
         setPrimaryBankIdState,
         setSecondaryBankIdState,
@@ -3306,7 +3309,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
         writeOperationDiagnosticsLog,
       }
     );
-  }, [user, logExportActivity]);
+  }, [currentBankId, logExportActivity, primaryBankId, secondaryBankId, user]);
 
   const mergeImportedBankMissingMedia = React.useCallback(async (
     imported: SamplerBank,
