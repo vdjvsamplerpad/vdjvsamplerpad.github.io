@@ -4,7 +4,7 @@ import { createPresignedGetUrl, createPresignedPutUrl, deleteObject } from "../_
 import { createSignedEntitlementToken, isEntitlementTokenSigningEnabled } from "../_shared/entitlement-token.ts";
 import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig } from "../_shared/sampler-app-config.ts";
 import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_shared/supabase.ts";
-import { asString, asUuid } from "../_shared/validate.ts";
+import { asNumber, asString, asUuid } from "../_shared/validate.ts";
 import { consumeRateLimit } from "../_shared/rate-limit.ts";
 import {
   type DiscordField,
