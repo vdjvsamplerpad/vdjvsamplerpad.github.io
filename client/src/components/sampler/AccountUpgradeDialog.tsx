@@ -24,6 +24,7 @@ type UpgradeTierOption = {
   displayName: string;
   description: string;
   pricePhp: number;
+  promoDiscountPercent?: number;
   isActive: boolean;
   available: boolean;
   pendingRequest?: {
@@ -36,6 +37,7 @@ type UpgradeTierOption = {
     basePrice: number;
     creditPhp: number;
     quotePrice: number;
+    promoDiscountPercent?: number;
   };
 };
 
@@ -94,6 +96,21 @@ const validateProofFile = (file: File | null): string | null => {
 };
 
 const tierLabel = (tier: TargetTier): string => tier === 'pro_max' ? 'PRO MAX' : 'PRO';
+const DEFAULT_PROMO_DISCOUNT_PERCENT = 30;
+
+const clampPromoDiscountPercent = (value: unknown): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_PROMO_DISCOUNT_PERCENT;
+  return Math.min(90, Math.max(0, Math.round(parsed)));
+};
+
+const getPromoDiscountPercent = (tier: UpgradeTierOption | null | undefined): number =>
+  clampPromoDiscountPercent(tier?.promoDiscountPercent ?? tier?.quote?.promoDiscountPercent);
+
+const getBeforePromoPrice = (price: number, discountPercent: number): number => {
+  if (!Number.isFinite(price) || price <= 0 || discountPercent <= 0 || discountPercent >= 100) return price;
+  return Math.max(price, Math.round(price / (1 - discountPercent / 100)));
+};
 
 export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNotice }: AccountUpgradeDialogProps) {
   const { profile, capabilities } = useAuthState();
@@ -176,6 +193,9 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
     ...tiers.map((tier) => ({ id: tier.tier, kind: 'tier' as const, tier })),
   ], [tiers]);
   const quotePrice = selected?.quote?.quotePrice ?? selected?.pricePhp ?? 0;
+  const heroPromoPercent = tiers.length
+    ? Math.max(...tiers.map((tier) => getPromoDiscountPercent(tier)))
+    : DEFAULT_PROMO_DISCOUNT_PERCENT;
   const currentTierLabel = capabilities.effectiveTier === 'pro_max' ? 'PRO MAX' : capabilities.effectiveTier.toUpperCase();
   const freeDailyPlaysLabel = typeof capabilities.limits.defaultBankDailyPlays === 'number'
     ? String(capabilities.limits.defaultBankDailyPlays)
@@ -345,102 +365,126 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
     const active = tier ? selectedTier === tier.tier : capabilities.effectiveTier === 'free';
     const pending = Boolean(tier?.pendingRequest);
     const disabled = isFree || !tier?.available || pending;
-    const badge = isFree ? 'Current Access' : pending ? 'Pending review' : isProMax ? 'Best value' : 'Most popular';
-    const accentClass = isFree
-      ? 'from-slate-500/20 via-slate-500/10 to-slate-900/10 border-slate-500/30 shadow-slate-950/30'
-      : isProMax
-        ? 'from-sky-500/35 via-blue-600/20 to-slate-900/10 border-blue-500 shadow-blue-500/25'
-        : 'from-pink-500/40 via-fuchsia-500/20 to-slate-900/10 border-pink-500 shadow-pink-500/25';
+    const badge = isFree ? 'Current access' : pending ? 'Pending review' : isProMax ? 'Best value' : 'Most popular';
+    const promoPercent = tier ? getPromoDiscountPercent(tier) : 0;
     const title = isFree ? 'FREE' : tierLabel(tier!.tier);
-    const subtitle = isFree
-      ? 'For trying VDJV before upgrading'
-      : tier!.description;
-    const price = isFree ? 'Free' : formatPhp(tier!.quote.quotePrice);
-    const previousPrice = !isFree && tier!.quote.creditPhp > 0 ? formatPhp(tier!.quote.basePrice) : null;
+    const subtitle = isFree ? 'For trying VDJV before upgrading' : tier!.description;
+    const displayPrice = !isFree ? tier!.quote.quotePrice : 0;
+    const price = isFree ? 'Free' : formatPhp(displayPrice);
+    const previousPrice = !isFree && displayPrice > 0 && promoPercent > 0
+      ? formatPhp(getBeforePromoPrice(displayPrice, promoPercent))
+      : null;
     const cta = isFree ? 'Current Plan' : pending ? 'Pending Review' : `Get ${title}`;
     const ctaClass = isFree
       ? 'bg-white text-slate-950'
       : isProMax
-        ? 'bg-blue-600 text-white shadow-[0_12px_34px_rgba(37,99,235,0.38)] group-hover:bg-blue-500'
-        : 'bg-pink-600 text-white shadow-[0_12px_34px_rgba(219,39,119,0.38)] group-hover:bg-pink-500';
+        ? 'bg-[#1d4df5] text-white shadow-[0_14px_36px_rgba(29,78,245,0.38)] group-hover:bg-[#2860ff]'
+        : 'bg-[#ed0d7c] text-white shadow-[0_14px_36px_rgba(237,13,124,0.42)] group-hover:bg-[#ff168c]';
+    const shellClass = isFree
+      ? 'border-white/10 bg-[#15171a] shadow-black/50'
+      : isProMax
+        ? 'border-[#1f55ff] bg-[#10151f] shadow-[0_0_0_1px_rgba(31,85,255,0.48),0_28px_90px_rgba(31,85,255,0.18)]'
+        : 'border-[#f41885] bg-[#171318] shadow-[0_0_0_1px_rgba(244,24,133,0.5),0_28px_90px_rgba(244,24,133,0.2)]';
+    const heroPanelClass = isFree
+      ? 'bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.035))]'
+      : isProMax
+        ? 'bg-[radial-gradient(110%_90%_at_95%_0%,rgba(49,104,255,0.52),transparent_54%),radial-gradient(100%_86%_at_18%_4%,rgba(255,255,255,0.17),transparent_44%),linear-gradient(180deg,rgba(24,54,150,0.9),rgba(18,21,34,0.96))]'
+        : 'bg-[radial-gradient(120%_95%_at_88%_0%,rgba(255,20,132,0.62),transparent_55%),radial-gradient(100%_90%_at_12%_0%,rgba(255,255,255,0.18),transparent_42%),linear-gradient(180deg,rgba(112,19,78,0.96),rgba(27,20,30,0.98))]';
+
     return (
       <button
         key={plan.id}
         type="button"
         onClick={() => tier ? selectPlan(tier) : undefined}
-        className={`group relative flex min-h-[520px] flex-col overflow-hidden rounded-[1.65rem] border bg-gradient-to-b p-4 text-left text-white shadow-2xl transition duration-300 sm:p-5 ${accentClass} ${
-          active ? 'ring-2 ring-white/20' : ''
+        className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left text-white transition duration-300 md:min-h-[680px] ${shellClass} ${
+          active ? 'ring-2 ring-white/18' : ''
         } ${disabled ? 'cursor-default' : 'hover:-translate-y-1 hover:brightness-110'}`}
       >
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_25%_0%,rgba(255,255,255,0.24),transparent_36%),radial-gradient(circle_at_88%_20%,rgba(255,255,255,0.14),transparent_28%)]" />
-        <div className="pointer-events-none absolute inset-x-5 top-20 h-32 rounded-full bg-white/10 blur-3xl" />
-        <div className="relative flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-2xl font-black uppercase tracking-tight sm:text-3xl">{title}</h3>
-              {!isFree && (
-                <span className={`rounded px-2 py-0.5 text-[10px] font-black uppercase ${isProMax ? 'bg-blue-300 text-blue-950' : 'bg-cyan-300 text-cyan-950'}`}>
-                  VDJV 2.0
-                </span>
-              )}
-            </div>
-            <p className="mt-2 line-clamp-2 text-sm text-white/64">{subtitle}</p>
-          </div>
-          <span className={`shrink-0 rounded-md px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${
-            isProMax ? 'bg-blue-600 text-white' : isFree ? 'bg-white/12 text-white/80' : 'bg-pink-600 text-white'
+        {!isFree && (
+          <div className={`flex h-9 items-center justify-center text-[11px] font-black uppercase tracking-wide ${
+            isProMax ? 'bg-[#2155ff]' : 'bg-[#f21984]'
           }`}>
-            {badge}
-          </span>
+            {isProMax ? '* ' : '+ '}{badge}
+          </div>
+        )}
+
+        <div className={`relative m-4 overflow-hidden rounded-[13px] border border-white/8 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] ${heroPanelClass}`}>
+          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(112deg,rgba(255,255,255,0.18),transparent_24%,transparent_70%,rgba(255,255,255,0.08))]" />
+          <div className="relative flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h3 className="text-[28px] font-black uppercase leading-none tracking-tight">{title}</h3>
+                {!isFree && (
+                  <span className="rounded-[4px] bg-[#63dff0] px-2 py-0.5 text-[10px] font-black uppercase italic text-[#07242b] shadow-[0_0_18px_rgba(99,223,240,0.35)]">
+                    VDJV 2.0
+                  </span>
+                )}
+              </div>
+              <p className="mt-3 line-clamp-2 text-sm text-white/58">{subtitle}</p>
+            </div>
+            {isFree ? (
+              <span className="rounded-md bg-white/10 px-2.5 py-1 text-[10px] font-black uppercase text-white/72">{badge}</span>
+            ) : (
+              <span className="rounded-[4px] bg-[#f21984] px-2 py-1 text-[10px] font-black uppercase text-white shadow-[0_0_18px_rgba(242,25,132,0.45)]">
+                {promoPercent}% OFF
+              </span>
+            )}
+          </div>
+
+          <div className="relative mt-5 rounded-[10px] bg-white/[0.075] p-4">
+            <div className="text-sm font-black">
+              * {isFree ? 'Daily trial access' : isProMax ? 'All current Store banks' : 'Full sampler tools'}
+            </div>
+            <div className="mt-2 text-sm leading-relaxed text-white/58">
+              {isFree
+                ? `${freeDailyPlaysLabel} Default Bank plays. Upgrade to remove daily play limits.`
+                : isProMax
+                  ? 'PRO plus Store bank grant snapshot at approval time.'
+                  : 'Unlock checkout, free promos, search, mapping, backup, and editing.'}
+            </div>
+            <div className="mt-4 h-1 rounded-full bg-white/22">
+              <div className={`h-full rounded-full ${isFree ? 'w-1/3 bg-white/50' : isProMax ? 'w-full bg-[#6aa0ff]' : 'w-2/3 bg-[#f24ca2]'}`} />
+            </div>
+            <div className="mt-4 flex justify-between text-xs font-bold text-white/65">
+              <span>{isFree ? 'Limited' : 'Unlocked'}</span>
+              <span>{isProMax ? 'Maximum' : isFree ? 'Starter' : 'Pro'}</span>
+            </div>
+          </div>
         </div>
-        <div className="relative mt-5 rounded-2xl border border-white/8 bg-white/[0.075] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur">
-          <div className="text-sm font-black">
-            {isFree ? 'Daily trial access' : isProMax ? 'All current Store banks' : 'Full sampler tools'}
-          </div>
-          <div className="mt-2 text-sm leading-relaxed text-white/65">
-            {isFree
-              ? `${freeDailyPlaysLabel} Default Bank plays. Upgrade to remove daily play limits.`
-              : isProMax
-                ? 'PRO plus Store bank grant snapshot at approval time.'
-                : 'Unlock checkout, free promos, search, mapping, backup, and editing.'}
-          </div>
-          <div className="mt-4 h-1.5 rounded-full bg-white/18">
-            <div className={`h-full rounded-full ${isFree ? 'w-1/3 bg-white/55' : isProMax ? 'w-full bg-blue-400' : 'w-2/3 bg-pink-500'}`} />
-          </div>
-          <div className="mt-3 flex justify-between text-xs font-bold text-white/70">
-            <span>{isFree ? 'Limited' : 'Unlocked'}</span>
-            <span>{isProMax ? 'Maximum' : isFree ? 'Starter' : 'Pro'}</span>
-          </div>
-        </div>
-        <div className="relative mt-5">
+
+        <div className="relative px-4">
           <div className="flex flex-wrap items-end gap-2">
-            {previousPrice && <span className="text-2xl font-black text-pink-500 line-through">{previousPrice}</span>}
-            <span className="text-4xl font-black tracking-tight sm:text-5xl">{price}</span>
-            {!isFree && <span className="pb-1 text-xs text-white/58">one-time request</span>}
+            {previousPrice && <span className="text-[28px] font-black text-[#f21984] line-through decoration-2">{previousPrice}</span>}
+            <span className="text-[42px] font-black leading-none tracking-tight">{price}</span>
+            {!isFree && <span className="pb-1 text-xs text-white/52">one-time request</span>}
           </div>
           {!isFree && tier!.quote.creditPhp > 0 ? (
-            <div className="mt-2 inline-flex rounded-full bg-lime-300 px-2 py-0.5 text-[10px] font-black uppercase text-slate-950">
-              {formatPhp(tier!.quote.creditPhp)} cheaper
+            <div className="mt-2 inline-flex rounded-[4px] bg-[#b9ff12] px-2 py-0.5 text-[10px] font-black uppercase text-slate-950">
+              {formatPhp(tier!.quote.creditPhp)} store credit
             </div>
           ) : (
-            <div className="mt-2 text-xs text-white/50">{isFree ? 'Upgrade offer available anytime.' : 'Admin reviews payment proof before activation.'}</div>
+            <div className="mt-2 text-xs text-white/46">{isFree ? 'Upgrade offer available anytime.' : 'Admin reviews payment proof before activation.'}</div>
           )}
         </div>
+
         {pending && (
-          <div className="relative mt-4 rounded-xl border border-amber-300/30 bg-amber-300/12 px-3 py-2 text-xs text-amber-100">
+          <div className="relative mx-4 mt-4 rounded-xl border border-amber-300/30 bg-amber-300/12 px-3 py-2 text-xs text-amber-100">
             Already submitted{tier!.pendingRequest?.receipt_reference ? `: ${tier!.pendingRequest.receipt_reference}` : ''}. Wait for admin review.
           </div>
         )}
-        <div className="relative mt-5 space-y-2">
+
+        <div className="relative mt-5 space-y-2 px-4">
           {list.map((item) => (
-            <div key={item} className="flex items-start gap-2.5 text-[13px] font-semibold text-white/92">
-              <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-white">
+            <div key={item} className="flex items-start gap-2.5 text-[13px] font-bold text-white/92">
+              <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${isFree ? 'text-white/70' : isProMax ? 'text-blue-200' : 'text-[#ff2b95]'}`}>
                 <Check className="h-3.5 w-3.5" />
               </span>
               <span>{item}</span>
             </div>
           ))}
         </div>
-        <div className="relative mt-5 rounded-2xl border border-white/8 bg-black/18 p-3">
+
+        <div className="relative mx-4 mt-5 rounded-[10px] border border-white/7 bg-white/[0.04] p-3">
           <div className="mb-2 text-[11px] font-black uppercase tracking-wider text-white/88">
             {isProMax ? 'Store Access' : isFree ? 'Locked Features' : 'Included Tools'}
           </div>
@@ -461,8 +505,9 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
             </div>
           </div>
         </div>
-        <div className="relative mt-auto pt-6">
-          <div className={`flex h-11 items-center justify-center rounded-full text-sm font-black transition ${
+
+        <div className="relative mt-auto px-4 pb-4 pt-6">
+          <div className={`flex h-12 items-center justify-center rounded-[10px] text-sm font-black transition ${
             disabled && !isFree ? 'bg-white/10 text-white/55' : ctaClass
           }`}>
             {cta}
@@ -477,6 +522,27 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`w-[98vw] max-h-[96vh] overflow-hidden p-0 sm:max-w-[1380px] ${dialogShellClass}`}>
         <div className="max-h-[96vh] overflow-y-auto p-4 sm:p-6">
+        {step === 'plans' && (
+          <div className="relative -mx-4 -mt-4 mb-5 h-[280px] overflow-hidden rounded-t-lg md:hidden">
+            <video
+              src="/assets/preview.mp4"
+              autoPlay
+              loop
+              muted
+              playsInline
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+            <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.1)_0%,rgba(0,0,0,0.44)_100%)]" />
+            <div className="absolute inset-x-0 bottom-0 h-[160px] bg-[radial-gradient(120%_100%_at_50%_100%,rgba(180,40,120,0.48)_0%,rgba(140,30,100,0.24)_50%,transparent_72%)]" />
+            <div className="absolute left-0 right-0 top-11 flex flex-col items-center gap-1 text-center">
+              <p className="text-sm font-semibold text-white/78">Special Offer</p>
+              <p className="select-none text-[60px] font-black uppercase leading-[68px] tracking-[-0.05em] text-transparent drop-shadow-[0_4px_16px_rgba(0,0,0,0.26)] [background-clip:text] [-webkit-text-fill-color:transparent] [background-image:linear-gradient(182deg,rgb(255,255,255)_50%,rgba(255,255,255,0.6)_74%)]">
+                {heroPromoPercent}% OFF
+              </p>
+              <p className="text-sm font-semibold text-white/78">Pay less, play more</p>
+            </div>
+          </div>
+        )}
         <DialogHeader className={step === 'plans' ? 'items-center text-center' : undefined}>
           <DialogTitle className={step === 'plans'
             ? 'text-3xl font-black tracking-tight text-white drop-shadow-[0_0_18px_rgba(255,255,255,0.16)] sm:text-5xl'
@@ -505,29 +571,12 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
         ) : step === 'plans' ? (
           <div className="relative mt-5 space-y-5">
             <div className="pointer-events-none absolute inset-x-0 top-20 mx-auto h-64 max-w-4xl rounded-full bg-pink-500/10 blur-3xl" />
-            <div className="flex items-center justify-center">
-              <div className="inline-flex items-center gap-3 rounded-full bg-lime-300/20 px-3 py-1.5 text-xs font-bold text-lime-300 ring-1 ring-lime-300/20">
-                <span className="flex -space-x-2">
-                  {['DJ', 'VJ', 'MC'].map((label) => (
-                    <span key={label} className="flex h-7 w-7 items-center justify-center rounded-full border border-black/40 bg-slate-800 text-[9px] font-black text-white shadow-lg">
-                      {label}
-                    </span>
-                  ))}
-                </span>
-                <span>Built for live event performers</span>
-              </div>
+            <div className="hidden items-center justify-center gap-3 text-xs font-black uppercase tracking-wide text-white/60 md:flex">
+              <span className="rounded-[8px] bg-[#f21984] px-3 py-1.5 text-white shadow-[0_0_28px_rgba(242,25,132,0.34)]">{heroPromoPercent}% off</span>
+              <span>One-time upgrade pricing</span>
             </div>
 
-            <div className="flex items-center justify-center gap-3 text-xs font-black uppercase tracking-wide text-white/60">
-              <span>Monthly</span>
-              <span className="relative h-6 w-11 rounded-full bg-white/25 shadow-inner">
-                <span className="absolute right-1 top-1 h-4 w-4 rounded-full bg-white shadow" />
-              </span>
-              <span className="text-white">Annual</span>
-              <span className="rounded-lg bg-pink-600 px-2.5 py-1 text-white">30% off</span>
-            </div>
-
-            <div className="relative -mx-4 rounded-[1.6rem] border border-white/10 bg-white/[0.025] py-4 md:mx-0 md:px-4">
+            <div className="relative -mx-4 rounded-[1.6rem] border border-white/10 bg-white/[0.025] py-4 md:mx-0 md:border-0 md:bg-transparent md:px-0">
               <div className="mb-3 flex items-center justify-center gap-2 text-xs text-white/70">
                 <span className="rounded-full bg-white/10 px-3 py-1">Current tier: {currentTierLabel}</span>
               </div>

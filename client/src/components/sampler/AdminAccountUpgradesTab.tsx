@@ -19,6 +19,7 @@ interface TierDraft {
   displayName: string;
   description: string;
   pricePhp: string;
+  pricePromoDiscountPercent: string;
   limitsJson: string;
   featuresJson: string;
   isActive: boolean;
@@ -52,14 +53,25 @@ const formatDateTime = (value?: string | null): string => {
   }).format(date);
 };
 
-const buildTierDraft = (tier: AdminAccountTierConfig): TierDraft => ({
-  displayName: tier.display_name || tier.tier,
-  description: tier.description || '',
-  pricePhp: String(tier.price_php ?? 0),
-  limitsJson: JSON.stringify(tier.limits || {}, null, 2),
-  featuresJson: JSON.stringify(tier.features || {}, null, 2),
-  isActive: tier.is_active !== false,
-});
+const getTierPromoDiscountPercent = (limits: Record<string, unknown> | null | undefined): number => {
+  const raw = limits?.pricePromoDiscountPercent ?? limits?.price_promo_discount_percent;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return 30;
+  return Math.min(90, Math.max(0, Math.round(value)));
+};
+
+const buildTierDraft = (tier: AdminAccountTierConfig): TierDraft => {
+  const limits = tier.limits || {};
+  return {
+    displayName: tier.display_name || tier.tier,
+    description: tier.description || '',
+    pricePhp: String(tier.price_php ?? 0),
+    pricePromoDiscountPercent: tier.tier === 'free' ? '0' : String(getTierPromoDiscountPercent(limits)),
+    limitsJson: JSON.stringify(limits, null, 2),
+    featuresJson: JSON.stringify(tier.features || {}, null, 2),
+    isActive: tier.is_active !== false,
+  };
+};
 
 const COMMON_LIMIT_FIELDS = [
   ['defaultBankDailyPlays', 'Default plays/day'],
@@ -155,6 +167,7 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
           displayName: tier,
           description: '',
           pricePhp: '0',
+          pricePromoDiscountPercent: tier === 'free' ? '0' : '30',
           limitsJson: '{}',
           featuresJson: '{}',
           isActive: true,
@@ -186,6 +199,10 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
     try {
       const pricePhp = Number(draft.pricePhp);
       const limits = JSON.parse(draft.limitsJson || '{}') as Record<string, unknown>;
+      const promoPercent = Number(draft.pricePromoDiscountPercent);
+      limits.pricePromoDiscountPercent = tier === 'free'
+        ? 0
+        : Math.min(90, Math.max(0, Math.round(Number.isFinite(promoPercent) ? promoPercent : 30)));
       const features = JSON.parse(draft.featuresJson || '{}') as Record<string, boolean>;
       await adminApi.saveAccountTierConfig({
         tier,
@@ -336,6 +353,20 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
                 </div>
                 <Input value={draft.displayName} onChange={(event) => updateTierDraft(tier.tier, { displayName: event.target.value })} placeholder="Display name" />
                 <Input value={draft.pricePhp} onChange={(event) => updateTierDraft(tier.tier, { pricePhp: event.target.value })} placeholder="Price PHP" inputMode="numeric" />
+                {tier.tier !== 'free' && (
+                  <label className="grid grid-cols-[1fr_7rem] items-center gap-2 rounded-md border px-3 py-2 text-xs">
+                    <span>
+                      <span className="block font-semibold">Promo discount label</span>
+                      <span className="text-gray-500">Shown as crossed-out offer math. Payment still uses Price PHP.</span>
+                    </span>
+                    <Input
+                      value={draft.pricePromoDiscountPercent}
+                      onChange={(event) => updateTierDraft(tier.tier, { pricePromoDiscountPercent: event.target.value })}
+                      className="h-8 text-xs"
+                      inputMode="numeric"
+                    />
+                  </label>
+                )}
                 <textarea
                   value={draft.description}
                   onChange={(event) => updateTierDraft(tier.tier, { description: event.target.value })}

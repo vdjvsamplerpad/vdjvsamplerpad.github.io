@@ -104,6 +104,17 @@ const normalizeUpgradeTier = (value: unknown): StoredAccountTier | null => {
   return null;
 };
 
+const normalizePromoDiscountPercent = (value: unknown): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 30;
+  return Math.min(90, Math.max(0, Math.round(parsed)));
+};
+
+const getTierPromoDiscountPercent = (tierConfig: any): number => {
+  const limits = tierConfig?.limits && typeof tierConfig.limits === "object" ? tierConfig.limits : {};
+  return normalizePromoDiscountPercent(limits.pricePromoDiscountPercent ?? limits.price_promo_discount_percent);
+};
+
 const normalizeVoucherCode = (value: unknown): string => String(value || "").trim().toUpperCase().replace(/\s+/g, "");
 
 const buildUpgradeReceiptReference = (requestId: string): string =>
@@ -157,6 +168,7 @@ const quoteUpgradeRequest = async (
     basePrice,
     creditPhp: credit.total,
     quotePrice,
+    promoDiscountPercent: getTierPromoDiscountPercent(tierConfig),
     purchaseCreditSnapshot: credit.rows,
   };
 };
@@ -2979,6 +2991,7 @@ const getAccountUpgradeOptions = async (req: Request) => {
       displayName: asString((config as any)?.display_name, 80) || targetTier.toUpperCase(),
       description: asString((config as any)?.description, 1000) || "",
       pricePhp: normalizeTierPrice((config as any)?.price_php),
+      promoDiscountPercent: getTierPromoDiscountPercent(config),
       isActive: (config as any)?.is_active !== false,
       available: !pendingRequest && !alreadyOnTier && !isDowngrade && (config as any)?.is_active !== false,
       pendingRequest,
