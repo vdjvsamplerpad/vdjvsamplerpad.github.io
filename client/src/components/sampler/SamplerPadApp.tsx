@@ -1932,8 +1932,11 @@ export function SamplerPadApp() {
       const resetLabel = resetAt
         ? new Date(resetAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
         : 'tomorrow';
+      const freeReason = reason.toLowerCase().includes('sign in')
+        ? 'Daily Default Bank free plays are finished.'
+        : reason;
       window.dispatchEvent(new CustomEvent('vdjv-open-upgrade', {
-        detail: { reason: `${reason} Free plays reset ${resetLabel}.` }
+        detail: { reason: `${freeReason} Free plays reset ${resetLabel}. Upgrade to PRO for unlimited Default Bank plays and full sampler features.` }
       }));
       return;
     }
