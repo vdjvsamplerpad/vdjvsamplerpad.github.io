@@ -97,6 +97,11 @@ const validateProofFile = (file: File | null): string | null => {
 
 const tierLabel = (tier: TargetTier): string => tier === 'pro_max' ? 'PRO MAX' : 'PRO';
 const DEFAULT_PROMO_DISCOUNT_PERCENT = 30;
+const PAYMENT_CHANNEL_OPTIONS: Array<{ value: PaymentChannel; title: string; subtitle: string; accent: 'pink' | 'blue' | 'green' }> = [
+  { value: 'image_proof', title: 'Receipt Upload', subtitle: 'Fastest admin review', accent: 'pink' },
+  { value: 'gcash_manual', title: 'GCash Manual', subtitle: 'Enter sender and reference', accent: 'blue' },
+  { value: 'maya_manual', title: 'Maya Manual', subtitle: 'Enter sender and reference', accent: 'green' },
+];
 
 const clampPromoDiscountPercent = (value: unknown): number => {
   const parsed = Number(value);
@@ -340,15 +345,34 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
   const shellClass = isDark
     ? 'border-slate-700 bg-slate-950 text-slate-100'
     : 'border-slate-200 bg-white text-slate-950';
-  const cardClass = isDark
-    ? 'border-slate-800 bg-slate-900/72'
-    : 'border-slate-200 bg-white';
   const inputClass = isDark
     ? 'border-slate-700 bg-slate-950 text-slate-100 placeholder:text-slate-500'
     : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400';
   const dialogShellClass = step === 'plans'
-    ? 'border-slate-900 bg-[#07090d] text-slate-100'
+    ? isDark
+      ? 'border-slate-900 bg-[#07090d] text-slate-100'
+      : 'border-slate-200 bg-[#f6f4ee] text-slate-950'
     : shellClass;
+  const planTitleClass = isDark
+    ? 'text-white drop-shadow-[0_0_18px_rgba(255,255,255,0.16)]'
+    : 'text-slate-950 drop-shadow-[0_10px_30px_rgba(15,23,42,0.12)]';
+  const planDescriptionClass = isDark ? 'text-slate-400' : 'text-slate-600';
+  const planAmbientGlowClass = isDark ? 'bg-pink-500/10' : 'bg-pink-500/14';
+  const planMetaClass = isDark ? 'text-white/60' : 'text-slate-600';
+  const currentTierPillClass = isDark ? 'bg-white/10 text-white/70' : 'bg-slate-950/8 text-slate-700';
+  const planRailShellClass = isDark
+    ? 'border-white/10 bg-white/[0.025]'
+    : 'border-slate-950/10 bg-white/72 shadow-[0_24px_80px_rgba(15,23,42,0.12)]';
+  const planFootnoteClass = isDark
+    ? 'border-white/10 bg-white/[0.04] text-white/62'
+    : 'border-slate-950/10 bg-white/82 text-slate-600 shadow-[0_18px_54px_rgba(15,23,42,0.08)]';
+  const requestPanelClass = isDark
+    ? 'border-white/10 bg-[#111116] text-white shadow-[0_24px_80px_rgba(0,0,0,0.3)]'
+    : 'border-slate-950/10 bg-white text-slate-950 shadow-[0_24px_80px_rgba(15,23,42,0.12)]';
+  const requestSubtlePanelClass = isDark
+    ? 'border-white/10 bg-white/[0.045] text-white'
+    : 'border-slate-950/10 bg-slate-50 text-slate-950';
+  const enabledBadgeClass = 'bg-[#b9ff12] text-slate-950 shadow-[0_0_18px_rgba(185,255,18,0.35)]';
 
   const renderPlanCard = (plan: PlanView) => {
     const tier = plan.tier;
@@ -396,7 +420,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
         key={plan.id}
         type="button"
         onClick={() => tier ? selectPlan(tier) : undefined}
-        className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left text-white transition duration-300 md:min-h-[680px] ${shellClass} ${
+        className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left text-white transition duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f21984]/60 md:min-h-[680px] ${shellClass} ${
           active ? 'ring-2 ring-white/18' : ''
         } ${disabled ? 'cursor-default' : 'hover:-translate-y-1 hover:brightness-110'}`}
       >
@@ -491,7 +515,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
           <div className="space-y-2 text-xs text-white/66">
             <div className="flex items-center justify-between gap-3">
               <span>{isProMax ? 'Published Store banks' : 'Bank Store downloads'}</span>
-              <span className={`rounded px-1.5 py-0.5 font-black ${isProMax ? 'bg-lime-300 text-slate-950' : isFree ? 'bg-white/10 text-white/55' : 'bg-lime-300 text-slate-950'}`}>
+              <span className={`rounded px-1.5 py-0.5 font-black ${isProMax ? enabledBadgeClass : isFree ? 'bg-white/10 text-white/55' : enabledBadgeClass}`}>
                 {isProMax ? 'GRANTED' : isFree ? 'LOCKED' : 'ENABLED'}
               </span>
             </div>
@@ -501,7 +525,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
             </div>
             <div className="flex items-center justify-between gap-3">
               <span>{isProMax ? 'Device bank cap' : 'Backup / repair'}</span>
-              <span className="rounded bg-lime-300 px-1.5 py-0.5 font-black text-slate-950">{isProMax ? '150' : isFree ? 'LOCKED' : 'ENABLED'}</span>
+              <span className={`rounded px-1.5 py-0.5 font-black ${isFree ? 'bg-white/10 text-white/55' : enabledBadgeClass}`}>{isProMax ? '150' : isFree ? 'LOCKED' : 'ENABLED'}</span>
             </div>
           </div>
         </div>
@@ -545,12 +569,12 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
         )}
         <DialogHeader className={step === 'plans' ? 'items-center text-center' : undefined}>
           <DialogTitle className={step === 'plans'
-            ? 'text-3xl font-black tracking-tight text-white drop-shadow-[0_0_18px_rgba(255,255,255,0.16)] sm:text-5xl'
+            ? `text-3xl font-black tracking-tight sm:text-5xl ${planTitleClass}`
             : 'text-2xl font-black tracking-tight sm:text-3xl'}
           >
             {step === 'plans' ? 'PICK YOUR PLAN' : `Request ${selected ? tierLabel(selected.tier) : 'upgrade'}`}
           </DialogTitle>
-          <DialogDescription className={step === 'plans' ? 'text-slate-400' : undefined}>
+          <DialogDescription className={step === 'plans' ? planDescriptionClass : undefined}>
             {step === 'plans'
               ? 'Scale your sampler access with higher limits, Store downloads, and event-ready features.'
               : `Current tier: ${currentTierLabel}${profile?.display_name ? ` - ${profile.display_name}` : ''}.`}
@@ -570,15 +594,15 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
           </div>
         ) : step === 'plans' ? (
           <div className="relative mt-5 space-y-5">
-            <div className="pointer-events-none absolute inset-x-0 top-20 mx-auto h-64 max-w-4xl rounded-full bg-pink-500/10 blur-3xl" />
-            <div className="hidden items-center justify-center gap-3 text-xs font-black uppercase tracking-wide text-white/60 md:flex">
+            <div className={`pointer-events-none absolute inset-x-0 top-20 mx-auto h-64 max-w-4xl rounded-full blur-3xl ${planAmbientGlowClass}`} />
+            <div className={`hidden items-center justify-center gap-3 text-xs font-black uppercase tracking-wide md:flex ${planMetaClass}`}>
               <span className="rounded-[8px] bg-[#f21984] px-3 py-1.5 text-white shadow-[0_0_28px_rgba(242,25,132,0.34)]">{heroPromoPercent}% off</span>
               <span>One-time upgrade pricing</span>
             </div>
 
-            <div className="relative -mx-4 rounded-[1.6rem] border border-white/10 bg-white/[0.025] py-4 md:mx-0 md:border-0 md:bg-transparent md:px-0">
-              <div className="mb-3 flex items-center justify-center gap-2 text-xs text-white/70">
-                <span className="rounded-full bg-white/10 px-3 py-1">Current tier: {currentTierLabel}</span>
+            <div className={`relative -mx-4 rounded-[1.6rem] border py-4 md:mx-0 md:border-0 md:bg-transparent md:px-0 md:shadow-none ${planRailShellClass}`}>
+              <div className="mb-3 flex items-center justify-center gap-2 text-xs">
+                <span className={`rounded-full px-3 py-1 ${currentTierPillClass}`}>Current tier: {currentTierLabel}</span>
               </div>
               <div
                 ref={planRailRef}
@@ -619,35 +643,36 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
               </div>
             </div>
 
-            <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-xs leading-relaxed text-white/62 backdrop-blur">
+            <div className={`rounded-2xl border px-4 py-3 text-xs leading-relaxed backdrop-blur ${planFootnoteClass}`}>
               PRO MAX grants Store banks that are published at upgrade approval time. Future new releases are not automatically included unless admin grants them later.
             </div>
 
             {successMessage && (
-              <div className="rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-500">
+              <div className="rounded-xl border border-[#b9ff12]/40 bg-[#b9ff12]/10 px-3 py-2 text-sm font-semibold text-lime-400">
                 {successMessage}
               </div>
             )}
           </div>
         ) : selected ? (
           <div className="mx-auto max-w-2xl space-y-5">
-            <div className={`rounded-[1.75rem] border p-5 shadow-sm ${cardClass}`}>
+            <div className={`relative overflow-hidden rounded-[18px] border p-5 ${requestPanelClass}`}>
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(90%_100%_at_95%_0%,rgba(242,25,132,0.18),transparent_54%),linear-gradient(112deg,rgba(255,255,255,0.12),transparent_30%)]" />
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="text-[11px] font-black uppercase tracking-[0.22em] text-emerald-500">Selected plan</div>
+                <div className="relative">
+                  <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#f21984]">Selected plan</div>
                   <h3 className="mt-1 text-2xl font-black">{selected.displayName}</h3>
                   <p className="mt-1 text-sm opacity-75">{selected.description}</p>
                 </div>
-                <div className="text-right">
+                <div className="relative text-right">
                   <div className="text-3xl font-black">{formatPhp(quotePrice)}</div>
-                  {selected.quote.creditPhp > 0 && <div className="text-xs text-emerald-500">-{formatPhp(selected.quote.creditPhp)} Store credit</div>}
+                  {selected.quote.creditPhp > 0 && <div className="text-xs font-black text-[#b9ff12]">-{formatPhp(selected.quote.creditPhp)} Store credit</div>}
                 </div>
               </div>
             </div>
 
             {quotePrice > 0 ? (
               <>
-                <div className={`rounded-xl border p-5 shadow-sm ${cardClass}`}>
+                <div className={`rounded-[18px] border p-5 shadow-sm ${requestPanelClass}`}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <h3 className="text-lg font-semibold">Payment Information</h3>
@@ -664,7 +689,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                   </div>
 
                   {paymentConfig?.instructions && (
-                    <div className={`mt-4 whitespace-pre-wrap rounded-xl border px-3 py-2 text-sm leading-relaxed ${isDark ? 'border-slate-800 bg-slate-950/60 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                    <div className={`mt-4 whitespace-pre-wrap rounded-[12px] border px-3 py-2 text-sm leading-relaxed ${requestSubtlePanelClass}`}>
                       {paymentConfig.instructions}
                     </div>
                   )}
@@ -672,8 +697,8 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                   {(paymentConfig?.gcash_number || paymentConfig?.maya_number) && (
                     <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                       {paymentConfig.gcash_number && (
-                        <div className={`flex flex-col items-center justify-center gap-1 rounded-xl border p-3 text-center ${isDark ? 'border-blue-500/30 bg-blue-900/20' : 'border-blue-100 bg-blue-50'}`}>
-                          <span className="text-xs font-black uppercase tracking-wider text-blue-500">GCash</span>
+                        <div className={`flex flex-col items-center justify-center gap-1 rounded-[12px] border p-3 text-center ${isDark ? 'border-[#1d4df5]/35 bg-[#1d4df5]/14' : 'border-[#1d4df5]/20 bg-[#1d4df5]/8'}`}>
+                          <span className="text-xs font-black uppercase tracking-wider text-[#1d4df5]">GCash</span>
                           <CopyableValue
                             value={paymentConfig.gcash_number}
                             label="GCash number"
@@ -686,8 +711,8 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                         </div>
                       )}
                       {paymentConfig.maya_number && (
-                        <div className={`flex flex-col items-center justify-center gap-1 rounded-xl border p-3 text-center ${isDark ? 'border-green-500/30 bg-green-900/20' : 'border-green-100 bg-green-50'}`}>
-                          <span className="text-xs font-black uppercase tracking-wider text-green-500">Maya</span>
+                        <div className={`flex flex-col items-center justify-center gap-1 rounded-[12px] border p-3 text-center ${isDark ? 'border-[#b9ff12]/35 bg-[#b9ff12]/10' : 'border-lime-400/40 bg-lime-200/30'}`}>
+                          <span className="text-xs font-black uppercase tracking-wider text-lime-500">Maya</span>
                           <CopyableValue
                             value={paymentConfig.maya_number}
                             label="Maya number"
@@ -712,19 +737,37 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                   )}
                 </div>
 
-                <div className={`rounded-xl border p-5 shadow-sm ${cardClass}`}>
+                <div className={`rounded-[18px] border p-5 shadow-sm ${requestPanelClass}`}>
                   <div className="grid gap-4">
                     <div className="space-y-1.5">
                       <Label>Payment Channel</Label>
-                      <select
-                        value={paymentChannel}
-                        onChange={(event) => setPaymentChannel(event.target.value as PaymentChannel)}
-                        className={`w-full rounded-md border p-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500/40 ${inputClass}`}
-                      >
-                        <option value="image_proof">Upload Official Receipt (Fast Approval)</option>
-                        <option value="gcash_manual">GCash Manual</option>
-                        <option value="maya_manual">Maya Manual</option>
-                      </select>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {PAYMENT_CHANNEL_OPTIONS.map((option) => {
+                          const selectedChannel = paymentChannel === option.value;
+                          const accentClass = option.accent === 'blue'
+                            ? 'border-[#1d4df5] bg-[#1d4df5]/12 text-[#8fb0ff]'
+                            : option.accent === 'green'
+                              ? 'border-[#b9ff12] bg-[#b9ff12]/12 text-[#b9ff12]'
+                              : 'border-[#f21984] bg-[#f21984]/12 text-[#ff8fc4]';
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => setPaymentChannel(option.value)}
+                              className={`rounded-[12px] border p-3 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f21984]/50 ${
+                                selectedChannel
+                                  ? accentClass
+                                  : isDark
+                                    ? 'border-white/10 bg-white/[0.035] text-white/70 hover:bg-white/[0.06]'
+                                    : 'border-slate-950/10 bg-slate-50 text-slate-600 hover:bg-white'
+                              }`}
+                            >
+                              <div className="text-xs font-black uppercase tracking-wide">{option.title}</div>
+                              <div className="mt-1 text-[11px] opacity-75">{option.subtitle}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
 
                     {(paymentChannel === 'gcash_manual' || paymentChannel === 'maya_manual') && (
@@ -743,7 +786,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                     <div className="space-y-1.5">
                       <Label>Upload Receipt / Image Proof {paymentChannel === 'image_proof' ? <span className="text-red-500">*</span> : <span className="text-xs font-normal opacity-60">(Optional)</span>}</Label>
                       <div className="flex items-center gap-3">
-                        {proofPreviewUrl && <img src={proofPreviewUrl} alt="Payment proof preview" className="h-14 w-14 rounded-md border object-cover" />}
+                        {proofPreviewUrl && <img src={proofPreviewUrl} alt="Payment proof preview" className="h-14 w-14 rounded-[10px] border object-cover" />}
                         <Input
                           type="file"
                           accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif"
@@ -766,7 +809,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                         value={notes}
                         onChange={(event) => setNotes(event.target.value)}
                         rows={3}
-                        className={`w-full resize-none rounded-md border p-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500/40 ${inputClass}`}
+                        className={`w-full resize-none rounded-md border p-2.5 text-sm outline-none focus:ring-2 focus:ring-[#f21984]/40 ${inputClass}`}
                         placeholder="Optional message for admin"
                       />
                     </div>
@@ -774,13 +817,13 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                 </div>
               </>
             ) : (
-              <div className={`rounded-xl border p-4 text-sm ${isDark ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
+              <div className={`rounded-[14px] border p-4 text-sm ${isDark ? 'border-[#b9ff12]/35 bg-[#b9ff12]/10 text-lime-100' : 'border-lime-300 bg-lime-50 text-lime-900'}`}>
                 No payment is required for this upgrade quote. Submit to apply or create an admin-reviewed request.
               </div>
             )}
 
             {successMessage && (
-              <div className="rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-500">
+              <div className="rounded-xl border border-[#b9ff12]/40 bg-[#b9ff12]/10 px-3 py-2 text-sm font-semibold text-lime-400">
                 {successMessage}
               </div>
             )}
@@ -790,7 +833,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back to Plans
               </Button>
-              <Button type="button" onClick={() => void submitUpgrade()} disabled={submitting || !selected.available} className="flex-1 bg-emerald-500 font-black text-slate-950 hover:bg-emerald-400">
+              <Button type="button" onClick={() => void submitUpgrade()} disabled={submitting || !selected.available} className="flex-1 bg-[#ed0d7c] font-black text-white shadow-[0_14px_36px_rgba(237,13,124,0.32)] hover:bg-[#ff168c]">
                 {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : quotePrice > 0 ? <Upload className="mr-2 h-4 w-4" /> : <ArrowRight className="mr-2 h-4 w-4" />}
                 {submitting ? 'Submitting...' : quotePrice > 0 ? 'Submit Upgrade Request' : 'Apply Upgrade'}
               </Button>
