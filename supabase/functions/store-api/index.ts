@@ -216,8 +216,35 @@ const applyAccountTierToUser = async (
     .eq("id", userId);
   if (tierError) throw new Error(tierError.message);
 
+  if (tier === "pro_max") {
+    await grantPublishedStoreBanksToUser(admin, userId);
+  }
+
   const snapshot = await loadAccountCapabilitySnapshot(admin, userId);
   return snapshot;
+};
+
+const grantPublishedStoreBanksToUser = async (
+  admin: ReturnType<typeof createServiceClient>,
+  userId: string,
+) => {
+  const { data: catalogRows, error } = await admin
+    .from("bank_catalog_items")
+    .select("bank_id,item_type,is_published,coming_soon")
+    .eq("is_published", true)
+    .eq("item_type", "single_bank")
+    .not("bank_id", "is", null);
+  if (error) throw new Error(error.message);
+  const bankIds = Array.from(new Set((catalogRows || [])
+    .filter((row: any) => !row?.coming_soon)
+    .map((row: any) => asUuid(row?.bank_id))
+    .filter(Boolean) as string[]));
+  if (bankIds.length === 0) return;
+  const rows = bankIds.map((bankId) => ({ user_id: userId, bank_id: bankId }));
+  const { error: upsertError } = await admin
+    .from("user_bank_access")
+    .upsert(rows, { onConflict: "user_id,bank_id", ignoreDuplicates: true });
+  if (upsertError) throw new Error(upsertError.message);
 };
 
 const readPositiveInt = (value: string | undefined, fallback: number): number => {
@@ -1631,7 +1658,7 @@ const normalizeStoreCatalogItem = (
 
   const isComingSoon = Boolean(item?.coming_soon);
   const isFreeTier = input.accountCapabilities.effectiveTier === "free";
-  const hasAllStoreAccess = Boolean(input.accountCapabilities.features.bankStoreAllAccess);
+  const hasAllStoreAccess = input.isAdmin;
   const isPromotionFreeClaim = Boolean(
     item?.has_active_promotion
     && item?.promotion_discount_type === "free"
@@ -2627,7 +2654,7 @@ const getStoreCatalog = async (req: Request) => {
         q: q || "",
       });
     }
-    if (userId && !accountCapabilities.features.bankStoreAllAccess) {
+    if (userId && !userIsAdmin) {
       const [accessResult, approvedResult] = await Promise.all([
         admin.from("user_bank_access").select("bank_id").eq("user_id", userId),
         admin.from("bank_purchase_requests").select("bank_id").eq("user_id", userId).eq("status", "approved"),
@@ -2643,7 +2670,7 @@ const getStoreCatalog = async (req: Request) => {
       });
       purchasedBankIds = Array.from(purchasedSet);
     }
-    if (sort === "purchased" && !accountCapabilities.features.bankStoreAllAccess && purchasedBankIds.length === 0) {
+    if (sort === "purchased" && !userIsAdmin && purchasedBankIds.length === 0) {
       return ok({
         items: [],
         banners,
@@ -2664,7 +2691,7 @@ const getStoreCatalog = async (req: Request) => {
     .from("bank_catalog_items")
     .select(catalogSelect)
     .eq("is_published", true);
-  if (sort === "purchased" && !accountCapabilities.features.bankStoreAllAccess && purchasedBankIds.length > 0) {
+  if (sort === "purchased" && !userIsAdmin && purchasedBankIds.length > 0) {
     catalogQuery = catalogQuery.in("bank_id", purchasedBankIds);
   }
   catalogQuery = catalogQuery.order("created_at", { ascending: false });
@@ -2929,18 +2956,32 @@ const getAccountUpgradeOptions = async (req: Request) => {
   const profile = await ensureProfileForAccountUser(admin, user);
   const capabilities = await loadAccountCapabilitySnapshot(admin, user.id);
   const targets: StoredAccountTier[] = ["pro", "pro_max"];
+  const { data: pendingRows, error: pendingError } = await admin
+    .from("account_upgrade_requests")
+    .select("id,target_tier,status,receipt_reference,created_at,quote_price_php_snapshot")
+    .eq("user_id", user.id)
+    .eq("status", "pending")
+    .in("target_tier", targets);
+  if (pendingError) return fail(500, pendingError.message);
+  const pendingByTier = new Map<string, any>();
+  for (const row of pendingRows || []) {
+    const target = normalizeUpgradeTier((row as any)?.target_tier);
+    if (target && !pendingByTier.has(target)) pendingByTier.set(target, row);
+  }
   const tiers = await Promise.all(targets.map(async (targetTier) => {
     const config = await getTierConfig(admin, targetTier);
     const quote = await quoteUpgradeRequest(admin, user.id, targetTier);
     const alreadyOnTier = capabilities.effectiveTier === targetTier || capabilities.effectiveTier === "pro_max";
     const isDowngrade = capabilities.effectiveTier === "pro" && targetTier === "pro";
+    const pendingRequest = pendingByTier.get(targetTier) || null;
     return {
       tier: targetTier,
       displayName: asString((config as any)?.display_name, 80) || targetTier.toUpperCase(),
       description: asString((config as any)?.description, 1000) || "",
       pricePhp: normalizeTierPrice((config as any)?.price_php),
       isActive: (config as any)?.is_active !== false,
-      available: !alreadyOnTier && !isDowngrade && (config as any)?.is_active !== false,
+      available: !pendingRequest && !alreadyOnTier && !isDowngrade && (config as any)?.is_active !== false,
+      pendingRequest,
       quote,
     };
   }));
@@ -3020,6 +3061,17 @@ const createAccountUpgradeRequest = async (req: Request, body: any) => {
   }
   if (targetTier === "pro" && currentCapabilities.effectiveTier === "pro_max") {
     return fail(409, "ALREADY_ABOVE_TIER", { capabilities: currentCapabilities });
+  }
+  const { data: existingPending, error: existingPendingError } = await admin
+    .from("account_upgrade_requests")
+    .select("id,target_tier,status,receipt_reference,created_at,quote_price_php_snapshot")
+    .eq("user_id", user.id)
+    .eq("target_tier", targetTier)
+    .eq("status", "pending")
+    .maybeSingle();
+  if (existingPendingError) return fail(500, existingPendingError.message);
+  if (existingPending) {
+    return fail(409, "UPGRADE_REQUEST_PENDING", { request: existingPending });
   }
 
   const paymentChannel = asString(body?.paymentChannel ?? body?.payment_channel, 40);
@@ -6130,12 +6182,6 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       reason: "bank_store_checkout_disabled",
     });
   }
-  if (accountCapabilities.features.bankStoreAllAccess) {
-    return fail(409, "ALREADY_UNLOCKED_BY_PRO_MAX", {
-      tier: accountCapabilities.effectiveTier,
-    });
-  }
-
   const purchaseLimit = await consumeRateLimit({
     scope: "store.purchase_request",
     subject: userId,
@@ -6898,7 +6944,7 @@ const resolveStoreDownloadContext = async (
   if (bankError) return { ok: false, response: fail(500, bankError.message) };
   if (!bankRow || bankRow.deleted_at) return { ok: false, response: fail(410, "BANK_ARCHIVED") };
 
-  if (catalogItem.requires_grant && !accountCapabilities.features.bankStoreAllAccess) {
+  if (catalogItem.requires_grant) {
     const { data: accessData } = await admin
       .from("user_bank_access")
       .select("id")

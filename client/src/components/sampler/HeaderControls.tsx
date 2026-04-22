@@ -409,7 +409,11 @@ export function HeaderControls({
       const customEvent = event as CustomEvent<{ reason?: string }>;
       const reason = customEvent.detail?.reason;
       if (user || getCachedUser()) {
-        openUpgradeDialog(reason || 'Upgrade to unlock this action.');
+        if (capabilities.effectiveTier === 'free') {
+          openUpgradeDialog(reason || 'Upgrade to unlock this action.');
+        } else if (reason) {
+          pushNotice({ variant: 'info', message: reason });
+        }
         return;
       }
       setShowLoginModal(true);
@@ -419,7 +423,7 @@ export function HeaderControls({
     };
     window.addEventListener('vdjv-require-login', handleRequireLogin as EventListener);
     return () => window.removeEventListener('vdjv-require-login', handleRequireLogin as EventListener);
-  }, [openUpgradeDialog, pushNotice, user]);
+  }, [capabilities.effectiveTier, openUpgradeDialog, pushNotice, user]);
 
   React.useEffect(() => {
     const handleOpenAbout = () => setAboutOpen(true);

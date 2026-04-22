@@ -371,8 +371,35 @@ const applyAccountTierToUser = async (
     .eq("id", userId);
   if (tierError) throw new Error(tierError.message);
 
+  if (tier === "pro_max") {
+    await grantPublishedStoreBanksToUser(admin, userId);
+  }
+
   const snapshot = await loadAccountCapabilitySnapshot(admin, userId);
   return snapshot;
+};
+
+const grantPublishedStoreBanksToUser = async (
+  admin: ReturnType<typeof createServiceClient>,
+  userId: string,
+) => {
+  const { data: catalogRows, error } = await admin
+    .from("bank_catalog_items")
+    .select("bank_id,item_type,is_published,coming_soon")
+    .eq("is_published", true)
+    .eq("item_type", "single_bank")
+    .not("bank_id", "is", null);
+  if (error) throw new Error(error.message);
+  const bankIds = Array.from(new Set((catalogRows || [])
+    .filter((row: any) => !row?.coming_soon)
+    .map((row: any) => asUuid(row?.bank_id))
+    .filter(Boolean) as string[]));
+  if (bankIds.length === 0) return;
+  const rows = bankIds.map((bankId) => ({ user_id: userId, bank_id: bankId }));
+  const { error: upsertError } = await admin
+    .from("user_bank_access")
+    .upsert(rows, { onConflict: "user_id,bank_id", ignoreDuplicates: true });
+  if (upsertError) throw new Error(upsertError.message);
 };
 
 const toUtcDateKey = (value: Date): string => {
@@ -3670,6 +3697,53 @@ const copyNextVoucher = async (
   return fail(500, message);
 };
 
+const revokeLatestUnusedVoucher = async (
+  campaignId: string,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const { data: voucher, error } = await admin
+    .from("account_vouchers")
+    .select("id,campaign_id,status,redeemed_at")
+    .eq("campaign_id", campaignId)
+    .eq("status", "reserved")
+    .is("redeemed_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return fail(500, error.message);
+  if (!voucher) return fail(404, "NO_UNUSED_VOUCHER");
+  const nowIso = new Date().toISOString();
+  const { error: updateError } = await admin
+    .from("account_vouchers")
+    .update({ status: "disabled", updated_at: nowIso })
+    .eq("id", (voucher as any).id)
+    .eq("status", "reserved");
+  if (updateError) return fail(500, updateError.message);
+  const { data: campaign } = await admin
+    .from("account_voucher_campaigns")
+    .select("reserved_count")
+    .eq("id", campaignId)
+    .maybeSingle();
+  await admin
+    .from("account_voucher_campaigns")
+    .update({
+      reserved_count: Math.max(0, Math.floor(Number((campaign as any)?.reserved_count || 0)) - 1),
+      updated_at: nowIso,
+    })
+    .eq("id", campaignId);
+  await swallowDiscordError(() =>
+    sendDiscordAdminActionEvent({
+      severity: "info",
+      title: "Voucher Revoked",
+      description: "Admin revoked the latest unused voucher code for a campaign.",
+      actorUserId: adminUserId,
+      extraFields: [{ name: "Campaign ID", value: campaignId, inline: false }],
+    })
+  );
+  return ok({ campaignId, voucherId: (voucher as any).id, status: "disabled" });
+};
+
 Deno.serve(async (req) => {
   const cors = handleCorsPreflight(req);
   if (cors) return cors;
@@ -3852,6 +3926,12 @@ Deno.serve(async (req) => {
       const campaignId = asUuid(route.id);
       if (!campaignId) return badRequest("Invalid voucher campaign id");
       return await copyNextVoucher(campaignId, admin, adminCheck.userId);
+    }
+
+    if (route.section === "vouchers" && route.id && route.action === "revoke-latest") {
+      const campaignId = asUuid(route.id);
+      if (!campaignId) return badRequest("Invalid voucher campaign id");
+      return await revokeLatestUnusedVoucher(campaignId, admin, adminCheck.userId);
     }
 
     if (route.section === "users" && route.id && route.action) {

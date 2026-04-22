@@ -378,6 +378,7 @@ export function SamplerPadApp() {
   );
   const guestDefaultBankTrialStateRef = React.useRef(guestDefaultBankTrialState);
   const defaultBankAllowanceLimit = capabilities.limits.defaultBankDailyPlays;
+  const isFreeAccountTier = capabilities.effectiveTier === 'free';
   const [accountDefaultBankAllowanceState, setAccountDefaultBankAllowanceState] = React.useState<DefaultBankPlayAllowanceState | null>(null);
   const accountDefaultBankAllowanceStateRef = React.useRef<DefaultBankPlayAllowanceState | null>(null);
   const defaultSettings = React.useMemo(
@@ -419,7 +420,7 @@ export function SamplerPadApp() {
 
   React.useEffect(() => {
     const limit = defaultBankAllowanceLimit;
-    if (!effectiveAuthUser?.id || typeof limit !== 'number') {
+    if (!isFreeAccountTier || !effectiveAuthUser?.id || typeof limit !== 'number') {
       accountDefaultBankAllowanceStateRef.current = null;
       setAccountDefaultBankAllowanceState(null);
       return;
@@ -428,7 +429,7 @@ export function SamplerPadApp() {
     accountDefaultBankAllowanceStateRef.current = nextState;
     setAccountDefaultBankAllowanceState(nextState);
     persistDefaultBankPlayAllowance(nextState);
-  }, [capabilities.effectiveTier, defaultBankAllowanceLimit, effectiveAuthUser?.id]);
+  }, [capabilities.effectiveTier, defaultBankAllowanceLimit, effectiveAuthUser?.id, isFreeAccountTier]);
 
   const isGuestTrialEligibleDefaultBank = React.useCallback((bank: SamplerBank | null | undefined) => {
     if (effectiveAuthUser || !bank) return false;
@@ -438,10 +439,11 @@ export function SamplerPadApp() {
 
   const isAccountAllowanceEligibleDefaultBank = React.useCallback((bank: SamplerBank | null | undefined) => {
     if (!effectiveAuthUser || !bank) return false;
+    if (!isFreeAccountTier) return false;
     if (typeof defaultBankAllowanceLimit !== 'number') return false;
     if (bank.isLocalDuplicate) return false;
     return bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(bank);
-  }, [defaultBankAllowanceLimit, effectiveAuthUser]);
+  }, [defaultBankAllowanceLimit, effectiveAuthUser, isFreeAccountTier]);
 
   const isDefaultBankSourcedPad = React.useCallback((pad: PadData | null | undefined, bank: SamplerBank | null | undefined) => {
     if (!pad) return false;
@@ -1925,6 +1927,7 @@ export function SamplerPadApp() {
 
   const requestDefaultBankLogin = React.useCallback((reason = 'Please sign in to play default bank pads.') => {
     if (effectiveAuthUser) {
+      if (!isFreeAccountTier) return;
       const resetAt = accountDefaultBankAllowanceStateRef.current?.resetAfter;
       const resetLabel = resetAt
         ? new Date(resetAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -1938,11 +1941,11 @@ export function SamplerPadApp() {
     window.dispatchEvent(new CustomEvent('vdjv-require-login', {
       detail: { reason }
     }));
-  }, [effectiveAuthUser]);
+  }, [effectiveAuthUser, isFreeAccountTier]);
 
   const handleConsumeGuestTrialPlayback = React.useCallback((pad: PadData, bankId: string, bankName: string) => {
     const bank = banksRef.current.find((entry) => entry.id === bankId);
-    if ((isAccountAllowanceEligibleDefaultBank(bank) || (effectiveAuthUser && isDefaultBankSourcedPad(pad, bank))) && typeof defaultBankAllowanceLimit === 'number') {
+    if (isFreeAccountTier && (isAccountAllowanceEligibleDefaultBank(bank) || (effectiveAuthUser && isDefaultBankSourcedPad(pad, bank))) && typeof defaultBankAllowanceLimit === 'number') {
       const current = accountDefaultBankAllowanceStateRef.current
         || loadDefaultBankPlayAllowance(effectiveAuthUser!.id, capabilities.effectiveTier, defaultBankAllowanceLimit);
       if (current.exhausted) {
@@ -1974,6 +1977,7 @@ export function SamplerPadApp() {
     effectiveAuthUser,
     isAccountAllowanceEligibleDefaultBank,
     isDefaultBankSourcedPad,
+    isFreeAccountTier,
     isGuestTrialEligibleDefaultBank,
     requestDefaultBankLogin,
   ]);

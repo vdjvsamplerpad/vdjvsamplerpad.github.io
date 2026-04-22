@@ -305,8 +305,8 @@ export function AboutDialog({
   authTransitionStatus = 'idle',
   onSignOut
 }: AboutDialogProps) {
-  const { profile, capabilities } = useAuthState();
-  const { refreshAccountCapabilities, updatePassword } = useAuthActions();
+  const { user, profile, capabilities } = useAuthState();
+  const { refreshAccountCapabilities, requestPasswordReset, updateDisplayName } = useAuthActions();
   const isAdmin = profile?.role === 'admin';
   const accountTierLabel = capabilities.effectiveTier === 'pro_max'
     ? 'PRO MAX'
@@ -322,10 +322,11 @@ export function AboutDialog({
   const [voucherCode, setVoucherCode] = React.useState('');
   const [voucherBusy, setVoucherBusy] = React.useState(false);
   const [voucherNotice, setVoucherNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [newPassword, setNewPassword] = React.useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = React.useState('');
   const [passwordBusy, setPasswordBusy] = React.useState(false);
   const [passwordNotice, setPasswordNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [displayNameDraft, setDisplayNameDraft] = React.useState('');
+  const [displayNameBusy, setDisplayNameBusy] = React.useState(false);
+  const [displayNameNotice, setDisplayNameNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [midiLearnAction, setMidiLearnAction] = React.useState<
     | { type: 'system'; action: SystemAction }
     | { type: 'channel'; channelIndex: number; field?: keyof ChannelMapping }
@@ -336,6 +337,11 @@ export function AboutDialog({
   const effectiveAppUpdateBusy = appUpdateBusy || appUpdateActionBusy;
   const rawAppUpdateError = appUpdateActionError || appUpdateError;
   const summarizedAppUpdateError = summarizeAppUpdateError(rawAppUpdateError, appUpdatePlatform);
+
+  React.useEffect(() => {
+    setDisplayNameDraft(profile?.display_name || '');
+    setDisplayNameNotice(null);
+  }, [profile?.display_name]);
 
   const handleCheckForAppUpdates = React.useCallback(async () => {
     if (!onCheckForAppUpdates || effectiveAppUpdateBusy) return;
@@ -448,9 +454,8 @@ export function AboutDialog({
       setBackupNotice(null);
       setVoucherCode('');
       setVoucherNotice(null);
-      setNewPassword('');
-      setConfirmNewPassword('');
       setPasswordNotice(null);
+      setDisplayNameNotice(null);
       setActivePanel('general');
       setShowSignOutConfirm(false);
       setShowBackupExportConfirm(false);
@@ -1249,32 +1254,47 @@ export function AboutDialog({
     }
   }, []);
 
-  const handleUpdatePassword = React.useCallback(async () => {
+  const handleSendPasswordSetupEmail = React.useCallback(async () => {
     if (passwordBusy) return;
-    if (newPassword.length < 8) {
-      setPasswordNotice({ type: 'error', message: 'Password must be at least 8 characters.' });
-      return;
-    }
-    if (newPassword !== confirmNewPassword) {
-      setPasswordNotice({ type: 'error', message: 'Passwords do not match.' });
+    const email = user?.email?.trim().toLowerCase();
+    if (!email) {
+      setPasswordNotice({ type: 'error', message: 'No email is attached to this account.' });
       return;
     }
     setPasswordBusy(true);
     setPasswordNotice(null);
     try {
-      const { error } = await updatePassword(newPassword);
+      const { error } = await requestPasswordReset(email);
       if (error) {
-        throw new Error(error.message || 'Password update failed.');
+        throw new Error(error.message || 'Password email failed.');
       }
-      setNewPassword('');
-      setConfirmNewPassword('');
-      setPasswordNotice({ type: 'success', message: 'Password updated.' });
+      setPasswordNotice({ type: 'success', message: 'Password setup/reset email sent. Open it from your email to continue securely.' });
     } catch (error) {
-      setPasswordNotice({ type: 'error', message: error instanceof Error ? error.message : 'Password update failed.' });
+      setPasswordNotice({ type: 'error', message: error instanceof Error ? error.message : 'Password email failed.' });
     } finally {
       setPasswordBusy(false);
     }
-  }, [confirmNewPassword, newPassword, passwordBusy, updatePassword]);
+  }, [passwordBusy, requestPasswordReset, user?.email]);
+
+  const handleSaveDisplayName = React.useCallback(async () => {
+    if (displayNameBusy) return;
+    const normalized = displayNameDraft.trim();
+    if (normalized.length < 2) {
+      setDisplayNameNotice({ type: 'error', message: 'Display name must be at least 2 characters.' });
+      return;
+    }
+    setDisplayNameBusy(true);
+    setDisplayNameNotice(null);
+    try {
+      const { error } = await updateDisplayName(normalized);
+      if (error) throw new Error(error.message || 'Display name update failed.');
+      setDisplayNameNotice({ type: 'success', message: 'Display name updated.' });
+    } catch (error) {
+      setDisplayNameNotice({ type: 'error', message: error instanceof Error ? error.message : 'Display name update failed.' });
+    } finally {
+      setDisplayNameBusy(false);
+    }
+  }, [displayNameBusy, displayNameDraft, updateDisplayName]);
 
   const handleRedeemVoucher = React.useCallback(async () => {
     const code = voucherCode.trim();
@@ -1708,32 +1728,41 @@ export function AboutDialog({
                   </div>
 
                   <div className="rounded-md border border-gray-200 bg-white/80 p-2 space-y-2 dark:border-gray-700 dark:bg-gray-950/30">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Update Password</div>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Display Name</div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
                       <Input
-                        type="password"
-                        value={newPassword}
+                        value={displayNameDraft}
                         onChange={(event) => {
-                          setNewPassword(event.target.value);
-                          setPasswordNotice(null);
+                          setDisplayNameDraft(event.target.value);
+                          setDisplayNameNotice(null);
                         }}
-                        placeholder="New password"
+                        placeholder="Your DJ name"
                         className="h-8 text-xs"
-                        disabled={passwordBusy}
-                        autoComplete="new-password"
+                        disabled={displayNameBusy}
+                        maxLength={50}
                       />
-                      <Input
-                        type="password"
-                        value={confirmNewPassword}
-                        onChange={(event) => {
-                          setConfirmNewPassword(event.target.value);
-                          setPasswordNotice(null);
-                        }}
-                        placeholder="Confirm password"
-                        className="h-8 text-xs"
-                        disabled={passwordBusy}
-                        autoComplete="new-password"
-                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 shrink-0"
+                        onClick={() => void handleSaveDisplayName()}
+                        disabled={displayNameBusy || displayNameDraft.trim().length < 2 || displayNameDraft.trim() === (profile?.display_name || '').trim()}
+                      >
+                        {displayNameBusy ? 'Saving...' : 'Save'}
+                      </Button>
+                    </div>
+                    {displayNameNotice && (
+                      <div className={`text-[11px] ${displayNameNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'}`}>
+                        {displayNameNotice.message}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-md border border-gray-200 bg-white/80 p-2 space-y-2 dark:border-gray-700 dark:bg-gray-950/30">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Password Security</div>
+                    <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                      For safety, password setup or reset is handled by email verification instead of changing it directly inside the app.
                     </div>
                     <div className="flex items-center justify-between gap-2">
                       {passwordNotice ? (
@@ -1741,17 +1770,17 @@ export function AboutDialog({
                           {passwordNotice.message}
                         </div>
                       ) : (
-                        <div className="text-[11px] text-gray-500">Minimum 8 characters.</div>
+                        <div className="text-[11px] text-gray-500">{user?.email || 'Signed-in email required.'}</div>
                       )}
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         className="h-8 shrink-0"
-                        onClick={() => void handleUpdatePassword()}
-                        disabled={passwordBusy || newPassword.length < 8 || confirmNewPassword.length < 8}
+                        onClick={() => void handleSendPasswordSetupEmail()}
+                        disabled={passwordBusy || !user?.email}
                       >
-                        {passwordBusy ? 'Updating...' : 'Update'}
+                        {passwordBusy ? 'Sending...' : 'Send Email'}
                       </Button>
                     </div>
                   </div>

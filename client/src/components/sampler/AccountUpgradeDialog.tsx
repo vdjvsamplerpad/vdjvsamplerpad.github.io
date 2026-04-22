@@ -18,6 +18,12 @@ type UpgradeTierOption = {
   pricePhp: number;
   isActive: boolean;
   available: boolean;
+  pendingRequest?: {
+    id: string;
+    receipt_reference?: string | null;
+    created_at?: string | null;
+    quote_price_php_snapshot?: number | null;
+  } | null;
   quote: {
     basePrice: number;
     creditPhp: number;
@@ -61,6 +67,8 @@ const mapUpgradeError = (value: unknown): string => {
       return 'Payment proof is too large. Use a smaller image.';
     case 'RATE_LIMITED':
       return 'Too many attempts. Please try again later.';
+    case 'UPGRADE_REQUEST_PENDING':
+      return 'You already have a pending upgrade request. Wait for admin review before submitting another one.';
     default:
       return code || 'Upgrade request failed. Please try again.';
   }
@@ -234,7 +242,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
   ];
   const proMaxChecklist = [
     'Everything in PRO',
-    'All published Store banks unlocked',
+    'All Store banks published at upgrade time are granted',
     'Higher own-bank and device bank caps',
   ];
 
@@ -283,11 +291,18 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-500">{tier.displayName}</div>
-                      {!tier.available && <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px]">Current</span>}
+                      {tier.pendingRequest ? (
+                        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-500">Pending</span>
+                      ) : !tier.available && <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px]">Current</span>}
                     </div>
                     <div className="mt-2 text-2xl font-black">{formatPhp(tier.quote.quotePrice)}</div>
                     {tier.quote.creditPhp > 0 && (
                       <div className="mt-1 text-[11px] text-emerald-500">Includes {formatPhp(tier.quote.creditPhp)} store credit deduction</div>
+                    )}
+                    {tier.pendingRequest && (
+                      <div className="mt-1 text-[11px] text-amber-500">
+                        Pending admin review{tier.pendingRequest.receipt_reference ? `: ${tier.pendingRequest.receipt_reference}` : ''}.
+                      </div>
                     )}
                     <p className="mt-2 text-sm opacity-80">{tier.description}</p>
                     <div className="mt-3 space-y-1.5">

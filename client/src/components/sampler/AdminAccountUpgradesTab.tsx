@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -69,15 +70,28 @@ const COMMON_LIMIT_FIELDS = [
 ] as const;
 
 const COMMON_FEATURE_FIELDS = [
+  ['bankStoreBrowse', 'Store browse'],
   ['bankStoreCheckout', 'Store checkout'],
   ['bankStoreDownload', 'Store download'],
-  ['storeFreePromotions', 'Free promotions'],
+  ['bankStoreFreeClaim', 'Free promotions'],
+  ['bankStoreAllAccess', 'Legacy all-store flag'],
   ['search', 'Search'],
   ['inputMapping', 'Input mapping'],
+  ['systemShortcuts', 'System shortcuts'],
+  ['channelShortcuts', 'Channel shortcuts'],
+  ['mappingImportExport', 'Mapping import/export'],
   ['backupRepair', 'Backup & repair'],
+  ['advancedStopModes', 'Advanced stop modes'],
   ['mixerHotcue', 'Mixer hotcue'],
-  ['padEditAdvanced', 'Advanced pad edit'],
-  ['bankEditAdvanced', 'Advanced bank edit'],
+  ['padEditGroup', 'Pad group edit'],
+  ['padEditTempo', 'Pad tempo edit'],
+  ['padEditKeyboardMidi', 'Pad keyboard/MIDI'],
+  ['padEditHotcue', 'Pad hotcue'],
+  ['padEditFades', 'Pad fades'],
+  ['bankEditPosition', 'Bank position edit'],
+  ['bankEditKeyboardMidi', 'Bank keyboard/MIDI'],
+  ['storeDemoBanks', 'Store demo banks'],
+  ['ownBankUnlimitedPlay', 'Own-bank unlimited play'],
 ] as const;
 
 const parseJsonObject = (value: string): Record<string, unknown> => {
@@ -107,6 +121,8 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
   const [campaignTargetEmail, setCampaignTargetEmail] = React.useState('');
   const [campaignNotes, setCampaignNotes] = React.useState('');
   const [activeSection, setActiveSection] = React.useState<AccountAdminSection>('requests');
+  const [rejectRequest, setRejectRequest] = React.useState<AdminAccountUpgradeRequest | null>(null);
+  const [rejectMessage, setRejectMessage] = React.useState('');
 
   const loadData = React.useCallback(async () => {
     setLoading(true);
@@ -189,15 +205,13 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
     }
   };
 
-  const decideUpgrade = async (request: AdminAccountUpgradeRequest, action: 'approve' | 'reject') => {
-    const rejectionMessage = action === 'reject'
-      ? window.prompt('Reason for rejection?', request.rejection_message || '')
-      : undefined;
-    if (action === 'reject' && rejectionMessage === null) return;
+  const decideUpgrade = async (request: AdminAccountUpgradeRequest, action: 'approve' | 'reject', rejectionMessage?: string) => {
     setUpgradeBusyId(request.id);
     try {
       await adminApi.accountUpgradeDecision(request.id, action, rejectionMessage || undefined);
       pushNotice('success', action === 'approve' ? 'Upgrade approved.' : 'Upgrade rejected.');
+      setRejectRequest(null);
+      setRejectMessage('');
       await loadData();
     } catch (error) {
       pushNotice('error', error instanceof Error ? error.message : 'Upgrade decision failed.');
@@ -249,6 +263,19 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
       await loadData();
     } catch (error) {
       pushNotice('error', error instanceof Error ? error.message : 'Copy next voucher failed.');
+    } finally {
+      setVoucherBusyId(null);
+    }
+  };
+
+  const revokeLatestVoucher = async (campaign: AdminVoucherCampaign) => {
+    setVoucherBusyId(`revoke:${campaign.id}`);
+    try {
+      await adminApi.revokeLatestVoucher(campaign.id);
+      pushNotice('success', 'Latest unused voucher revoked. You can copy a replacement code.');
+      await loadData();
+    } catch (error) {
+      pushNotice('error', error instanceof Error ? error.message : 'Voucher revoke failed.');
     } finally {
       setVoucherBusyId(null);
     }
@@ -436,7 +463,17 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
                     {request.status === 'pending' ? (
                       <div className="flex justify-end gap-2">
                         <Button size="sm" onClick={() => void decideUpgrade(request, 'approve')} disabled={upgradeBusyId === request.id}>Approve</Button>
-                        <Button size="sm" variant="outline" onClick={() => void decideUpgrade(request, 'reject')} disabled={upgradeBusyId === request.id}>Reject</Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setRejectRequest(request);
+                            setRejectMessage(request.rejection_message || '');
+                          }}
+                          disabled={upgradeBusyId === request.id}
+                        >
+                          Reject
+                        </Button>
                       </div>
                     ) : (
                       <span className="text-xs text-gray-500">{request.reviewed_at ? formatDateTime(request.reviewed_at) : '-'}</span>
@@ -502,14 +539,24 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
                   <TableCell>{formatDateTime(campaign.expires_at)}</TableCell>
                   <TableCell>{campaign.target_email || campaign.target_user_id || '-'}</TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void copyNextVoucher(campaign)}
-                      disabled={voucherBusyId === campaign.id || !campaign.is_active || campaign.reserved_count >= campaign.max_codes}
-                    >
-                      {voucherBusyId === campaign.id ? 'Copying...' : 'Copy Next Code'}
-                    </Button>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void revokeLatestVoucher(campaign)}
+                        disabled={voucherBusyId === `revoke:${campaign.id}` || campaign.reserved_count <= campaign.redeemed_count}
+                      >
+                        {voucherBusyId === `revoke:${campaign.id}` ? 'Revoking...' : 'Revoke Latest'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void copyNextVoucher(campaign)}
+                        disabled={voucherBusyId === campaign.id || !campaign.is_active || campaign.reserved_count >= campaign.max_codes}
+                      >
+                        {voucherBusyId === campaign.id ? 'Copying...' : 'Copy Next Code'}
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -518,6 +565,48 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
         </div>
       </div>
       )}
+
+      <Dialog open={Boolean(rejectRequest)} onOpenChange={(open) => {
+        if (!open) {
+          setRejectRequest(null);
+          setRejectMessage('');
+        }
+      }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Reject Upgrade Request</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-lg border bg-gray-50 p-3 text-sm dark:bg-gray-900/40">
+              <div className="font-medium">{rejectRequest?.display_name || rejectRequest?.email || 'User'}</div>
+              <div className="text-xs text-gray-500">{rejectRequest?.email}</div>
+              <div className="mt-1 text-xs uppercase text-gray-500">{rejectRequest?.target_tier?.replace('_', ' ')}</div>
+            </div>
+            <div className="space-y-1">
+              <Label>Rejection Reason</Label>
+              <textarea
+                value={rejectMessage}
+                onChange={(event) => setRejectMessage(event.target.value)}
+                className="min-h-28 w-full rounded-md border bg-transparent px-3 py-2 text-sm"
+                placeholder="Explain what the user needs to fix or resend."
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setRejectRequest(null)}>Cancel</Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={!rejectRequest || upgradeBusyId === rejectRequest.id}
+                onClick={() => {
+                  if (rejectRequest) void decideUpgrade(rejectRequest, 'reject', rejectMessage.trim() || 'Rejected by admin.');
+                }}
+              >
+                {rejectRequest && upgradeBusyId === rejectRequest.id ? 'Rejecting...' : 'Reject Request'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

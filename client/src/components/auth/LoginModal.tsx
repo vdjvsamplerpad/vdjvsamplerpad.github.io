@@ -221,7 +221,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [email, setEmail] = React.useState('')
   const [password, setPassword] = React.useState('')
   const [confirmPassword, setConfirmPassword] = React.useState('')
-  const [signupDisplayName, setSignupDisplayName] = React.useState('')
+  const [termsAccepted, setTermsAccepted] = React.useState(false)
   const [mode, setMode] = React.useState<Mode>('signin')
   const [loading, setLoading] = React.useState(false)
   const [googleLoading, setGoogleLoading] = React.useState(false)
@@ -345,7 +345,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setEmail('')
       setPassword('')
       setConfirmPassword('')
-      setSignupDisplayName('')
+      setTermsAccepted(false)
       setMode('signin')
       setResetCooldown(0)
       setShowPassword(false)
@@ -546,13 +546,12 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     async (event: React.FormEvent) => {
       event.preventDefault()
       const normalizedEmail = email.trim().toLowerCase()
-      const normalizedDisplayName = signupDisplayName.trim()
       if (!isValidEmail(normalizedEmail)) {
         pushNotice?.({ variant: 'error', message: 'Enter a valid email address.' })
         return
       }
-      if (normalizedDisplayName.length < 2) {
-        pushNotice?.({ variant: 'error', message: 'Display name must be at least 2 characters.' })
+      if (!termsAccepted) {
+        pushNotice?.({ variant: 'error', message: 'Accept the Privacy and Terms agreement to create an account.' })
         return
       }
       if (password.length < 8) {
@@ -570,7 +569,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
           password,
           options: {
             data: {
-              display_name: normalizedDisplayName,
+              display_name: normalizedEmail.split('@')[0] || 'User',
               email: normalizedEmail,
             },
             emailRedirectTo: resolveGoogleOAuthRedirectUrl(appReturnUrl),
@@ -583,7 +582,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         setEmail('')
         setPassword('')
         setConfirmPassword('')
-        setSignupDisplayName('')
+        setTermsAccepted(false)
         if (data.session) {
           pushNotice?.({ variant: 'success', message: 'Free account created.' })
           onOpenChange(false)
@@ -597,7 +596,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         setLoading(false)
       }
     },
-    [appReturnUrl, confirmPassword, email, onOpenChange, password, pushNotice, signupDisplayName],
+    [appReturnUrl, confirmPassword, email, onOpenChange, password, pushNotice, termsAccepted],
   )
 
   React.useEffect(() => {
@@ -1423,7 +1422,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                     setBuyStep('account')
                     setPassword('')
                     setConfirmPassword('')
-                    setSignupDisplayName('')
+                    setTermsAccepted(false)
                     setPayerName('')
                     setReferenceNo('')
                     setNotes('')
@@ -1520,21 +1519,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                       )}
 
                       <div className="space-y-1.5">
-                        <Label htmlFor="buyDisplayName" className={colorText}>Display Name / DJ Name</Label>
-                        <Input
-                          id="buyDisplayName"
-                          value={signupDisplayName}
-                          onChange={(e) => setSignupDisplayName(e.target.value)}
-                          placeholder="e.g. DJ VII"
-                          required
-                          disabled={loading}
-                          minLength={2}
-                          maxLength={50}
-                          autoComplete="nickname"
-                        />
-                      </div>
-
-                      <div className="space-y-1.5">
                         <Label htmlFor="buyEmail" className={colorText}>Email</Label>
                         <Input
                           id="buyEmail"
@@ -1600,6 +1584,22 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                           </div>
                         </div>
                       </div>
+
+                      <label className={`flex gap-3 rounded-xl border px-3 py-3 text-xs leading-relaxed ${isDark ? 'border-slate-700 bg-slate-900/50 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+                        <input
+                          type="checkbox"
+                          checked={termsAccepted}
+                          onChange={(event) => setTermsAccepted(event.target.checked)}
+                          disabled={loading}
+                          required
+                          className="mt-0.5 h-4 w-4 shrink-0"
+                        />
+                        <span>
+                          I agree to the VDJV Terms and Privacy Policy. VDJV stores my email, display name, device/session
+                          details, purchase or upgrade proof metadata, crash/import logs, and app activity needed for support,
+                          payments, offline access, and account safety. I am responsible for my account and imported content.
+                        </span>
+                      </label>
                     </>
                   )}
 
@@ -1805,7 +1805,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                     <Button
                       type="submit"
                       className={`flex-1 ${isDark ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
-                      disabled={loading}
+                      disabled={loading || (buyStep === 'account' && !termsAccepted)}
                     >
                       <ArrowRight className="w-4 h-4 mr-2" />
                       Create Free Account

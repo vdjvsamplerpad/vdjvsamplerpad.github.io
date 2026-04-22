@@ -434,6 +434,7 @@ export function SideMenu({
   const accountTierLabel = capabilities.effectiveTier === 'pro_max'
     ? 'PRO MAX'
     : capabilities.effectiveTier.toUpperCase();
+  const accountIdentityLabel = effectiveUser ? `${accountTierLabel} - ${displayName}` : 'GUEST';
   const isLowestGraphics = graphicsTier === 'lowest';
   const requestStoreLogin = React.useCallback((reason?: string) => {
     requestLoginPrompt(reason || 'Please sign in to download this bank.');
@@ -812,6 +813,12 @@ export function SideMenu({
         const message = error instanceof Error ? error.message : 'Could not create bank.';
         if (message.toLowerCase().includes('owned bank quota')) {
           setShowCreateDialog(false);
+          requestUpgradePrompt(
+            capabilities.effectiveTier === 'pro'
+              ? 'You reached your PRO owned-bank quota. Upgrade to PRO MAX for a higher own-bank limit.'
+              : 'You reached your account bank limit. Upgrade to unlock more own banks.'
+          );
+          return;
         }
         pushNotice({ variant: 'error', message });
       }
@@ -1072,7 +1079,7 @@ export function SideMenu({
               VDJV Sampler Pad
             </div>
             <div className={`text-[11px] truncate ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-              {accountTierLabel} - {displayName}
+              {accountIdentityLabel}
             </div>
           </div>
           <Button

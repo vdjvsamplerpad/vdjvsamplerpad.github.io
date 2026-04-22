@@ -736,6 +736,10 @@ export const adminApi = {
     return callAdmin<{ voucher: Record<string, unknown>; code: string }>('POST', `vouchers/${campaignId}/copy-next`);
   },
 
+  async revokeLatestVoucher(campaignId: string) {
+    return callAdmin<{ campaignId: string; voucherId: string; status: string }>('POST', `vouchers/${campaignId}/revoke-latest`);
+  },
+
   async deleteUser(userId: string) {
     return callAdmin<{ userId: string }>('POST', `users/${userId}/delete`);
   },
