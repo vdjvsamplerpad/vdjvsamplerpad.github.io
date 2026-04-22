@@ -400,27 +400,51 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
       : null;
     const cta = isFree ? 'Current Plan' : pending ? 'Pending Review' : `Get ${title}`;
     const ctaClass = isFree
-      ? 'bg-white text-slate-950'
+      ? isDark ? 'bg-white text-slate-950' : 'bg-slate-950 text-white shadow-[0_12px_30px_rgba(15,23,42,0.18)]'
       : isProMax
         ? 'bg-[#1d4df5] text-white shadow-[0_14px_36px_rgba(29,78,245,0.38)] group-hover:bg-[#2860ff]'
         : 'bg-[#ed0d7c] text-white shadow-[0_14px_36px_rgba(237,13,124,0.42)] group-hover:bg-[#ff168c]';
     const shellClass = isFree
-      ? 'border-white/10 bg-[#15171a] shadow-black/50'
+      ? isDark
+        ? 'border-white/10 bg-[#15171a] shadow-black/50'
+        : 'border-slate-950/10 bg-white text-slate-950 shadow-[0_26px_80px_rgba(15,23,42,0.12)]'
       : isProMax
-        ? 'border-[#1f55ff] bg-[#10151f] shadow-[0_0_0_1px_rgba(31,85,255,0.48),0_28px_90px_rgba(31,85,255,0.18)]'
-        : 'border-[#f41885] bg-[#171318] shadow-[0_0_0_1px_rgba(244,24,133,0.5),0_28px_90px_rgba(244,24,133,0.2)]';
+        ? isDark
+          ? 'border-[#1f55ff] bg-[#10151f] shadow-[0_0_0_1px_rgba(31,85,255,0.48),0_28px_90px_rgba(31,85,255,0.18)]'
+          : 'border-[#1f55ff]/60 bg-[#eef4ff] text-slate-950 shadow-[0_0_0_1px_rgba(31,85,255,0.22),0_28px_90px_rgba(31,85,255,0.16)]'
+        : isDark
+          ? 'border-[#f41885] bg-[#171318] shadow-[0_0_0_1px_rgba(244,24,133,0.5),0_28px_90px_rgba(244,24,133,0.2)]'
+          : 'border-[#f41885]/60 bg-[#fff1f7] text-slate-950 shadow-[0_0_0_1px_rgba(244,24,133,0.18),0_28px_90px_rgba(244,24,133,0.16)]';
     const heroPanelClass = isFree
-      ? 'bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.035))]'
+      ? isDark
+        ? 'bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.035))]'
+        : 'bg-[linear-gradient(180deg,rgba(15,23,42,0.06),rgba(15,23,42,0.02))]'
       : isProMax
-        ? 'bg-[radial-gradient(110%_90%_at_95%_0%,rgba(49,104,255,0.52),transparent_54%),radial-gradient(100%_86%_at_18%_4%,rgba(255,255,255,0.17),transparent_44%),linear-gradient(180deg,rgba(24,54,150,0.9),rgba(18,21,34,0.96))]'
-        : 'bg-[radial-gradient(120%_95%_at_88%_0%,rgba(255,20,132,0.62),transparent_55%),radial-gradient(100%_90%_at_12%_0%,rgba(255,255,255,0.18),transparent_42%),linear-gradient(180deg,rgba(112,19,78,0.96),rgba(27,20,30,0.98))]';
+        ? isDark
+          ? 'bg-[radial-gradient(110%_90%_at_95%_0%,rgba(49,104,255,0.52),transparent_54%),radial-gradient(100%_86%_at_18%_4%,rgba(255,255,255,0.17),transparent_44%),linear-gradient(180deg,rgba(24,54,150,0.9),rgba(18,21,34,0.96))]'
+          : 'bg-[radial-gradient(110%_90%_at_95%_0%,rgba(49,104,255,0.22),transparent_54%),radial-gradient(100%_86%_at_18%_4%,rgba(255,255,255,0.9),transparent_44%),linear-gradient(180deg,rgba(219,232,255,0.98),rgba(255,255,255,0.92))]'
+        : isDark
+          ? 'bg-[radial-gradient(120%_95%_at_88%_0%,rgba(255,20,132,0.62),transparent_55%),radial-gradient(100%_90%_at_12%_0%,rgba(255,255,255,0.18),transparent_42%),linear-gradient(180deg,rgba(112,19,78,0.96),rgba(27,20,30,0.98))]'
+          : 'bg-[radial-gradient(120%_95%_at_88%_0%,rgba(255,20,132,0.22),transparent_55%),radial-gradient(100%_90%_at_12%_0%,rgba(255,255,255,0.95),transparent_42%),linear-gradient(180deg,rgba(255,219,237,0.98),rgba(255,255,255,0.92))]';
+    const cardTextClass = isDark ? 'text-white' : 'text-slate-950';
+    const subtitleClass = isDark ? 'text-white/58' : 'text-slate-600';
+    const innerPanelClass = isDark ? 'bg-white/[0.075] text-white' : 'bg-white/72 text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]';
+    const mutedTextClass = isDark ? 'text-white/58' : 'text-slate-600';
+    const secondaryTextClass = isDark ? 'text-white/65' : 'text-slate-600';
+    const noteTextClass = isDark ? 'text-white/46' : 'text-slate-500';
+    const featureTextClass = isDark ? 'text-white/92' : 'text-slate-800';
+    const detailBoxClass = isDark ? 'border-white/7 bg-white/[0.04] text-white' : 'border-slate-950/8 bg-white/72 text-slate-950';
+    const detailMutedClass = isDark ? 'text-white/66' : 'text-slate-600';
+    const lockBadgeClass = isDark ? 'bg-white/10 text-white/55' : 'bg-slate-950/8 text-slate-500';
+    const neutralBadgeClass = isDark ? 'bg-white/10 text-white' : 'bg-slate-950/8 text-slate-700';
+    const disabledCtaClass = isDark ? 'bg-white/10 text-white/55' : 'bg-slate-950/8 text-slate-500';
 
     return (
       <button
         key={plan.id}
         type="button"
         onClick={() => tier ? selectPlan(tier) : undefined}
-        className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left text-white transition duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f21984]/60 md:min-h-[680px] ${shellClass} ${
+        className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left transition duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f21984]/60 md:min-h-[680px] ${cardTextClass} ${shellClass} ${
           active ? 'ring-2 ring-white/18' : ''
         } ${disabled ? 'cursor-default' : 'hover:-translate-y-1 hover:brightness-110'}`}
       >
@@ -432,7 +456,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
           </div>
         )}
 
-        <div className={`relative m-4 overflow-hidden rounded-[13px] border border-white/8 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] ${heroPanelClass}`}>
+        <div className={`relative m-4 overflow-hidden rounded-[13px] border p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] ${isDark ? 'border-white/8' : 'border-slate-950/8'} ${heroPanelClass}`}>
           <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(112deg,rgba(255,255,255,0.18),transparent_24%,transparent_70%,rgba(255,255,255,0.08))]" />
           <div className="relative flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -444,10 +468,10 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                   </span>
                 )}
               </div>
-              <p className="mt-3 line-clamp-2 text-sm text-white/58">{subtitle}</p>
+              <p className={`mt-3 line-clamp-2 text-sm ${subtitleClass}`}>{subtitle}</p>
             </div>
             {isFree ? (
-              <span className="rounded-md bg-white/10 px-2.5 py-1 text-[10px] font-black uppercase text-white/72">{badge}</span>
+              <span className={`rounded-md px-2.5 py-1 text-[10px] font-black uppercase ${neutralBadgeClass}`}>{badge}</span>
             ) : (
               <span className="rounded-[4px] bg-[#f21984] px-2 py-1 text-[10px] font-black uppercase text-white shadow-[0_0_18px_rgba(242,25,132,0.45)]">
                 {promoPercent}% OFF
@@ -455,21 +479,21 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
             )}
           </div>
 
-          <div className="relative mt-5 rounded-[10px] bg-white/[0.075] p-4">
+          <div className={`relative mt-5 rounded-[10px] p-4 ${innerPanelClass}`}>
             <div className="text-sm font-black">
               * {isFree ? 'Daily trial access' : isProMax ? 'All current Store banks' : 'Full sampler tools'}
             </div>
-            <div className="mt-2 text-sm leading-relaxed text-white/58">
+            <div className={`mt-2 text-sm leading-relaxed ${mutedTextClass}`}>
               {isFree
                 ? `${freeDailyPlaysLabel} Default Bank plays. Upgrade to remove daily play limits.`
                 : isProMax
                   ? 'PRO plus Store bank grant snapshot at approval time.'
                   : 'Unlock checkout, free promos, search, mapping, backup, and editing.'}
             </div>
-            <div className="mt-4 h-1 rounded-full bg-white/22">
+            <div className={`mt-4 h-1 rounded-full ${isDark ? 'bg-white/22' : 'bg-slate-950/12'}`}>
               <div className={`h-full rounded-full ${isFree ? 'w-1/3 bg-white/50' : isProMax ? 'w-full bg-[#6aa0ff]' : 'w-2/3 bg-[#f24ca2]'}`} />
             </div>
-            <div className="mt-4 flex justify-between text-xs font-bold text-white/65">
+            <div className={`mt-4 flex justify-between text-xs font-bold ${secondaryTextClass}`}>
               <span>{isFree ? 'Limited' : 'Unlocked'}</span>
               <span>{isProMax ? 'Maximum' : isFree ? 'Starter' : 'Pro'}</span>
             </div>
@@ -480,14 +504,14 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
           <div className="flex flex-wrap items-end gap-2">
             {previousPrice && <span className="text-[28px] font-black text-[#f21984] line-through decoration-2">{previousPrice}</span>}
             <span className="text-[42px] font-black leading-none tracking-tight">{price}</span>
-            {!isFree && <span className="pb-1 text-xs text-white/52">one-time request</span>}
+            {!isFree && <span className={`pb-1 text-xs ${noteTextClass}`}>one-time request</span>}
           </div>
           {!isFree && tier!.quote.creditPhp > 0 ? (
             <div className="mt-2 inline-flex rounded-[4px] bg-[#b9ff12] px-2 py-0.5 text-[10px] font-black uppercase text-slate-950">
               {formatPhp(tier!.quote.creditPhp)} store credit
             </div>
           ) : (
-            <div className="mt-2 text-xs text-white/46">{isFree ? 'Upgrade offer available anytime.' : 'Admin reviews payment proof before activation.'}</div>
+            <div className={`mt-2 text-xs ${noteTextClass}`}>{isFree ? 'Upgrade offer available anytime.' : 'Admin reviews payment proof before activation.'}</div>
           )}
         </div>
 
@@ -499,8 +523,8 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
 
         <div className="relative mt-5 space-y-2 px-4">
           {list.map((item) => (
-            <div key={item} className="flex items-start gap-2.5 text-[13px] font-bold text-white/92">
-              <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${isFree ? 'text-white/70' : isProMax ? 'text-blue-200' : 'text-[#ff2b95]'}`}>
+            <div key={item} className={`flex items-start gap-2.5 text-[13px] font-bold ${featureTextClass}`}>
+              <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${isFree ? isDark ? 'text-white/70' : 'text-slate-500' : isProMax ? 'text-blue-400' : 'text-[#ff2b95]'}`}>
                 <Check className="h-3.5 w-3.5" />
               </span>
               <span>{item}</span>
@@ -508,31 +532,31 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
           ))}
         </div>
 
-        <div className="relative mx-4 mt-5 rounded-[10px] border border-white/7 bg-white/[0.04] p-3">
-          <div className="mb-2 text-[11px] font-black uppercase tracking-wider text-white/88">
+        <div className={`relative mx-4 mt-5 rounded-[10px] border p-3 ${detailBoxClass}`}>
+          <div className={`mb-2 text-[11px] font-black uppercase tracking-wider ${isDark ? 'text-white/88' : 'text-slate-700'}`}>
             {isProMax ? 'Store Access' : isFree ? 'Locked Features' : 'Included Tools'}
           </div>
-          <div className="space-y-2 text-xs text-white/66">
+          <div className={`space-y-2 text-xs ${detailMutedClass}`}>
             <div className="flex items-center justify-between gap-3">
               <span>{isProMax ? 'Published Store banks' : 'Bank Store downloads'}</span>
-              <span className={`rounded px-1.5 py-0.5 font-black ${isProMax ? enabledBadgeClass : isFree ? 'bg-white/10 text-white/55' : enabledBadgeClass}`}>
+              <span className={`rounded px-1.5 py-0.5 font-black ${isProMax ? enabledBadgeClass : isFree ? lockBadgeClass : enabledBadgeClass}`}>
                 {isProMax ? 'GRANTED' : isFree ? 'LOCKED' : 'ENABLED'}
               </span>
             </div>
             <div className="flex items-center justify-between gap-3">
               <span>{isProMax ? 'Own bank quota' : 'Search / mappings'}</span>
-              <span className="rounded bg-white/10 px-1.5 py-0.5 font-black text-white">{isProMax ? '12' : isFree ? 'LOCKED' : 'ENABLED'}</span>
+              <span className={`rounded px-1.5 py-0.5 font-black ${isFree ? lockBadgeClass : neutralBadgeClass}`}>{isProMax ? '12' : isFree ? 'LOCKED' : 'ENABLED'}</span>
             </div>
             <div className="flex items-center justify-between gap-3">
               <span>{isProMax ? 'Device bank cap' : 'Backup / repair'}</span>
-              <span className={`rounded px-1.5 py-0.5 font-black ${isFree ? 'bg-white/10 text-white/55' : enabledBadgeClass}`}>{isProMax ? '150' : isFree ? 'LOCKED' : 'ENABLED'}</span>
+              <span className={`rounded px-1.5 py-0.5 font-black ${isFree ? lockBadgeClass : enabledBadgeClass}`}>{isProMax ? '150' : isFree ? 'LOCKED' : 'ENABLED'}</span>
             </div>
           </div>
         </div>
 
         <div className="relative mt-auto px-4 pb-4 pt-6">
           <div className={`flex h-12 items-center justify-center rounded-[10px] text-sm font-black transition ${
-            disabled && !isFree ? 'bg-white/10 text-white/55' : ctaClass
+            disabled && !isFree ? disabledCtaClass : ctaClass
           }`}>
             {cta}
             {!disabled && <ArrowRight className="ml-2 h-4 w-4" />}
