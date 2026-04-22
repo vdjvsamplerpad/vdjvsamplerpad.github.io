@@ -136,6 +136,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   const [proofPreviewUrl, setProofPreviewUrl] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
   const planRailRef = React.useRef<HTMLDivElement | null>(null);
+  const planRailScrollSyncRef = React.useRef<number | null>(null);
   const isDark = theme === 'dark';
 
   React.useEffect(() => {
@@ -147,6 +148,12 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     setProofPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [proofFile]);
+
+  React.useEffect(() => () => {
+    if (planRailScrollSyncRef.current !== null) {
+      window.clearTimeout(planRailScrollSyncRef.current);
+    }
+  }, []);
 
   React.useEffect(() => {
     if (!open) return;
@@ -194,6 +201,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   }, [open, pushNotice]);
 
   const selected = tiers.find((tier) => tier.tier === selectedTier) || tiers[0] || null;
+  const selectedIsProMax = selected?.tier === 'pro_max';
   const planViews = React.useMemo<PlanView[]>(() => [
     { id: 'free', kind: 'free' },
     ...tiers.map((tier) => ({ id: tier.tier, kind: 'tier' as const, tier })),
@@ -346,6 +354,33 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     });
   }, [mobilePlanIndex, planViews.length]);
 
+  const syncMobilePlanFromScroll = React.useCallback(() => {
+    const rail = planRailRef.current;
+    if (!rail || !planViews.length) return;
+    if (planRailScrollSyncRef.current !== null) {
+      window.clearTimeout(planRailScrollSyncRef.current);
+    }
+    planRailScrollSyncRef.current = window.setTimeout(() => {
+      const railRect = rail.getBoundingClientRect();
+      const railCenter = railRect.left + railRect.width / 2;
+      let nearestIndex = mobilePlanIndex;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      Array.from(rail.children).forEach((child, index) => {
+        const childRect = (child as HTMLElement).getBoundingClientRect();
+        const childCenter = childRect.left + childRect.width / 2;
+        const distance = Math.abs(childCenter - railCenter);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestIndex = index;
+        }
+      });
+      if (nearestIndex !== mobilePlanIndex) {
+        setMobileSlideDirection(nearestIndex > mobilePlanIndex ? 'next' : 'prev');
+        setMobilePlanIndex(nearestIndex);
+      }
+    }, 90);
+  }, [mobilePlanIndex, planViews.length]);
+
   const shellClass = isDark
     ? 'border-slate-700 bg-slate-950 text-slate-100'
     : 'border-slate-200 bg-white text-slate-950';
@@ -377,6 +412,15 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     ? 'border-white/10 bg-white/[0.045] text-white'
     : 'border-slate-950/10 bg-slate-50 text-slate-950';
   const enabledBadgeClass = 'bg-[#b9ff12] text-slate-950 shadow-[0_0_18px_rgba(185,255,18,0.35)]';
+  const requestAccentTextClass = selectedIsProMax ? 'text-[#68a0ff]' : 'text-[#f21984]';
+  const requestAccentGlowClass = selectedIsProMax
+    ? 'bg-[radial-gradient(90%_100%_at_95%_0%,rgba(29,77,245,0.24),transparent_54%),linear-gradient(112deg,rgba(255,255,255,0.12),transparent_30%)]'
+    : 'bg-[radial-gradient(90%_100%_at_95%_0%,rgba(242,25,132,0.18),transparent_54%),linear-gradient(112deg,rgba(255,255,255,0.12),transparent_30%)]';
+  const requestFocusRingClass = selectedIsProMax ? 'focus-visible:ring-[#1d4df5]/50' : 'focus-visible:ring-[#f21984]/50';
+  const requestInputFocusClass = selectedIsProMax ? 'focus:ring-[#1d4df5]/40' : 'focus:ring-[#f21984]/40';
+  const requestSubmitButtonClass = selectedIsProMax
+    ? 'bg-[#1d4df5] font-black text-white shadow-[0_14px_36px_rgba(29,77,245,0.32)] hover:bg-[#2860ff]'
+    : 'bg-[#ed0d7c] font-black text-white shadow-[0_14px_36px_rgba(237,13,124,0.32)] hover:bg-[#ff168c]';
 
   const renderPlanCard = (plan: PlanView) => {
     const tier = plan.tier;
@@ -444,10 +488,8 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     const disabledCtaClass = isDark ? 'bg-white/10 text-white/55' : 'bg-slate-950/8 text-slate-500';
 
     return (
-      <button
+      <div
         key={plan.id}
-        type="button"
-        onClick={() => tier ? selectPlan(tier) : undefined}
         className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left transition duration-300 focus:border-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f21984]/60 md:min-h-[680px] ${cardTextClass} ${shellClass} ${
           active ? 'ring-2 ring-white/18' : ''
         } ${disabled ? 'cursor-default' : 'hover:-translate-y-1 hover:brightness-110'}`}
@@ -559,14 +601,18 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
         </div>
 
         <div className="relative mt-auto px-4 pb-4 pt-6">
-          <div className={`flex h-12 items-center justify-center rounded-[10px] text-sm font-black transition ${
+          <button
+            type="button"
+            onClick={() => tier ? selectPlan(tier) : undefined}
+            disabled={disabled}
+            className={`flex h-12 w-full items-center justify-center rounded-[10px] text-sm font-black transition disabled:cursor-default ${
             disabled && !isFree ? disabledCtaClass : ctaClass
           }`}>
             {cta}
             {!disabled && <ArrowRight className="ml-2 h-4 w-4" />}
-          </div>
+          </button>
         </div>
-      </button>
+      </div>
     );
   };
 
@@ -578,33 +624,13 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
           <style>{`
             @media (max-width: 767px) {
               .vdjv-mobile-plan-card {
-                transition: opacity 320ms ease, transform 420ms cubic-bezier(.2,.8,.2,1), filter 320ms ease;
-                transform: scale(.94);
-                opacity: .54;
-                filter: saturate(.72) brightness(.82);
+                transition: opacity 220ms ease, transform 260ms cubic-bezier(.2,.8,.2,1);
+                transform: scale(.985);
+                opacity: .86;
               }
               .vdjv-mobile-plan-card.vdjv-mobile-plan-card-active {
                 opacity: 1;
-                filter: saturate(1) brightness(1);
-                animation-duration: 430ms;
-                animation-fill-mode: both;
-                animation-timing-function: cubic-bezier(.2,.8,.2,1);
-              }
-              .vdjv-mobile-plan-card.vdjv-mobile-plan-card-active[data-slide-direction="next"] {
-                animation-name: vdjvPlanSlideNext;
-              }
-              .vdjv-mobile-plan-card.vdjv-mobile-plan-card-active[data-slide-direction="prev"] {
-                animation-name: vdjvPlanSlidePrev;
-              }
-              @keyframes vdjvPlanSlideNext {
-                0% { transform: translateX(28px) scale(.94); opacity: .34; filter: blur(7px) saturate(.75); }
-                62% { transform: translateX(-5px) scale(1.012); opacity: 1; filter: blur(0) saturate(1.04); }
-                100% { transform: translateX(0) scale(1); opacity: 1; filter: blur(0) saturate(1); }
-              }
-              @keyframes vdjvPlanSlidePrev {
-                0% { transform: translateX(-28px) scale(.94); opacity: .34; filter: blur(7px) saturate(.75); }
-                62% { transform: translateX(5px) scale(1.012); opacity: 1; filter: blur(0) saturate(1.04); }
-                100% { transform: translateX(0) scale(1); opacity: 1; filter: blur(0) saturate(1); }
+                transform: scale(1);
               }
             }
           `}</style>
@@ -663,6 +689,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
               </div>
               <div
                 ref={planRailRef}
+                onScroll={syncMobilePlanFromScroll}
                 className="flex snap-x snap-mandatory gap-4 overflow-x-auto px-6 pb-2 [-ms-overflow-style:none] [scrollbar-width:none] md:grid md:grid-cols-3 md:overflow-visible md:px-0 [&::-webkit-scrollbar]:hidden"
               >
                 {planViews.map((plan, index) => (
@@ -719,10 +746,10 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
         ) : selected ? (
           <div className="mx-auto max-w-2xl space-y-5">
             <div className={`relative overflow-hidden rounded-[18px] border p-5 ${requestPanelClass}`}>
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(90%_100%_at_95%_0%,rgba(242,25,132,0.18),transparent_54%),linear-gradient(112deg,rgba(255,255,255,0.12),transparent_30%)]" />
+              <div className={`pointer-events-none absolute inset-0 ${requestAccentGlowClass}`} />
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="relative">
-                  <div className="text-[11px] font-black uppercase tracking-[0.22em] text-[#f21984]">Selected plan</div>
+                  <div className={`text-[11px] font-black uppercase tracking-[0.22em] ${requestAccentTextClass}`}>Selected plan</div>
                   <h3 className="mt-1 text-2xl font-black">{selected.displayName}</h3>
                   <p className="mt-1 text-sm opacity-75">{selected.description}</p>
                 </div>
@@ -807,17 +834,19 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
                       <div className="grid gap-2 sm:grid-cols-3">
                         {PAYMENT_CHANNEL_OPTIONS.map((option) => {
                           const selectedChannel = paymentChannel === option.value;
-                          const accentClass = option.accent === 'blue'
+                          const accentClass = selectedIsProMax
                             ? 'border-[#1d4df5] bg-[#1d4df5]/12 text-[#8fb0ff]'
                             : option.accent === 'green'
                               ? 'border-[#b9ff12] bg-[#b9ff12]/12 text-[#b9ff12]'
-                              : 'border-[#f21984] bg-[#f21984]/12 text-[#ff8fc4]';
+                              : option.accent === 'blue'
+                                ? 'border-[#1d4df5] bg-[#1d4df5]/12 text-[#8fb0ff]'
+                                : 'border-[#f21984] bg-[#f21984]/12 text-[#ff8fc4]';
                           return (
                             <button
                               key={option.value}
                               type="button"
                               onClick={() => setPaymentChannel(option.value)}
-                              className={`rounded-[12px] border p-3 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f21984]/50 ${
+                              className={`rounded-[12px] border p-3 text-left transition focus:outline-none focus-visible:ring-2 ${requestFocusRingClass} ${
                                 selectedChannel
                                   ? accentClass
                                   : isDark
@@ -872,7 +901,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
                         value={notes}
                         onChange={(event) => setNotes(event.target.value)}
                         rows={3}
-                        className={`w-full resize-none rounded-md border p-2.5 text-sm outline-none focus:ring-2 focus:ring-[#f21984]/40 ${inputClass}`}
+                        className={`w-full resize-none rounded-md border p-2.5 text-sm outline-none focus:ring-2 ${requestInputFocusClass} ${inputClass}`}
                         placeholder="Optional message for admin"
                       />
                     </div>
@@ -896,7 +925,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back to Plans
               </Button>
-              <Button type="button" onClick={() => void submitUpgrade()} disabled={submitting || !selected.available} className="flex-1 bg-[#ed0d7c] font-black text-white shadow-[0_14px_36px_rgba(237,13,124,0.32)] hover:bg-[#ff168c]">
+              <Button type="button" onClick={() => void submitUpgrade()} disabled={submitting || !selected.available} className={`flex-1 ${requestSubmitButtonClass}`}>
                 {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : quotePrice > 0 ? <Upload className="mr-2 h-4 w-4" /> : <ArrowRight className="mr-2 h-4 w-4" />}
                 {submitting ? 'Submitting...' : quotePrice > 0 ? 'Submit Upgrade Request' : 'Apply Upgrade'}
               </Button>
