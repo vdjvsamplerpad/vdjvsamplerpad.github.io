@@ -490,8 +490,8 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     return (
       <div
         key={plan.id}
-        className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left transition duration-300 focus:border-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f21984]/60 md:min-h-[680px] ${cardTextClass} ${shellClass} ${
-          active ? 'ring-2 ring-white/18' : ''
+        className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left transition duration-300 md:min-h-[680px] ${cardTextClass} ${shellClass} ${
+          active ? 'brightness-105' : ''
         } ${disabled ? 'cursor-default' : 'hover:-translate-y-1 hover:brightness-110'}`}
       >
         {!isFree && (
