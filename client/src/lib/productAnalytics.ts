@@ -5,6 +5,8 @@ type ProductAnalyticsProperties = Record<string, unknown>;
 const POSTHOG_KEY = String(import.meta.env.VITE_POSTHOG_KEY || '').trim();
 const POSTHOG_HOST = String(import.meta.env.VITE_POSTHOG_HOST || '').trim();
 const APP_VERSION = String(import.meta.env.VITE_APP_VERSION || 'unknown').trim();
+const FORCE_LOCAL_POSTHOG = String(import.meta.env.VITE_POSTHOG_ENABLE_LOCAL || '').trim() === 'true';
+const DISABLE_POSTHOG = String(import.meta.env.VITE_DISABLE_POSTHOG || '').trim() === 'true';
 
 let initialized = false;
 
@@ -31,7 +33,27 @@ const baseProperties = (): ProductAnalyticsProperties => ({
   runtime: resolveRuntime(),
 });
 
-export const isProductAnalyticsEnabled = (): boolean => Boolean(POSTHOG_KEY && POSTHOG_HOST && isBrowser);
+const isLocalOrDevRuntime = (): boolean => {
+  if (!isBrowser) return false;
+  const host = window.location.hostname;
+  return import.meta.env.DEV || host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0';
+};
+
+const isLocallyDisabled = (): boolean => {
+  if (!isBrowser) return false;
+  try {
+    return window.localStorage.getItem('vdjv-disable-posthog') === '1';
+  } catch {
+    return false;
+  }
+};
+
+export const isProductAnalyticsEnabled = (): boolean => {
+  if (!POSTHOG_KEY || !POSTHOG_HOST || !isBrowser) return false;
+  if (DISABLE_POSTHOG || isLocallyDisabled()) return false;
+  if (isLocalOrDevRuntime() && !FORCE_LOCAL_POSTHOG) return false;
+  return true;
+};
 
 export const initProductAnalytics = (): void => {
   if (!isProductAnalyticsEnabled() || initialized) return;

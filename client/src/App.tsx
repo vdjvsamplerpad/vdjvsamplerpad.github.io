@@ -50,6 +50,10 @@ function AnalyticsRouteTracker() {
 
 function RouteContainer() {
   const Router = window.location.protocol === 'file:' ? HashRouter : BrowserRouter;
+  const routerFuture = {
+    v7_startTransition: true,
+    v7_relativeSplatPath: true,
+  };
   const packagedRuntime = isPackagedAppRuntime();
   const includeLanding = __VDJV_INCLUDE_LANDING__ && Boolean(LandingPage);
   const landingPath = getLandingPagePath();
@@ -58,7 +62,7 @@ function RouteContainer() {
   const fallbackPath = packagedRuntime || !includeLanding ? samplerPath : landingPath;
 
   return (
-    <Router>
+    <Router future={routerFuture}>
       <AnalyticsRouteTracker />
       <Routes>
         {packagedRuntime ? (
