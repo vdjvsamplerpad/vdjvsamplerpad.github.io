@@ -1,5 +1,6 @@
 import type { PadData, SamplerBank } from '../types/sampler';
 import { applyBankContentPolicy, isOfficialPadContent } from './useSamplerStore.provenance';
+import { DEFAULT_BANK_SOURCE_ID, isExplicitDefaultBankIdentity } from './useSamplerStore.bankIdentity';
 
 type MediaBackend = 'native' | 'idb';
 type SetState<T> = (value: T | ((prev: T) => T)) => void;
@@ -610,14 +611,16 @@ export const runTransferPadPipeline = (
     const pad = src.pads.find((p) => p.id === padId);
     if (!pad) return prev;
     const maxPos = tgt.pads.length > 0 ? Math.max(...tgt.pads.map((p) => p.position || 0)) : -1;
+    const sourceIsDefaultBank = src.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(src);
     const upPad: PadData = {
       ...pad,
       position: maxPos + 1,
-      contentOrigin: pad.contentOrigin || 'user',
+      contentOrigin: pad.contentOrigin || (sourceIsDefaultBank ? 'official_admin' : 'user'),
       originPadId: pad.originPadId || pad.id,
-      originBankId: pad.originBankId,
+      originBankId: pad.originBankId || (sourceIsDefaultBank ? DEFAULT_BANK_SOURCE_ID : undefined),
       originCatalogItemId: pad.originCatalogItemId,
       originBankTitle: pad.originBankTitle || src.name,
+      restoreAssetKind: pad.restoreAssetKind || (sourceIsDefaultBank ? 'default_asset' : undefined),
     };
     return prev.map((b) => {
       if (b.id === sourceBankId) return applyBankContentPolicy({ ...b, pads: b.pads.filter((p) => p.id !== padId) });

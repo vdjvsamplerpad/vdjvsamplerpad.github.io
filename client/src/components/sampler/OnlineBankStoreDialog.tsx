@@ -274,6 +274,12 @@ export function OnlineBankStoreDialog({
             window.dispatchEvent(new CustomEvent('vdjv-require-login', { detail: { reason } }));
         }, 0);
     };
+    const requestUpgrade = React.useCallback((reason: string) => {
+        onOpenChange(false);
+        window.setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('vdjv-open-upgrade', { detail: { reason } }));
+        }, 0);
+    }, [onOpenChange]);
     const { normalizeProgress, handleDownload, cancelDownload } = useOnlineStoreDownloadTransfer({
         effectiveUser,
         requestLogin,
@@ -1147,8 +1153,8 @@ export function OnlineBankStoreDialog({
 
                                                         {/* Action Button(s) */}
                                                         <div className="shrink-0 flex gap-2">
-                                                            {isGuest && (item.status === 'free_download' || item.status === 'granted_download' || item.status === 'buy') ? (
-                                                                <Button
+    {isGuest && (item.status === 'free_download' || item.status === 'granted_download' || item.status === 'buy') ? (
+        <Button
                                                                     size="sm"
                                                                     onClick={() => {
                                                                         requestLogin();
@@ -1156,21 +1162,32 @@ export function OnlineBankStoreDialog({
                                                                     disabled={!isOnline}
                                                                     className="h-8 px-4 text-xs font-medium rounded-full disabled:opacity-50 bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_15px_rgba(79,70,229,0.2)] hover:shadow-[0_0_20px_rgba(79,70,229,0.4)] transition-all"
                                                                 >
-                                                                    Get
-                                                                </Button>
-                                                            ) : item.status === 'upgrade_required' ? (
-                                                                <Button
-                                                                    size="sm"
-                                                                    onClick={() => {
-                                                                        showToast(isFreeAccount
-                                                                            ? 'Upgrade to PRO or PRO MAX to get Store banks.'
-                                                                            : 'Upgrade required to get this Store bank.', 'error');
-                                                                    }}
-                                                                    disabled={!isOnline}
-                                                                    className="h-8 px-4 text-xs font-semibold rounded-full disabled:opacity-50 bg-amber-500 hover:bg-amber-400 text-black shadow-lg"
-                                                                >
-                                                                    Get
-                                                                </Button>
+            Get
+        </Button>
+    ) : isFreeAccount ? (
+        <Button
+            size="sm"
+            onClick={() => {
+                requestUpgrade('FREE accounts can browse the Store, but downloads, checkout, and free promotions require PRO or PRO MAX.');
+            }}
+            disabled={!isOnline}
+            className="h-8 px-4 text-xs font-semibold rounded-full disabled:opacity-50 bg-amber-500 hover:bg-amber-400 text-black shadow-lg"
+        >
+            Upgrade
+        </Button>
+    ) : item.status === 'upgrade_required' ? (
+        <Button
+            size="sm"
+            onClick={() => {
+                requestUpgrade(isFreeAccount
+                    ? 'FREE accounts can browse the Store, but downloads and free promotions require PRO or PRO MAX.'
+                    : 'Upgrade required to get this Store bank.');
+            }}
+            disabled={!isOnline}
+            className="h-8 px-4 text-xs font-semibold rounded-full disabled:opacity-50 bg-amber-500 hover:bg-amber-400 text-black shadow-lg"
+        >
+            Upgrade
+        </Button>
                                                             ) : (item.status === 'free_download' || item.status === 'granted_download' || item.status === 'pro_max_unlocked') ? (
                                                                 hasImportedCopy ? (
                                                                     <Button

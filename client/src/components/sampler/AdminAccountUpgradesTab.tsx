@@ -12,6 +12,7 @@ import {
 } from '@/lib/admin-api';
 
 type UpgradeStatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'cancelled';
+type AccountAdminSection = 'requests' | 'vouchers' | 'tiers';
 
 interface TierDraft {
   displayName: string;
@@ -59,6 +60,35 @@ const buildTierDraft = (tier: AdminAccountTierConfig): TierDraft => ({
   isActive: tier.is_active !== false,
 });
 
+const COMMON_LIMIT_FIELDS = [
+  ['defaultBankDailyPlays', 'Default plays/day'],
+  ['ownedBankQuota', 'Owned banks'],
+  ['ownedBankPadCap', 'Pads per owned bank'],
+  ['deviceTotalBankCap', 'Total banks/device'],
+  ['deckCount', 'Deck channels'],
+] as const;
+
+const COMMON_FEATURE_FIELDS = [
+  ['bankStoreCheckout', 'Store checkout'],
+  ['bankStoreDownload', 'Store download'],
+  ['storeFreePromotions', 'Free promotions'],
+  ['search', 'Search'],
+  ['inputMapping', 'Input mapping'],
+  ['backupRepair', 'Backup & repair'],
+  ['mixerHotcue', 'Mixer hotcue'],
+  ['padEditAdvanced', 'Advanced pad edit'],
+  ['bankEditAdvanced', 'Advanced bank edit'],
+] as const;
+
+const parseJsonObject = (value: string): Record<string, unknown> => {
+  try {
+    const parsed = JSON.parse(value || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+};
+
 export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: AdminAccountUpgradesTabProps) {
   const [loading, setLoading] = React.useState(false);
   const [savingTier, setSavingTier] = React.useState<string | null>(null);
@@ -76,6 +106,7 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
   const [campaignExpiresAt, setCampaignExpiresAt] = React.useState('');
   const [campaignTargetEmail, setCampaignTargetEmail] = React.useState('');
   const [campaignNotes, setCampaignNotes] = React.useState('');
+  const [activeSection, setActiveSection] = React.useState<AccountAdminSection>('requests');
 
   const loadData = React.useCallback(async () => {
     setLoading(true);
@@ -115,6 +146,21 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
         ...patch,
       },
     }));
+  };
+
+  const updateTierLimit = (tier: string, key: string, value: string) => {
+    const draft = tierDrafts[tier];
+    const limits = parseJsonObject(draft?.limitsJson || '{}');
+    const numberValue = Number(value);
+    limits[key] = Number.isFinite(numberValue) ? numberValue : 0;
+    updateTierDraft(tier, { limitsJson: JSON.stringify(limits, null, 2) });
+  };
+
+  const updateTierFeature = (tier: string, key: string, checked: boolean) => {
+    const draft = tierDrafts[tier];
+    const features = parseJsonObject(draft?.featuresJson || '{}');
+    features[key] = checked;
+    updateTierDraft(tier, { featuresJson: JSON.stringify(features, null, 2) });
   };
 
   const saveTierConfig = async (tier: AdminAccountTierConfig['tier']) => {
@@ -220,6 +266,25 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
         </Button>
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        {([
+          ['requests', 'Upgrade Requests'],
+          ['vouchers', 'Vouchers'],
+          ['tiers', 'Tier Config'],
+        ] as Array<[AccountAdminSection, string]>).map(([section, label]) => (
+          <Button
+            key={section}
+            type="button"
+            size="sm"
+            variant={activeSection === section ? 'default' : 'outline'}
+            onClick={() => setActiveSection(section)}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+
+      {activeSection === 'tiers' && (
       <div className={`rounded-lg border p-3 ${cardClass}`}>
         <div className="mb-3 flex items-center justify-between gap-2">
           <h4 className="text-sm font-semibold">Tier Config</h4>
@@ -228,6 +293,8 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
         <div className="grid gap-3 lg:grid-cols-3">
           {tierConfigs.map((tier) => {
             const draft = tierDrafts[tier.tier] || buildTierDraft(tier);
+            const limits = parseJsonObject(draft.limitsJson);
+            const features = parseJsonObject(draft.featuresJson) as Record<string, unknown>;
             return (
               <div key={tier.tier} className="space-y-2 rounded-lg border p-3">
                 <div className="flex items-center justify-between gap-2">
@@ -248,18 +315,53 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
                   className="min-h-16 w-full rounded-md border bg-transparent px-3 py-2 text-xs"
                   placeholder="Description"
                 />
-                <textarea
-                  value={draft.limitsJson}
-                  onChange={(event) => updateTierDraft(tier.tier, { limitsJson: event.target.value })}
-                  className="min-h-32 w-full rounded-md border bg-transparent px-3 py-2 font-mono text-[11px]"
-                  spellCheck={false}
-                />
-                <textarea
-                  value={draft.featuresJson}
-                  onChange={(event) => updateTierDraft(tier.tier, { featuresJson: event.target.value })}
-                  className="min-h-40 w-full rounded-md border bg-transparent px-3 py-2 font-mono text-[11px]"
-                  spellCheck={false}
-                />
+                <div className="rounded-md border p-2">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Common Limits</div>
+                  <div className="grid gap-2">
+                    {COMMON_LIMIT_FIELDS.map(([key, label]) => (
+                      <label key={key} className="grid grid-cols-[1fr_6rem] items-center gap-2 text-xs">
+                        <span>{label}</span>
+                        <Input
+                          value={String(limits[key] ?? '')}
+                          onChange={(event) => updateTierLimit(tier.tier, key, event.target.value)}
+                          className="h-8 text-xs"
+                          inputMode="numeric"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-md border p-2">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Feature Gates</div>
+                  <div className="grid gap-2">
+                    {COMMON_FEATURE_FIELDS.map(([key, label]) => (
+                      <Label key={key} className="flex items-center justify-between gap-2 text-xs">
+                        <span>{label}</span>
+                        <Checkbox
+                          checked={features[key] === true}
+                          onCheckedChange={(checked) => updateTierFeature(tier.tier, key, checked === true)}
+                        />
+                      </Label>
+                    ))}
+                  </div>
+                </div>
+                <details className="rounded-md border p-2">
+                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-gray-500">Advanced JSON</summary>
+                  <div className="mt-2 space-y-2">
+                    <textarea
+                      value={draft.limitsJson}
+                      onChange={(event) => updateTierDraft(tier.tier, { limitsJson: event.target.value })}
+                      className="min-h-32 w-full rounded-md border bg-transparent px-3 py-2 font-mono text-[11px]"
+                      spellCheck={false}
+                    />
+                    <textarea
+                      value={draft.featuresJson}
+                      onChange={(event) => updateTierDraft(tier.tier, { featuresJson: event.target.value })}
+                      className="min-h-40 w-full rounded-md border bg-transparent px-3 py-2 font-mono text-[11px]"
+                      spellCheck={false}
+                    />
+                  </div>
+                </details>
                 <Button size="sm" className="w-full" onClick={() => void saveTierConfig(tier.tier)} disabled={savingTier === tier.tier}>
                   {savingTier === tier.tier ? 'Saving...' : 'Save Tier'}
                 </Button>
@@ -268,7 +370,9 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
           })}
         </div>
       </div>
+      )}
 
+      {activeSection === 'requests' && (
       <div className={`rounded-lg border p-3 ${cardClass}`}>
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <div className="space-y-1">
@@ -344,7 +448,9 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
           </Table>
         </div>
       </div>
+      )}
 
+      {activeSection === 'vouchers' && (
       <div className={`rounded-lg border p-3 ${cardClass}`}>
         <h4 className="mb-3 text-sm font-semibold">Voucher Campaigns</h4>
         <div className="mb-4 grid gap-2 lg:grid-cols-[1fr_auto_auto_auto_1fr_auto]">
@@ -411,6 +517,7 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
           </Table>
         </div>
       </div>
+      )}
     </div>
   );
 }

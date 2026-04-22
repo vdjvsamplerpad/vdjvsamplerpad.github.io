@@ -306,7 +306,7 @@ export function AboutDialog({
   onSignOut
 }: AboutDialogProps) {
   const { profile, capabilities } = useAuthState();
-  const { refreshAccountCapabilities } = useAuthActions();
+  const { refreshAccountCapabilities, updatePassword } = useAuthActions();
   const isAdmin = profile?.role === 'admin';
   const accountTierLabel = capabilities.effectiveTier === 'pro_max'
     ? 'PRO MAX'
@@ -322,6 +322,10 @@ export function AboutDialog({
   const [voucherCode, setVoucherCode] = React.useState('');
   const [voucherBusy, setVoucherBusy] = React.useState(false);
   const [voucherNotice, setVoucherNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [newPassword, setNewPassword] = React.useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = React.useState('');
+  const [passwordBusy, setPasswordBusy] = React.useState(false);
+  const [passwordNotice, setPasswordNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [midiLearnAction, setMidiLearnAction] = React.useState<
     | { type: 'system'; action: SystemAction }
     | { type: 'channel'; channelIndex: number; field?: keyof ChannelMapping }
@@ -442,6 +446,11 @@ export function AboutDialog({
       setChannelMappingError(null);
       setMappingNotice(null);
       setBackupNotice(null);
+      setVoucherCode('');
+      setVoucherNotice(null);
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setPasswordNotice(null);
       setActivePanel('general');
       setShowSignOutConfirm(false);
       setShowBackupExportConfirm(false);
@@ -1219,6 +1228,54 @@ export function AboutDialog({
     }
   }, [onSignOut, isSigningOut, onOpenChange]);
 
+  const mapVoucherRedeemError = React.useCallback((value: unknown): string => {
+    const code = String(value || '').trim();
+    switch (code) {
+      case 'VOUCHER_NOT_AVAILABLE':
+      case 'VOUCHER_NOT_FOUND':
+        return 'Voucher is not available. Check the code or ask admin for a new one.';
+      case 'VOUCHER_EXPIRED':
+        return 'Voucher expired. Ask admin for a new code.';
+      case 'VOUCHER_ALREADY_REDEEMED':
+        return 'Voucher was already used.';
+      case 'VOUCHER_TARGET_MISMATCH':
+        return 'Voucher is locked to another email or user.';
+      case 'RATE_LIMITED':
+        return 'Too many voucher attempts. Please try again later.';
+      case 'NOT_AUTHENTICATED':
+        return 'Sign in before redeeming a voucher.';
+      default:
+        return code || 'Voucher redeem failed. Please try again.';
+    }
+  }, []);
+
+  const handleUpdatePassword = React.useCallback(async () => {
+    if (passwordBusy) return;
+    if (newPassword.length < 8) {
+      setPasswordNotice({ type: 'error', message: 'Password must be at least 8 characters.' });
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPasswordNotice({ type: 'error', message: 'Passwords do not match.' });
+      return;
+    }
+    setPasswordBusy(true);
+    setPasswordNotice(null);
+    try {
+      const { error } = await updatePassword(newPassword);
+      if (error) {
+        throw new Error(error.message || 'Password update failed.');
+      }
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setPasswordNotice({ type: 'success', message: 'Password updated.' });
+    } catch (error) {
+      setPasswordNotice({ type: 'error', message: error instanceof Error ? error.message : 'Password update failed.' });
+    } finally {
+      setPasswordBusy(false);
+    }
+  }, [confirmNewPassword, newPassword, passwordBusy, updatePassword]);
+
   const handleRedeemVoucher = React.useCallback(async () => {
     const code = voucherCode.trim();
     if (!code || voucherBusy) return;
@@ -1240,7 +1297,7 @@ export function AboutDialog({
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(payload?.error || payload?.message || `Voucher redeem failed (${response.status})`);
+        throw new Error(mapVoucherRedeemError(payload?.error || payload?.message || `HTTP_${response.status}`));
       }
       await refreshAccountCapabilities();
       setVoucherCode('');
@@ -1250,7 +1307,7 @@ export function AboutDialog({
     } finally {
       setVoucherBusy(false);
     }
-  }, [refreshAccountCapabilities, voucherBusy, voucherCode]);
+  }, [mapVoucherRedeemError, refreshAccountCapabilities, voucherBusy, voucherCode]);
 
   React.useEffect(() => {
     if (!isSigningOut) return;
@@ -1271,6 +1328,15 @@ export function AboutDialog({
   const masterVolumeUpKeyError = getInlineMappingError('master-volumeUp-key');
   const masterVolumeDownKeyError = getInlineMappingError('master-volumeDown-key');
   const masterMuteKeyError = getInlineMappingError('master-mute-key');
+  const availablePanels = React.useMemo(() => {
+    const panels: Array<{ id: 'general' | 'system' | 'channels' | 'backup'; label: string }> = [
+      { id: 'general', label: 'General' },
+    ];
+    if (isAuthenticated && canUseSystemShortcuts) panels.push({ id: 'system', label: 'System Shortcut' });
+    if (isAuthenticated && canUseChannelShortcuts) panels.push({ id: 'channels', label: 'Channels Shortcut' });
+    if (isAuthenticated && (canUseBackupRepair || canUseMappingImportExport)) panels.push({ id: 'backup', label: 'Backup' });
+    return panels;
+  }, [canUseBackupRepair, canUseChannelShortcuts, canUseMappingImportExport, canUseSystemShortcuts, isAuthenticated]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1282,18 +1348,21 @@ export function AboutDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2 max-h-[calc(92vh-96px)] overflow-y-auto pr-1 text-sm">
-          <div className={`grid gap-2 ${isAuthenticated ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1'}`}>
-            <Button type="button" variant={activePanel === 'general' ? 'default' : 'outline'} size="sm" onClick={() => setActivePanel('general')}>General</Button>
-            {isAuthenticated && canUseSystemShortcuts && (
-              <Button type="button" variant={activePanel === 'system' ? 'default' : 'outline'} size="sm" onClick={() => setActivePanel('system')}>System Shortcut</Button>
-            )}
-            {isAuthenticated && canUseChannelShortcuts && (
-              <Button type="button" variant={activePanel === 'channels' ? 'default' : 'outline'} size="sm" onClick={() => setActivePanel('channels')}>Channels Shortcut</Button>
-            )}
-            {isAuthenticated && (canUseBackupRepair || canUseMappingImportExport) && (
-              <Button type="button" variant={activePanel === 'backup' ? 'default' : 'outline'} size="sm" onClick={() => setActivePanel('backup')}>Backup</Button>
-            )}
-          </div>
+          {availablePanels.length > 1 && (
+            <div className={`grid gap-2 ${isAuthenticated ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1'}`}>
+              {availablePanels.map((panel) => (
+                <Button
+                  key={panel.id}
+                  type="button"
+                  variant={activePanel === panel.id ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setActivePanel(panel.id)}
+                >
+                  {panel.label}
+                </Button>
+              ))}
+            </div>
+          )}
 
           {activePanel === 'general' && (
             <>
@@ -1601,10 +1670,14 @@ export function AboutDialog({
               </div>
 
               {isAuthenticated && onSignOut && (
-                <div className="rounded-lg border border-red-300 bg-red-50/60 dark:border-red-700 dark:bg-red-900/20 p-3 space-y-2">
-                  <div className="text-xs uppercase tracking-wide text-red-600 dark:text-red-300">Account</div>
-                  <div className="rounded-md border border-gray-200 bg-white/70 p-2 space-y-2 dark:border-gray-700 dark:bg-gray-950/30">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Redeem Voucher</div>
+                <div className="rounded-lg border border-gray-200 bg-gray-50/70 p-3 space-y-3 dark:border-gray-700 dark:bg-gray-900/30">
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Account</div>
+                    <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">{accountTierLabel} - {displayName}</div>
+                  </div>
+
+                  <div className="rounded-md border border-indigo-200 bg-white/80 p-2 space-y-2 dark:border-indigo-900/60 dark:bg-gray-950/30">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Redeem Voucher</div>
                     <div className="flex flex-col gap-2 sm:flex-row">
                       <Input
                         value={voucherCode}
@@ -1628,15 +1701,65 @@ export function AboutDialog({
                       </Button>
                     </div>
                     {voucherNotice && (
-                      <div className={`text-[11px] ${voucherNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-500'}`}>
+                      <div className={`text-[11px] ${voucherNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'}`}>
                         {voucherNotice.message}
                       </div>
                     )}
                   </div>
+
+                  <div className="rounded-md border border-gray-200 bg-white/80 p-2 space-y-2 dark:border-gray-700 dark:bg-gray-950/30">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Update Password</div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <Input
+                        type="password"
+                        value={newPassword}
+                        onChange={(event) => {
+                          setNewPassword(event.target.value);
+                          setPasswordNotice(null);
+                        }}
+                        placeholder="New password"
+                        className="h-8 text-xs"
+                        disabled={passwordBusy}
+                        autoComplete="new-password"
+                      />
+                      <Input
+                        type="password"
+                        value={confirmNewPassword}
+                        onChange={(event) => {
+                          setConfirmNewPassword(event.target.value);
+                          setPasswordNotice(null);
+                        }}
+                        placeholder="Confirm password"
+                        className="h-8 text-xs"
+                        disabled={passwordBusy}
+                        autoComplete="new-password"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      {passwordNotice ? (
+                        <div className={`text-[11px] ${passwordNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'}`}>
+                          {passwordNotice.message}
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-gray-500">Minimum 8 characters.</div>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 shrink-0"
+                        onClick={() => void handleUpdatePassword()}
+                        disabled={passwordBusy || newPassword.length < 8 || confirmNewPassword.length < 8}
+                      >
+                        {passwordBusy ? 'Updating...' : 'Update'}
+                      </Button>
+                    </div>
+                  </div>
+
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-full border-red-400 text-red-700 hover:bg-red-100 hover:text-red-800 dark:border-red-600 dark:text-red-300 dark:hover:bg-red-900/40 dark:hover:text-red-200"
+                    className="w-full border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30 dark:hover:text-red-200"
                     onClick={() => setShowSignOutConfirm(true)}
                     disabled={isSigningOut}
                   >

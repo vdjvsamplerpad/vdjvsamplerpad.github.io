@@ -393,6 +393,10 @@ export function SideMenu({
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new Event('vdjv-open-about'));
   }, []);
+  const requestUpgradePrompt = React.useCallback((reason: string) => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('vdjv-open-upgrade', { detail: { reason } }));
+  }, []);
   const effectiveUser = user || getCachedUser();
   const hiddenPreviewStorageKey = React.useMemo(
     () => `${HIDDEN_STORE_PREVIEW_BANKS_KEY_PREFIX}${profile?.id || effectiveUser?.id || 'guest'}`,
@@ -427,6 +431,9 @@ export function SideMenu({
     showSignedInPreviewBanks: isFreeTier && capabilities.features.storeDemoBanks,
   });
   const displayName = profile?.display_name?.trim() || effectiveUser?.email?.split('@')[0] || 'Guest';
+  const accountTierLabel = capabilities.effectiveTier === 'pro_max'
+    ? 'PRO MAX'
+    : capabilities.effectiveTier.toUpperCase();
   const isLowestGraphics = graphicsTier === 'lowest';
   const requestStoreLogin = React.useCallback((reason?: string) => {
     requestLoginPrompt(reason || 'Please sign in to download this bank.');
@@ -1005,11 +1012,11 @@ export function SideMenu({
         variant: 'info',
         message: upgradeMessage,
       });
-      requestAboutDialog();
+      requestUpgradePrompt(upgradeMessage);
       return;
     }
     requestLoginPrompt(reason || 'Please sign in to open this bank preview.');
-  }, [capabilities.features.bankStoreDownload, effectiveUser, pushNotice, requestAboutDialog, requestLoginPrompt]);
+  }, [capabilities.features.bankStoreDownload, effectiveUser, pushNotice, requestLoginPrompt, requestUpgradePrompt]);
 
   const handleConfirmBulkClear = React.useCallback(() => {
     if (pendingBulkClearAction === 'keys') {
@@ -1064,7 +1071,9 @@ export function SideMenu({
             <div className={`text-sm font-semibold truncate ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
               VDJV Sampler Pad
             </div>
-            <div className={`text-[11px] truncate ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>{displayName}</div>
+            <div className={`text-[11px] truncate ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+              {accountTierLabel} - {displayName}
+            </div>
           </div>
           <Button
             variant="ghost"

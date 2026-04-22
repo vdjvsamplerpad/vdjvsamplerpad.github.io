@@ -31,7 +31,7 @@ const HIDE_PROTECTED_BANKS_KEY = 'vdjv-hide-protected-banks';
 const PASSWORD_RECOVERY_MODE_KEY = 'vdjv-password-recovery-mode';
 const GOOGLE_OAUTH_LOGIN_PENDING_KEY = 'vdjv-google-oauth-login-pending';
 const GOOGLE_OAUTH_LOGIN_LOGGED_PREFIX = 'vdjv-google-oauth-login-logged:';
-const PROFILE_SELECT = 'id, role, display_name, account_tier, tier_source, tier_updated_at, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap';
+const PROFILE_SELECT = 'id, role, display_name, account_tier, tier_source, tier_updated_at, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap, welcome_email_sent_at';
 const AUTH_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 const GOOGLE_OAUTH_LOGIN_PENDING_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -104,6 +104,7 @@ export interface Profile {
   owned_bank_quota?: number | null
   owned_bank_pad_cap?: number | null
   device_total_bank_cap?: number | null
+  welcome_email_sent_at?: string | null
 }
 
 interface AuthState {
@@ -578,7 +579,16 @@ function useAuthValue(): AuthProviderValue {
 
     const { data: created, error: upsertErr } = await supabase
       .from('profiles')
-      .upsert({ id: user.id, display_name: displayName, role: 'user' }, { onConflict: 'id' })
+      .upsert({
+        id: user.id,
+        display_name: displayName,
+        role: 'user',
+        account_tier: 'free',
+        tier_source: 'signup',
+        owned_bank_quota: 2,
+        owned_bank_pad_cap: 25,
+        device_total_bank_cap: 4,
+      }, { onConflict: 'id' })
       .select(PROFILE_SELECT)
       .single()
 

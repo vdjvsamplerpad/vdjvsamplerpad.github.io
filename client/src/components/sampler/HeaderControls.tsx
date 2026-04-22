@@ -14,6 +14,7 @@ import type { DefaultBankSourceOption } from './AdminAccessDialog.shared';
 import type { LoginModal as LoginModalType } from '@/components/auth/LoginModal';
 import type { AboutDialog as AboutDialogType } from '@/components/ui/about-dialog';
 import type { HeaderAdminDebugPanel as HeaderAdminDebugPanelType } from './HeaderAdminDebugPanel';
+import type { AccountUpgradeDialog as AccountUpgradeDialogType } from './AccountUpgradeDialog';
 import { EXTRA_PAD_COLORS, PRIMARY_PAD_COLORS, getPadColorOptionLabel } from './padColorPalette';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
 import { useStorePreviewBadge } from './hooks/useStorePreviewBadge';
@@ -22,6 +23,7 @@ import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
 const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then((module) => ({ default: module.LoginModal }))) as unknown as typeof LoginModalType;
 const AboutDialog = React.lazy(() => import('@/components/ui/about-dialog').then((module) => ({ default: module.AboutDialog }))) as unknown as typeof AboutDialogType;
 const HeaderAdminDebugPanel = React.lazy(() => import('./HeaderAdminDebugPanel').then((module) => ({ default: module.HeaderAdminDebugPanel }))) as unknown as typeof HeaderAdminDebugPanelType;
+const AccountUpgradeDialog = React.lazy(() => import('./AccountUpgradeDialog').then((module) => ({ default: module.AccountUpgradeDialog }))) as unknown as typeof AccountUpgradeDialogType;
 
 
 interface HeaderControlsProps {
@@ -112,6 +114,12 @@ interface HeaderControlsProps {
     files: File[],
     options?: { addAsNewWhenNoTarget?: boolean }
   ) => Promise<string>;
+  freePlaySummary?: {
+    visible: boolean;
+    remainingCount: number;
+    exhausted: boolean;
+    resetLabel?: string | null;
+  };
   defaultBankSourceOptions: DefaultBankSourceOption[];
   onPublishDefaultBankRelease: (
     bankId: string,
@@ -338,6 +346,7 @@ export function HeaderControls({
   onRestoreAppBackup,
   onRetryMissingMediaInCurrentBank,
   onRecoverMissingMediaFromBanks,
+  freePlaySummary,
   defaultBankSourceOptions,
   onPublishDefaultBankRelease,
 }: HeaderControlsProps) {
@@ -349,6 +358,8 @@ export function HeaderControls({
   const [AdminAccessDialog, setAdminAccessDialog] = React.useState<React.ComponentType<any> | null>(null);
   const [showLoginModal, setShowLoginModal] = React.useState(false);
   const [aboutOpen, setAboutOpen] = React.useState(false);
+  const [upgradeOpen, setUpgradeOpen] = React.useState(false);
+  const [upgradeReason, setUpgradeReason] = React.useState<string | null>(null);
   const [showPadColorPaintDialog, setShowPadColorPaintDialog] = React.useState(false);
   const [showAllPadColors, setShowAllPadColors] = React.useState(false);
   const [pendingPadColor, setPendingPadColor] = React.useState<string>(adminPadColorPaintColor || PRIMARY_PAD_COLORS[0]?.value || '#f59e0b');
@@ -372,6 +383,17 @@ export function HeaderControls({
   // Slide notices
   const { notices, pushNotice, dismiss } = useNotices()
 
+  const openUpgradeDialog = React.useCallback((reason?: string | null) => {
+    const activeUser = user || getCachedUser();
+    if (!activeUser) {
+      setShowLoginModal(true);
+      if (reason) pushNotice({ variant: 'info', message: reason });
+      return;
+    }
+    setUpgradeReason(reason || null);
+    setUpgradeOpen(true);
+  }, [pushNotice, user]);
+
   // Track previous user to detect login
   const prevUserIdRef = React.useRef<string | null>(null);
   const prevAuthTransitionRef = React.useRef(authTransition.status);
@@ -385,21 +407,34 @@ export function HeaderControls({
   React.useEffect(() => {
     const handleRequireLogin = (event: Event) => {
       const customEvent = event as CustomEvent<{ reason?: string }>;
-      setShowLoginModal(true);
       const reason = customEvent.detail?.reason;
+      if (user || getCachedUser()) {
+        openUpgradeDialog(reason || 'Upgrade to unlock this action.');
+        return;
+      }
+      setShowLoginModal(true);
       if (reason) {
         pushNotice({ variant: 'info', message: reason });
       }
     };
     window.addEventListener('vdjv-require-login', handleRequireLogin as EventListener);
     return () => window.removeEventListener('vdjv-require-login', handleRequireLogin as EventListener);
-  }, [pushNotice]);
+  }, [openUpgradeDialog, pushNotice, user]);
 
   React.useEffect(() => {
     const handleOpenAbout = () => setAboutOpen(true);
     window.addEventListener('vdjv-open-about', handleOpenAbout as EventListener);
     return () => window.removeEventListener('vdjv-open-about', handleOpenAbout as EventListener);
   }, []);
+
+  React.useEffect(() => {
+    const handleOpenUpgrade = (event: Event) => {
+      const customEvent = event as CustomEvent<{ reason?: string }>;
+      openUpgradeDialog(customEvent.detail?.reason || 'Upgrade to PRO or PRO MAX to unlock this feature.');
+    };
+    window.addEventListener('vdjv-open-upgrade', handleOpenUpgrade as EventListener);
+    return () => window.removeEventListener('vdjv-open-upgrade', handleOpenUpgrade as EventListener);
+  }, [openUpgradeDialog]);
 
   React.useEffect(() => {
     const handleOpenSharedBankImport = () => {
@@ -456,7 +491,12 @@ export function HeaderControls({
       if ((event.metaKey || event.ctrlKey) && normalizedKey === 'k') {
         if (isEditableTarget(event.target)) return;
         if (!capabilities.features.search) {
-          pushNotice({ variant: 'info', message: 'Search is available in PRO.' });
+          if (capabilities.effectiveTier === 'free') {
+            event.preventDefault();
+            openUpgradeDialog('Search is available in PRO and PRO MAX.');
+          } else {
+            pushNotice({ variant: 'info', message: 'Search is available in PRO.' });
+          }
           return;
         }
         event.preventDefault();
@@ -475,7 +515,7 @@ export function HeaderControls({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [adminPadColorPaintActive, capabilities.features.search, onStopAdminPadColorPaint, onToggleSearch, pushNotice, searchOpen, windowWidth]);
+  }, [adminPadColorPaintActive, capabilities.effectiveTier, capabilities.features.search, onStopAdminPadColorPaint, onToggleSearch, openUpgradeDialog, pushNotice, searchOpen, windowWidth]);
 
   // Show greeting notification when user logs in
   React.useEffect(() => {
@@ -864,6 +904,29 @@ export function HeaderControls({
               {!isMobileScreen && 'Search'}
             </Button>
           )}
+          {!capabilities.features.search && capabilities.effectiveTier === 'free' && freePlaySummary?.visible && (
+            <Button
+              onClick={() => openUpgradeDialog(
+                freePlaySummary.exhausted
+                  ? `Free plays are finished. They reset ${freePlaySummary.resetLabel || 'tomorrow'}. Upgrade to keep playing now.`
+                  : 'Upgrade to PRO for unlimited Default Bank plays and Store access.'
+              )}
+              variant="outline"
+              size={isMobileScreen ? "sm" : "default"}
+              className={`${isMobileScreen ? 'min-w-[5.25rem]' : 'w-32'} px-2 transition-all duration-200 ${
+                freePlaySummary.exhausted
+                  ? theme === 'dark'
+                    ? 'bg-red-500/20 border-red-400 text-red-100 hover:bg-red-500/30'
+                    : 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100'
+                  : theme === 'dark'
+                    ? 'bg-amber-500/15 border-amber-400 text-amber-100 hover:bg-amber-500/25'
+                    : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
+              }`}
+              title={freePlaySummary.exhausted ? 'Free plays finished. Click for upgrade options.' : 'Free Default Bank plays left'}
+            >
+              <span className="text-[11px] font-bold">{isMobileScreen ? `FREE ${freePlaySummary.remainingCount}` : `FREE PLAY: ${freePlaySummary.remainingCount}`}</span>
+            </Button>
+          )}
 
           {/* Mute/Unmute Button */}
           <Button
@@ -1187,6 +1250,18 @@ export function HeaderControls({
             open={showLoginModal}
             onOpenChange={setShowLoginModal}
             theme={theme}
+            pushNotice={pushNotice}
+          />
+        </React.Suspense>
+      )}
+
+      {upgradeOpen && (
+        <React.Suspense fallback={null}>
+          <AccountUpgradeDialog
+            open={upgradeOpen}
+            onOpenChange={setUpgradeOpen}
+            theme={theme}
+            reason={upgradeReason}
             pushNotice={pushNotice}
           />
         </React.Suspense>

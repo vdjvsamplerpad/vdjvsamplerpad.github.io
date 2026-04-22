@@ -443,6 +443,14 @@ export function SamplerPadApp() {
     return bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(bank);
   }, [defaultBankAllowanceLimit, effectiveAuthUser]);
 
+  const isDefaultBankSourcedPad = React.useCallback((pad: PadData | null | undefined, bank: SamplerBank | null | undefined) => {
+    if (!pad) return false;
+    if (bank && !bank.isLocalDuplicate && (bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(bank))) {
+      return true;
+    }
+    return pad.originBankId === DEFAULT_BANK_SOURCE_ID || pad.restoreAssetKind === 'default_asset';
+  }, []);
+
   const isDefaultBankPlaybackLocked = React.useCallback(
     (bank: SamplerBank | null | undefined) => {
       if (!bank) return false;
@@ -819,6 +827,21 @@ export function SamplerPadApp() {
       }
     }));
   }, [settings.channelCount, settings.systemMappings.channelCount]);
+
+  React.useEffect(() => {
+    const configuredLimit = Number(capabilities.limits.deckCount);
+    if (!Number.isFinite(configuredLimit) || configuredLimit <= 0) return;
+    const allowedCount = Math.max(2, Math.min(8, Math.floor(configuredLimit)));
+    if (settings.channelCount <= allowedCount) return;
+    setSettings((prev) => ({
+      ...prev,
+      channelCount: allowedCount,
+      systemMappings: {
+        ...prev.systemMappings,
+        channelCount: allowedCount,
+      },
+    }));
+  }, [capabilities.limits.deckCount, settings.channelCount]);
 
   React.useEffect(() => {
     if (!settings.midiEnabled) return;
@@ -1902,9 +1925,12 @@ export function SamplerPadApp() {
 
   const requestDefaultBankLogin = React.useCallback((reason = 'Please sign in to play default bank pads.') => {
     if (effectiveAuthUser) {
-      window.dispatchEvent(new Event('vdjv-open-about'));
-      window.dispatchEvent(new CustomEvent('vdjv-require-login', {
-        detail: { reason }
+      const resetAt = accountDefaultBankAllowanceStateRef.current?.resetAfter;
+      const resetLabel = resetAt
+        ? new Date(resetAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+        : 'tomorrow';
+      window.dispatchEvent(new CustomEvent('vdjv-open-upgrade', {
+        detail: { reason: `${reason} Free plays reset ${resetLabel}.` }
       }));
       return;
     }
@@ -1916,11 +1942,11 @@ export function SamplerPadApp() {
 
   const handleConsumeGuestTrialPlayback = React.useCallback((pad: PadData, bankId: string, bankName: string) => {
     const bank = banksRef.current.find((entry) => entry.id === bankId);
-    if (isAccountAllowanceEligibleDefaultBank(bank) && typeof defaultBankAllowanceLimit === 'number') {
+    if ((isAccountAllowanceEligibleDefaultBank(bank) || (effectiveAuthUser && isDefaultBankSourcedPad(pad, bank))) && typeof defaultBankAllowanceLimit === 'number') {
       const current = accountDefaultBankAllowanceStateRef.current
         || loadDefaultBankPlayAllowance(effectiveAuthUser!.id, capabilities.effectiveTier, defaultBankAllowanceLimit);
       if (current.exhausted) {
-        requestDefaultBankLogin('Daily Default Bank free plays are finished. Upgrade to PRO or reconnect tomorrow.');
+        requestDefaultBankLogin('Daily Default Bank free plays are finished.');
         return false;
       }
       const nextState = consumeDefaultBankPlayAllowance(current, defaultBankAllowanceLimit);
@@ -1947,6 +1973,7 @@ export function SamplerPadApp() {
     defaultBankAllowanceLimit,
     effectiveAuthUser,
     isAccountAllowanceEligibleDefaultBank,
+    isDefaultBankSourcedPad,
     isGuestTrialEligibleDefaultBank,
     requestDefaultBankLogin,
   ]);
@@ -1957,7 +1984,7 @@ export function SamplerPadApp() {
       const current = accountDefaultBankAllowanceStateRef.current
         || loadDefaultBankPlayAllowance(effectiveAuthUser!.id, capabilities.effectiveTier, defaultBankAllowanceLimit);
       if (current.exhausted) {
-        requestDefaultBankLogin('Daily Default Bank free plays are finished. Upgrade to PRO or reconnect tomorrow.');
+        requestDefaultBankLogin('Daily Default Bank free plays are finished.');
         return false;
       }
       const nextState = consumeDefaultBankPlayAllowance(current, defaultBankAllowanceLimit);
@@ -2000,24 +2027,41 @@ export function SamplerPadApp() {
     const sourceBank = banksRef.current.find((entry) => entry.id === sourceBankId);
     if (!sourceBank) return true;
 
-    if (effectiveAuthUser && !isAccountAllowanceEligibleDefaultBank(sourceBank)) return true;
+    const sourcePadId = channelState.loadedPadRef?.padId || channelState.pad?.padId || null;
+    const sourcePad = sourcePadId
+      ? sourceBank.pads.find((entry) => entry.id === sourcePadId) || null
+      : null;
+    const countsAgainstAccountAllowance = isAccountAllowanceEligibleDefaultBank(sourceBank)
+      || (effectiveAuthUser && isDefaultBankSourcedPad(sourcePad, sourceBank));
+    if (effectiveAuthUser && !countsAgainstAccountAllowance) return true;
+
+    if (effectiveAuthUser && countsAgainstAccountAllowance && accountDefaultBankAllowanceStateRef.current?.exhausted) {
+      requestDefaultBankLogin('Daily Default Bank free plays are finished.');
+      return false;
+    }
 
     if (isDefaultBankPlaybackLocked(sourceBank)) {
       requestDefaultBankLogin(
         effectiveAuthUser
-          ? 'Daily Default Bank free plays are finished. Upgrade to PRO or reconnect tomorrow.'
+          ? 'Daily Default Bank free plays are finished.'
           : 'Guest trial finished. Sign in to keep playing Default Bank.'
       );
       return false;
     }
 
-    if (!isGuestTrialEligibleDefaultBank(sourceBank) && !isAccountAllowanceEligibleDefaultBank(sourceBank)) return true;
+    if (!isGuestTrialEligibleDefaultBank(sourceBank) && !countsAgainstAccountAllowance) return true;
+
+    if (countsAgainstAccountAllowance && sourcePad) {
+      return handleConsumeGuestTrialPlayback(sourcePad, sourceBank.id, sourceBank.name);
+    }
 
     return handleConsumeGuestTrialPlaybackForBank(sourceBank.id);
   }, [
     effectiveAuthUser,
+    handleConsumeGuestTrialPlayback,
     handleConsumeGuestTrialPlaybackForBank,
     isAccountAllowanceEligibleDefaultBank,
+    isDefaultBankSourcedPad,
     isDefaultBankPlaybackLocked,
     isGuestTrialEligibleDefaultBank,
     playbackManager,
@@ -2209,7 +2253,11 @@ export function SamplerPadApp() {
 
       let next = readLatestPad();
       if (isDefaultBankPlaybackLocked(next.bank)) {
-        requestDefaultBankLogin('Guest trial finished. Sign in to keep playing Default Bank.');
+        requestDefaultBankLogin(
+          effectiveAuthUser
+            ? 'Daily Default Bank free plays are finished.'
+            : 'Guest trial finished. Sign in to keep playing Default Bank.'
+        );
         return false;
       }
       const canAttemptPadRecovery =
@@ -2258,7 +2306,7 @@ export function SamplerPadApp() {
       setShowErrorDialog(true);
       return false;
     }
-  }, [buildPlaybackReadyPad, isDefaultBankPlaybackLocked, playbackManager, rehydratePadMedia, requestDefaultBankLogin, shouldFocusPadsForChannelLoad, updateSetting]);
+  }, [buildPlaybackReadyPad, effectiveAuthUser, isDefaultBankPlaybackLocked, playbackManager, rehydratePadMedia, requestDefaultBankLogin, shouldFocusPadsForChannelLoad, updateSetting]);
 
   const handleSelectPadForChannelLoad = React.useCallback((pad: PadData, bankId: string, bankName: string) => {
     if (armedLoadChannelId === null) return;
@@ -2916,7 +2964,11 @@ export function SamplerPadApp() {
     ) => {
       const targetBank = banksRef.current.find((entry) => entry.id === bankId);
       if (mode !== 'hold-stop' && isDefaultBankPlaybackLocked(targetBank)) {
-        requestDefaultBankLogin('Guest trial finished. Sign in to keep playing Default Bank.');
+        requestDefaultBankLogin(
+          effectiveAuthUser
+            ? 'Daily Default Bank free plays are finished.'
+            : 'Guest trial finished. Sign in to keep playing Default Bank.'
+        );
         return false;
       }
       const shouldConsumeGuestTrial = (() => {
@@ -2943,7 +2995,7 @@ export function SamplerPadApp() {
         });
       return true;
     },
-    [buildPlaybackReadyPad, handleConsumeGuestTrialPlayback, isDefaultBankPlaybackLocked, playbackManager, requestDefaultBankLogin]
+    [buildPlaybackReadyPad, effectiveAuthUser, handleConsumeGuestTrialPlayback, isDefaultBankPlaybackLocked, playbackManager, requestDefaultBankLogin]
   );
 
   const activeHoldKeysRef = React.useRef<Map<string, string>>(new Map());
@@ -4330,6 +4382,10 @@ export function SamplerPadApp() {
     hotcueEnabled: capabilities.features.mixerHotcue
   };
 
+  const freePlayResetLabel = accountDefaultBankAllowanceState?.resetAfter
+    ? new Date(accountDefaultBankAllowanceState.resetAfter).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : null;
+
   const headerControlsProps = {
     primaryBank: displayPrimary,
     secondaryBank: displaySecondary,
@@ -4417,6 +4473,14 @@ export function SamplerPadApp() {
     onRestoreAppBackup: handleRestoreAppBackup,
     onRetryMissingMediaInCurrentBank: handleRetryMissingMediaInCurrentBank,
     onRecoverMissingMediaFromBanks: handleRecoverMissingMediaFromBanks,
+    freePlaySummary: accountDefaultBankAllowanceState && effectiveAuthUser && capabilities.effectiveTier === 'free'
+      ? {
+        visible: true,
+        remainingCount: accountDefaultBankAllowanceState.remainingCount,
+        exhausted: accountDefaultBankAllowanceState.exhausted,
+        resetLabel: freePlayResetLabel,
+      }
+      : undefined,
     midiDeviceProfiles: midiDeviceProfilesState,
     midiDeviceProfileId: settings.midiDeviceProfileId,
     onSelectMidiDeviceProfile: (id: string | null) => updateSetting('midiDeviceProfileId', id),
@@ -4500,7 +4564,8 @@ export function SamplerPadApp() {
         onRequireLogin={requestDefaultBankLogin}
         onGuestTrialConsumePlayback={handleConsumeGuestTrialPlayback}
         guestTrialSummary={{
-          visible: !effectiveAuthUser || Boolean(accountDefaultBankAllowanceState),
+          visible: !effectiveAuthUser || Boolean(effectiveAuthUser && capabilities.effectiveTier === 'free' && accountDefaultBankAllowanceState),
+          mode: effectiveAuthUser ? 'free' : 'guest',
           remainingCount: accountDefaultBankAllowanceState?.remainingCount ?? guestDefaultBankTrialState.remainingCount,
           exhausted: accountDefaultBankAllowanceState?.exhausted ?? guestDefaultBankTrialState.exhausted,
         }}

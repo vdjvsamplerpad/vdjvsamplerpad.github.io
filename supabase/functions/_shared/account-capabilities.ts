@@ -221,11 +221,15 @@ export const buildAccountCapabilitySnapshot = (
   const baseTier = normalizeStoredTier(profile?.account_tier);
   const effectiveTier = normalizeEffectiveTier(profile);
   const configLimits = mergeLimits(DEFAULT_ACCOUNT_LIMITS[effectiveTier], tierConfig?.limits);
-  const profileLimits = mergeLimits(configLimits, {
-    ownedBankQuota: profile?.owned_bank_quota,
-    ownedBankPadCap: profile?.owned_bank_pad_cap,
-    deviceTotalBankCap: profile?.device_total_bank_cap,
-  });
+  const tierSource = asString(profile?.tier_source, 40);
+  const shouldApplyLegacyProfileLimits = tierSource === "admin" || tierSource === "system";
+  const profileLimits = shouldApplyLegacyProfileLimits
+    ? mergeLimits(configLimits, {
+        ownedBankQuota: profile?.owned_bank_quota,
+        ownedBankPadCap: profile?.owned_bank_pad_cap,
+        deviceTotalBankCap: profile?.device_total_bank_cap,
+      })
+    : configLimits;
   const configFeatures = mergeFeatures(DEFAULT_ACCOUNT_FEATURES[effectiveTier], tierConfig?.features);
   const limits = mergeLimits(profileLimits, overrideRow?.limits);
   const features = mergeFeatures(configFeatures, overrideRow?.features);
@@ -263,7 +267,7 @@ export const loadAccountCapabilitySnapshot = async (
 
   const { data: profile } = await admin
     .from("profiles")
-    .select("id,role,account_tier,owned_bank_quota,owned_bank_pad_cap,device_total_bank_cap")
+    .select("id,role,account_tier,tier_source,owned_bank_quota,owned_bank_pad_cap,device_total_bank_cap")
     .eq("id", userId)
     .maybeSingle();
   const safeProfile = profile || { id: userId, role: "user", account_tier: "free" };

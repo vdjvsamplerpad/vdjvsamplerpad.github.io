@@ -221,6 +221,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [email, setEmail] = React.useState('')
   const [password, setPassword] = React.useState('')
   const [confirmPassword, setConfirmPassword] = React.useState('')
+  const [signupDisplayName, setSignupDisplayName] = React.useState('')
   const [mode, setMode] = React.useState<Mode>('signin')
   const [loading, setLoading] = React.useState(false)
   const [googleLoading, setGoogleLoading] = React.useState(false)
@@ -273,7 +274,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const isSignInSyncing = authTransition.status === 'signing_in'
   const isSignInBusy = loading || googleLoading || awaitingSignInSync || isSignInSyncing
   const isLoginSubmitting = mode === 'signin' && isSignInBusy
-  const isBuySubmitting = mode === 'buy' && buyStep === 'payment' && loading
+  const isBuySubmitting = mode === 'buy' && loading
 
   const logLoginAttempt = React.useCallback((input: {
     status: 'success' | 'failed'
@@ -344,6 +345,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setEmail('')
       setPassword('')
       setConfirmPassword('')
+      setSignupDisplayName('')
       setMode('signin')
       setResetCooldown(0)
       setShowPassword(false)
@@ -541,11 +543,16 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   )
 
   const handleBuyNext = React.useCallback(
-    (event: React.FormEvent) => {
+    async (event: React.FormEvent) => {
       event.preventDefault()
       const normalizedEmail = email.trim().toLowerCase()
+      const normalizedDisplayName = signupDisplayName.trim()
       if (!isValidEmail(normalizedEmail)) {
         pushNotice?.({ variant: 'error', message: 'Enter a valid email address.' })
+        return
+      }
+      if (normalizedDisplayName.length < 2) {
+        pushNotice?.({ variant: 'error', message: 'Display name must be at least 2 characters.' })
         return
       }
       if (password.length < 8) {
@@ -556,9 +563,41 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         pushNotice?.({ variant: 'error', message: 'Passwords do not match.' })
         return
       }
-      setBuyStep('payment')
+      setLoading(true)
+      try {
+        const { data, error } = await supabase.auth.signUp({
+          email: normalizedEmail,
+          password,
+          options: {
+            data: {
+              display_name: normalizedDisplayName,
+              email: normalizedEmail,
+            },
+            emailRedirectTo: resolveGoogleOAuthRedirectUrl(appReturnUrl),
+          },
+        })
+        if (error) {
+          pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(error.message) })
+          return
+        }
+        setEmail('')
+        setPassword('')
+        setConfirmPassword('')
+        setSignupDisplayName('')
+        if (data.session) {
+          pushNotice?.({ variant: 'success', message: 'Free account created.' })
+          onOpenChange(false)
+          return
+        }
+        pushNotice?.({ variant: 'success', message: 'Free account created. Check your email to confirm, then sign in.' })
+        setMode('signin')
+      } catch {
+        pushNotice?.({ variant: 'error', message: 'We could not create your account. Please try again.' })
+      } finally {
+        setLoading(false)
+      }
     },
-    [confirmPassword, email, password, pushNotice],
+    [appReturnUrl, confirmPassword, email, onOpenChange, password, pushNotice, signupDisplayName],
   )
 
   React.useEffect(() => {
@@ -1073,7 +1112,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
 
         <DialogDescription className="sr-only">
           {mode === 'signin' && 'Sign in to your account.'}
-          {mode === 'buy' && 'Submit account registration with payment details.'}
+          {mode === 'buy' && 'Create a free account.'}
           {mode === 'forgot' && 'Request a password reset code via email.'}
           {mode === 'reset' && 'Enter your reset code and choose a new password for your account.'}
         </DialogDescription>
@@ -1384,6 +1423,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                     setBuyStep('account')
                     setPassword('')
                     setConfirmPassword('')
+                    setSignupDisplayName('')
                     setPayerName('')
                     setReferenceNo('')
                     setNotes('')
@@ -1459,11 +1499,11 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               />
             ) : (
               <>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className={`rounded-lg border px-3 py-2 text-xs font-medium ${buyStep === 'account' ? (isDark ? 'border-indigo-500 bg-indigo-500/15 text-indigo-200' : 'border-indigo-300 bg-indigo-50 text-indigo-700') : (isDark ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-500')}`}>1. Account Setup</div>
-                  <div className={`rounded-lg border px-3 py-2 text-xs font-medium ${buyStep === 'payment' ? (isDark ? 'border-emerald-500 bg-emerald-500/15 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700') : (isDark ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-500')}`}>2. Payment Proof</div>
+                <div className={`rounded-xl border px-4 py-3 text-sm ${isDark ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-100' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`}>
+                  <div className="font-semibold">Create Free Account</div>
+                  <div className="mt-1 text-xs opacity-85">Account creation is free. Payment proof is only required later if you request PRO or PRO MAX from your account settings.</div>
                 </div>
-                <form onSubmit={buyStep === 'account' ? handleBuyNext : handleBuySubmit} className="relative space-y-3">
+                <form onSubmit={handleBuyNext} className="relative space-y-3">
                   {buyStep === 'account' && (
                     <>
                       {paymentConfig?.messenger_url && (
@@ -1478,6 +1518,21 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                           {' '}for help.
                         </div>
                       )}
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="buyDisplayName" className={colorText}>Display Name / DJ Name</Label>
+                        <Input
+                          id="buyDisplayName"
+                          value={signupDisplayName}
+                          onChange={(e) => setSignupDisplayName(e.target.value)}
+                          placeholder="e.g. DJ VII"
+                          required
+                          disabled={loading}
+                          minLength={2}
+                          maxLength={50}
+                          autoComplete="nickname"
+                        />
+                      </div>
 
                       <div className="space-y-1.5">
                         <Label htmlFor="buyEmail" className={colorText}>Email</Label>
@@ -1752,12 +1807,8 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                       className={`flex-1 ${isDark ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
                       disabled={loading}
                     >
-                      {buyStep === 'payment'
-                        ? <ArrowRight className="w-4 h-4 mr-2" />
-                        : <ArrowRight className="w-4 h-4 mr-2" />}
-                      {buyStep === 'payment'
-                        ? 'Submit Registration'
-                        : 'Next: Payment'}
+                      <ArrowRight className="w-4 h-4 mr-2" />
+                      Create Free Account
                     </Button>
                   </div>
                   {isBuySubmitting && (
@@ -1766,9 +1817,9 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-indigo-500/10">
                           <LoadingSpinner size="lg" className="h-10 w-10 border-4 border-indigo-200/40 border-t-indigo-500" />
                         </div>
-                        <div className="mt-4 text-base font-semibold">Submitting your account request...</div>
+                        <div className="mt-4 text-base font-semibold">Creating your free account...</div>
                         <div className={`mt-2 text-sm leading-relaxed ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
-                          Please wait while we save your request, run payment checks, and prepare your receipt.
+                          Please wait while we create your account and prepare your profile.
                         </div>
                       </div>
                     </div>

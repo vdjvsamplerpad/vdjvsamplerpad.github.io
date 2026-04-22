@@ -9,6 +9,7 @@ import { consumeRateLimit } from "../_shared/rate-limit.ts";
 import {
   type AccountCapabilitySnapshot,
   type StoredAccountTier,
+  DEFAULT_ACCOUNT_LIMITS,
   buildAccountCapabilitySnapshot,
   loadAccountCapabilitySnapshot,
   normalizeTierPrice,
@@ -169,7 +170,7 @@ const ensureProfileForAccountUser = async (admin: ReturnType<typeof createServic
     || "User";
   const { data: existing, error: selectError } = await admin
     .from("profiles")
-    .select("id,role,display_name,account_tier,owned_bank_quota,owned_bank_pad_cap,device_total_bank_cap")
+    .select("id,role,display_name,account_tier,tier_source,tier_updated_at,owned_bank_quota,owned_bank_pad_cap,device_total_bank_cap,welcome_email_sent_at")
     .eq("id", userId)
     .maybeSingle();
   if (selectError) throw new Error(selectError.message);
@@ -183,8 +184,12 @@ const ensureProfileForAccountUser = async (admin: ReturnType<typeof createServic
       role: "user",
       account_tier: "free",
       tier_source: "signup",
+      tier_updated_at: new Date().toISOString(),
+      owned_bank_quota: DEFAULT_ACCOUNT_LIMITS.free.ownedBankQuota,
+      owned_bank_pad_cap: DEFAULT_ACCOUNT_LIMITS.free.ownedBankPadCap,
+      device_total_bank_cap: DEFAULT_ACCOUNT_LIMITS.free.deviceTotalBankCap,
     }, { onConflict: "id" })
-    .select("id,role,display_name,account_tier,owned_bank_quota,owned_bank_pad_cap,device_total_bank_cap")
+    .select("id,role,display_name,account_tier,tier_source,tier_updated_at,owned_bank_quota,owned_bank_pad_cap,device_total_bank_cap,welcome_email_sent_at")
     .single();
   if (upsertError || !created) throw new Error(upsertError?.message || "Profile setup failed");
   return created;
@@ -847,6 +852,45 @@ const sendEmailViaResend = async (input: {
   const errorPayload = await response.text().catch(() => "");
   const suffix = errorPayload ? ` (${errorPayload.slice(0, 300)})` : "";
   throw new Error(`Resend email send failed: HTTP_${response.status}${suffix}`);
+};
+
+const sendFreeAccountWelcomeEmail = async (input: {
+  email: string;
+  displayName: string;
+  tier: string;
+}): Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }> => {
+  const targetEmail = normalizeEmail(input.email);
+  if (!targetEmail) return { status: "skipped", error: "No valid recipient email" };
+  if (!RESEND_API_KEY || !STORE_EMAIL_FROM) {
+    return { status: "skipped", error: "Email provider is not configured" };
+  }
+
+  const displayName = asString(input.displayName, 120) || targetEmail.split("@")[0] || "User";
+  const tierLabel = input.tier === "pro_max" ? "PRO MAX" : input.tier.toUpperCase();
+  const html = `
+    <div style="font-family:Inter,Arial,sans-serif;background:#111827;color:#f9fafb;padding:24px;">
+      <div style="max-width:560px;margin:0 auto;border:1px solid #374151;border-radius:18px;background:#020617;padding:24px;">
+        <div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#60a5fa;">VDJV Samplerpad</div>
+        <h1 style="margin:10px 0 8px;font-size:28px;line-height:1.1;">Welcome, ${escapeHtml(displayName)}</h1>
+        <p style="margin:0 0 16px;color:#d1d5db;line-height:1.5;">Your account is ready. Current tier: <strong>${escapeHtml(tierLabel)}</strong>.</p>
+        <div style="border:1px solid #1f2937;border-radius:14px;padding:14px;background:#0f172a;color:#d1d5db;font-size:14px;line-height:1.5;">
+          FREE accounts can try the Default Bank with daily plays and create limited own sampler banks. Upgrade inside the app to unlock Store downloads and PRO features.
+        </div>
+        <p style="margin:16px 0 0;color:#9ca3af;font-size:12px;">If you did not create this account, ignore this email or contact support.</p>
+      </div>
+    </div>
+  `;
+  try {
+    await sendEmailViaResend({
+      to: targetEmail,
+      subject: "Welcome to VDJV Samplerpad",
+      html,
+      text: `Welcome, ${displayName}. Your VDJV Samplerpad account is ready. Current tier: ${tierLabel}.`,
+    });
+    return { status: "sent", error: null };
+  } catch (error) {
+    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
 };
 
 const normalizeBase64 = (value: string): string => {
@@ -2849,6 +2893,25 @@ const getAccountMe = async (req: Request) => {
   }
   const profile = await ensureProfileForAccountUser(admin, user);
   const capabilities = await loadAccountCapabilitySnapshot(admin, user.id);
+  if (
+    profile?.account_tier === "free" &&
+    profile?.tier_source === "signup" &&
+    !profile?.welcome_email_sent_at &&
+    user.email
+  ) {
+    const welcomeResult = await sendFreeAccountWelcomeEmail({
+      email: user.email,
+      displayName: asString(profile?.display_name, 120) || user.email.split("@")[0] || "User",
+      tier: capabilities.effectiveTier,
+    });
+    if (welcomeResult.status === "sent") {
+      await admin
+        .from("profiles")
+        .update({ welcome_email_sent_at: new Date().toISOString() })
+        .eq("id", user.id)
+        .is("welcome_email_sent_at", null);
+    }
+  }
   return ok({
     user: {
       id: user.id,
@@ -2856,6 +2919,91 @@ const getAccountMe = async (req: Request) => {
     },
     profile,
     capabilities,
+  });
+};
+
+const getAccountUpgradeOptions = async (req: Request) => {
+  const admin = createServiceClient();
+  const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
+  if (!user?.id) return fail(401, "NOT_AUTHENTICATED");
+  const profile = await ensureProfileForAccountUser(admin, user);
+  const capabilities = await loadAccountCapabilitySnapshot(admin, user.id);
+  const targets: StoredAccountTier[] = ["pro", "pro_max"];
+  const tiers = await Promise.all(targets.map(async (targetTier) => {
+    const config = await getTierConfig(admin, targetTier);
+    const quote = await quoteUpgradeRequest(admin, user.id, targetTier);
+    const alreadyOnTier = capabilities.effectiveTier === targetTier || capabilities.effectiveTier === "pro_max";
+    const isDowngrade = capabilities.effectiveTier === "pro" && targetTier === "pro";
+    return {
+      tier: targetTier,
+      displayName: asString((config as any)?.display_name, 80) || targetTier.toUpperCase(),
+      description: asString((config as any)?.description, 1000) || "",
+      pricePhp: normalizeTierPrice((config as any)?.price_php),
+      isActive: (config as any)?.is_active !== false,
+      available: !alreadyOnTier && !isDowngrade && (config as any)?.is_active !== false,
+      quote,
+    };
+  }));
+  return ok({
+    user: {
+      id: user.id,
+      email: user.email || null,
+    },
+    profile,
+    capabilities,
+    tiers,
+  });
+};
+
+const createAccountUpgradeProofUploadUrl = async (req: Request, body: any) => {
+  const admin = createServiceClient();
+  const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
+  if (!user?.id) return fail(401, "NOT_AUTHENTICATED");
+
+  const fileName = asString(body?.fileName, 240);
+  const contentType = asString(body?.contentType, 160)?.toLowerCase() || "";
+  const paymentChannel = asString(body?.paymentChannel, 40);
+  const sizeBytes = Number(body?.sizeBytes ?? body?.size_bytes ?? 0);
+
+  if (!paymentChannel || !PAYMENT_CHANNEL_VALUES.has(paymentChannel)) {
+    return badRequest("Invalid paymentChannel");
+  }
+  if (!fileName) return badRequest("fileName is required");
+  const ext = getExtensionFromFileName(fileName);
+  if (!ext || !ACCOUNT_REG_ALLOWED_EXTENSIONS.has(ext)) {
+    return badRequest("Unsupported proof file extension");
+  }
+  if (contentType && !ACCOUNT_REG_ALLOWED_MIME_TYPES.has(contentType)) {
+    return badRequest("Unsupported proof mime type");
+  }
+  if (Number.isFinite(sizeBytes) && sizeBytes > ACCOUNT_REG_MAX_PROOF_BYTES) {
+    return fail(413, "PROOF_TOO_LARGE", { max_bytes: ACCOUNT_REG_MAX_PROOF_BYTES });
+  }
+
+  const uploadRateLimit = await consumeRateLimit({
+    scope: "account_upgrade.proof_upload",
+    subject: `${getRequestIp(req)}:${user.id}`,
+    maxHits: ACCOUNT_REG_UPLOAD_RATE_LIMIT,
+    windowSeconds: ACCOUNT_REG_UPLOAD_RATE_WINDOW_SECONDS,
+  });
+  if (!uploadRateLimit.allowed) {
+    return fail(429, "RATE_LIMITED", {
+      scope: "account_upgrade.proof_upload",
+      retry_after_seconds: uploadRateLimit.retryAfterSeconds,
+    });
+  }
+
+  const objectPath = `${user.id}/account-upgrades/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const { data, error } = await admin.storage.from("payment-proof").createSignedUploadUrl(objectPath);
+  if (error || !data?.token) {
+    return fail(500, error?.message || "Failed to create signed upload URL");
+  }
+  return ok({
+    bucket: "payment-proof",
+    path: objectPath,
+    token: data.token,
+    signedUrl: data.signedUrl || null,
+    max_bytes: ACCOUNT_REG_MAX_PROOF_BYTES,
   });
 };
 
@@ -9126,6 +9274,13 @@ Deno.serve(async (req) => {
     if (req.method === "GET" && scoped[0] === "sampler-config" && scoped.length === 1) return await getPublicSamplerAppConfig();
     if (req.method === "GET" && scoped[0] === "account" && scoped[1] === "me" && scoped.length === 2) {
       return await getAccountMe(req);
+    }
+    if (req.method === "GET" && scoped[0] === "account" && scoped[1] === "upgrade-options" && scoped.length === 2) {
+      return await getAccountUpgradeOptions(req);
+    }
+    if (req.method === "POST" && scoped[0] === "account" && scoped[1] === "upgrade-proof-upload-url" && scoped.length === 2) {
+      const body = await req.json().catch(() => ({}));
+      return await createAccountUpgradeProofUploadUrl(req, body);
     }
     if (req.method === "POST" && scoped[0] === "account" && scoped[1] === "upgrade-request" && scoped.length === 2) {
       const body = await req.json().catch(() => ({}));

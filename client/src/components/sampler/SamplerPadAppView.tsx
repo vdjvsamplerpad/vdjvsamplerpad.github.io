@@ -110,6 +110,7 @@ interface SamplerPadAppViewProps {
   onGuestTrialConsumePlayback: (pad: PadData, bankId: string, bankName: string) => boolean;
   guestTrialSummary: {
     visible: boolean;
+    mode: 'guest' | 'free';
     remainingCount: number;
     exhausted: boolean;
   };
@@ -372,7 +373,7 @@ export function SamplerPadAppView({
       <div className={`flex-1 min-h-0 ${getMainContentMargin} ${getMainContentPadding}`}>
         <div className="max-w-full mx-auto py-2 relative z-10 h-full min-h-0 flex flex-col">
           <HeaderControls {...headerControlsProps} />
-          {guestTrialSummary.visible && (
+          {guestTrialSummary.visible && guestTrialSummary.mode === 'guest' && (
             <div className="mb-2 rounded-xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
               {guestTrialSummary.exhausted
                 ? 'Guest trial finished. Sign in to keep playing Default Bank.'
