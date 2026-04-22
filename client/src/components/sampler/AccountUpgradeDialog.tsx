@@ -13,6 +13,7 @@ import { useAuthActions, useAuthState } from '@/hooks/useAuth';
 type TargetTier = 'pro' | 'pro_max';
 type PaymentChannel = 'image_proof' | 'gcash_manual' | 'maya_manual';
 type DialogStep = 'plans' | 'request';
+type MobileSlideDirection = 'next' | 'prev';
 type PlanView = {
   id: 'free' | TargetTier;
   kind: 'free' | 'tier';
@@ -53,7 +54,6 @@ interface AccountUpgradeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   theme: 'light' | 'dark';
-  reason?: string | null;
   pushNotice?: (notice: { variant: 'success' | 'error' | 'info'; message: string }) => void;
 }
 
@@ -117,7 +117,7 @@ const getBeforePromoPrice = (price: number, discountPercent: number): number => 
   return Math.max(price, Math.round(price / (1 - discountPercent / 100)));
 };
 
-export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNotice }: AccountUpgradeDialogProps) {
+export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: AccountUpgradeDialogProps) {
   const { profile, capabilities } = useAuthState();
   const { refreshAccountCapabilities } = useAuthActions();
   const [loading, setLoading] = React.useState(false);
@@ -127,6 +127,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
   const [paymentConfig, setPaymentConfig] = React.useState<PaymentConfig | null>(null);
   const [selectedTier, setSelectedTier] = React.useState<TargetTier>('pro');
   const [mobilePlanIndex, setMobilePlanIndex] = React.useState(0);
+  const [mobileSlideDirection, setMobileSlideDirection] = React.useState<MobileSlideDirection>('next');
   const [paymentChannel, setPaymentChannel] = React.useState<PaymentChannel>('image_proof');
   const [payerName, setPayerName] = React.useState('');
   const [referenceNo, setReferenceNo] = React.useState('');
@@ -334,13 +335,16 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
   const showMobilePlan = React.useCallback((nextIndex: number) => {
     if (!planViews.length) return;
     const normalized = (nextIndex + planViews.length) % planViews.length;
+    const forwardDistance = (normalized - mobilePlanIndex + planViews.length) % planViews.length;
+    const backwardDistance = (mobilePlanIndex - normalized + planViews.length) % planViews.length;
+    setMobileSlideDirection(forwardDistance <= backwardDistance ? 'next' : 'prev');
     setMobilePlanIndex(normalized);
     window.requestAnimationFrame(() => {
       const rail = planRailRef.current;
       const target = rail?.children.item(normalized) as HTMLElement | null;
       target?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
     });
-  }, [planViews.length]);
+  }, [mobilePlanIndex, planViews.length]);
 
   const shellClass = isDark
     ? 'border-slate-700 bg-slate-950 text-slate-100'
@@ -406,15 +410,15 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
         : 'bg-[#ed0d7c] text-white shadow-[0_14px_36px_rgba(237,13,124,0.42)] group-hover:bg-[#ff168c]';
     const shellClass = isFree
       ? isDark
-        ? 'border-white/10 bg-[#15171a] shadow-black/50'
-        : 'border-slate-950/10 bg-white text-slate-950 shadow-[0_26px_80px_rgba(15,23,42,0.12)]'
+        ? 'border-white/10 bg-[#15171a] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_38px_rgba(255,255,255,0.035)]'
+        : 'border-slate-950/10 bg-white text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),inset_0_0_38px_rgba(15,23,42,0.04)]'
       : isProMax
         ? isDark
-          ? 'border-[#1f55ff] bg-[#10151f] shadow-[0_0_0_1px_rgba(31,85,255,0.48),0_28px_90px_rgba(31,85,255,0.18)]'
-          : 'border-[#1f55ff]/60 bg-[#eef4ff] text-slate-950 shadow-[0_0_0_1px_rgba(31,85,255,0.22),0_28px_90px_rgba(31,85,255,0.16)]'
+          ? 'border-white/10 bg-[#10151f] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_48px_rgba(31,85,255,0.2)]'
+          : 'border-slate-950/10 bg-[#eef4ff] text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),inset_0_0_48px_rgba(31,85,255,0.14)]'
         : isDark
-          ? 'border-[#f41885] bg-[#171318] shadow-[0_0_0_1px_rgba(244,24,133,0.5),0_28px_90px_rgba(244,24,133,0.2)]'
-          : 'border-[#f41885]/60 bg-[#fff1f7] text-slate-950 shadow-[0_0_0_1px_rgba(244,24,133,0.18),0_28px_90px_rgba(244,24,133,0.16)]';
+          ? 'border-white/10 bg-[#171318] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_48px_rgba(244,24,133,0.2)]'
+          : 'border-slate-950/10 bg-[#fff1f7] text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),inset_0_0_48px_rgba(244,24,133,0.14)]';
     const heroPanelClass = isFree
       ? isDark
         ? 'bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.035))]'
@@ -444,7 +448,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
         key={plan.id}
         type="button"
         onClick={() => tier ? selectPlan(tier) : undefined}
-        className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left transition duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f21984]/60 md:min-h-[680px] ${cardTextClass} ${shellClass} ${
+        className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left transition duration-300 focus:border-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f21984]/60 md:min-h-[680px] ${cardTextClass} ${shellClass} ${
           active ? 'ring-2 ring-white/18' : ''
         } ${disabled ? 'cursor-default' : 'hover:-translate-y-1 hover:brightness-110'}`}
       >
@@ -571,6 +575,41 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
       <DialogContent className={`w-[98vw] max-h-[96vh] overflow-hidden p-0 sm:max-w-[1380px] ${dialogShellClass}`}>
         <div className="max-h-[96vh] overflow-y-auto p-4 sm:p-6">
         {step === 'plans' && (
+          <style>{`
+            @media (max-width: 767px) {
+              .vdjv-mobile-plan-card {
+                transition: opacity 320ms ease, transform 420ms cubic-bezier(.2,.8,.2,1), filter 320ms ease;
+                transform: scale(.94);
+                opacity: .54;
+                filter: saturate(.72) brightness(.82);
+              }
+              .vdjv-mobile-plan-card.vdjv-mobile-plan-card-active {
+                opacity: 1;
+                filter: saturate(1) brightness(1);
+                animation-duration: 430ms;
+                animation-fill-mode: both;
+                animation-timing-function: cubic-bezier(.2,.8,.2,1);
+              }
+              .vdjv-mobile-plan-card.vdjv-mobile-plan-card-active[data-slide-direction="next"] {
+                animation-name: vdjvPlanSlideNext;
+              }
+              .vdjv-mobile-plan-card.vdjv-mobile-plan-card-active[data-slide-direction="prev"] {
+                animation-name: vdjvPlanSlidePrev;
+              }
+              @keyframes vdjvPlanSlideNext {
+                0% { transform: translateX(28px) scale(.94); opacity: .34; filter: blur(7px) saturate(.75); }
+                62% { transform: translateX(-5px) scale(1.012); opacity: 1; filter: blur(0) saturate(1.04); }
+                100% { transform: translateX(0) scale(1); opacity: 1; filter: blur(0) saturate(1); }
+              }
+              @keyframes vdjvPlanSlidePrev {
+                0% { transform: translateX(-28px) scale(.94); opacity: .34; filter: blur(7px) saturate(.75); }
+                62% { transform: translateX(5px) scale(1.012); opacity: 1; filter: blur(0) saturate(1.04); }
+                100% { transform: translateX(0) scale(1); opacity: 1; filter: blur(0) saturate(1); }
+              }
+            }
+          `}</style>
+        )}
+        {step === 'plans' && (
           <div className="relative -mx-4 -mt-4 mb-5 h-[280px] overflow-hidden rounded-t-lg md:hidden">
             <video
               src="/assets/preview.mp4"
@@ -605,12 +644,6 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
           </DialogDescription>
         </DialogHeader>
 
-        {reason && (
-          <div className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-amber-500/40 bg-amber-500/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
-            <span className="font-semibold">Upgrade option:</span> {reason}
-          </div>
-        )}
-
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-12 text-sm">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -632,8 +665,14 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                 ref={planRailRef}
                 className="flex snap-x snap-mandatory gap-4 overflow-x-auto px-6 pb-2 [-ms-overflow-style:none] [scrollbar-width:none] md:grid md:grid-cols-3 md:overflow-visible md:px-0 [&::-webkit-scrollbar]:hidden"
               >
-                {planViews.map((plan) => (
-                  <div key={plan.id} className="w-[min(86vw,430px)] shrink-0 snap-center md:w-auto">
+                {planViews.map((plan, index) => (
+                  <div
+                    key={plan.id}
+                    data-slide-direction={mobileSlideDirection}
+                    className={`vdjv-mobile-plan-card w-[min(86vw,430px)] shrink-0 snap-center md:w-auto md:scale-100 md:opacity-100 md:filter-none ${
+                      index === mobilePlanIndex ? 'vdjv-mobile-plan-card-active' : ''
+                    }`}
+                  >
                     {renderPlanCard(plan)}
                   </div>
                 ))}
@@ -642,7 +681,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                 type="button"
                 aria-label="Previous plan"
                 onClick={() => showMobilePlan(mobilePlanIndex - 1)}
-                className="absolute left-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
+                className="absolute left-1 top-[36%] z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
@@ -650,7 +689,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                 type="button"
                 aria-label="Next plan"
                 onClick={() => showMobilePlan(mobilePlanIndex + 1)}
-                className="absolute right-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
+                className="absolute right-1 top-[36%] z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
               >
                 <ChevronRight className="h-5 w-5" />
               </button>

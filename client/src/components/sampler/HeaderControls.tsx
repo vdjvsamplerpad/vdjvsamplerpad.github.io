@@ -359,7 +359,6 @@ export function HeaderControls({
   const [showLoginModal, setShowLoginModal] = React.useState(false);
   const [aboutOpen, setAboutOpen] = React.useState(false);
   const [upgradeOpen, setUpgradeOpen] = React.useState(false);
-  const [upgradeReason, setUpgradeReason] = React.useState<string | null>(null);
   const [showPadColorPaintDialog, setShowPadColorPaintDialog] = React.useState(false);
   const [showAllPadColors, setShowAllPadColors] = React.useState(false);
   const [pendingPadColor, setPendingPadColor] = React.useState<string>(adminPadColorPaintColor || PRIMARY_PAD_COLORS[0]?.value || '#f59e0b');
@@ -384,13 +383,14 @@ export function HeaderControls({
   const { notices, pushNotice, dismiss } = useNotices()
 
   const openUpgradeDialog = React.useCallback((reason?: string | null) => {
+    const message = reason || 'Choose a PRO or PRO MAX plan to unlock this feature.';
     const activeUser = user || getCachedUser();
     if (!activeUser) {
       setShowLoginModal(true);
-      if (reason) pushNotice({ variant: 'info', message: reason });
+      pushNotice({ variant: 'info', message });
       return;
     }
-    setUpgradeReason(reason || null);
+    pushNotice({ variant: 'info', message });
     setUpgradeOpen(true);
   }, [pushNotice, user]);
 
@@ -1265,7 +1265,6 @@ export function HeaderControls({
             open={upgradeOpen}
             onOpenChange={setUpgradeOpen}
             theme={theme}
-            reason={upgradeReason}
             pushNotice={pushNotice}
           />
         </React.Suspense>

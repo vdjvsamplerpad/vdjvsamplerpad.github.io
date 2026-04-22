@@ -1015,15 +1015,11 @@ export function SideMenu({
       const upgradeMessage = reason && !/sign in/i.test(reason)
         ? reason
         : 'Upgrade to PRO or PRO MAX to unlock Store demo banks.';
-      pushNotice({
-        variant: 'info',
-        message: upgradeMessage,
-      });
       requestUpgradePrompt(upgradeMessage);
       return;
     }
     requestLoginPrompt(reason || 'Please sign in to open this bank preview.');
-  }, [capabilities.features.bankStoreDownload, effectiveUser, pushNotice, requestLoginPrompt, requestUpgradePrompt]);
+  }, [capabilities.features.bankStoreDownload, effectiveUser, requestLoginPrompt, requestUpgradePrompt]);
 
   const handleConfirmBulkClear = React.useCallback(() => {
     if (pendingBulkClearAction === 'keys') {
