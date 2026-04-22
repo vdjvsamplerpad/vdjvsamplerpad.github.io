@@ -35,6 +35,12 @@ import {
   persistGuestDefaultBankTrialState,
   readGuestDefaultBankTrialStateSync,
 } from '@/lib/guest-default-bank-trial';
+import {
+  consumeDefaultBankPlayAllowance,
+  loadDefaultBankPlayAllowance,
+  persistDefaultBankPlayAllowance,
+  type DefaultBankPlayAllowanceState,
+} from '@/lib/account-default-bank-play-allowance';
 import { getLatestUserSamplerMetadataSnapshot } from '@/lib/user-sampler-snapshot-api';
 import {
   summarizeRemoteSnapshotPrompt,
@@ -353,7 +359,7 @@ export function SamplerPadApp() {
   const { theme, toggleTheme } = useTheme();
   const { width: windowWidth, height: windowHeight } = useWindowSize();
   const midi = useWebMidi();
-  const { user, profile, loading, authTransition } = useAuthState();
+  const { user, profile, loading, authTransition, capabilities } = useAuthState();
   const audioTelemetry = React.useMemo(
     () => getAudioTelemetry((import.meta as any).env?.VITE_APP_VERSION || 'unknown'),
     []
@@ -371,6 +377,9 @@ export function SamplerPadApp() {
     readGuestDefaultBankTrialStateSync()
   );
   const guestDefaultBankTrialStateRef = React.useRef(guestDefaultBankTrialState);
+  const defaultBankAllowanceLimit = capabilities.limits.defaultBankDailyPlays;
+  const [accountDefaultBankAllowanceState, setAccountDefaultBankAllowanceState] = React.useState<DefaultBankPlayAllowanceState | null>(null);
+  const accountDefaultBankAllowanceStateRef = React.useRef<DefaultBankPlayAllowanceState | null>(null);
   const defaultSettings = React.useMemo(
     () => createDefaultSettings(DECK_LAYOUT_SCHEMA_VERSION, samplerConfig),
     [samplerConfig]
@@ -393,6 +402,10 @@ export function SamplerPadApp() {
   }, [guestDefaultBankTrialState]);
 
   React.useEffect(() => {
+    accountDefaultBankAllowanceStateRef.current = accountDefaultBankAllowanceState;
+  }, [accountDefaultBankAllowanceState]);
+
+  React.useEffect(() => {
     let cancelled = false;
     void loadGuestDefaultBankTrialState().then((nextState) => {
       if (cancelled) return;
@@ -404,19 +417,49 @@ export function SamplerPadApp() {
     };
   }, []);
 
+  React.useEffect(() => {
+    const limit = defaultBankAllowanceLimit;
+    if (!effectiveAuthUser?.id || typeof limit !== 'number') {
+      accountDefaultBankAllowanceStateRef.current = null;
+      setAccountDefaultBankAllowanceState(null);
+      return;
+    }
+    const nextState = loadDefaultBankPlayAllowance(effectiveAuthUser.id, capabilities.effectiveTier, limit);
+    accountDefaultBankAllowanceStateRef.current = nextState;
+    setAccountDefaultBankAllowanceState(nextState);
+    persistDefaultBankPlayAllowance(nextState);
+  }, [capabilities.effectiveTier, defaultBankAllowanceLimit, effectiveAuthUser?.id]);
+
   const isGuestTrialEligibleDefaultBank = React.useCallback((bank: SamplerBank | null | undefined) => {
     if (effectiveAuthUser || !bank) return false;
     if (bank.isLocalDuplicate) return false;
     return bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(bank);
   }, [effectiveAuthUser]);
 
+  const isAccountAllowanceEligibleDefaultBank = React.useCallback((bank: SamplerBank | null | undefined) => {
+    if (!effectiveAuthUser || !bank) return false;
+    if (typeof defaultBankAllowanceLimit !== 'number') return false;
+    if (bank.isLocalDuplicate) return false;
+    return bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(bank);
+  }, [defaultBankAllowanceLimit, effectiveAuthUser]);
+
   const isDefaultBankPlaybackLocked = React.useCallback(
     (bank: SamplerBank | null | undefined) => {
-      if (effectiveAuthUser || !bank) return false;
+      if (!bank) return false;
+      if (isAccountAllowanceEligibleDefaultBank(bank)) {
+        return Boolean(accountDefaultBankAllowanceState?.exhausted);
+      }
+      if (effectiveAuthUser) return false;
       if (bank.isLocalDuplicate && isExplicitDefaultBankIdentity(bank)) return true;
       return isGuestTrialEligibleDefaultBank(bank) && guestDefaultBankTrialState.exhausted;
     },
-    [effectiveAuthUser, guestDefaultBankTrialState.exhausted, isGuestTrialEligibleDefaultBank]
+    [
+      accountDefaultBankAllowanceState?.exhausted,
+      effectiveAuthUser,
+      guestDefaultBankTrialState.exhausted,
+      isAccountAllowanceEligibleDefaultBank,
+      isGuestTrialEligibleDefaultBank,
+    ]
   );
 
   const buildPlaybackReadyPad = React.useCallback((pad: PadData): PadData => {
@@ -1858,14 +1901,34 @@ export function SamplerPadApp() {
   }, [armedLoadChannelId, settings.channelCount]);
 
   const requestDefaultBankLogin = React.useCallback((reason = 'Please sign in to play default bank pads.') => {
+    if (effectiveAuthUser) {
+      window.dispatchEvent(new Event('vdjv-open-about'));
+      window.dispatchEvent(new CustomEvent('vdjv-require-login', {
+        detail: { reason }
+      }));
+      return;
+    }
     window.dispatchEvent(new Event('vdjv-login-request'));
     window.dispatchEvent(new CustomEvent('vdjv-require-login', {
       detail: { reason }
     }));
-  }, []);
+  }, [effectiveAuthUser]);
 
   const handleConsumeGuestTrialPlayback = React.useCallback((pad: PadData, bankId: string, bankName: string) => {
     const bank = banksRef.current.find((entry) => entry.id === bankId);
+    if (isAccountAllowanceEligibleDefaultBank(bank) && typeof defaultBankAllowanceLimit === 'number') {
+      const current = accountDefaultBankAllowanceStateRef.current
+        || loadDefaultBankPlayAllowance(effectiveAuthUser!.id, capabilities.effectiveTier, defaultBankAllowanceLimit);
+      if (current.exhausted) {
+        requestDefaultBankLogin('Daily Default Bank free plays are finished. Upgrade to PRO or reconnect tomorrow.');
+        return false;
+      }
+      const nextState = consumeDefaultBankPlayAllowance(current, defaultBankAllowanceLimit);
+      accountDefaultBankAllowanceStateRef.current = nextState;
+      setAccountDefaultBankAllowanceState(nextState);
+      persistDefaultBankPlayAllowance(nextState);
+      return true;
+    }
     if (!isGuestTrialEligibleDefaultBank(bank)) return true;
 
     const current = guestDefaultBankTrialStateRef.current;
@@ -1879,10 +1942,30 @@ export function SamplerPadApp() {
     setGuestDefaultBankTrialState(nextState);
     void persistGuestDefaultBankTrialState(nextState);
     return true;
-  }, [isGuestTrialEligibleDefaultBank, requestDefaultBankLogin]);
+  }, [
+    capabilities.effectiveTier,
+    defaultBankAllowanceLimit,
+    effectiveAuthUser,
+    isAccountAllowanceEligibleDefaultBank,
+    isGuestTrialEligibleDefaultBank,
+    requestDefaultBankLogin,
+  ]);
 
   const handleConsumeGuestTrialPlaybackForBank = React.useCallback((bankId: string) => {
     const bank = banksRef.current.find((entry) => entry.id === bankId);
+    if (isAccountAllowanceEligibleDefaultBank(bank) && typeof defaultBankAllowanceLimit === 'number') {
+      const current = accountDefaultBankAllowanceStateRef.current
+        || loadDefaultBankPlayAllowance(effectiveAuthUser!.id, capabilities.effectiveTier, defaultBankAllowanceLimit);
+      if (current.exhausted) {
+        requestDefaultBankLogin('Daily Default Bank free plays are finished. Upgrade to PRO or reconnect tomorrow.');
+        return false;
+      }
+      const nextState = consumeDefaultBankPlayAllowance(current, defaultBankAllowanceLimit);
+      accountDefaultBankAllowanceStateRef.current = nextState;
+      setAccountDefaultBankAllowanceState(nextState);
+      persistDefaultBankPlayAllowance(nextState);
+      return true;
+    }
     if (!isGuestTrialEligibleDefaultBank(bank)) return true;
 
     const current = guestDefaultBankTrialStateRef.current;
@@ -1896,11 +1979,16 @@ export function SamplerPadApp() {
     setGuestDefaultBankTrialState(nextState);
     void persistGuestDefaultBankTrialState(nextState);
     return true;
-  }, [isGuestTrialEligibleDefaultBank, requestDefaultBankLogin]);
+  }, [
+    capabilities.effectiveTier,
+    defaultBankAllowanceLimit,
+    effectiveAuthUser,
+    isAccountAllowanceEligibleDefaultBank,
+    isGuestTrialEligibleDefaultBank,
+    requestDefaultBankLogin,
+  ]);
 
   const allowGuestDeckPlaybackStart = React.useCallback((channelId: number) => {
-    if (effectiveAuthUser) return true;
-
     const channelState = playbackManager
       .getChannelStates()
       .find((entry) => entry.channelId === channelId);
@@ -1912,17 +2000,24 @@ export function SamplerPadApp() {
     const sourceBank = banksRef.current.find((entry) => entry.id === sourceBankId);
     if (!sourceBank) return true;
 
+    if (effectiveAuthUser && !isAccountAllowanceEligibleDefaultBank(sourceBank)) return true;
+
     if (isDefaultBankPlaybackLocked(sourceBank)) {
-      requestDefaultBankLogin('Guest trial finished. Sign in to keep playing Default Bank.');
+      requestDefaultBankLogin(
+        effectiveAuthUser
+          ? 'Daily Default Bank free plays are finished. Upgrade to PRO or reconnect tomorrow.'
+          : 'Guest trial finished. Sign in to keep playing Default Bank.'
+      );
       return false;
     }
 
-    if (!isGuestTrialEligibleDefaultBank(sourceBank)) return true;
+    if (!isGuestTrialEligibleDefaultBank(sourceBank) && !isAccountAllowanceEligibleDefaultBank(sourceBank)) return true;
 
     return handleConsumeGuestTrialPlaybackForBank(sourceBank.id);
   }, [
     effectiveAuthUser,
     handleConsumeGuestTrialPlaybackForBank,
+    isAccountAllowanceEligibleDefaultBank,
     isDefaultBankPlaybackLocked,
     isGuestTrialEligibleDefaultBank,
     playbackManager,
@@ -2203,6 +2298,10 @@ export function SamplerPadApp() {
   }, []);
 
   const toggleSearchOverlay = React.useCallback(() => {
+    if (!capabilities.features.search) {
+      window.dispatchEvent(new Event('vdjv-open-about'));
+      return;
+    }
     setSearchOpen((prev) => {
       const next = !prev;
       if (!next) {
@@ -2211,7 +2310,7 @@ export function SamplerPadApp() {
       }
       return next;
     });
-  }, []);
+  }, [capabilities.features.search]);
 
   React.useEffect(() => {
     if (searchOpen) return;
@@ -3179,6 +3278,7 @@ export function SamplerPadApp() {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!settings.keyboardMappingEnabled) return;
+      if (!capabilities.features.inputMapping) return;
       if (event.defaultPrevented) return;
       if (isEditableTarget(event.target)) return;
 
@@ -3195,7 +3295,7 @@ export function SamplerPadApp() {
         .filter((key) => key !== 'masterVolumeCC' && key !== 'channelMappings' && key !== 'midiShift')
         .find((key) => settings.systemMappings[key as SystemAction]?.key === normalized) as ExtendedSystemAction | undefined;
 
-      if (systemAction) {
+      if (systemAction && capabilities.features.systemShortcuts) {
         event.preventDefault();
         switch (systemAction) {
           case 'stopAll':
@@ -3266,7 +3366,7 @@ export function SamplerPadApp() {
         }
       }
 
-      const channelMappings = settings.systemMappings.channelMappings || [];
+      const channelMappings = capabilities.features.channelShortcuts ? (settings.systemMappings.channelMappings || []) : [];
       const activeChannelLimit = Math.max(2, Math.min(8, settings.channelCount || 4));
       for (let i = 0; i < Math.min(channelMappings.length, activeChannelLimit); i += 1) {
         const mapping = channelMappings[i];
@@ -3310,7 +3410,9 @@ export function SamplerPadApp() {
           return;
         }
 
-        const hotcueKeys = [mapping.keyHotcue1, mapping.keyHotcue2, mapping.keyHotcue3, mapping.keyHotcue4];
+        const hotcueKeys = capabilities.features.mixerHotcue
+          ? [mapping.keyHotcue1, mapping.keyHotcue2, mapping.keyHotcue3, mapping.keyHotcue4]
+          : [];
         let handledHotcue = false;
         for (let hc = 0; hc < 4; hc++) {
           if (hotcueKeys[hc] && hotcueKeys[hc] === normalized) {
@@ -3322,7 +3424,9 @@ export function SamplerPadApp() {
         }
         if (handledHotcue) return;
 
-        const setHotcueKeys = [mapping.keySetHotcue1, mapping.keySetHotcue2, mapping.keySetHotcue3, mapping.keySetHotcue4];
+        const setHotcueKeys = capabilities.features.mixerHotcue
+          ? [mapping.keySetHotcue1, mapping.keySetHotcue2, mapping.keySetHotcue3, mapping.keySetHotcue4]
+          : [];
         for (let hc = 0; hc < 4; hc++) {
           if (setHotcueKeys[hc] && setHotcueKeys[hc] === normalized) {
             event.preventDefault();
@@ -3421,6 +3525,7 @@ export function SamplerPadApp() {
 
     const handleKeyUp = (event: KeyboardEvent) => {
       if (!settings.keyboardMappingEnabled) return;
+      if (!capabilities.features.inputMapping) return;
       if (event.defaultPrevented) return;
       if (isEditableTarget(event.target)) return;
 
@@ -3460,6 +3565,10 @@ export function SamplerPadApp() {
     };
   }, [
     handleMixerToggle,
+    capabilities.features.channelShortcuts,
+    capabilities.features.inputMapping,
+    capabilities.features.mixerHotcue,
+    capabilities.features.systemShortcuts,
     handleCancelChannelLoadFromHeader,
     handleSideMenuToggle,
     handleStopAll,
@@ -3515,12 +3624,14 @@ export function SamplerPadApp() {
   }, []);
 
   const handleMidiMessage = React.useCallback((message: MidiMessage) => {
+    if (!capabilities.features.inputMapping) return;
     const resolvePad = (mapped: { pad: PadData; bankId: string; bankName: string } | undefined) => {
       if (!mapped) return null;
       return mapped;
     };
 
     const handleSystemAction = (action: ExtendedSystemAction) => {
+      if (!capabilities.features.systemShortcuts) return false;
       switch (action) {
         case 'stopAll':
           handleStopAll();
@@ -3617,7 +3728,7 @@ export function SamplerPadApp() {
       }
 
       if (message.type === 'noteon') {
-        const channelMappings = settings.systemMappings.channelMappings || [];
+        const channelMappings = capabilities.features.channelShortcuts ? (settings.systemMappings.channelMappings || []) : [];
         const activeChannelLimit = Math.max(2, Math.min(8, settings.channelCount || 4));
         let handledChannelMidi = false;
 
@@ -3651,7 +3762,9 @@ export function SamplerPadApp() {
             break;
           }
 
-          const hcMidis = [mapping.midiHotcue1, mapping.midiHotcue2, mapping.midiHotcue3, mapping.midiHotcue4];
+          const hcMidis = capabilities.features.mixerHotcue
+            ? [mapping.midiHotcue1, mapping.midiHotcue2, mapping.midiHotcue3, mapping.midiHotcue4]
+            : [];
           for (let hc = 0; hc < 4; hc++) {
             if (hcMidis[hc] === message.note) {
               handleTriggerChannelHotcue(cId, hc);
@@ -3661,7 +3774,9 @@ export function SamplerPadApp() {
           }
           if (handledChannelMidi) break;
 
-          const hcSetMidis = [mapping.midiSetHotcue1, mapping.midiSetHotcue2, mapping.midiSetHotcue3, mapping.midiSetHotcue4];
+          const hcSetMidis = capabilities.features.mixerHotcue
+            ? [mapping.midiSetHotcue1, mapping.midiSetHotcue2, mapping.midiSetHotcue3, mapping.midiSetHotcue4]
+            : [];
           for (let hc = 0; hc < 4; hc++) {
             if (hcSetMidis[hc] === message.note) {
               const channelState = playbackManager.getChannelStates().find((c) => c.channelId === cId);
@@ -3767,7 +3882,7 @@ export function SamplerPadApp() {
           break;
       }
     } else if (message.type === 'cc') {
-      const channelMappings = settings.systemMappings.channelMappings || [];
+      const channelMappings = capabilities.features.channelShortcuts ? (settings.systemMappings.channelMappings || []) : [];
       const activeChannelLimit = Math.max(2, Math.min(8, settings.channelCount || 4));
       const channelIndex = channelMappings.findIndex((mapping, index) => index < activeChannelLimit && mapping?.midiCC === message.cc);
       if (channelIndex >= 0) {
@@ -3857,6 +3972,10 @@ export function SamplerPadApp() {
       }
     }
   }, [
+    capabilities.features.channelShortcuts,
+    capabilities.features.inputMapping,
+    capabilities.features.mixerHotcue,
+    capabilities.features.systemShortcuts,
     midiNoteByBank,
     midiCCByBank,
     midiBankNoteMap,
@@ -4207,7 +4326,8 @@ export function SamplerPadApp() {
     editMode: settings.editMode,
     theme,
     windowWidth,
-    graphicsTier: effectiveGraphicsTier
+    graphicsTier: effectiveGraphicsTier,
+    hotcueEnabled: capabilities.features.mixerHotcue
   };
 
   const headerControlsProps = {
@@ -4380,9 +4500,9 @@ export function SamplerPadApp() {
         onRequireLogin={requestDefaultBankLogin}
         onGuestTrialConsumePlayback={handleConsumeGuestTrialPlayback}
         guestTrialSummary={{
-          visible: !effectiveAuthUser,
-          remainingCount: guestDefaultBankTrialState.remainingCount,
-          exhausted: guestDefaultBankTrialState.exhausted,
+          visible: !effectiveAuthUser || Boolean(accountDefaultBankAllowanceState),
+          remainingCount: accountDefaultBankAllowanceState?.remainingCount ?? guestDefaultBankTrialState.remainingCount,
+          exhausted: accountDefaultBankAllowanceState?.exhausted ?? guestDefaultBankTrialState.exhausted,
         }}
         restoreBackupInputRef={restoreBackupInputRef}
         recoverBankInputRef={recoverBankInputRef}

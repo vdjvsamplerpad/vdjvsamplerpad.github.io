@@ -34,18 +34,26 @@ interface AdminAccessDialogModalsProps {
     open: boolean;
     user: AdminUser | null;
     displayName: string;
+    accountTier: 'free' | 'pro' | 'pro_max';
     ownedBankQuota: string;
     ownedBankPadCap: string;
     deviceTotalBankCap: string;
+    limitOverridesJson: string;
+    featureOverridesJson: string;
+    overrideNotes: string;
     saving: boolean;
     bankListsLoading: boolean;
     ownedBanks: AdminBank[];
     grantedBanks: AccessEntry[];
     onOpenChange: (open: boolean) => void;
     onDisplayNameChange: (value: string) => void;
+    onAccountTierChange: (value: 'free' | 'pro' | 'pro_max') => void;
     onOwnedBankQuotaChange: (value: string) => void;
     onOwnedBankPadCapChange: (value: string) => void;
     onDeviceTotalBankCapChange: (value: string) => void;
+    onLimitOverridesJsonChange: (value: string) => void;
+    onFeatureOverridesJsonChange: (value: string) => void;
+    onOverrideNotesChange: (value: string) => void;
     onSaveProfile: () => void;
     onOpenResetPassword: () => void;
     onOpenUnban: () => void;
@@ -191,6 +199,27 @@ export function AdminAccessDialogModals({
           </DialogHeader>
           <div className="space-y-2">
             <div><Label>Display Name</Label><Input value={details.displayName} onChange={(event) => details.onDisplayNameChange(event.target.value)} /></div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div>
+                <Label>Account Tier</Label>
+                <select
+                  value={details.accountTier}
+                  onChange={(event) => details.onAccountTierChange(event.target.value as 'free' | 'pro' | 'pro_max')}
+                  disabled={details.user?.role === 'admin'}
+                  className={`w-full rounded-md border px-3 py-2 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300 text-gray-900'}`}
+                >
+                  <option value="free">FREE</option>
+                  <option value="pro">PRO</option>
+                  <option value="pro_max">PRO MAX</option>
+                </select>
+              </div>
+              <div>
+                <Label>Tier Source</Label>
+                <div className={`rounded-md border px-3 py-2 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-300' : 'bg-gray-50 border-gray-200 text-gray-700'}`}>
+                  {details.user?.role === 'admin' ? 'admin always PRO MAX' : details.user?.tier_source || '-'}
+                </div>
+              </div>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
               <div>
                 <Label>Bank Quota</Label>
@@ -216,10 +245,48 @@ export function AdminAccessDialogModals({
                 <Label>Bank Cap</Label>
                 <Input
                   type="number"
-                  min={10}
+                  min={1}
                   max={1000}
                   value={details.deviceTotalBankCap}
                   onChange={(event) => details.onDeviceTotalBankCapChange(event.target.value)}
+                />
+              </div>
+            </div>
+            <div className={`rounded border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50/70'}`}>
+              <div>
+                <Label>User Capability Overrides</Label>
+                <p className="text-xs opacity-70">
+                  Optional JSON. Leave blank to keep existing overrides unchanged. Use empty objects to clear overrides.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs">Limit Overrides JSON</Label>
+                  <textarea
+                    value={details.limitOverridesJson}
+                    onChange={(event) => details.onLimitOverridesJsonChange(event.target.value)}
+                    className={`min-h-28 w-full rounded-md border px-3 py-2 font-mono text-[11px] ${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+                    placeholder='{"ownedBankQuota": 3}'
+                    spellCheck={false}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Feature Overrides JSON</Label>
+                  <textarea
+                    value={details.featureOverridesJson}
+                    onChange={(event) => details.onFeatureOverridesJsonChange(event.target.value)}
+                    className={`min-h-28 w-full rounded-md border px-3 py-2 font-mono text-[11px] ${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+                    placeholder='{"search": true}'
+                    spellCheck={false}
+                  />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs">Override Notes</Label>
+                <Input
+                  value={details.overrideNotes}
+                  onChange={(event) => details.onOverrideNotesChange(event.target.value)}
+                  placeholder="Optional admin note"
                 />
               </div>
             </div>

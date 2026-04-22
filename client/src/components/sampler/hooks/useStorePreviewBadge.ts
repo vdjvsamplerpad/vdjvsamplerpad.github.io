@@ -14,11 +14,12 @@ const buildStorePreviewSignature = (items: GuestStorePreviewBank[]): string => (
 export function useStorePreviewBadge(input: {
   effectiveUser: { id?: string | null } | null;
   profileId?: string | null;
+  showSignedInPreviewBanks?: boolean;
 }) {
-  const { effectiveUser, profileId } = input;
+  const { effectiveUser, profileId, showSignedInPreviewBanks = false } = input;
   const { previewBanks } = useGuestStorePreviewBanks(effectiveUser);
   const [signedInPreviewBanks, setSignedInPreviewBanks] = React.useState<GuestStorePreviewBank[]>([]);
-  const storePreviewItems = effectiveUser ? [] : previewBanks;
+  const storePreviewItems = effectiveUser ? (showSignedInPreviewBanks ? signedInPreviewBanks : []) : previewBanks;
   const badgePreviewItems = effectiveUser ? signedInPreviewBanks : previewBanks;
   const storePreviewSignature = React.useMemo(
     () => buildStorePreviewSignature(badgePreviewItems),
@@ -53,7 +54,7 @@ export function useStorePreviewBadge(input: {
   }, [storePreviewSeenKey]);
 
   React.useEffect(() => {
-    if (!effectiveUser) {
+    if (!effectiveUser || !showSignedInPreviewBanks) {
       setSignedInPreviewBanks([]);
       return;
     }
@@ -73,7 +74,7 @@ export function useStorePreviewBadge(input: {
     return () => {
       cancelled = true;
     };
-  }, [effectiveUser]);
+  }, [effectiveUser, showSignedInPreviewBanks]);
 
   const markStorePreviewSeen = React.useCallback(() => {
     if (!storePreviewSignature || typeof window === 'undefined') return;

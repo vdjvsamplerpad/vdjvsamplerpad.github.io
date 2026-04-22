@@ -109,7 +109,9 @@ export function BankEditDialog({
   type BankWithMidi = SamplerBank & { midiNote?: number; midiCC?: number };
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
   const canDeleteBank = bank.isLocalDuplicate || !isExplicitDefaultBankIdentity(bank);
-  const { profile } = useAuthState();
+  const { profile, capabilities } = useAuthState();
+  const canEditBankPosition = capabilities.features.bankEditPosition;
+  const canEditBankKeyboardMidi = capabilities.features.bankEditKeyboardMidi;
   const shouldShowPreparedPlaybackUi = profile?.role === 'admin';
   const [name, setName] = React.useState(bank.name);
   const [defaultColor, setDefaultColor] = React.useState(bank.defaultColor);
@@ -337,6 +339,10 @@ export function BankEditDialog({
 
   React.useEffect(() => {
     if (!midiLearnActive) return;
+    if (!canEditBankKeyboardMidi) {
+      setMidiLearnActive(false);
+      return;
+    }
 
     const handleMidiEvent = (event: Event) => {
       const detail = (event as CustomEvent<MidiMessage>).detail;
@@ -396,7 +402,7 @@ export function BankEditDialog({
 
     window.addEventListener('vdjv-midi', handleMidiEvent as EventListener);
     return () => window.removeEventListener('vdjv-midi', handleMidiEvent as EventListener);
-  }, [midiLearnActive, allBanks, allPads, bank, blockedMidiNotes, blockedMidiCCs]);
+  }, [midiLearnActive, canEditBankKeyboardMidi, allBanks, allPads, bank, blockedMidiNotes, blockedMidiCCs]);
 
   const handleSave = () => {
     if (shortcutError) {
@@ -422,16 +428,16 @@ export function BankEditDialog({
     }
 
     const targetPosition = Number(selectedBankPosition);
-    if (onMoveToPosition && Number.isFinite(targetPosition) && targetPosition !== currentBankPosition) {
+    if (canEditBankPosition && onMoveToPosition && Number.isFinite(targetPosition) && targetPosition !== currentBankPosition) {
       onMoveToPosition(bank.id, targetPosition);
     }
 
     onSave({
       name,
       defaultColor,
-      shortcutKey: shortcutKey || undefined,
-      midiNote,
-      midiCC,
+      shortcutKey: canEditBankKeyboardMidi ? (shortcutKey || undefined) : bank.shortcutKey,
+      midiNote: canEditBankKeyboardMidi ? midiNote : (bank as BankWithMidi).midiNote,
+      midiCC: canEditBankKeyboardMidi ? midiCC : (bank as BankWithMidi).midiCC,
       bankMetadata: nextBankMetadata,
     });
   };
@@ -474,11 +480,11 @@ export function BankEditDialog({
   }): Partial<SamplerBank> => ({
     name,
     defaultColor,
-    shortcutKey: shortcutKey || undefined,
-    midiNote,
-    midiCC,
+    shortcutKey: canEditBankKeyboardMidi ? (shortcutKey || undefined) : bank.shortcutKey,
+    midiNote: canEditBankKeyboardMidi ? midiNote : (bank as BankWithMidi).midiNote,
+    midiCC: canEditBankKeyboardMidi ? midiCC : (bank as BankWithMidi).midiCC,
     bankMetadata: buildPendingBankMetadata(input),
-  }), [buildPendingBankMetadata, defaultColor, midiCC, midiNote, name, shortcutKey]);
+  }), [bank, buildPendingBankMetadata, canEditBankKeyboardMidi, defaultColor, midiCC, midiNote, name, shortcutKey]);
 
   const buildPendingBankSnapshot = React.useCallback((input?: {
     includeStoreMetadata?: boolean;
@@ -870,6 +876,10 @@ export function BankEditDialog({
   }, [bank.bankMetadata?.thumbnailUrl]);
 
   const applyShortcutKey = (nextKey: string | null) => {
+    if (!canEditBankKeyboardMidi) {
+      setShortcutError('Bank keyboard and MIDI assignment requires PRO.');
+      return;
+    }
     if (!nextKey) {
       setShortcutKey('');
       setShortcutError(null);
@@ -916,6 +926,10 @@ export function BankEditDialog({
   const handleShortcutKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Tab') return;
     event.preventDefault();
+    if (!canEditBankKeyboardMidi) {
+      setShortcutError('Bank keyboard and MIDI assignment requires PRO.');
+      return;
+    }
 
     if (event.key === 'Backspace' || event.key === 'Delete' || event.key === 'Escape') {
       applyShortcutKey(null);
@@ -1021,6 +1035,7 @@ export function BankEditDialog({
               orderedBanks={orderedBanks}
               selectedBankPosition={selectedBankPosition}
               setSelectedBankPosition={setSelectedBankPosition}
+              canEditPosition={canEditBankPosition}
               isAdmin={isAdmin}
               activeAdminThumbnailUrl={activeAdminThumbnailUrl}
               adminThumbnailUploading={adminThumbnailUploading}
@@ -1033,6 +1048,7 @@ export function BankEditDialog({
               hideThumbnailPreview={hideThumbnailPreview}
               setHideThumbnailPreview={setHideThumbnailPreview}
               midiEnabled={midiEnabled}
+              canEditKeyboardMidi={canEditBankKeyboardMidi}
               shortcutKey={shortcutKey}
               handleShortcutKeyDown={handleShortcutKeyDown}
               shortcutError={shortcutError}

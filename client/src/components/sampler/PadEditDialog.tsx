@@ -14,6 +14,7 @@ import { WaveformTrim } from './WaveformTrim';
 import { isReservedShortcutCombo, normalizeShortcutKey, normalizeStoredShortcutKey, RESERVED_SHORTCUT_KEYS } from '@/lib/keyboard-shortcuts';
 import { MidiMessage } from '@/lib/midi';
 import { EXTRA_PAD_COLORS, PRIMARY_PAD_COLORS } from './padColorPalette';
+import { useAuthState } from '@/hooks/useAuth';
 
 interface PadEditDialogProps {
   pad: PadData;
@@ -179,6 +180,12 @@ export function PadEditDialog({
     () => typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent),
     []
   );
+  const { capabilities } = useAuthState();
+  const canEditPadGroup = capabilities.features.padEditGroup;
+  const canEditPadTempo = capabilities.features.padEditTempo;
+  const canEditPadKeyboardMidi = capabilities.features.padEditKeyboardMidi;
+  const canEditPadHotcue = capabilities.features.padEditHotcue;
+  const canEditPadFades = capabilities.features.padEditFades;
   const [name, setName] = React.useState(pad.name);
   const [artist, setArtist] = React.useState(pad.artist || '');
   const [color, setColor] = React.useState(pad.color);
@@ -420,6 +427,10 @@ export function PadEditDialog({
 
   React.useEffect(() => {
     if (!midiLearnActive) return;
+    if (!canEditPadKeyboardMidi) {
+      setMidiLearnActive(false);
+      return;
+    }
 
     const handleMidiEvent = (event: Event) => {
       const detail = (event as CustomEvent<MidiMessage>).detail;
@@ -478,7 +489,7 @@ export function PadEditDialog({
 
     window.addEventListener('vdjv-midi', handleMidiEvent as EventListener);
     return () => window.removeEventListener('vdjv-midi', handleMidiEvent as EventListener);
-  }, [midiLearnActive, blockedMidiNotes, blockedMidiCCs, allBanks, bankPads, pad.id]);
+  }, [midiLearnActive, canEditPadKeyboardMidi, blockedMidiNotes, blockedMidiCCs, allBanks, bankPads, pad.id]);
 
   // Image validation function
   const validateImage = (file: File): Promise<{ valid: boolean; error?: string }> => {
@@ -582,6 +593,10 @@ export function PadEditDialog({
   };
 
   const applyShortcutKey = (nextKey: string | null) => {
+    if (!canEditPadKeyboardMidi) {
+      setShortcutError('Keyboard and MIDI pad assignment requires PRO.');
+      return;
+    }
     if (!nextKey) {
       setShortcutKey('');
       setShortcutError(null);
@@ -627,6 +642,10 @@ export function PadEditDialog({
   const handleShortcutKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Tab') return;
     event.preventDefault();
+    if (!canEditPadKeyboardMidi) {
+      setShortcutError('Keyboard and MIDI pad assignment requires PRO.');
+      return;
+    }
 
     if (event.key === 'Backspace' || event.key === 'Delete' || event.key === 'Escape') {
       applyShortcutKey(null);
@@ -677,24 +696,24 @@ export function PadEditDialog({
         color,
         triggerMode,
         playbackMode,
-        padGroup: normalizedPadGroup,
-        padGroupUniversal: normalizedPadGroup ? padGroupUniversal : false,
+        padGroup: canEditPadGroup ? normalizedPadGroup : pad.padGroup,
+        padGroupUniversal: canEditPadGroup ? (normalizedPadGroup ? padGroupUniversal : false) : pad.padGroupUniversal,
         volume: volume[0] / 100,
         gainDb: gainDb[0],
         gain: gainDbToLinear(gainDb[0]),
-        fadeInMs: fadeInMs[0],
-        fadeOutMs: fadeOutMs[0],
+        fadeInMs: canEditPadFades ? fadeInMs[0] : pad.fadeInMs,
+        fadeOutMs: canEditPadFades ? fadeOutMs[0] : pad.fadeOutMs,
         startTimeMs: startTimeMs[0],
         endTimeMs: endTimeMs[0],
         pitch: pitch[0],
-        tempoPercent: isIOS ? 0 : tempoPercent[0],
-        keyLock: isIOS ? false : keyLock,
+        tempoPercent: canEditPadTempo ? (isIOS ? 0 : tempoPercent[0]) : pad.tempoPercent,
+        keyLock: canEditPadTempo ? (isIOS ? false : keyLock) : pad.keyLock,
         imageUrl,
         imageData,
-        shortcutKey: shortcutKey || undefined,
-        midiNote,
-        midiCC,
-        savedHotcuesMs: savedHotcues,
+        shortcutKey: canEditPadKeyboardMidi ? (shortcutKey || undefined) : pad.shortcutKey,
+        midiNote: canEditPadKeyboardMidi ? midiNote : pad.midiNote,
+        midiCC: canEditPadKeyboardMidi ? midiCC : pad.midiCC,
+        savedHotcuesMs: canEditPadHotcue ? savedHotcues : pad.savedHotcuesMs,
         ignoreChannel: pad.ignoreChannel
       };
 
@@ -717,23 +736,23 @@ export function PadEditDialog({
         color,
         triggerMode,
         playbackMode,
-        padGroup: normalizedPadGroup,
-        padGroupUniversal: normalizedPadGroup ? padGroupUniversal : false,
+        padGroup: canEditPadGroup ? normalizedPadGroup : (pad.padGroup ?? null),
+        padGroupUniversal: canEditPadGroup ? (normalizedPadGroup ? padGroupUniversal : false) : Boolean(pad.padGroupUniversal),
         volume: volume[0] / 100,
         gainDb: gainDb[0],
         startTimeMs: startTimeMs[0],
         endTimeMs: endTimeMs[0],
-        fadeInMs: fadeInMs[0],
-        fadeOutMs: fadeOutMs[0],
+        fadeInMs: canEditPadFades ? fadeInMs[0] : (pad.fadeInMs || 0),
+        fadeOutMs: canEditPadFades ? fadeOutMs[0] : (pad.fadeOutMs || 0),
         pitch: pitch[0],
-        tempoPercent: isIOS ? 0 : tempoPercent[0],
-        keyLock: isIOS ? false : keyLock,
+        tempoPercent: canEditPadTempo ? (isIOS ? 0 : tempoPercent[0]) : (pad.tempoPercent || 0),
+        keyLock: canEditPadTempo ? (isIOS ? false : keyLock) : Boolean(pad.keyLock),
         imageUrl,
         imageData,
-        shortcutKey: shortcutKey || '',
-        midiNote: midiNote ?? null,
-        midiCC: midiCC ?? null,
-        savedHotcuesMs: savedHotcues
+        shortcutKey: canEditPadKeyboardMidi ? (shortcutKey || '') : (pad.shortcutKey || ''),
+        midiNote: canEditPadKeyboardMidi ? (midiNote ?? null) : (pad.midiNote ?? null),
+        midiCC: canEditPadKeyboardMidi ? (midiCC ?? null) : (pad.midiCC ?? null),
+        savedHotcuesMs: canEditPadHotcue ? savedHotcues : (pad.savedHotcuesMs ?? [null, null, null, null])
       });
       return true;
     } catch (error) {
@@ -1114,61 +1133,67 @@ export function PadEditDialog({
               </div>
             </div>
 
-            <div className={`grid gap-3 ${midiEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
-                  <Label htmlFor="shortcutKey">Keyboard Shortcut</Label>
-                  <HelpTooltip content={`Press a single key or supported modifier combo. Reserved keys stay blocked: ${reservedKeysText}.`} label="Keyboard shortcut help" />
-                </div>
-                <Input
-                  id="shortcutKey"
-                  value={shortcutKey}
-                  onKeyDown={handleShortcutKeyDown}
-                  placeholder="Press a key"
-                  readOnly
-                />
-                {shortcutError && (
-                  <p className="text-xs text-red-500">{shortcutError}</p>
-                )}
-              </div>
-
-              {midiEnabled && (
+            {canEditPadKeyboardMidi ? (
+              <div className={`grid gap-3 ${midiEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
                 <div className="space-y-2">
                   <div className="flex items-center gap-1.5">
-                    <Label>MIDI Assignment</Label>
-                    <HelpTooltip content="Use Learn MIDI to capture the next incoming Note or CC message for this pad." label="MIDI assignment help" />
+                    <Label htmlFor="shortcutKey">Keyboard Shortcut</Label>
+                    <HelpTooltip content={`Press a single key or supported modifier combo. Reserved keys stay blocked: ${reservedKeysText}.`} label="Keyboard shortcut help" />
                   </div>
-                  <div className="text-xs text-gray-500">
-                    Note: {midiNote ?? '-'} | CC: {midiCC ?? '-'}
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setMidiLearnActive(true)}
-                      className="flex-1"
-                    >
-                      {midiLearnActive ? 'Listening...' : 'Learn MIDI'}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setMidiNote(undefined);
-                        setMidiCC(undefined);
-                        setMidiLearnActive(false);
-                        setMidiError(null);
-                      }}
-                    >
-                      Clear
-                    </Button>
-                  </div>
-                  {midiError && <p className="text-xs text-red-500">{midiError}</p>}
+                  <Input
+                    id="shortcutKey"
+                    value={shortcutKey}
+                    onKeyDown={handleShortcutKeyDown}
+                    placeholder="Press a key"
+                    readOnly
+                  />
+                  {shortcutError && (
+                    <p className="text-xs text-red-500">{shortcutError}</p>
+                  )}
                 </div>
-              )}
-            </div>
+
+                {midiEnabled && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5">
+                      <Label>MIDI Assignment</Label>
+                      <HelpTooltip content="Use Learn MIDI to capture the next incoming Note or CC message for this pad." label="MIDI assignment help" />
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Note: {midiNote ?? '-'} | CC: {midiCC ?? '-'}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setMidiLearnActive(true)}
+                        className="flex-1"
+                      >
+                        {midiLearnActive ? 'Listening...' : 'Learn MIDI'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setMidiNote(undefined);
+                          setMidiCC(undefined);
+                          setMidiLearnActive(false);
+                          setMidiError(null);
+                        }}
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                    {midiError && <p className="text-xs text-red-500">{midiError}</p>}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-200">
+                Keyboard and MIDI pad assignment are locked on this account tier.
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
@@ -1207,43 +1232,45 @@ export function PadEditDialog({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 items-end">
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
-                  <Label htmlFor="padGroup">Pad Group</Label>
-                  <HelpTooltip content="Pads with the same group number become mutually exclusive. Starting one stops the other pad in that same group first." label="Pad group help" />
-                </div>
-                <Input
-                  id="padGroup"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={padGroupInput}
-                  onChange={(event) => {
-                    const digitsOnly = event.target.value.replace(/[^0-9]/g, '').slice(0, 4);
-                    setPadGroupInput(digitsOnly);
-                    if (!digitsOnly) {
-                      setPadGroupUniversal(false);
-                    }
-                  }}
-                  placeholder="Optional group number"
-                />
-              </div>
-
-              <div className="space-y-2 min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <Label htmlFor={`pad-group-universal-${pad.id}`}>Universal</Label>
-                  <HelpTooltip content="When enabled, the group rule applies across all banks that share the same group number instead of only the current bank." label="Universal group help" />
-                </div>
-                <div className="flex items-center justify-end rounded-lg border px-3 py-2 min-h-10">
-                  <Switch
-                    id={`pad-group-universal-${pad.id}`}
-                    checked={padGroupUniversal && padGroupInput.trim().length > 0}
-                    onCheckedChange={setPadGroupUniversal}
-                    disabled={padGroupInput.trim().length === 0}
+            {canEditPadGroup ? (
+              <div className="grid grid-cols-2 gap-3 items-end">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="padGroup">Pad Group</Label>
+                    <HelpTooltip content="Pads with the same group number become mutually exclusive. Starting one stops the other pad in that same group first." label="Pad group help" />
+                  </div>
+                  <Input
+                    id="padGroup"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={padGroupInput}
+                    onChange={(event) => {
+                      const digitsOnly = event.target.value.replace(/[^0-9]/g, '').slice(0, 4);
+                      setPadGroupInput(digitsOnly);
+                      if (!digitsOnly) {
+                        setPadGroupUniversal(false);
+                      }
+                    }}
+                    placeholder="Optional group number"
                   />
                 </div>
+
+                <div className="space-y-2 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor={`pad-group-universal-${pad.id}`}>Universal</Label>
+                    <HelpTooltip content="When enabled, the group rule applies across all banks that share the same group number instead of only the current bank." label="Universal group help" />
+                  </div>
+                  <div className="flex items-center justify-end rounded-lg border px-3 py-2 min-h-10">
+                    <Switch
+                      id={`pad-group-universal-${pad.id}`}
+                      checked={padGroupUniversal && padGroupInput.trim().length > 0}
+                      onCheckedChange={setPadGroupUniversal}
+                      disabled={padGroupInput.trim().length === 0}
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : null}
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
@@ -1303,16 +1330,16 @@ export function PadEditDialog({
                     graphicsTier={graphicsTier}
                     onStartTimeChange={(ms) => setStartTimeMs([ms])}
                     onEndTimeChange={(ms) => setEndTimeMs([ms])}
-                    hotcues={savedHotcues}
-                    hotcueMarkerMs={hotcueMarkerMs}
-                    onHotcueMarkerChange={handleHotcueMarkerChange}
+                    hotcues={canEditPadHotcue ? savedHotcues : undefined}
+                    hotcueMarkerMs={canEditPadHotcue ? hotcueMarkerMs : null}
+                    onHotcueMarkerChange={canEditPadHotcue ? handleHotcueMarkerChange : undefined}
                     onDurationMeasured={handleTrimDurationMeasured}
                     canResetTrim={hasTrimApplied}
                     onResetTrim={handleTrimReset}
                   />
                 </div>
 
-                {/* Hotcue Controls */}
+                {canEditPadHotcue && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label>Hotcues</Label>
@@ -1359,10 +1386,10 @@ export function PadEditDialog({
                     })}
                   </div>
                 </div>
+                )}
 
-                {/* Fade Controls */}
+                {canEditPadFades && (
                 <div className="grid grid-cols-2 gap-3">
-                  {/* Fade In Control */}
                   <div className="space-y-2">
                     <Label
                       className="cursor-pointer"
@@ -1387,7 +1414,6 @@ export function PadEditDialog({
                     />
                   </div>
 
-                  {/* Fade Out Control */}
                   <div className="space-y-2">
                     <Label
                       className="cursor-pointer"
@@ -1412,10 +1438,11 @@ export function PadEditDialog({
                     />
                   </div>
                 </div>
+                )}
               </>
             )}
 
-            {!isIOS && (
+            {!isIOS && canEditPadTempo && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5">

@@ -16,6 +16,12 @@ import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_sha
 import { asNumber, asString, asUuid } from "../_shared/validate.ts";
 import { consumeRateLimit } from "../_shared/rate-limit.ts";
 import { sendDiscordAdminActionEvent } from "../_shared/discord.ts";
+import {
+  type StoredAccountTier,
+  buildAccountCapabilitySnapshot,
+  loadAccountCapabilitySnapshot,
+  normalizeTierPrice,
+} from "../_shared/account-capabilities.ts";
 
 type SortDirection = "asc" | "desc";
 type ActivityEventType = "auth.login" | "auth.signup" | "auth.signout" | "bank.export" | "bank.import";
@@ -124,6 +130,7 @@ const R2_DIRECT_UPLOAD_SESSION_TTL_SECONDS = Math.max(
   60,
   Math.min(3600, readPositiveInt(Deno.env.get("R2_DIRECT_UPLOAD_SESSION_TTL_SECONDS"), 900)),
 );
+const textEncoder = new TextEncoder();
 
 const resolveSupabaseUrl = (): string =>
   Deno.env.get("APP_SUPABASE_URL") || Deno.env.get("SUPABASE_URL") || "";
@@ -314,6 +321,60 @@ const parseUuidList = (value: unknown): string[] => {
   return Array.from(unique);
 };
 
+const normalizeUpgradeTier = (value: unknown): StoredAccountTier | null => {
+  const normalized = asString(value, 32);
+  if (normalized === "pro" || normalized === "pro_max") return normalized;
+  return null;
+};
+
+const normalizeProfileTier = (value: unknown): StoredAccountTier | null => {
+  const normalized = asString(value, 32);
+  if (normalized === "free" || normalized === "pro" || normalized === "pro_max") return normalized;
+  return null;
+};
+
+const randomVoucherCode = (): string => {
+  const bytes = new Uint8Array(18);
+  crypto.getRandomValues(bytes);
+  const text = Array.from(bytes).map((byte) => byte.toString(36).padStart(2, "0")).join("").toUpperCase();
+  return `VDJV-${text.slice(0, 6)}-${text.slice(6, 12)}-${text.slice(12, 18)}`;
+};
+
+const sha256Hex = async (value: string): Promise<string> => {
+  const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(value.trim().toUpperCase()));
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+};
+
+const applyAccountTierToUser = async (
+  admin: ReturnType<typeof createServiceClient>,
+  userId: string,
+  tier: StoredAccountTier,
+  source: "admin" | "upgrade_request" | "voucher" | "system",
+) => {
+  const { data: tierConfig, error: tierConfigError } = await admin
+    .from("account_tier_configs")
+    .select("tier,limits,features,is_active")
+    .eq("tier", tier)
+    .maybeSingle();
+  if (tierConfigError) throw new Error(tierConfigError.message);
+  const tierDefaults = buildAccountCapabilitySnapshot({ id: userId, role: "user", account_tier: tier }, tierConfig, null);
+  const { error: tierError } = await admin
+    .from("profiles")
+    .update({
+      account_tier: tier,
+      tier_source: source,
+      tier_updated_at: new Date().toISOString(),
+      owned_bank_quota: tierDefaults.limits.ownedBankQuota,
+      owned_bank_pad_cap: tierDefaults.limits.ownedBankPadCap,
+      device_total_bank_cap: tierDefaults.limits.deviceTotalBankCap,
+    })
+    .eq("id", userId);
+  if (tierError) throw new Error(tierError.message);
+
+  const snapshot = await loadAccountCapabilitySnapshot(admin, userId);
+  return snapshot;
+};
+
 const toUtcDateKey = (value: Date): string => {
   const year = value.getUTCFullYear();
   const month = String(value.getUTCMonth() + 1).padStart(2, "0");
@@ -335,6 +396,13 @@ const asFiniteNumber = (value: unknown): number => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return parsed;
+};
+
+const parseIsoDateTime = (value: unknown): string | null => {
+  const text = asString(value, 80);
+  if (!text) return null;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 };
 
 const parseDateOnlyParam = (value: string | null): Date | null => {
@@ -637,7 +705,7 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
   const { data: profileRows, error: profileError } = userIds.length
     ? await admin
       .from("profiles")
-      .select("id, role, display_name, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap")
+      .select("id, role, display_name, account_tier, tier_source, tier_updated_at, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap")
       .in("id", userIds)
     : { data: [], error: null };
   if (profileError) return fail(500, profileError.message);
@@ -649,6 +717,7 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
     const metadataDisplayName = asString(user?.user_metadata?.display_name, 120);
     const displayName = profileDisplayName || metadataDisplayName || user.email?.split("@")[0] || "User";
     const role = profile?.role === "admin" ? "admin" : "user";
+    const accountTier = role === "admin" ? "pro_max" : (normalizeProfileTier(profile?.account_tier) || "free");
     const bannedUntil = (user as any).banned_until || null;
     const isBanned = Boolean(bannedUntil && new Date(bannedUntil).getTime() > Date.now());
 
@@ -656,6 +725,10 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
       id: user.id,
       email: user.email || null,
       role,
+      account_tier: accountTier,
+      effective_account_tier: role === "admin" ? "pro_max" : accountTier,
+      tier_source: asString(profile?.tier_source, 40) || null,
+      tier_updated_at: parseIsoDateTime(profile?.tier_updated_at),
       display_name: displayName,
       owned_bank_quota: Number.isFinite(Number(profile?.owned_bank_quota)) ? Number(profile?.owned_bank_quota) : quotaDefaults.ownedBankQuota,
       owned_bank_pad_cap: Number.isFinite(Number(profile?.owned_bank_pad_cap)) ? Number(profile?.owned_bank_pad_cap) : quotaDefaults.ownedBankPadCap,
@@ -843,9 +916,6 @@ const createUser = async (body: any, admin: ReturnType<typeof createServiceClien
   if (!password || password.length < 6) return badRequest("Password must be at least 6 characters");
 
   const displayName = displayNameInput || email.split("@")[0] || "User";
-  const samplerConfigResult = await getNormalizedSamplerAppConfig(admin);
-  if (samplerConfigResult.error) return fail(500, samplerConfigResult.error.message);
-  const quotaDefaults = samplerConfigResult.config.quotaDefaults;
   const { data: created, error: createErr } = await admin.auth.admin.createUser({
     email,
     password,
@@ -863,11 +933,15 @@ const createUser = async (body: any, admin: ReturnType<typeof createServiceClien
       id: userId,
       display_name: displayName,
       role: "user",
-      owned_bank_quota: quotaDefaults.ownedBankQuota,
-      owned_bank_pad_cap: quotaDefaults.ownedBankPadCap,
-      device_total_bank_cap: quotaDefaults.deviceTotalBankCap,
+      account_tier: "free",
+      tier_source: "admin",
+      tier_updated_at: new Date().toISOString(),
+      owned_bank_quota: 2,
+      owned_bank_pad_cap: 25,
+      device_total_bank_cap: 4,
     }, { onConflict: "id" });
   if (profileErr) return fail(500, `User created, profile setup failed: ${profileErr.message}`);
+  const capabilities = await applyAccountTierToUser(admin, userId, "free", "admin");
 
   return ok(
     {
@@ -876,29 +950,39 @@ const createUser = async (body: any, admin: ReturnType<typeof createServiceClien
         email: created.user.email,
         display_name: displayName,
         role: "user",
-        owned_bank_quota: quotaDefaults.ownedBankQuota,
-        owned_bank_pad_cap: quotaDefaults.ownedBankPadCap,
-        device_total_bank_cap: quotaDefaults.deviceTotalBankCap,
+        account_tier: "free",
+        effective_account_tier: "free",
+        tier_source: "admin",
+        tier_updated_at: capabilities.refreshedAt,
+        owned_bank_quota: capabilities.limits.ownedBankQuota,
+        owned_bank_pad_cap: capabilities.limits.ownedBankPadCap,
+        device_total_bank_cap: capabilities.limits.deviceTotalBankCap,
       },
     },
     201,
   );
 };
 
-const updateUserProfile = async (userId: string, body: any, admin: ReturnType<typeof createServiceClient>) => {
+const updateUserProfile = async (
+  userId: string,
+  body: any,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
   const displayName = asString(body?.displayName, 120);
   if (!displayName) return badRequest("displayName is required");
   const ownedBankQuota = Math.floor(Number(body?.ownedBankQuota));
   const ownedBankPadCap = Math.floor(Number(body?.ownedBankPadCap));
   const deviceTotalBankCap = Math.floor(Number(body?.deviceTotalBankCap));
+  const requestedTier = normalizeProfileTier(body?.accountTier ?? body?.account_tier);
   if (!Number.isFinite(ownedBankQuota) || ownedBankQuota < 1 || ownedBankQuota > 500) {
     return badRequest("ownedBankQuota must be between 1 and 500");
   }
   if (!Number.isFinite(ownedBankPadCap) || ownedBankPadCap < 1 || ownedBankPadCap > 256) {
     return badRequest("ownedBankPadCap must be between 1 and 256");
   }
-  if (!Number.isFinite(deviceTotalBankCap) || deviceTotalBankCap < 10 || deviceTotalBankCap > 1000) {
-    return badRequest("deviceTotalBankCap must be between 10 and 1000");
+  if (!Number.isFinite(deviceTotalBankCap) || deviceTotalBankCap < 1 || deviceTotalBankCap > 1000) {
+    return badRequest("deviceTotalBankCap must be between 1 and 1000");
   }
 
   const { data: existingUser, error: existingUserError } = await admin.auth.admin.getUserById(userId);
@@ -917,20 +1001,26 @@ const updateUserProfile = async (userId: string, body: any, admin: ReturnType<ty
 
   const { data: profileRow, error: profileSelectError } = await admin
     .from("profiles")
-    .select("id, role")
+    .select("id, role, account_tier, tier_source")
     .eq("id", userId)
     .maybeSingle();
   if (profileSelectError) return fail(500, profileSelectError.message);
 
+  const currentRole = profileRow?.role === "admin" ? "admin" : "user";
+  const accountTier = currentRole === "admin" ? "pro_max" : (requestedTier || normalizeProfileTier(profileRow?.account_tier) || "free");
   if (profileRow?.id) {
+    const profileUpdates: Record<string, unknown> = {
+      display_name: displayName,
+      account_tier: accountTier,
+      tier_source: requestedTier ? "admin" : (asString(profileRow?.tier_source, 40) || "admin"),
+      owned_bank_quota: ownedBankQuota,
+      owned_bank_pad_cap: ownedBankPadCap,
+      device_total_bank_cap: deviceTotalBankCap,
+    };
+    if (requestedTier) profileUpdates.tier_updated_at = new Date().toISOString();
     const { error: profileUpdateError } = await admin
       .from("profiles")
-      .update({
-        display_name: displayName,
-        owned_bank_quota: ownedBankQuota,
-        owned_bank_pad_cap: ownedBankPadCap,
-        device_total_bank_cap: deviceTotalBankCap,
-      })
+      .update(profileUpdates)
       .eq("id", userId);
     if (profileUpdateError) return fail(500, profileUpdateError.message);
   } else {
@@ -941,6 +1031,9 @@ const updateUserProfile = async (userId: string, body: any, admin: ReturnType<ty
           id: userId,
           role: "user",
           display_name: displayName,
+          account_tier: accountTier,
+          tier_source: "admin",
+          tier_updated_at: new Date().toISOString(),
           owned_bank_quota: ownedBankQuota,
           owned_bank_pad_cap: ownedBankPadCap,
           device_total_bank_cap: deviceTotalBankCap,
@@ -950,15 +1043,37 @@ const updateUserProfile = async (userId: string, body: any, admin: ReturnType<ty
     if (profileUpsertError) return fail(500, profileUpsertError.message);
   }
 
+  const hasLimitOverrides = body?.limitOverrides && typeof body.limitOverrides === "object" && !Array.isArray(body.limitOverrides);
+  const hasFeatureOverrides = body?.featureOverrides && typeof body.featureOverrides === "object" && !Array.isArray(body.featureOverrides);
+  if (hasLimitOverrides || hasFeatureOverrides) {
+    const { error: overrideError } = await admin
+      .from("profile_feature_overrides")
+      .upsert({
+        user_id: userId,
+        limits: hasLimitOverrides ? body.limitOverrides : {},
+        features: hasFeatureOverrides ? body.featureOverrides : {},
+        notes: asString(body?.overrideNotes, 1000),
+        updated_by: adminUserId,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "user_id" });
+    if (overrideError) return fail(500, overrideError.message);
+  }
+
+  const capabilities = await loadAccountCapabilitySnapshot(admin, userId);
+
   return ok({
     user: {
       id: userId,
       email: existingUser.user.email || null,
       display_name: displayName,
+      role: currentRole,
+      account_tier: accountTier,
+      effective_account_tier: currentRole === "admin" ? "pro_max" : accountTier,
       owned_bank_quota: ownedBankQuota,
       owned_bank_pad_cap: ownedBankPadCap,
       device_total_bank_cap: deviceTotalBankCap,
     },
+    capabilities,
   });
 };
 
@@ -3365,6 +3480,196 @@ const handlePurchaseAction = async (requestId: string, action: string, admin: Re
   return badRequest("Invalid action");
 };
 
+const listAccountTierConfigs = async (admin: ReturnType<typeof createServiceClient>) => {
+  const { data, error } = await admin
+    .from("account_tier_configs")
+    .select("*")
+    .order("tier", { ascending: true });
+  if (error) return fail(500, error.message);
+  return ok({ tiers: data || [] });
+};
+
+const saveAccountTierConfig = async (body: any, admin: ReturnType<typeof createServiceClient>, adminUserId: string) => {
+  const tier = normalizeProfileTier(body?.tier);
+  if (!tier) return badRequest("tier is required");
+  const displayName = asString(body?.displayName ?? body?.display_name, 80) || tier.toUpperCase();
+  const description = asString(body?.description, 500);
+  const pricePhp = normalizeTierPrice(body?.pricePhp ?? body?.price_php);
+  const limits = body?.limits && typeof body.limits === "object" && !Array.isArray(body.limits) ? body.limits : {};
+  const features = body?.features && typeof body.features === "object" && !Array.isArray(body.features) ? body.features : {};
+  const { data, error } = await admin
+    .from("account_tier_configs")
+    .upsert({
+      tier,
+      display_name: displayName,
+      description,
+      price_php: pricePhp,
+      limits,
+      features,
+      is_active: body?.isActive ?? body?.is_active ?? true,
+      updated_by: adminUserId,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "tier" })
+    .select("*")
+    .single();
+  if (error || !data) return fail(500, error?.message || "Tier config could not be saved");
+  return ok({ tier: data });
+};
+
+const listAccountUpgradeRequests = async (req: Request, admin: ReturnType<typeof createServiceClient>) => {
+  const url = new URL(req.url);
+  const status = asString(url.searchParams.get("status"), 40) || "pending";
+  const page = Math.max(1, Number(url.searchParams.get("page") || 1));
+  const perPage = Math.max(1, Math.min(200, Number(url.searchParams.get("perPage") || 50)));
+  const q = asString(url.searchParams.get("q"), 160)?.toLowerCase() || "";
+  let query: any = admin
+    .from("account_upgrade_requests")
+    .select("*", { count: "exact" })
+    .order("created_at", { ascending: false });
+  if (status !== "all") query = query.eq("status", status);
+  if (q) query = query.or(`email.ilike.%${q}%,display_name.ilike.%${q}%,receipt_reference.ilike.%${q}%`);
+  const { data, error, count } = await query.range((page - 1) * perPage, (page * perPage) - 1);
+  if (error) return fail(500, error.message);
+  return ok({
+    requests: data || [],
+    total: Number(count || 0),
+    page,
+    perPage,
+    totalPages: Math.max(1, Math.ceil(Number(count || 0) / perPage)),
+  });
+};
+
+const accountUpgradeRequestAction = async (
+  requestId: string,
+  body: any,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const action = asString(body?.action, 40) || "";
+  const rejectionMessage = asString(body?.rejectionMessage ?? body?.rejection_message, 1000);
+  const { data: requestRow, error: requestError } = await admin
+    .from("account_upgrade_requests")
+    .select("*")
+    .eq("id", requestId)
+    .maybeSingle();
+  if (requestError || !requestRow) return fail(404, requestError?.message || "Upgrade request not found");
+  if ((requestRow as any).status !== "pending") return badRequest("Request is already processed");
+
+  const nowIso = new Date().toISOString();
+  if (action === "reject") {
+    const { error } = await admin
+      .from("account_upgrade_requests")
+      .update({
+        status: "rejected",
+        rejection_message: rejectionMessage,
+        reviewed_by: adminUserId,
+        reviewed_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq("id", requestId);
+    if (error) return fail(500, error.message);
+    return ok({ requestId, status: "rejected" });
+  }
+
+  if (action === "approve") {
+    const userId = asUuid((requestRow as any).user_id);
+    const targetTier = normalizeUpgradeTier((requestRow as any).target_tier);
+    if (!userId || !targetTier) return fail(409, "REQUEST_MISSING_USER_OR_TIER");
+    const capabilities = await applyAccountTierToUser(admin, userId, targetTier, "upgrade_request");
+    const { error } = await admin
+      .from("account_upgrade_requests")
+      .update({
+        status: "approved",
+        reviewed_by: adminUserId,
+        reviewed_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq("id", requestId);
+    if (error) return fail(500, error.message);
+    await swallowDiscordError(() =>
+      sendDiscordAdminActionEvent({
+        severity: "info",
+        title: "Account Upgrade Approved",
+        description: `Admin approved ${targetTier.toUpperCase()} access.`,
+        actorUserId: adminUserId,
+        targetUserId: userId,
+        requestId,
+        extraFields: [
+          { name: "Target Tier", value: targetTier.toUpperCase(), inline: true },
+          { name: "Quote", value: `PHP ${normalizeTierPrice((requestRow as any).quote_price_php_snapshot).toFixed(2)}`, inline: true },
+        ],
+      })
+    );
+    return ok({ requestId, status: "approved", capabilities });
+  }
+
+  return badRequest("Invalid action");
+};
+
+const listVoucherCampaigns = async (admin: ReturnType<typeof createServiceClient>) => {
+  const { data, error } = await admin
+    .from("account_voucher_campaigns")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) return fail(500, error.message);
+  return ok({ campaigns: data || [] });
+};
+
+const createVoucherCampaign = async (body: any, admin: ReturnType<typeof createServiceClient>, adminUserId: string) => {
+  const name = asString(body?.name, 160);
+  const targetTier = normalizeUpgradeTier(body?.targetTier ?? body?.target_tier);
+  if (!name) return badRequest("name is required");
+  if (!targetTier) return badRequest("targetTier must be pro or pro_max");
+  const maxCodes = Math.max(1, Math.min(10000, Math.floor(Number(body?.maxCodes ?? body?.max_codes ?? 1))));
+  const expiresAtRaw = asString(body?.expiresAt ?? body?.expires_at, 80);
+  const expiresAt = expiresAtRaw ? parseIsoDateTime(expiresAtRaw) : null;
+  const { data, error } = await admin
+    .from("account_voucher_campaigns")
+    .insert({
+      name,
+      target_tier: targetTier,
+      max_codes: maxCodes,
+      expires_at: expiresAt,
+      target_email: asString(body?.targetEmail ?? body?.target_email, 320)?.toLowerCase() || null,
+      target_user_id: asUuid(body?.targetUserId ?? body?.target_user_id),
+      notes: asString(body?.notes, 1000),
+      created_by: adminUserId,
+    })
+    .select("*")
+    .single();
+  if (error || !data) return fail(500, error?.message || "Voucher campaign could not be created");
+  return ok({ campaign: data }, 201);
+};
+
+const copyNextVoucher = async (
+  campaignId: string,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = randomVoucherCode();
+    const { data: voucher, error } = await admin.rpc("copy_next_account_voucher_code", {
+      p_campaign_id: campaignId,
+      p_code_hash: await sha256Hex(code),
+      p_code_prefix: code.slice(0, 9),
+      p_code_suffix: code.slice(-6),
+      p_admin_user_id: adminUserId,
+    });
+    if (!error && voucher) {
+      return ok({ voucher, code });
+    }
+    lastError = error;
+    const message = asString(error?.message, 200) || "";
+    if (!/VOUCHER_CODE_COLLISION/i.test(message)) break;
+  }
+  const message = asString(lastError?.message, 200) || "Voucher could not be created";
+  if (/VOUCHER_CAMPAIGN_NOT_FOUND/i.test(message)) return fail(404, "Voucher campaign not found");
+  if (/CAMPAIGN_INACTIVE|CAMPAIGN_EXPIRED|VOUCHER_LIMIT_REACHED/i.test(message)) return fail(409, message);
+  return fail(500, message);
+};
+
 Deno.serve(async (req) => {
   const cors = handleCorsPreflight(req);
   if (cors) return cors;
@@ -3399,6 +3704,18 @@ Deno.serve(async (req) => {
 
     if (req.method === "GET" && route.section === "banks" && !route.id) {
       return await listBanks(req, admin);
+    }
+
+    if (req.method === "GET" && route.section === "account-tiers" && !route.id) {
+      return await listAccountTierConfigs(admin);
+    }
+
+    if (req.method === "GET" && route.section === "account-upgrades" && !route.id) {
+      return await listAccountUpgradeRequests(req, admin);
+    }
+
+    if (req.method === "GET" && route.section === "vouchers" && !route.id) {
+      return await listVoucherCampaigns(admin);
     }
 
     if (req.method === "GET" && route.section === "store" && route.id === "catalog" && url.pathname.includes("/upload-sessions")) {
@@ -3517,10 +3834,30 @@ Deno.serve(async (req) => {
       return await createUser(body, admin);
     }
 
+    if (route.section === "account-tiers" && route.id === "save") {
+      return await saveAccountTierConfig(body, admin, adminCheck.userId);
+    }
+
+    if (route.section === "account-upgrades" && route.id && route.action === "decision") {
+      const requestId = asUuid(route.id);
+      if (!requestId) return badRequest("Invalid upgrade request id");
+      return await accountUpgradeRequestAction(requestId, body, admin, adminCheck.userId);
+    }
+
+    if (route.section === "vouchers" && route.id === "campaigns" && route.action === "create") {
+      return await createVoucherCampaign(body, admin, adminCheck.userId);
+    }
+
+    if (route.section === "vouchers" && route.id && route.action === "copy-next") {
+      const campaignId = asUuid(route.id);
+      if (!campaignId) return badRequest("Invalid voucher campaign id");
+      return await copyNextVoucher(campaignId, admin, adminCheck.userId);
+    }
+
     if (route.section === "users" && route.id && route.action) {
       const userId = asUuid(route.id);
       if (!userId) return badRequest("Invalid user id");
-      if (route.action === "update-profile") return await updateUserProfile(userId, body, admin);
+      if (route.action === "update-profile") return await updateUserProfile(userId, body, admin, adminCheck.userId);
       if (route.action === "delete") return await deleteUser(userId, admin, adminCheck.userId);
       if (route.action === "ban") return await banUser(userId, body, admin);
       if (route.action === "unban") return await unbanUser(userId, admin);

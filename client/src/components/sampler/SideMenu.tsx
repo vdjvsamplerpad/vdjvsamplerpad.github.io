@@ -42,6 +42,7 @@ const STORE_BUTTON_CONFETTI = [
   { key: 'c4', className: '-top-2 left-8 bg-emerald-300', delay: '160ms', duration: '2.3s', drift: '7px', rotate: '-20deg' },
   { key: 'c5', className: '-top-3 right-8 bg-fuchsia-300', delay: '420ms', duration: '2.5s', drift: '-10px', rotate: '28deg' },
 ];
+const HIDDEN_STORE_PREVIEW_BANKS_KEY_PREFIX = 'vdjv-hidden-store-preview-banks-v1:';
 const withAlpha = (hex: string, alphaHex: string): string => {
   const normalized = hex.trim().replace('#', '');
   if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return hex;
@@ -329,8 +330,9 @@ export function SideMenu({
     }
   }, [banks, editingBank, onUpdatePad, pushNotice]);
 
-  const { user, profile } = useAuthState();
+  const { user, profile, capabilities } = useAuthState();
   const isAdmin = profile?.role === 'admin';
+  const isFreeTier = capabilities.effectiveTier === 'free';
   const pendingAdminUploadCount = adminExportUploadQueueSummary?.pendingCount || 0;
   const nextAdminUploadRetryLabel = React.useMemo(() => {
     const nextRetryAt = adminExportUploadQueueSummary?.nextRetryAt || null;
@@ -392,9 +394,37 @@ export function SideMenu({
     window.dispatchEvent(new Event('vdjv-open-about'));
   }, []);
   const effectiveUser = user || getCachedUser();
+  const hiddenPreviewStorageKey = React.useMemo(
+    () => `${HIDDEN_STORE_PREVIEW_BANKS_KEY_PREFIX}${profile?.id || effectiveUser?.id || 'guest'}`,
+    [effectiveUser?.id, profile?.id]
+  );
+  const [hiddenPreviewBankIds, setHiddenPreviewBankIds] = React.useState<Set<string>>(() => new Set());
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(hiddenPreviewStorageKey) || '[]');
+      setHiddenPreviewBankIds(new Set(Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : []));
+    } catch {
+      setHiddenPreviewBankIds(new Set());
+    }
+  }, [hiddenPreviewStorageKey]);
+  const hidePreviewBank = React.useCallback((bankId: string) => {
+    setHiddenPreviewBankIds((current) => {
+      const next = new Set(current);
+      next.add(bankId);
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(hiddenPreviewStorageKey, JSON.stringify(Array.from(next)));
+        } catch {
+        }
+      }
+      return next;
+    });
+  }, [hiddenPreviewStorageKey]);
   const { storePreviewItems, showStoreNewBadge, markStorePreviewSeen } = useStorePreviewBadge({
     effectiveUser: user,
     profileId: profile?.id,
+    showSignedInPreviewBanks: isFreeTier && capabilities.features.storeDemoBanks,
   });
   const displayName = profile?.display_name?.trim() || effectiveUser?.email?.split('@')[0] || 'Guest';
   const isLowestGraphics = graphicsTier === 'lowest';
@@ -741,7 +771,9 @@ export function SideMenu({
     const realEntries: BankListEntry[] = sortedBanks.map((bank) => ({ kind: 'real', bank }));
     if (storePreviewItems.length === 0) return realEntries;
 
-    const previewEntries: BankListEntry[] = storePreviewItems.map((preview) => ({ kind: 'preview', preview }));
+    const previewEntries: BankListEntry[] = storePreviewItems
+      .filter((preview) => !hiddenPreviewBankIds.has(preview.bankId))
+      .map((preview) => ({ kind: 'preview', preview }));
     const defaultBankIndex = realEntries.findIndex(
       (entry) => entry.kind === 'real' && isCanonicalDefaultBankIdentity(entry.bank, banks)
     );
@@ -755,7 +787,7 @@ export function SideMenu({
       ...previewEntries,
       ...realEntries.slice(defaultBankIndex + 1),
     ];
-  }, [banks, sortedBanks, storePreviewItems]);
+  }, [banks, hiddenPreviewBankIds, sortedBanks, storePreviewItems]);
 
   const snapshotActionBank = React.useMemo(
     () => (snapshotBankAction ? banks.find((bank) => bank.id === snapshotBankAction.bankId) || null : null),
@@ -965,8 +997,19 @@ export function SideMenu({
   };
 
   const handlePreviewBankInteraction = React.useCallback((reason?: string) => {
+    if (effectiveUser && !capabilities.features.bankStoreDownload) {
+      const upgradeMessage = reason && !/sign in/i.test(reason)
+        ? reason
+        : 'Upgrade to PRO or PRO MAX to unlock Store demo banks.';
+      pushNotice({
+        variant: 'info',
+        message: upgradeMessage,
+      });
+      requestAboutDialog();
+      return;
+    }
     requestLoginPrompt(reason || 'Please sign in to open this bank preview.');
-  }, [requestLoginPrompt]);
+  }, [capabilities.features.bankStoreDownload, effectiveUser, pushNotice, requestAboutDialog, requestLoginPrompt]);
 
   const handleConfirmBulkClear = React.useCallback(() => {
     if (pendingBulkClearAction === 'keys') {
@@ -1507,6 +1550,26 @@ export function SideMenu({
                         )}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
+                        {isPreview && isFreeTier && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              hidePreviewBank(bankId);
+                            }}
+                            className={`${bankActionButtonClass} transition-all duration-200 ${isHighThumbnailCard
+                              ? 'text-white/85 hover:text-white hover:bg-black/35'
+                              : theme === 'dark'
+                                ? 'text-gray-400 hover:text-white hover:bg-gray-600'
+                                : 'text-gray-600 hover:text-gray-900 hover:bg-white'
+                              }`}
+                            title="Hide this Store demo"
+                          >
+                            <X className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
+                          </Button>
+                        )}
+                        {(!isPreview || !isFreeTier) && (
                         <div className="flex flex-col gap-0">
                           <Button
                             variant="ghost"
@@ -1553,7 +1616,9 @@ export function SideMenu({
                             <ChevronDown className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
                           </Button>
                         </div>
+                        )}
 
+                        {(!isPreview || !isFreeTier) && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -1584,6 +1649,7 @@ export function SideMenu({
                           >
                             <Crown className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
                           </Button>
+                        )}
 
                         {shouldShowOfflinePrefetchAction && !isPreview && bank && isExplicitDefaultBankIdentity(bank) && bank.pads.some((pad) => {
                           const hasUrlBackedAudio = Boolean(pad.audioUrl) && !pad.audioStorageKey && !pad.audioBackend;
@@ -1614,6 +1680,7 @@ export function SideMenu({
                           </Button>
                         )}
 
+                        {(!isPreview || !isFreeTier) && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -1642,6 +1709,7 @@ export function SideMenu({
                         >
                           <Settings className={isHighGraphics ? 'w-3.5 h-3.5' : 'w-3 h-3'} />
                         </Button>
+                        )}
                       </div>
                     </div>
                   </div>

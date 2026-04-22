@@ -7,6 +7,13 @@ import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_sha
 import { asNumber, asString, asUuid } from "../_shared/validate.ts";
 import { consumeRateLimit } from "../_shared/rate-limit.ts";
 import {
+  type AccountCapabilitySnapshot,
+  type StoredAccountTier,
+  buildAccountCapabilitySnapshot,
+  loadAccountCapabilitySnapshot,
+  normalizeTierPrice,
+} from "../_shared/account-capabilities.ts";
+import {
   type DiscordField,
   sendDiscordAccountRegistrationEvent,
   sendDiscordAdminActionEvent,
@@ -88,6 +95,124 @@ const requireAdmin = async (req: Request): Promise<{ ok: true; userId: string } 
   const admin = await isAdminUser(user.id);
   if (!admin) return { ok: false, response: fail(403, "NOT_AUTHORIZED") };
   return { ok: true, userId: user.id };
+};
+
+const normalizeUpgradeTier = (value: unknown): StoredAccountTier | null => {
+  const normalized = asString(value, 32);
+  if (normalized === "pro" || normalized === "pro_max") return normalized;
+  return null;
+};
+
+const normalizeVoucherCode = (value: unknown): string => String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+
+const buildUpgradeReceiptReference = (requestId: string): string =>
+  `VDJV-UPGRADE-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${requestId.replace(/-/g, "").slice(0, 10).toUpperCase()}`;
+
+const computeStorePurchaseCredit = async (admin: ReturnType<typeof createServiceClient>, userId: string) => {
+  const { data, error } = await admin
+    .from("bank_purchase_requests")
+    .select("id,catalog_item_id,bank_id,price_php_snapshot,is_refunded,status,created_at")
+    .eq("user_id", userId)
+    .eq("status", "approved")
+    .or("is_refunded.is.null,is_refunded.eq.false");
+  if (error) throw new Error(error.message);
+  const rows = (data || []).map((row: any) => {
+    const amount = normalizeTierPrice(row?.price_php_snapshot);
+    return {
+      id: asString(row?.id, 80) || "",
+      catalogItemId: asString(row?.catalog_item_id, 80) || null,
+      bankId: asString(row?.bank_id, 80) || null,
+      amountPhp: amount,
+      createdAt: parseIsoDateTime(row?.created_at),
+    };
+  }).filter((row) => row.id && row.amountPhp > 0);
+  const total = rows.reduce((sum, row) => sum + row.amountPhp, 0);
+  return {
+    total: Math.round(total * 100) / 100,
+    rows,
+  };
+};
+
+const getTierConfig = async (admin: ReturnType<typeof createServiceClient>, tier: StoredAccountTier) => {
+  const { data, error } = await admin
+    .from("account_tier_configs")
+    .select("tier,display_name,description,price_php,limits,features,is_active,updated_at")
+    .eq("tier", tier)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data;
+};
+
+const quoteUpgradeRequest = async (
+  admin: ReturnType<typeof createServiceClient>,
+  userId: string,
+  targetTier: StoredAccountTier,
+) => {
+  const tierConfig = await getTierConfig(admin, targetTier);
+  const basePrice = normalizeTierPrice((tierConfig as any)?.price_php);
+  const credit = targetTier === "pro_max" ? await computeStorePurchaseCredit(admin, userId) : { total: 0, rows: [] as any[] };
+  const quotePrice = Math.max(0, Math.round((basePrice - credit.total) * 100) / 100);
+  return {
+    basePrice,
+    creditPhp: credit.total,
+    quotePrice,
+    purchaseCreditSnapshot: credit.rows,
+  };
+};
+
+const ensureProfileForAccountUser = async (admin: ReturnType<typeof createServiceClient>, user: any) => {
+  const userId = asUuid(user?.id);
+  if (!userId) throw new Error("Invalid user");
+  const displayName =
+    asString(user?.user_metadata?.display_name, 120)
+    || asString(user?.email, 320)?.split("@")[0]
+    || "User";
+  const { data: existing, error: selectError } = await admin
+    .from("profiles")
+    .select("id,role,display_name,account_tier,owned_bank_quota,owned_bank_pad_cap,device_total_bank_cap")
+    .eq("id", userId)
+    .maybeSingle();
+  if (selectError) throw new Error(selectError.message);
+  if (existing) return existing;
+
+  const { data: created, error: upsertError } = await admin
+    .from("profiles")
+    .upsert({
+      id: userId,
+      display_name: displayName,
+      role: "user",
+      account_tier: "free",
+      tier_source: "signup",
+    }, { onConflict: "id" })
+    .select("id,role,display_name,account_tier,owned_bank_quota,owned_bank_pad_cap,device_total_bank_cap")
+    .single();
+  if (upsertError || !created) throw new Error(upsertError?.message || "Profile setup failed");
+  return created;
+};
+
+const applyAccountTierToUser = async (
+  admin: ReturnType<typeof createServiceClient>,
+  userId: string,
+  tier: StoredAccountTier,
+  source: "admin" | "upgrade_request" | "voucher" | "system",
+) => {
+  const tierConfig = await getTierConfig(admin, tier);
+  const tierDefaults = buildAccountCapabilitySnapshot({ id: userId, role: "user", account_tier: tier }, tierConfig, null);
+  const { error: tierError } = await admin
+    .from("profiles")
+    .update({
+      account_tier: tier,
+      tier_source: source,
+      tier_updated_at: new Date().toISOString(),
+      owned_bank_quota: tierDefaults.limits.ownedBankQuota,
+      owned_bank_pad_cap: tierDefaults.limits.ownedBankPadCap,
+      device_total_bank_cap: tierDefaults.limits.deviceTotalBankCap,
+    })
+    .eq("id", userId);
+  if (tierError) throw new Error(tierError.message);
+
+  const snapshot = await loadAccountCapabilitySnapshot(admin, userId);
+  return snapshot;
 };
 
 const readPositiveInt = (value: string | undefined, fallback: number): number => {
@@ -1439,6 +1564,7 @@ const normalizeStoreCatalogItem = (
     rejectedCatalogItems: Map<string, string>;
     userId: string | null;
     isAdmin: boolean;
+    accountCapabilities: AccountCapabilitySnapshot;
   },
 ) => {
   const itemType = normalizeCatalogItemType(item?.item_type);
@@ -1460,6 +1586,8 @@ const normalizeStoreCatalogItem = (
   }
 
   const isComingSoon = Boolean(item?.coming_soon);
+  const isFreeTier = input.accountCapabilities.effectiveTier === "free";
+  const hasAllStoreAccess = Boolean(input.accountCapabilities.features.bankStoreAllAccess);
   const isPromotionFreeClaim = Boolean(
     item?.has_active_promotion
     && item?.promotion_discount_type === "free"
@@ -1470,6 +1598,8 @@ const normalizeStoreCatalogItem = (
   let status = "buy";
   let rejectionMessage: string | null = null;
   if (isComingSoon) status = "pending";
+  else if (isFreeTier) status = "upgrade_required";
+  else if (hasAllStoreAccess) status = "pro_max_unlocked";
   else if (itemType === "bank_bundle") {
     if (input.pendingCatalogItems.has(catalogItemId)) status = "pending";
     else if (input.rejectedCatalogItems.has(catalogItemId)) {
@@ -1515,18 +1645,18 @@ const normalizeStoreCatalogItem = (
     asset_protection: asString(item?.asset_protection, 40)?.toLowerCase() === "public" ? "public" : "encrypted",
     is_pinned: Boolean(item?.is_pinned),
     is_owned: itemType === "bank_bundle"
-      ? allBundleOwned
-      : (input.isAdmin || input.userGrants.has(bankId) || input.approvedRequests.has(bankId)),
-    is_free_download: itemType === "bank_bundle" ? false : !item?.requires_grant,
+      ? (hasAllStoreAccess || allBundleOwned)
+      : (hasAllStoreAccess || input.isAdmin || input.userGrants.has(bankId) || input.approvedRequests.has(bankId)),
+    is_free_download: itemType === "bank_bundle" || isFreeTier ? false : !item?.requires_grant,
     is_pending: itemType === "bank_bundle"
       ? (isComingSoon || input.pendingCatalogItems.has(catalogItemId))
       : (isComingSoon || input.pendingRequests.has(bankId)),
     is_rejected: itemType === "bank_bundle"
       ? input.rejectedCatalogItems.has(catalogItemId)
       : input.rejectedRequests.has(bankId),
-    is_downloadable: itemType === "bank_bundle" ? false : (status === "free_download" || status === "granted_download"),
-    is_purchased: itemType === "bank_bundle" ? false : status === "granted_download",
-    is_promotion_free_claim: isPromotionFreeClaim,
+    is_downloadable: itemType === "bank_bundle" ? false : (status === "free_download" || status === "granted_download" || status === "pro_max_unlocked"),
+    is_purchased: itemType === "bank_bundle" ? hasAllStoreAccess : (status === "granted_download" || status === "pro_max_unlocked"),
+    is_promotion_free_claim: isFreeTier ? false : isPromotionFreeClaim,
     price_php: isComingSoon ? null : resolveCatalogPrice(item),
     original_price_php: asPriceNumber(item?.original_price_php),
     discount_amount_php: asPriceNumber(item?.discount_amount_php) || 0,
@@ -2406,6 +2536,7 @@ const getStoreCatalog = async (req: Request) => {
   const user = await getUserFromAuthHeader(authHeader);
   const userId = user?.id || null;
   const userIsAdmin = userId ? await isAdminUser(userId) : false;
+  const accountCapabilities = await loadAccountCapabilitySnapshot(admin, userId);
   const maintenanceState = await getStoreMaintenanceState(req, admin);
   if ("response" in maintenanceState) return maintenanceState.response;
   if (maintenanceState.enabled && !maintenanceState.isAdmin) {
@@ -2452,7 +2583,7 @@ const getStoreCatalog = async (req: Request) => {
         q: q || "",
       });
     }
-    if (userId) {
+    if (userId && !accountCapabilities.features.bankStoreAllAccess) {
       const [accessResult, approvedResult] = await Promise.all([
         admin.from("user_bank_access").select("bank_id").eq("user_id", userId),
         admin.from("bank_purchase_requests").select("bank_id").eq("user_id", userId).eq("status", "approved"),
@@ -2468,7 +2599,7 @@ const getStoreCatalog = async (req: Request) => {
       });
       purchasedBankIds = Array.from(purchasedSet);
     }
-    if (sort === "purchased" && purchasedBankIds.length === 0) {
+    if (sort === "purchased" && !accountCapabilities.features.bankStoreAllAccess && purchasedBankIds.length === 0) {
       return ok({
         items: [],
         banners,
@@ -2489,7 +2620,7 @@ const getStoreCatalog = async (req: Request) => {
     .from("bank_catalog_items")
     .select(catalogSelect)
     .eq("is_published", true);
-  if (sort === "purchased" && purchasedBankIds.length > 0) {
+  if (sort === "purchased" && !accountCapabilities.features.bankStoreAllAccess && purchasedBankIds.length > 0) {
     catalogQuery = catalogQuery.in("bank_id", purchasedBankIds);
   }
   catalogQuery = catalogQuery.order("created_at", { ascending: false });
@@ -2572,6 +2703,7 @@ const getStoreCatalog = async (req: Request) => {
         rejectedCatalogItems,
         userId,
         isAdmin: userIsAdmin,
+        accountCapabilities,
       });
     })
     .filter(Boolean) as any[];
@@ -2613,7 +2745,7 @@ const getStoreCatalog = async (req: Request) => {
     items.sort((left, right) => compareTitle(left, right, "asc"));
     strategy = "filtered_free_download";
   } else if (sort === "purchased") {
-    items = items.filter((item) => item.status === "granted_download");
+    items = items.filter((item) => item.status === "granted_download" || item.status === "pro_max_unlocked");
     items.sort((left, right) => compareTitle(left, right, "asc"));
     strategy = "filtered_purchased";
   } else if (sort === "name_asc") {
@@ -2706,6 +2838,213 @@ const getStorePaymentConfig = async (req: Request) => {
       message: maintenanceState.message,
     },
   });
+};
+
+const getAccountMe = async (req: Request) => {
+  const admin = createServiceClient();
+  const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
+  if (!user?.id) {
+    const capabilities = await loadAccountCapabilitySnapshot(admin, null);
+    return ok({ user: null, profile: null, capabilities });
+  }
+  const profile = await ensureProfileForAccountUser(admin, user);
+  const capabilities = await loadAccountCapabilitySnapshot(admin, user.id);
+  return ok({
+    user: {
+      id: user.id,
+      email: user.email || null,
+    },
+    profile,
+    capabilities,
+  });
+};
+
+const createAccountUpgradeRequest = async (req: Request, body: any) => {
+  const admin = createServiceClient();
+  const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
+  if (!user?.id) return fail(401, "NOT_AUTHENTICATED");
+  const profile = await ensureProfileForAccountUser(admin, user);
+  const targetTier = normalizeUpgradeTier(body?.targetTier ?? body?.target_tier);
+  if (!targetTier || targetTier === "free") return badRequest("targetTier must be pro or pro_max");
+  const currentCapabilities = await loadAccountCapabilitySnapshot(admin, user.id);
+  if (currentCapabilities.effectiveTier === "pro_max" || currentCapabilities.effectiveTier === targetTier) {
+    return fail(409, "ALREADY_ON_TIER", { capabilities: currentCapabilities });
+  }
+  if (targetTier === "pro" && currentCapabilities.effectiveTier === "pro_max") {
+    return fail(409, "ALREADY_ABOVE_TIER", { capabilities: currentCapabilities });
+  }
+
+  const paymentChannel = asString(body?.paymentChannel ?? body?.payment_channel, 40);
+  if (paymentChannel && !PAYMENT_CHANNEL_VALUES.has(paymentChannel)) return badRequest("Invalid paymentChannel");
+  const proofPath = asString(body?.proofPath ?? body?.proof_path, 500);
+  if (proofPath && !proofPath.startsWith(`${user.id}/`)) return badRequest("proofPath must be inside your own folder");
+  if (proofPath && !/\.(png|jpg|jpeg|webp|gif|heic|heif)$/i.test(proofPath)) return badRequest("proofPath must be an image file");
+
+  const quote = await quoteUpgradeRequest(admin, user.id, targetTier);
+  if (quote.quotePrice > 0 && paymentChannel === "image_proof" && !proofPath) {
+    return badRequest("proofPath is required for image_proof");
+  }
+
+  const requestId = crypto.randomUUID();
+  const receiptReference = buildUpgradeReceiptReference(requestId);
+  const { data: inserted, error: insertError } = await admin
+    .from("account_upgrade_requests")
+    .insert({
+      id: requestId,
+      user_id: user.id,
+      email: String(user.email || "").toLowerCase(),
+      display_name: asString(profile?.display_name, 120) || asString(user?.user_metadata?.display_name, 120) || null,
+      target_tier: targetTier,
+      status: quote.quotePrice <= 0 ? "approved" : "pending",
+      payment_channel: quote.quotePrice <= 0 ? "voucher" : paymentChannel || null,
+      payer_name: quote.quotePrice <= 0 ? null : asString(body?.payerName ?? body?.payer_name, 120),
+      reference_no: quote.quotePrice <= 0 ? null : asString(body?.referenceNo ?? body?.reference_no, 120),
+      proof_path: quote.quotePrice <= 0 ? null : proofPath,
+      notes: asString(body?.notes, 1000),
+      base_price_php_snapshot: quote.basePrice,
+      store_credit_php_snapshot: quote.creditPhp,
+      quote_price_php_snapshot: quote.quotePrice,
+      purchase_credit_snapshot: quote.purchaseCreditSnapshot,
+      receipt_reference: receiptReference,
+      reviewed_at: quote.quotePrice <= 0 ? new Date().toISOString() : null,
+    })
+    .select("*")
+    .single();
+  if (insertError || !inserted) return fail(500, insertError?.message || "Upgrade request could not be created");
+
+  let capabilities: AccountCapabilitySnapshot | null = null;
+  if (quote.quotePrice <= 0) {
+    capabilities = await applyAccountTierToUser(admin, user.id, targetTier, "upgrade_request");
+  }
+
+  await swallowDiscordError(() =>
+    sendDiscordAdminActionEvent({
+      severity: quote.quotePrice <= 0 ? "info" : "warning",
+      title: "Account Upgrade Request Submitted",
+      description: `A user requested ${targetTier.toUpperCase()} access.`,
+      actorUserId: user.id,
+      targetUserId: user.id,
+      extraFields: [
+        { name: "Email", value: user.email || "unknown", inline: true },
+        { name: "Target Tier", value: targetTier.toUpperCase(), inline: true },
+        { name: "Quote", value: `PHP ${quote.quotePrice.toFixed(2)}`, inline: true },
+        { name: "Store Credit", value: `PHP ${quote.creditPhp.toFixed(2)}`, inline: true },
+        { name: "Receipt", value: receiptReference, inline: false },
+      ],
+    })
+  );
+
+  return ok({
+    request: inserted,
+    capabilities,
+  }, 201);
+};
+
+const redeemAccountVoucher = async (req: Request, body: any) => {
+  const admin = createServiceClient();
+  const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
+  if (!user?.id) return fail(401, "NOT_AUTHENTICATED");
+  await ensureProfileForAccountUser(admin, user);
+  const code = normalizeVoucherCode(body?.code);
+  if (code.length < 10 || code.length > 80) return badRequest("Invalid voucher code");
+
+  const limit = await consumeRateLimit({
+    scope: "account.voucher_redeem",
+    subject: user.id,
+    maxHits: 10,
+    windowSeconds: 3600,
+  });
+  if (!limit.allowed) {
+    return fail(429, "RATE_LIMITED", {
+      scope: "account.voucher_redeem",
+      retry_after_seconds: limit.retryAfterSeconds,
+    });
+  }
+
+  const codeHash = await sha256Hex(code);
+  const { data: voucher, error: voucherError } = await admin
+    .from("account_vouchers")
+    .select("*, account_voucher_campaigns (*)")
+    .eq("code_hash", codeHash)
+    .maybeSingle();
+  if (voucherError) return fail(500, voucherError.message);
+  if (!voucher) return fail(404, "VOUCHER_NOT_FOUND");
+  const campaign = Array.isArray((voucher as any).account_voucher_campaigns)
+    ? (voucher as any).account_voucher_campaigns[0]
+    : (voucher as any).account_voucher_campaigns;
+  const now = Date.now();
+  const voucherExpires = parseIsoDateTime((voucher as any).expires_at);
+  const campaignExpires = parseIsoDateTime(campaign?.expires_at);
+  if ((voucher as any).status !== "reserved") return fail(409, "VOUCHER_NOT_AVAILABLE");
+  if (voucherExpires && new Date(voucherExpires).getTime() <= now) return fail(409, "VOUCHER_EXPIRED");
+  if (campaignExpires && new Date(campaignExpires).getTime() <= now) return fail(409, "VOUCHER_EXPIRED");
+  if (campaign && campaign.is_active === false) return fail(409, "VOUCHER_CAMPAIGN_INACTIVE");
+  const targetEmail = asString((voucher as any).reserved_for_email || campaign?.target_email, 320)?.toLowerCase();
+  if (targetEmail && targetEmail !== String(user.email || "").toLowerCase()) return fail(403, "VOUCHER_EMAIL_MISMATCH");
+  const targetUserId = asUuid((voucher as any).reserved_for_user_id || campaign?.target_user_id);
+  if (targetUserId && targetUserId !== user.id) return fail(403, "VOUCHER_USER_MISMATCH");
+
+  const targetTier = normalizeUpgradeTier((voucher as any).target_tier);
+  if (!targetTier) return fail(409, "VOUCHER_INVALID_TIER");
+  const requestId = crypto.randomUUID();
+  const receiptReference = buildUpgradeReceiptReference(requestId);
+  const nowIso = new Date().toISOString();
+  const { data: requestRow, error: requestError } = await admin
+    .from("account_upgrade_requests")
+    .insert({
+      id: requestId,
+      user_id: user.id,
+      email: String(user.email || "").toLowerCase(),
+      display_name: asString(user?.user_metadata?.display_name, 120) || String(user.email || "").split("@")[0] || "User",
+      target_tier: targetTier,
+      status: "approved",
+      payment_channel: "voucher",
+      base_price_php_snapshot: 0,
+      store_credit_php_snapshot: 0,
+      quote_price_php_snapshot: 0,
+      purchase_credit_snapshot: [],
+      voucher_id: (voucher as any).id,
+      receipt_reference: receiptReference,
+      reviewed_at: nowIso,
+    })
+    .select("*")
+    .single();
+  if (requestError || !requestRow) return fail(500, requestError?.message || "Voucher request could not be recorded");
+
+  const { data: redeemedVoucher, error: voucherUpdateError } = await admin
+    .from("account_vouchers")
+    .update({
+      status: "redeemed",
+      redeemed_by: user.id,
+      redeemed_at: nowIso,
+    })
+    .eq("id", (voucher as any).id)
+    .eq("status", "reserved")
+    .select("id")
+    .maybeSingle();
+  if (voucherUpdateError || !redeemedVoucher) {
+    await admin.from("account_upgrade_requests").update({ status: "cancelled", updated_at: new Date().toISOString() }).eq("id", requestId);
+    return fail(409, voucherUpdateError?.message || "VOUCHER_NOT_AVAILABLE");
+  }
+
+  await admin.from("account_voucher_redemptions").insert({
+    voucher_id: (voucher as any).id,
+    campaign_id: (voucher as any).campaign_id,
+    user_id: user.id,
+    email: user.email || null,
+    target_tier: targetTier,
+    request_id: requestId,
+  });
+  await admin
+    .from("account_voucher_campaigns")
+    .update({
+      redeemed_count: Math.max(0, Math.floor(Number(campaign?.redeemed_count || 0))) + 1,
+      updated_at: nowIso,
+    })
+    .eq("id", (voucher as any).campaign_id);
+
+  const capabilities = await applyAccountTierToUser(admin, user.id, targetTier, "voucher");
+  return ok({ request: requestRow, capabilities });
 };
 
 const LANDING_VERSION_KEYS = ["V1", "V2", "V3"] as const;
@@ -5636,6 +5975,18 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       },
     });
   }
+  const accountCapabilities = await loadAccountCapabilitySnapshot(admin, userId);
+  if (!accountCapabilities.features.bankStoreCheckout && !accountCapabilities.features.bankStoreFreeClaim) {
+    return fail(403, "UPGRADE_REQUIRED", {
+      tier: accountCapabilities.effectiveTier,
+      reason: "bank_store_checkout_disabled",
+    });
+  }
+  if (accountCapabilities.features.bankStoreAllAccess) {
+    return fail(409, "ALREADY_UNLOCKED_BY_PRO_MAX", {
+      tier: accountCapabilities.effectiveTier,
+    });
+  }
 
   const purchaseLimit = await consumeRateLimit({
     scope: "store.purchase_request",
@@ -5735,6 +6086,18 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       && asPriceNumber(catalogRow?.price_php) === 0,
     );
   });
+  if (allFreePromotionClaim && !accountCapabilities.features.bankStoreFreeClaim) {
+    return fail(403, "UPGRADE_REQUIRED", {
+      tier: accountCapabilities.effectiveTier,
+      reason: "bank_store_free_claim_disabled",
+    });
+  }
+  if (!allFreePromotionClaim && !accountCapabilities.features.bankStoreCheckout) {
+    return fail(403, "UPGRADE_REQUIRED", {
+      tier: accountCapabilities.effectiveTier,
+      reason: "bank_store_checkout_disabled",
+    });
+  }
   let existingFreeClaimRowsByCatalogItemId = new Map<string, any>();
   let itemsToProcess = normalizedItems;
   if (allFreePromotionClaim) {
@@ -6315,6 +6678,16 @@ const resolveStoreDownloadContext = async (
   const user = await getUserFromAuthHeader(authHeader);
   const userId = user?.id || null;
   if (!userId) return { ok: false, response: fail(401, "NOT_AUTHENTICATED") };
+  const accountCapabilities = await loadAccountCapabilitySnapshot(admin, userId);
+  if (!accountCapabilities.features.bankStoreDownload) {
+    return {
+      ok: false,
+      response: fail(403, "UPGRADE_REQUIRED", {
+        tier: accountCapabilities.effectiveTier,
+        reason: "bank_store_download_disabled",
+      }),
+    };
+  }
   const maintenanceState = await getStoreMaintenanceState(req, admin);
   if ("response" in maintenanceState) return { ok: false, response: maintenanceState.response };
   if (maintenanceState.enabled && !maintenanceState.isAdmin) {
@@ -6377,7 +6750,7 @@ const resolveStoreDownloadContext = async (
   if (bankError) return { ok: false, response: fail(500, bankError.message) };
   if (!bankRow || bankRow.deleted_at) return { ok: false, response: fail(410, "BANK_ARCHIVED") };
 
-  if (catalogItem.requires_grant) {
+  if (catalogItem.requires_grant && !accountCapabilities.features.bankStoreAllAccess) {
     const { data: accessData } = await admin
       .from("user_bank_access")
       .select("id")
@@ -8751,6 +9124,17 @@ Deno.serve(async (req) => {
     if (req.method === "GET" && scoped[0] === "landing-config" && scoped.length === 1) return await getLandingDownloadConfig();
     if (req.method === "GET" && scoped[0] === "buy-config" && scoped.length === 1) return await getPublicBuyConfig();
     if (req.method === "GET" && scoped[0] === "sampler-config" && scoped.length === 1) return await getPublicSamplerAppConfig();
+    if (req.method === "GET" && scoped[0] === "account" && scoped[1] === "me" && scoped.length === 2) {
+      return await getAccountMe(req);
+    }
+    if (req.method === "POST" && scoped[0] === "account" && scoped[1] === "upgrade-request" && scoped.length === 2) {
+      const body = await req.json().catch(() => ({}));
+      return await createAccountUpgradeRequest(req, body);
+    }
+    if (req.method === "POST" && scoped[0] === "account" && scoped[1] === "voucher" && scoped[2] === "redeem" && scoped.length === 3) {
+      const body = await req.json().catch(() => ({}));
+      return await redeemAccountVoucher(req, body);
+    }
     if (req.method === "GET" && scoped[0] === "default-bank" && scoped[1] === "manifest" && scoped.length === 2) {
       return await getPublicDefaultBankManifest();
     }

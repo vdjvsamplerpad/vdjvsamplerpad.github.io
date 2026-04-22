@@ -775,6 +775,7 @@ function UsersTab({
             <TableRow>
               <TableHead><SortHeader title="Display Name" active={usersSortBy === 'display_name'} direction={usersSortDir} onClick={() => onToggleUserSort('display_name')} /></TableHead>
               <TableHead><SortHeader title="Email" active={usersSortBy === 'email'} direction={usersSortDir} onClick={() => onToggleUserSort('email')} /></TableHead>
+              <TableHead>Tier</TableHead>
               <TableHead><SortHeader title="Created" active={usersSortBy === 'created_at'} direction={usersSortDir} onClick={() => onToggleUserSort('created_at')} /></TableHead>
               <TableHead><SortHeader title="Last Sign-In" active={usersSortBy === 'last_sign_in_at'} direction={usersSortDir} onClick={() => onToggleUserSort('last_sign_in_at')} /></TableHead>
               <TableHead>Last Device</TableHead>
@@ -797,6 +798,18 @@ function UsersTab({
                     buttonClassName="h-5 w-5"
                   />
                 </TableCell>
+                <TableCell className="block md:table-cell py-1 md:py-4 border-none md:border-b">
+                  <span className="md:hidden font-semibold text-xs mr-2">Tier:</span>
+                  <span className={`inline-flex rounded px-2 py-1 text-[11px] font-bold uppercase ${
+                    (user.effective_account_tier || user.account_tier) === 'pro_max'
+                      ? 'bg-yellow-500/20 text-yellow-700 dark:text-yellow-300'
+                      : (user.effective_account_tier || user.account_tier) === 'pro'
+                        ? 'bg-blue-500/20 text-blue-700 dark:text-blue-300'
+                        : 'bg-gray-500/20 text-gray-700 dark:text-gray-300'
+                  }`}>
+                    {user.role === 'admin' ? 'ADMIN PRO MAX' : String(user.effective_account_tier || user.account_tier || 'free').replace('_', ' ')}
+                  </span>
+                </TableCell>
                 <TableCell className="hidden md:table-cell">{user.created_at ? new Date(user.created_at).toLocaleString() : '-'}</TableCell>
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : '-'}</TableCell>
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_device_name || '-'}</TableCell>
@@ -816,7 +829,7 @@ function UsersTab({
                 </TableCell>
               </TableRow>
             ))}
-            {!usersLoading && users.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={8} className="block md:table-cell text-center py-3 opacity-70">No users</TableCell></TableRow>}
+            {!usersLoading && users.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={9} className="block md:table-cell text-center py-3 opacity-70">No users</TableCell></TableRow>}
           </TableBody>
         </Table>
       </div>

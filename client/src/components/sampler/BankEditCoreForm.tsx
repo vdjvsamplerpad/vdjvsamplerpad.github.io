@@ -35,6 +35,7 @@ interface BankEditCoreFormProps {
   orderedBanks: SamplerBank[];
   selectedBankPosition: string;
   setSelectedBankPosition: (value: string) => void;
+  canEditPosition: boolean;
   isAdmin: boolean;
   activeAdminThumbnailUrl: string | null;
   adminThumbnailUploading: boolean;
@@ -47,6 +48,7 @@ interface BankEditCoreFormProps {
   hideThumbnailPreview: boolean;
   setHideThumbnailPreview: (value: boolean) => void;
   midiEnabled: boolean;
+  canEditKeyboardMidi: boolean;
   shortcutKey: string;
   handleShortcutKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
   shortcutError: string | null;
@@ -91,6 +93,7 @@ export function BankEditCoreForm({
   orderedBanks,
   selectedBankPosition,
   setSelectedBankPosition,
+  canEditPosition,
   isAdmin,
   activeAdminThumbnailUrl,
   adminThumbnailUploading,
@@ -103,6 +106,7 @@ export function BankEditCoreForm({
   hideThumbnailPreview,
   setHideThumbnailPreview,
   midiEnabled,
+  canEditKeyboardMidi,
   shortcutKey,
   handleShortcutKeyDown,
   shortcutError,
@@ -168,24 +172,30 @@ export function BankEditCoreForm({
           />
         </div>
 
-        <div className="space-y-2">
-          <div className="flex items-center gap-1.5">
-            <Label>Bank Position</Label>
-            <HelpTooltip content="Directly move this bank to another slot in the bank list without repeated move up or down actions." label="Bank position help" />
+        {canEditPosition ? (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Label>Bank Position</Label>
+              <HelpTooltip content="Directly move this bank to another slot in the bank list without repeated move up or down actions." label="Bank position help" />
+            </div>
+            <Select value={selectedBankPosition} onValueChange={setSelectedBankPosition}>
+              <SelectTrigger>
+                <SelectValue placeholder="Choose position" />
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                {orderedBanks.map((entry, index) => (
+                  <SelectItem key={entry.id} value={String(index)}>
+                    {index + 1}. {entry.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <Select value={selectedBankPosition} onValueChange={setSelectedBankPosition}>
-            <SelectTrigger>
-              <SelectValue placeholder="Choose position" />
-            </SelectTrigger>
-            <SelectContent className="max-h-72">
-              {orderedBanks.map((entry, index) => (
-                <SelectItem key={entry.id} value={String(index)}>
-                  {index + 1}. {entry.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        ) : (
+          <div className="rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-200">
+            Bank position editing is locked on this account tier.
+          </div>
+        )}
 
         <div className="space-y-2 sm:col-span-2">
           <div className="flex items-center gap-1.5">
@@ -281,57 +291,64 @@ export function BankEditCoreForm({
         </div>
       )}
 
-      <div className={`grid gap-3 ${midiEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
-        <div className="space-y-2">
-          <div className="flex items-center gap-1.5">
-            <Label htmlFor="bankShortcutKey">Bank Shortcut Key</Label>
-            <HelpTooltip content={`Assign a keyboard shortcut to switch to this bank. Reserved keys stay blocked: ${reservedKeysText}.`} label="Bank shortcut help" />
-          </div>
-          <Input
-            id="bankShortcutKey"
-            value={shortcutKey}
-            onKeyDown={handleShortcutKeyDown}
-            placeholder="Press a key"
-            readOnly
-          />
-          {shortcutError && (
-            <p className="text-xs text-red-500">{shortcutError}</p>
-          )}
-        </div>
-
-        {midiEnabled && (
+      {canEditKeyboardMidi ? (
+        <div className={`grid gap-3 ${midiEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
           <div className="space-y-2">
             <div className="flex items-center gap-1.5">
-              <Label>MIDI Assignment</Label>
-              <HelpTooltip content="Use Learn MIDI to capture the next incoming Note or CC message for fast bank selection." label="Bank MIDI help" />
+              <Label htmlFor="bankShortcutKey">Bank Shortcut Key</Label>
+              <HelpTooltip content={`Assign a keyboard shortcut to switch to this bank. Reserved keys stay blocked: ${reservedKeysText}.`} label="Bank shortcut help" />
             </div>
-            <div className="text-xs text-gray-500">
-              Note: {midiNote ?? '-'} | CC: {midiCC ?? '-'}
-            </div>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setMidiLearnActive(true)}
-                className="flex-1"
-              >
-                {midiLearnActive ? 'Listening...' : 'Learn MIDI'}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={clearMidiAssignments}
-              >
-                Clear
-              </Button>
-            </div>
-            {midiError && <p className="text-xs text-red-500">{midiError}</p>}
+            <Input
+              id="bankShortcutKey"
+              value={shortcutKey}
+              onKeyDown={handleShortcutKeyDown}
+              placeholder="Press a key"
+              readOnly
+            />
+            {shortcutError && (
+              <p className="text-xs text-red-500">{shortcutError}</p>
+            )}
           </div>
-        )}
-      </div>
 
+          {midiEnabled && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5">
+                <Label>MIDI Assignment</Label>
+                <HelpTooltip content="Use Learn MIDI to capture the next incoming Note or CC message for fast bank selection." label="Bank MIDI help" />
+              </div>
+              <div className="text-xs text-gray-500">
+                Note: {midiNote ?? '-'} | CC: {midiCC ?? '-'}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setMidiLearnActive(true)}
+                  className="flex-1"
+                >
+                  {midiLearnActive ? 'Listening...' : 'Learn MIDI'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={clearMidiAssignments}
+                >
+                  Clear
+                </Button>
+              </div>
+              {midiError && <p className="text-xs text-red-500">{midiError}</p>}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-200">
+          Bank keyboard and MIDI assignment are locked on this account tier.
+        </div>
+      )}
+
+      {canEditKeyboardMidi && (
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
@@ -376,6 +393,7 @@ export function BankEditCoreForm({
           <p className="text-xs text-gray-500">No shortcuts assigned in this bank.</p>
         )}
       </div>
+      )}
 
       <div className="space-y-2">
         <Label>Bank Information</Label>

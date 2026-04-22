@@ -342,7 +342,7 @@ export function HeaderControls({
   onPublishDefaultBankRelease,
 }: HeaderControlsProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const { user, profile, loading, authTransition } = useAuthState();
+  const { user, profile, loading, authTransition, capabilities } = useAuthState();
   const { signOut, updateDisplayName } = useAuthActions();
   const isAdmin = profile?.role === 'admin';
   const [adminDialogOpen, setAdminDialogOpen] = React.useState(false);
@@ -455,6 +455,10 @@ export function HeaderControls({
       if (!normalizedKey) return;
       if ((event.metaKey || event.ctrlKey) && normalizedKey === 'k') {
         if (isEditableTarget(event.target)) return;
+        if (!capabilities.features.search) {
+          pushNotice({ variant: 'info', message: 'Search is available in PRO.' });
+          return;
+        }
         event.preventDefault();
         onToggleSearch();
         return;
@@ -471,7 +475,7 @@ export function HeaderControls({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [adminPadColorPaintActive, onStopAdminPadColorPaint, onToggleSearch, pushNotice, searchOpen, windowWidth]);
+  }, [adminPadColorPaintActive, capabilities.features.search, onStopAdminPadColorPaint, onToggleSearch, pushNotice, searchOpen, windowWidth]);
 
   // Show greeting notification when user logs in
   React.useEffect(() => {
@@ -840,24 +844,26 @@ export function HeaderControls({
           )}
 
           {/* Search Button */}
-          <Button
-            onClick={onToggleSearch}
-            variant="outline"
-            size={isMobileScreen ? "sm" : "default"}
-            className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${
-              searchOpen
-                ? theme === 'dark'
-                  ? 'bg-cyan-500 border-cyan-400 text-cyan-100'
-                  : 'bg-cyan-50 border-cyan-300 text-cyan-700'
-                : theme === 'dark'
-                  ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-cyan-500 hover:border-cyan-400 hover:text-cyan-100'
-                  : 'bg-white border-gray-300 text-gray-700 hover:bg-cyan-50 hover:border-cyan-300 hover:text-cyan-700'
-            }`}
-            title={isMobileScreen ? 'Search pads' : 'Search pads (Ctrl/Cmd+K)'}
-          >
-            <Search className="w-4 h-4" />
-            {!isMobileScreen && 'Search'}
-          </Button>
+          {capabilities.features.search && (
+            <Button
+              onClick={onToggleSearch}
+              variant="outline"
+              size={isMobileScreen ? "sm" : "default"}
+              className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${
+                searchOpen
+                  ? theme === 'dark'
+                    ? 'bg-cyan-500 border-cyan-400 text-cyan-100'
+                    : 'bg-cyan-50 border-cyan-300 text-cyan-700'
+                  : theme === 'dark'
+                    ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-cyan-500 hover:border-cyan-400 hover:text-cyan-100'
+                    : 'bg-white border-gray-300 text-gray-700 hover:bg-cyan-50 hover:border-cyan-300 hover:text-cyan-700'
+              }`}
+              title={isMobileScreen ? 'Search pads' : 'Search pads (Ctrl/Cmd+K)'}
+            >
+              <Search className="w-4 h-4" />
+              {!isMobileScreen && 'Search'}
+            </Button>
+          )}
 
           {/* Mute/Unmute Button */}
           <Button

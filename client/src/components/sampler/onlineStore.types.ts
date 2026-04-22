@@ -38,7 +38,7 @@ export interface StoreItem {
     is_promotion_free_claim?: boolean;
     sha256?: string | null;
     thumbnail_path?: string | null;
-    status: 'free_download' | 'buy' | 'pending' | 'granted_download' | 'rejected';
+    status: 'free_download' | 'buy' | 'pending' | 'granted_download' | 'rejected' | 'upgrade_required' | 'pro_max_unlocked';
     rejection_message?: string | null;
     bank: {
         title: string;

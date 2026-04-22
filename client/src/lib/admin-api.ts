@@ -7,6 +7,10 @@ export interface AdminUser {
   id: string;
   email: string | null;
   role: 'admin' | 'user';
+  account_tier?: 'free' | 'pro' | 'pro_max';
+  effective_account_tier?: 'free' | 'pro' | 'pro_max';
+  tier_source?: string | null;
+  tier_updated_at?: string | null;
   display_name: string;
   owned_bank_quota: number;
   owned_bank_pad_cap: number;
@@ -17,6 +21,54 @@ export interface AdminUser {
   last_sign_in_platform: string | null;
   banned_until: string | null;
   is_banned: boolean;
+}
+
+export interface AdminAccountTierConfig {
+  tier: 'free' | 'pro' | 'pro_max';
+  display_name: string;
+  description?: string | null;
+  price_php: number;
+  limits: Record<string, unknown>;
+  features: Record<string, boolean>;
+  is_active: boolean;
+  updated_at?: string | null;
+}
+
+export interface AdminAccountUpgradeRequest {
+  id: string;
+  user_id: string | null;
+  email: string;
+  display_name?: string | null;
+  target_tier: 'pro' | 'pro_max';
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  payment_channel?: string | null;
+  payer_name?: string | null;
+  reference_no?: string | null;
+  proof_path?: string | null;
+  notes?: string | null;
+  base_price_php_snapshot: number;
+  store_credit_php_snapshot: number;
+  quote_price_php_snapshot: number;
+  receipt_reference?: string | null;
+  rejection_message?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  created_at: string;
+}
+
+export interface AdminVoucherCampaign {
+  id: string;
+  name: string;
+  target_tier: 'pro' | 'pro_max';
+  max_codes: number;
+  reserved_count: number;
+  redeemed_count: number;
+  expires_at?: string | null;
+  target_email?: string | null;
+  target_user_id?: string | null;
+  notes?: string | null;
+  is_active: boolean;
+  created_at: string;
 }
 
 export interface AdminBank {
@@ -623,11 +675,65 @@ export const adminApi = {
 
   async updateUserProfile(userId: string, input: {
     displayName: string;
+    accountTier?: 'free' | 'pro' | 'pro_max';
     ownedBankQuota: number;
     ownedBankPadCap: number;
     deviceTotalBankCap: number;
+    featureOverrides?: Record<string, boolean>;
+    limitOverrides?: Record<string, number | null>;
+    overrideNotes?: string;
   }) {
     return callAdmin<{ user: AdminUser }>('POST', `users/${userId}/update-profile`, input);
+  },
+
+  async listAccountTierConfigs() {
+    return callAdmin<{ tiers: AdminAccountTierConfig[] }>('GET', 'account-tiers');
+  },
+
+  async saveAccountTierConfig(input: {
+    tier: 'free' | 'pro' | 'pro_max';
+    displayName?: string;
+    description?: string;
+    pricePhp?: number;
+    limits?: Record<string, unknown>;
+    features?: Record<string, boolean>;
+    isActive?: boolean;
+  }) {
+    return callAdmin<{ tier: AdminAccountTierConfig }>('POST', 'account-tiers/save', input);
+  },
+
+  async listAccountUpgradeRequests(input: { q?: string; status?: 'all' | 'pending' | 'approved' | 'rejected' | 'cancelled'; page?: number; perPage?: number }) {
+    const query = toQueryString({
+      q: input.q,
+      status: input.status ?? 'pending',
+      page: input.page ?? 1,
+      perPage: input.perPage ?? 50,
+    });
+    return callAdmin<{ requests: AdminAccountUpgradeRequest[]; total: number; page: number; perPage: number; totalPages: number }>('GET', `account-upgrades${query}`);
+  },
+
+  async accountUpgradeDecision(requestId: string, action: 'approve' | 'reject', rejectionMessage?: string) {
+    return callAdmin<{ requestId: string; status: 'approved' | 'rejected' }>('POST', `account-upgrades/${requestId}/decision`, { action, rejectionMessage });
+  },
+
+  async listVoucherCampaigns() {
+    return callAdmin<{ campaigns: AdminVoucherCampaign[] }>('GET', 'vouchers');
+  },
+
+  async createVoucherCampaign(input: {
+    name: string;
+    targetTier: 'pro' | 'pro_max';
+    maxCodes: number;
+    expiresAt?: string | null;
+    targetEmail?: string | null;
+    targetUserId?: string | null;
+    notes?: string | null;
+  }) {
+    return callAdmin<{ campaign: AdminVoucherCampaign }>('POST', 'vouchers/campaigns/create', input);
+  },
+
+  async copyNextVoucher(campaignId: string) {
+    return callAdmin<{ voucher: Record<string, unknown>; code: string }>('POST', `vouchers/${campaignId}/copy-next`);
   },
 
   async deleteUser(userId: string) {

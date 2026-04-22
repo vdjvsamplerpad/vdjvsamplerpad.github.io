@@ -34,6 +34,7 @@ export type TabKey =
   | 'active'
   | 'activity'
   | 'account_requests'
+  | 'account_upgrades'
   | 'crash_reports'
   | 'store_requests'
   | 'installer_requests'
@@ -117,6 +118,7 @@ export const TABS: Array<{
   { key: 'activity', label: 'Activity', emoji: '📋', hint: 'Review export/import audit logs', tone: 'amber' },
   { key: 'sampler_defaults', label: 'Sampler Defaults', emoji: 'SD', hint: 'Control first-run sampler defaults and limits', tone: 'violet' },
   { key: 'account_requests', label: 'Account Requests', emoji: '✅', hint: 'Approve or reject account registration', tone: 'rose' },
+  { key: 'account_upgrades', label: 'Account Upgrades', emoji: 'PRO', hint: 'Approve PRO upgrades and issue vouchers', tone: 'rose' },
   { key: 'crash_reports', label: 'Crash Reports', emoji: 'CR', hint: 'Review client-submitted crash diagnostics', tone: 'amber' },
   { key: 'store_requests', label: 'Store Requests', emoji: '🛒', hint: 'Handle purchase requests', tone: 'orange' },
   { key: 'installer_requests', label: 'Installer Requests', emoji: 'IR', hint: 'Review bundled installer purchase requests', tone: 'orange' },

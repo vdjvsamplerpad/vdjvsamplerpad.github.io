@@ -69,6 +69,7 @@ import {
   StoreRequestsTab,
 } from './AdminAccessDialog.tabs';
 import { AdminAccessInstallerTab } from './AdminAccessInstallerTab';
+import { AdminAccountUpgradesTab } from './AdminAccountUpgradesTab';
 import { AdminAccessNonStoreTabs } from './AdminAccessDialog.nonStoreTabs';
 import { AdminAccessDialogModals } from './AdminAccessDialog.dialogs';
 import { useAdminAccessStoreManager } from './AdminAccessDialog.store';
@@ -78,6 +79,7 @@ const ADMIN_HOME_FETCH_COOLDOWN_MS = 60 * 1000;
 const ADMIN_NAV_ORDER: TabKey[] = [
   'home',
   'account_requests',
+  'account_upgrades',
   'store_requests',
   'installer_requests',
   'assignments',
@@ -326,9 +328,13 @@ export function AdminAccessDialog({
   const [detailsOpen, setDetailsOpen] = React.useState(false);
   const [detailsUser, setDetailsUser] = React.useState<AdminUser | null>(null);
   const [editDisplayName, setEditDisplayName] = React.useState('');
+  const [editAccountTier, setEditAccountTier] = React.useState<'free' | 'pro' | 'pro_max'>('free');
   const [editOwnedBankQuota, setEditOwnedBankQuota] = React.useState('6');
   const [editOwnedBankPadCap, setEditOwnedBankPadCap] = React.useState('64');
   const [editDeviceTotalBankCap, setEditDeviceTotalBankCap] = React.useState('120');
+  const [editLimitOverridesJson, setEditLimitOverridesJson] = React.useState('');
+  const [editFeatureOverridesJson, setEditFeatureOverridesJson] = React.useState('');
+  const [editOverrideNotes, setEditOverrideNotes] = React.useState('');
   const [detailsBankListsLoading, setDetailsBankListsLoading] = React.useState(false);
   const [detailsOwnedBanks, setDetailsOwnedBanks] = React.useState<AdminBank[]>([]);
   const [detailsGrantedBanks, setDetailsGrantedBanks] = React.useState<AccessEntry[]>([]);
@@ -1549,21 +1555,50 @@ export function AdminAccessDialog({
       setError('Pad cap must be between 1 and 256.');
       return;
     }
-    if (!Number.isFinite(deviceTotalBankCap) || deviceTotalBankCap < 10 || deviceTotalBankCap > 1000) {
-      setError('Bank cap must be between 10 and 1000.');
+    if (!Number.isFinite(deviceTotalBankCap) || deviceTotalBankCap < 1 || deviceTotalBankCap > 1000) {
+      setError('Bank cap must be between 1 and 1000.');
+      return;
+    }
+    let limitOverrides: Record<string, number | null> | undefined;
+    let featureOverrides: Record<string, boolean> | undefined;
+    try {
+      if (editLimitOverridesJson.trim()) {
+        const parsed = JSON.parse(editLimitOverridesJson) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          setError('Limit overrides must be a JSON object.');
+          return;
+        }
+        limitOverrides = parsed as Record<string, number | null>;
+      }
+      if (editFeatureOverridesJson.trim()) {
+        const parsed = JSON.parse(editFeatureOverridesJson) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          setError('Feature overrides must be a JSON object.');
+          return;
+        }
+        featureOverrides = parsed as Record<string, boolean>;
+      }
+    } catch (overrideError) {
+      setError(overrideError instanceof Error ? overrideError.message : 'Override JSON is invalid.');
       return;
     }
     setProfileSaving(true);
     try {
       await adminApi.updateUserProfile(detailsUser.id, {
         displayName,
+        accountTier: editAccountTier,
         ownedBankQuota,
         ownedBankPadCap,
         deviceTotalBankCap,
+        ...(limitOverrides !== undefined ? { limitOverrides } : {}),
+        ...(featureOverrides !== undefined ? { featureOverrides } : {}),
+        ...(editOverrideNotes.trim() ? { overrideNotes: editOverrideNotes.trim() } : {}),
       });
       setDetailsUser((prev) => (prev ? {
         ...prev,
         display_name: displayName,
+        account_tier: editAccountTier,
+        effective_account_tier: detailsUser.role === 'admin' ? 'pro_max' : editAccountTier,
         owned_bank_quota: ownedBankQuota,
         owned_bank_pad_cap: ownedBankPadCap,
         device_total_bank_cap: deviceTotalBankCap,
@@ -1714,9 +1749,13 @@ export function AdminAccessDialog({
   const openUserDetails = (user: AdminUser) => {
     setDetailsUser(user);
     setEditDisplayName(user.display_name || '');
+    setEditAccountTier(user.role === 'admin' ? 'pro_max' : (user.account_tier || user.effective_account_tier || 'free'));
     setEditOwnedBankQuota(String(user.owned_bank_quota ?? samplerDefaultsConfig.quotaDefaults.ownedBankQuota));
     setEditOwnedBankPadCap(String(user.owned_bank_pad_cap ?? samplerDefaultsConfig.quotaDefaults.ownedBankPadCap));
     setEditDeviceTotalBankCap(String(user.device_total_bank_cap ?? samplerDefaultsConfig.quotaDefaults.deviceTotalBankCap));
+    setEditLimitOverridesJson('');
+    setEditFeatureOverridesJson('');
+    setEditOverrideNotes('');
     setDetailsOwnedBanks([]);
     setDetailsGrantedBanks([]);
     setDetailsBankListsLoading(true);
@@ -2101,6 +2140,14 @@ export function AdminAccessDialog({
                 />
               )}
 
+              {tab === 'account_upgrades' && (
+                <AdminAccountUpgradesTab
+                  panelClass={tabPanelToneClass('account_upgrades')}
+                  cardClass={tabCardToneClass('account_upgrades')}
+                  pushNotice={(kind, message) => pushNotice({ variant: kind, message })}
+                />
+              )}
+
               {tab === 'crash_reports' && (
                 <CrashReportsTab
                   theme={theme}
@@ -2424,18 +2471,26 @@ export function AdminAccessDialog({
           open: detailsOpen,
           user: detailsUser,
           displayName: editDisplayName,
+          accountTier: editAccountTier,
           ownedBankQuota: editOwnedBankQuota,
           ownedBankPadCap: editOwnedBankPadCap,
           deviceTotalBankCap: editDeviceTotalBankCap,
+          limitOverridesJson: editLimitOverridesJson,
+          featureOverridesJson: editFeatureOverridesJson,
+          overrideNotes: editOverrideNotes,
           saving: profileSaving,
           bankListsLoading: detailsBankListsLoading,
           ownedBanks: detailsOwnedBanks,
           grantedBanks: detailsGrantedBanks,
           onOpenChange: handleDetailsOpenChange,
           onDisplayNameChange: setEditDisplayName,
+          onAccountTierChange: setEditAccountTier,
           onOwnedBankQuotaChange: setEditOwnedBankQuota,
           onOwnedBankPadCapChange: setEditOwnedBankPadCap,
           onDeviceTotalBankCapChange: setEditDeviceTotalBankCap,
+          onLimitOverridesJsonChange: setEditLimitOverridesJson,
+          onFeatureOverridesJsonChange: setEditFeatureOverridesJson,
+          onOverrideNotesChange: setEditOverrideNotes,
           onSaveProfile: saveUserProfile,
           onOpenResetPassword: () => setResetPasswordOpen(true),
           onOpenUnban: () => setUnbanOpen(true),

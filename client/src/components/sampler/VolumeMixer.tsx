@@ -48,6 +48,7 @@ interface VolumeMixerProps {
   theme: 'light' | 'dark';
   windowWidth: number;
   graphicsTier?: PerformanceTier;
+  hotcueEnabled?: boolean;
 }
 
 const HOTCUE_SLOTS = [0, 1, 2, 3] as const;
@@ -291,7 +292,8 @@ export function VolumeMixer({
   editMode,
   theme,
   windowWidth,
-  graphicsTier = 'low'
+  graphicsTier = 'low',
+  hotcueEnabled = true
 }: VolumeMixerProps) {
   const isMobile = windowWidth < 768;
   const displayedLegacyPlayingPads = React.useMemo(
@@ -1450,7 +1452,7 @@ export function VolumeMixer({
                       </>
                     )}
 
-                    {HOTCUE_SLOTS.map((slotIndex) => {
+                    {hotcueEnabled && HOTCUE_SLOTS.map((slotIndex) => {
                       const cue = channel.hotcuesMs[slotIndex];
                       if (typeof cue !== 'number') return null;
                       const cuePct = clamp((cue / duration) * 100, 0, 100);
@@ -1475,7 +1477,7 @@ export function VolumeMixer({
                   </div>
 
 
-                  {!channel.collapsed && (
+                  {hotcueEnabled && !channel.collapsed && (
                     <div className="mt-1.5 grid grid-cols-4 gap-1">
                       {HOTCUE_SLOTS.map((slotIndex) => {
                         const cue = channel.hotcuesMs[slotIndex];

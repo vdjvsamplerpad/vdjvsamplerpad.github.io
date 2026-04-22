@@ -174,11 +174,12 @@ export function OnlineBankStoreDialog({
     runtimeCatalogShasBySource,
     onImportBankFromStore,
 }: OnlineBankStoreDialogProps) {
-  const { user, profile } = useAuthState();
+  const { user, profile, capabilities } = useAuthState();
     const effectiveUser = user || getCachedUser();
     const effectiveUserId = effectiveUser?.id || null;
     const isGuest = !effectiveUser;
     const isAdmin = profile?.role === 'admin';
+    const isFreeAccount = !isGuest && capabilities.effectiveTier === 'free';
 
     const [loading, setLoading] = React.useState(false);
     const [items, setItems] = React.useState<StoreItem[]>([]);
@@ -295,6 +296,7 @@ export function OnlineBankStoreDialog({
             captureProductEvent('bank_store_opened', {
                 is_authenticated: Boolean(effectiveUserId),
                 is_admin: Boolean(isAdmin),
+                account_tier: capabilities.effectiveTier,
             });
             storeOpenedRef.current = true;
             return;
@@ -302,7 +304,7 @@ export function OnlineBankStoreDialog({
         if (!open) {
             storeOpenedRef.current = false;
         }
-    }, [effectiveUserId, isAdmin, open]);
+    }, [capabilities.effectiveTier, effectiveUserId, isAdmin, open]);
 
     React.useEffect(() => {
         const handleOnline = () => {
@@ -1047,7 +1049,7 @@ export function OnlineBankStoreDialog({
                                                     </div>
                                                     {/* Flash Sale Top Banner Slot */}
                                                     <div className="relative z-20 shrink-0 h-8 sm:h-9">
-                                                        {item.has_active_promotion && item.promotion_type === 'flash_sale' && item.promotion_ends_at && !(item.status === 'granted_download' || hasImportedCopy) && (
+                                                        {item.has_active_promotion && item.promotion_type === 'flash_sale' && item.promotion_ends_at && !(item.status === 'granted_download' || item.status === 'pro_max_unlocked' || hasImportedCopy) && (
                                                             <div className="absolute inset-0 bg-gradient-to-r from-rose-600/90 to-rose-500/90 backdrop-blur-md border-b border-rose-400/30 px-3 py-1.5 flex items-center justify-between text-[10px] sm:text-[11px] font-bold text-white tracking-wide shadow-lg">
                                                                 <div className="flex items-center gap-1.5 shrink-0 uppercase tracking-wider">
                                                                     <Timer className="w-3 h-3 sm:w-3.5 sm:h-3.5 animate-pulse" />
@@ -1065,7 +1067,7 @@ export function OnlineBankStoreDialog({
                                                     {/* Info */}
                                                     <div className="flex-1 min-h-0 p-4 pb-2 relative z-10 flex flex-col justify-end pointer-events-none">
                                                         {(() => {
-                                                            const ownsItem = item.status === 'granted_download' || importedOrDownloadedBankIds.has(item.bank_id);
+                                                            const ownsItem = item.status === 'granted_download' || item.status === 'pro_max_unlocked' || importedOrDownloadedBankIds.has(item.bank_id);
                                                             return (
                                                                 <div className="flex items-start justify-between gap-2 mb-1">
                                                                     <h3 className="font-bold text-base sm:text-lg leading-tight line-clamp-2 text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]" title={item.bank.title}>
@@ -1108,7 +1110,7 @@ export function OnlineBankStoreDialog({
                                                     {/* Bottom: Footer with Price & Actions */}
                                                     <div className="p-4 pt-3 flex items-center justify-between mt-auto relative z-10 border-t border-white/10 bg-black/20 backdrop-blur-sm">
                                                         {/* Price */}
-                                                        {!isGuest && item.status === 'buy' ? (
+                                                        {!isGuest && (item.status === 'buy' || item.status === 'upgrade_required') ? (
                                                             <div className="text-sm font-semibold min-w-0 flex-1 mr-2 text-white">
                                                                 {renderCatalogPrice(item)}
                                                             </div>
@@ -1137,6 +1139,10 @@ export function OnlineBankStoreDialog({
                                                             <span className="inline-flex items-center h-6 px-2 text-[10px] rounded-md font-bold uppercase tracking-wide bg-blue-600/20 text-blue-200 border border-blue-300/30">
                                                                 PURCHASED
                                                             </span>
+                                                        ) : !isGuest && item.status === 'pro_max_unlocked' ? (
+                                                            <span className="inline-flex items-center h-6 px-2 text-[10px] rounded-md font-bold uppercase tracking-wide bg-yellow-500/20 text-yellow-100 border border-yellow-300/40">
+                                                                PRO MAX
+                                                            </span>
                                                         ) : <div />}
 
                                                         {/* Action Button(s) */}
@@ -1152,7 +1158,20 @@ export function OnlineBankStoreDialog({
                                                                 >
                                                                     Get
                                                                 </Button>
-                                                            ) : (item.status === 'free_download' || item.status === 'granted_download') ? (
+                                                            ) : item.status === 'upgrade_required' ? (
+                                                                <Button
+                                                                    size="sm"
+                                                                    onClick={() => {
+                                                                        showToast(isFreeAccount
+                                                                            ? 'Upgrade to PRO or PRO MAX to get Store banks.'
+                                                                            : 'Upgrade required to get this Store bank.', 'error');
+                                                                    }}
+                                                                    disabled={!isOnline}
+                                                                    className="h-8 px-4 text-xs font-semibold rounded-full disabled:opacity-50 bg-amber-500 hover:bg-amber-400 text-black shadow-lg"
+                                                                >
+                                                                    Get
+                                                                </Button>
+                                                            ) : (item.status === 'free_download' || item.status === 'granted_download' || item.status === 'pro_max_unlocked') ? (
                                                                 hasImportedCopy ? (
                                                                     <Button
                                                                         size="sm"

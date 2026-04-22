@@ -15,7 +15,8 @@ import { ProgressDialog } from '@/components/ui/progress-dialog';
 import { StopMode } from '@/components/sampler/types/sampler';
 import type { GraphicsProfile } from '@/lib/performance-monitor';
 import { edgeFunctionUrl } from '@/lib/edge-api';
-import { useAuthState } from '@/hooks/useAuth';
+import { supabase } from '@/lib/supabase';
+import { useAuthActions, useAuthState } from '@/hooks/useAuth';
 import { isNativeBankImportAvailable, pickNativeSharedBankFile } from '@/lib/native-bank-import';
 import type { ImportBankSource } from '@/components/sampler/hooks/nativeBankImport.types';
 import { HelpTooltip } from '@/components/ui/help-tooltip';
@@ -304,10 +305,23 @@ export function AboutDialog({
   authTransitionStatus = 'idle',
   onSignOut
 }: AboutDialogProps) {
-  const { profile } = useAuthState();
+  const { profile, capabilities } = useAuthState();
+  const { refreshAccountCapabilities } = useAuthActions();
   const isAdmin = profile?.role === 'admin';
+  const accountTierLabel = capabilities.effectiveTier === 'pro_max'
+    ? 'PRO MAX'
+    : capabilities.effectiveTier.toUpperCase();
+  const canUseInputMapping = capabilities.features.inputMapping;
+  const canUseSystemShortcuts = capabilities.features.systemShortcuts;
+  const canUseChannelShortcuts = capabilities.features.channelShortcuts;
+  const canUseMappingImportExport = capabilities.features.mappingImportExport;
+  const canUseBackupRepair = capabilities.features.backupRepair;
+  const canUseAdvancedStopModes = capabilities.features.advancedStopModes;
   const [appUpdateActionError, setAppUpdateActionError] = React.useState<string | null>(null);
   const [appUpdateActionBusy, setAppUpdateActionBusy] = React.useState(false);
+  const [voucherCode, setVoucherCode] = React.useState('');
+  const [voucherBusy, setVoucherBusy] = React.useState(false);
+  const [voucherNotice, setVoucherNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [midiLearnAction, setMidiLearnAction] = React.useState<
     | { type: 'system'; action: SystemAction }
     | { type: 'channel'; channelIndex: number; field?: keyof ChannelMapping }
@@ -491,6 +505,17 @@ export function AboutDialog({
       setActivePanel('general');
     }
   }, [isAuthenticated, activePanel]);
+
+  React.useEffect(() => {
+    if (activePanel === 'system' && !canUseSystemShortcuts) setActivePanel('general');
+    if (activePanel === 'channels' && !canUseChannelShortcuts) setActivePanel('general');
+    if (activePanel === 'backup' && !canUseBackupRepair && !canUseMappingImportExport) setActivePanel('general');
+  }, [activePanel, canUseBackupRepair, canUseChannelShortcuts, canUseMappingImportExport, canUseSystemShortcuts]);
+
+  React.useEffect(() => {
+    if (canUseAdvancedStopModes || stopMode === 'instant') return;
+    onStopModeChange('instant');
+  }, [canUseAdvancedStopModes, onStopModeChange, stopMode]);
 
   React.useEffect(() => {
     return () => {
@@ -1194,6 +1219,39 @@ export function AboutDialog({
     }
   }, [onSignOut, isSigningOut, onOpenChange]);
 
+  const handleRedeemVoucher = React.useCallback(async () => {
+    const code = voucherCode.trim();
+    if (!code || voucherBusy) return;
+    setVoucherBusy(true);
+    setVoucherNotice(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in before redeeming a voucher.');
+      const response = await fetch(edgeFunctionUrl('store-api', 'account/voucher/redeem'), {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ code }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || payload?.message || `Voucher redeem failed (${response.status})`);
+      }
+      await refreshAccountCapabilities();
+      setVoucherCode('');
+      setVoucherNotice({ type: 'success', message: `Voucher applied. Account tier is now ${String(payload?.targetTier || '').toUpperCase() || 'updated'}.` });
+    } catch (error) {
+      setVoucherNotice({ type: 'error', message: error instanceof Error ? error.message : 'Voucher redeem failed.' });
+    } finally {
+      setVoucherBusy(false);
+    }
+  }, [refreshAccountCapabilities, voucherBusy, voucherCode]);
+
   React.useEffect(() => {
     if (!isSigningOut) return;
     if (authTransitionStatus === 'signing_out') return;
@@ -1226,13 +1284,13 @@ export function AboutDialog({
         <div className="space-y-3 py-2 max-h-[calc(92vh-96px)] overflow-y-auto pr-1 text-sm">
           <div className={`grid gap-2 ${isAuthenticated ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1'}`}>
             <Button type="button" variant={activePanel === 'general' ? 'default' : 'outline'} size="sm" onClick={() => setActivePanel('general')}>General</Button>
-            {isAuthenticated && (
+            {isAuthenticated && canUseSystemShortcuts && (
               <Button type="button" variant={activePanel === 'system' ? 'default' : 'outline'} size="sm" onClick={() => setActivePanel('system')}>System Shortcut</Button>
             )}
-            {isAuthenticated && (
+            {isAuthenticated && canUseChannelShortcuts && (
               <Button type="button" variant={activePanel === 'channels' ? 'default' : 'outline'} size="sm" onClick={() => setActivePanel('channels')}>Channels Shortcut</Button>
             )}
-            {isAuthenticated && (
+            {isAuthenticated && (canUseBackupRepair || canUseMappingImportExport) && (
               <Button type="button" variant={activePanel === 'backup' ? 'default' : 'outline'} size="sm" onClick={() => setActivePanel('backup')}>Backup</Button>
             )}
           </div>
@@ -1317,18 +1375,25 @@ export function AboutDialog({
                 </div>
                 <div className="space-y-1">
                   <FieldLabel label="Stop Mode" help="Chooses how pads stop when you turn them off or trigger a compatible stop action, such as instant cut, fade out, brake, backspin, or filter sweep." />
-                  <Select value={stopMode} onValueChange={(value) => onStopModeChange(value as StopMode)}>
+                  <Select value={canUseAdvancedStopModes ? stopMode : 'instant'} onValueChange={(value) => onStopModeChange(value as StopMode)} disabled={!canUseAdvancedStopModes}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="instant">Instant Stop</SelectItem>
-                      <SelectItem value="fadeout">Fade Out</SelectItem>
-                      <SelectItem value="brake">Brake</SelectItem>
-                      <SelectItem value="backspin">Backspin</SelectItem>
-                      <SelectItem value="filter">Filter Sweep</SelectItem>
+                      {canUseAdvancedStopModes && (
+                        <>
+                          <SelectItem value="fadeout">Fade Out</SelectItem>
+                          <SelectItem value="brake">Brake</SelectItem>
+                          <SelectItem value="backspin">Backspin</SelectItem>
+                          <SelectItem value="filter">Filter Sweep</SelectItem>
+                        </>
+                      )}
                     </SelectContent>
                   </Select>
+                  {!canUseAdvancedStopModes && (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-300">Advanced stop modes require PRO.</p>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <FieldLabel label="Default Trigger Mode" help="This applies only to newly loaded audio pads. Existing pads keep their current trigger mode until you edit them." />
@@ -1351,6 +1416,12 @@ export function AboutDialog({
                   label="Input & Mapping"
                   help="Settings for MIDI input, keyboard mapping, shortcut visibility, and automatic assignment behavior."
                 />
+                {!canUseInputMapping ? (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+                    Keyboard, MIDI, and mapping controls require PRO.
+                  </div>
+                ) : (
+                  <>
                 {!midiSupported && (
                   <p className="text-xs text-red-500">Web MIDI not supported in this browser.</p>
                 )}
@@ -1441,12 +1512,18 @@ export function AboutDialog({
                     </div>
                   </div>
                 )}
+                  </>
+                )}
               </div>
 
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2 sm:grid-cols-3">
                 <div className="rounded-lg border p-3 bg-gray-50/60 dark:bg-gray-900/30">
                   <div className="text-xs uppercase tracking-wide text-gray-500">User</div>
                   <div className="font-medium">{displayName}</div>
+                </div>
+                <div className="rounded-lg border p-3 bg-gray-50/60 dark:bg-gray-900/30">
+                  <div className="text-xs uppercase tracking-wide text-gray-500">Tier</div>
+                  <div className="font-medium">{accountTierLabel}</div>
                 </div>
                 <div className="rounded-lg border p-3 bg-gray-50/60 dark:bg-gray-900/30">
                   <div className="text-xs uppercase tracking-wide text-gray-500">Version</div>
@@ -1526,6 +1603,36 @@ export function AboutDialog({
               {isAuthenticated && onSignOut && (
                 <div className="rounded-lg border border-red-300 bg-red-50/60 dark:border-red-700 dark:bg-red-900/20 p-3 space-y-2">
                   <div className="text-xs uppercase tracking-wide text-red-600 dark:text-red-300">Account</div>
+                  <div className="rounded-md border border-gray-200 bg-white/70 p-2 space-y-2 dark:border-gray-700 dark:bg-gray-950/30">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Redeem Voucher</div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input
+                        value={voucherCode}
+                        onChange={(event) => {
+                          setVoucherCode(event.target.value);
+                          setVoucherNotice(null);
+                        }}
+                        placeholder="VDJV-XXXXXX-XXXXXX-XXXXXX"
+                        className="h-8 text-xs"
+                        disabled={voucherBusy}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 shrink-0"
+                        onClick={() => void handleRedeemVoucher()}
+                        disabled={voucherBusy || voucherCode.trim().length < 6}
+                      >
+                        {voucherBusy ? 'Checking...' : 'Redeem'}
+                      </Button>
+                    </div>
+                    {voucherNotice && (
+                      <div className={`text-[11px] ${voucherNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-500'}`}>
+                        {voucherNotice.message}
+                      </div>
+                    )}
+                  </div>
                   <Button
                     type="button"
                     variant="outline"
@@ -1540,7 +1647,7 @@ export function AboutDialog({
               )}
             </>
           )}
-          {isAuthenticated && activePanel === 'system' && (
+          {isAuthenticated && canUseSystemShortcuts && activePanel === 'system' && (
             <div className="rounded-lg border p-3 space-y-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <SectionLabel
@@ -1774,7 +1881,7 @@ export function AboutDialog({
 
             </div>
           )}
-          {isAuthenticated && activePanel === 'channels' && (
+          {isAuthenticated && canUseChannelShortcuts && activePanel === 'channels' && (
             <div className="rounded-lg border p-3 space-y-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <SectionLabel
@@ -2029,7 +2136,7 @@ export function AboutDialog({
               </div>
             </div>
           )}
-          {isAuthenticated && activePanel === 'backup' && (
+          {isAuthenticated && (canUseBackupRepair || canUseMappingImportExport) && activePanel === 'backup' && (
             <div className="space-y-3">
               <div className="rounded-lg border p-3 space-y-1 bg-gray-50/60 dark:bg-gray-900/30">
                 <div className="text-xs uppercase tracking-wide text-gray-500">🎧🔥 About Us - VDJV Sampler Pad 🔥🎧</div>
@@ -2063,7 +2170,8 @@ export function AboutDialog({
                   <p>Thank you for your support, ka-Power! ⚡ More power! 💪🔥</p>
                 </div>
               </div>
-              <div className="rounded-lg border p-3 space-y-2">
+              {canUseMappingImportExport && (
+                <div className="rounded-lg border p-3 space-y-2">
                 <SectionLabel
                   label="Mapping Backup"
                   help="Export or import only the app mapping setup, without doing a full backup of banks, media, and app state."
@@ -2088,9 +2196,11 @@ export function AboutDialog({
                     onChange={handleImportMappings}
                   />
                 </div>
-              </div>
+                </div>
+              )}
 
-              <div className="rounded-lg border p-3 space-y-2">
+              {canUseBackupRepair && (
+                <div className="rounded-lg border p-3 space-y-2">
                 <SectionLabel
                   label="Backup & Repair"
                   help="Create or restore the encrypted account backup for the signed-in account, including banks, media, arrangement, settings, and mappings. Use the repair actions when a bank list restores but media is still missing on this device."
@@ -2141,6 +2251,7 @@ export function AboutDialog({
                   onChange={handleRecoveryImport}
                 />
               </div>
+              )}
             </div>
           )}
         </div>

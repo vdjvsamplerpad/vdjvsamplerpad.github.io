@@ -1,7 +1,14 @@
 ﻿import * as React from 'react'
 import { supabase } from '@/lib/supabase'
 import type { User, AuthError, Session } from '@supabase/supabase-js'
+import { edgeFunctionUrl } from '@/lib/edge-api'
 import { clearUserBankCache, refreshAccessibleBanksCache } from '@/lib/bank-utils'
+import {
+  type AccountCapabilitySnapshot,
+  fallbackCapabilitiesForProfile,
+  readCachedCapabilities,
+  writeCachedCapabilities,
+} from '@/lib/account-capabilities'
 import {
   ensureActivityRuntime,
   SessionConflictError,
@@ -24,7 +31,7 @@ const HIDE_PROTECTED_BANKS_KEY = 'vdjv-hide-protected-banks';
 const PASSWORD_RECOVERY_MODE_KEY = 'vdjv-password-recovery-mode';
 const GOOGLE_OAUTH_LOGIN_PENDING_KEY = 'vdjv-google-oauth-login-pending';
 const GOOGLE_OAUTH_LOGIN_LOGGED_PREFIX = 'vdjv-google-oauth-login-logged:';
-const PROFILE_SELECT = 'id, role, display_name, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap';
+const PROFILE_SELECT = 'id, role, display_name, account_tier, tier_source, tier_updated_at, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap';
 const AUTH_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 const GOOGLE_OAUTH_LOGIN_PENDING_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -90,6 +97,10 @@ export interface Profile {
   id: string
   role: 'admin' | 'user'
   display_name: string
+  account_tier?: 'free' | 'pro' | 'pro_max' | null
+  effective_account_tier?: 'free' | 'pro' | 'pro_max' | null
+  tier_source?: string | null
+  tier_updated_at?: string | null
   owned_bank_quota?: number | null
   owned_bank_pad_cap?: number | null
   device_total_bank_cap?: number | null
@@ -107,6 +118,7 @@ interface AuthState {
   banned: boolean
   offlineTrustedSession: boolean
   lastSessionValidationAt: number | null
+  capabilities: AccountCapabilitySnapshot
 }
 
 // Helper to get cached user from localStorage (for offline/sync issues)
@@ -176,6 +188,7 @@ interface AuthActions {
   signIn: (email: string, password: string) => Promise<{ error?: AuthError | null; data?: { user: User | null } }>
   signInWithGoogle: (redirectTo?: string) => Promise<{ error?: AuthError | null }>
   signOut: () => Promise<{ error?: AuthError | null }>
+  refreshAccountCapabilities: () => Promise<AccountCapabilitySnapshot>
   requestPasswordReset: (email: string) => Promise<{ error?: AuthError | null }>
   verifyPasswordResetCode: (email: string, code: string) => Promise<{ error?: AuthError | null }>
   updatePassword: (newPassword: string) => Promise<{ error?: AuthError | null }>
@@ -322,10 +335,37 @@ async function loadProfile(userId: string) {
   }
 }
 
+async function loadAccountCapabilities(userId: string, profile: Profile | null): Promise<AccountCapabilitySnapshot> {
+  const cached = readCachedCapabilities(userId)
+  try {
+    const { data } = await supabase.auth.getSession()
+    const token = data.session?.access_token
+    if (!token) return cached || fallbackCapabilitiesForProfile(profile)
+    const response = await fetch(edgeFunctionUrl('store-api', 'account/me'), {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) return cached || fallbackCapabilitiesForProfile(profile)
+    const payload = await response.json().catch(() => ({}))
+    const accountData = payload?.data && typeof payload.data === 'object' ? payload.data : payload
+    const capabilities = accountData?.capabilities as AccountCapabilitySnapshot | undefined
+    if (!capabilities?.features || !capabilities?.limits) return cached || fallbackCapabilitiesForProfile(profile)
+    writeCachedCapabilities(userId, capabilities)
+    return capabilities
+  } catch {
+    return cached || fallbackCapabilitiesForProfile(profile)
+  }
+}
+
 function useAuthValue(): AuthProviderValue {
   const cachedBan = getCachedBan()
   const cachedUser = cachedBan ? null : getCachedUser()
   const cachedProfile = cachedBan ? null : getCachedProfile()
+  const cachedCapabilities = cachedUser?.id
+    ? readCachedCapabilities(cachedUser.id) || fallbackCapabilitiesForProfile(cachedProfile)
+    : fallbackCapabilitiesForProfile(null)
 
   const [state, setState] = React.useState<AuthState>({
     user: cachedUser,
@@ -339,6 +379,7 @@ function useAuthValue(): AuthProviderValue {
     banned: cachedBan,
     offlineTrustedSession: Boolean(cachedUser && (typeof navigator !== 'undefined' ? !navigator.onLine : false)),
     lastSessionValidationAt: null,
+    capabilities: cachedCapabilities,
   })
   
   // Track which user we've already refreshed cache for
@@ -350,6 +391,15 @@ function useAuthValue(): AuthProviderValue {
   React.useEffect(() => {
     authTransitionStatusRef.current = state.authTransition.status
   }, [state.authTransition.status])
+
+  React.useEffect(() => {
+    if (state.user) return
+    if (state.capabilities.effectiveTier === 'guest') return
+    setState((s) => ({
+      ...s,
+      capabilities: fallbackCapabilitiesForProfile(null),
+    }))
+  }, [state.capabilities.effectiveTier, state.user])
 
   React.useEffect(() => {
     ensureActivityRuntime()
@@ -402,9 +452,10 @@ function useAuthValue(): AuthProviderValue {
     identifyProductUser(currentUserId, {
       role: state.profile?.role || null,
       display_name: state.profile?.display_name || null,
+      account_tier: state.capabilities.effectiveTier,
     })
     lastAnalyticsUserIdRef.current = currentUserId
-  }, [state.profile?.display_name, state.profile?.role, state.user?.id])
+  }, [state.capabilities.effectiveTier, state.profile?.display_name, state.profile?.role, state.user?.id])
 
   const setBannedState = React.useCallback((banned: boolean) => {
     cacheBanState(banned)
@@ -434,6 +485,7 @@ function useAuthValue(): AuthProviderValue {
     const fallbackUser = getCachedUser()
     if (!fallbackUser?.id) return false
     const fallbackProfile = getCachedProfile()
+    const fallbackCapabilities = readCachedCapabilities(fallbackUser.id) || fallbackCapabilitiesForProfile(fallbackProfile)
     setHideProtectedBanksLock(false)
     cacheUserData(fallbackUser, fallbackProfile)
     cacheRefreshedForUserIdRef.current = fallbackUser.id
@@ -447,6 +499,7 @@ function useAuthValue(): AuthProviderValue {
         email: null,
       },
       offlineTrustedSession: true,
+      capabilities: fallbackCapabilities,
     }))
     return true
   }, [])
@@ -630,6 +683,7 @@ function useAuthValue(): AuthProviderValue {
         if (error) {
           if (isTransientNetworkError(error)) {
             const fallbackProfile = getCachedProfile()
+            const fallbackCapabilities = readCachedCapabilities(authUser.id) || fallbackCapabilitiesForProfile(fallbackProfile)
             cacheUserData(authUser, fallbackProfile)
             cacheRefreshedForUserIdRef.current = authUser.id
             setState((s) => ({
@@ -641,7 +695,8 @@ function useAuthValue(): AuthProviderValue {
                 status: 'idle',
                 email: null,
               },
-              offlineTrustedSession: true
+              offlineTrustedSession: true,
+              capabilities: fallbackCapabilities,
             }))
             logGoogleOAuthLoginIfPending(authUser)
           } else {
@@ -663,6 +718,7 @@ function useAuthValue(): AuthProviderValue {
           }
         } else {
           const resolvedProfile = profile ? (profile as Profile) : await ensureProfile(authUser)
+          const resolvedCapabilities = await loadAccountCapabilities(authUser.id, resolvedProfile)
           cacheUserData(authUser, resolvedProfile)
           setState((s) => ({
             ...s,
@@ -674,7 +730,8 @@ function useAuthValue(): AuthProviderValue {
               email: null,
             },
             offlineTrustedSession: false,
-            lastSessionValidationAt: Date.now()
+            lastSessionValidationAt: Date.now(),
+            capabilities: resolvedCapabilities,
           }))
           logGoogleOAuthLoginIfPending(authUser)
         }
@@ -873,10 +930,12 @@ function useAuthValue(): AuthProviderValue {
         try {
           const { data, error } = await loadProfile(state.user!.id)
           if (error || !data) return
+          const capabilities = await loadAccountCapabilities(state.user!.id, data)
           cacheUserData(state.user!, data)
           setState((s) => ({
             ...s,
-            profile: data
+            profile: data,
+            capabilities,
           }))
         } catch {
         }
@@ -1114,6 +1173,19 @@ function useAuthValue(): AuthProviderValue {
     }
   }, [])
 
+  const refreshAccountCapabilities = React.useCallback(async () => {
+    const activeUser = state.user || getCachedUser()
+    if (!activeUser?.id) {
+      const guestCapabilities = fallbackCapabilitiesForProfile(null)
+      setState((s) => ({ ...s, capabilities: guestCapabilities }))
+      return guestCapabilities
+    }
+    const activeProfile = state.profile || getCachedProfile()
+    const capabilities = await loadAccountCapabilities(activeUser.id, activeProfile)
+    setState((s) => ({ ...s, capabilities }))
+    return capabilities
+  }, [state.profile, state.user])
+
   const verifyPasswordResetCode = React.useCallback(async (email: string, code: string) => {
     const { error } = await supabase.auth.verifyOtp({
       email,
@@ -1178,6 +1250,7 @@ function useAuthValue(): AuthProviderValue {
     signIn,
     signInWithGoogle,
     signOut,
+    refreshAccountCapabilities,
     requestPasswordReset,
     verifyPasswordResetCode,
     updatePassword,
@@ -1186,6 +1259,7 @@ function useAuthValue(): AuthProviderValue {
   }), [
     clearSessionConflictReason,
     requestPasswordReset,
+    refreshAccountCapabilities,
     signIn,
     signInWithGoogle,
     signOut,
