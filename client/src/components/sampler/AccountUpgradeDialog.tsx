@@ -130,7 +130,6 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
     let cancelled = false;
     setLoading(true);
     setStep('plans');
-    setMobilePlanIndex(0);
     setSuccessMessage(null);
     void (async () => {
       try {
@@ -157,6 +156,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
         setPaymentConfig((paymentData?.config || null) as PaymentConfig | null);
         const firstAvailable = nextTiers.find((tier) => tier.available)?.tier || 'pro';
         setSelectedTier(firstAvailable);
+        setMobilePlanIndex(Math.max(0, nextTiers.findIndex((tier) => tier.tier === firstAvailable) + 1));
       } catch (error) {
         if (!cancelled) {
           pushNotice?.({ variant: 'error', message: error instanceof Error ? error.message : 'Could not load upgrade options.' });
@@ -295,6 +295,16 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
     if (mobilePlanIndex < planViews.length) return;
     setMobilePlanIndex(Math.max(0, planViews.length - 1));
   }, [mobilePlanIndex, planViews.length]);
+
+  React.useEffect(() => {
+    if (step !== 'plans' || loading || !planViews.length) return;
+    const frame = window.requestAnimationFrame(() => {
+      const rail = planRailRef.current;
+      const target = rail?.children.item(mobilePlanIndex) as HTMLElement | null;
+      target?.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'center' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, mobilePlanIndex, planViews.length, step]);
 
   const showMobilePlan = React.useCallback((nextIndex: number) => {
     if (!planViews.length) return;
@@ -517,13 +527,13 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
               <span className="rounded-lg bg-pink-600 px-2.5 py-1 text-white">30% off</span>
             </div>
 
-            <div className="relative -mx-4 md:mx-0">
+            <div className="relative -mx-4 rounded-[1.6rem] border border-white/10 bg-white/[0.025] py-4 md:mx-0 md:px-4">
               <div className="mb-3 flex items-center justify-center gap-2 text-xs text-white/70">
                 <span className="rounded-full bg-white/10 px-3 py-1">Current tier: {currentTierLabel}</span>
               </div>
               <div
                 ref={planRailRef}
-                className="flex snap-x snap-mandatory gap-4 overflow-x-auto px-6 pb-2 [-ms-overflow-style:none] [scrollbar-width:none] md:grid md:grid-cols-1 md:overflow-visible md:px-0 xl:grid-cols-3 [&::-webkit-scrollbar]:hidden"
+                className="flex snap-x snap-mandatory gap-4 overflow-x-auto px-6 pb-2 [-ms-overflow-style:none] [scrollbar-width:none] md:grid md:grid-cols-3 md:overflow-visible md:px-0 [&::-webkit-scrollbar]:hidden"
               >
                 {planViews.map((plan) => (
                   <div key={plan.id} className="w-[min(86vw,430px)] shrink-0 snap-center md:w-auto">
@@ -535,7 +545,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                 type="button"
                 aria-label="Previous plan"
                 onClick={() => showMobilePlan(mobilePlanIndex - 1)}
-                className="absolute left-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur"
+                className="absolute left-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
@@ -543,11 +553,11 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                 type="button"
                 aria-label="Next plan"
                 onClick={() => showMobilePlan(mobilePlanIndex + 1)}
-                className="absolute right-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur"
+                className="absolute right-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
               >
                 <ChevronRight className="h-5 w-5" />
               </button>
-              <div className="mt-4 flex justify-center gap-1.5">
+              <div className="mt-4 flex justify-center gap-1.5 md:hidden">
                 {planViews.map((plan, index) => (
                   <button
                     key={plan.id}
