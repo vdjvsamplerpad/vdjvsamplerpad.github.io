@@ -112,6 +112,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
   const [proofFile, setProofFile] = React.useState<File | null>(null);
   const [proofPreviewUrl, setProofPreviewUrl] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
+  const planRailRef = React.useRef<HTMLDivElement | null>(null);
   const isDark = theme === 'dark';
 
   React.useEffect(() => {
@@ -294,6 +295,17 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
     if (mobilePlanIndex < planViews.length) return;
     setMobilePlanIndex(Math.max(0, planViews.length - 1));
   }, [mobilePlanIndex, planViews.length]);
+
+  const showMobilePlan = React.useCallback((nextIndex: number) => {
+    if (!planViews.length) return;
+    const normalized = (nextIndex + planViews.length) % planViews.length;
+    setMobilePlanIndex(normalized);
+    window.requestAnimationFrame(() => {
+      const rail = planRailRef.current;
+      const target = rail?.children.item(normalized) as HTMLElement | null;
+      target?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    });
+  }, [planViews.length]);
 
   const shellClass = isDark
     ? 'border-slate-700 bg-slate-950 text-slate-100'
@@ -505,24 +517,16 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
               <span className="rounded-lg bg-pink-600 px-2.5 py-1 text-white">30% off</span>
             </div>
 
-            <div className="hidden grid-cols-3 gap-4 xl:grid">
-              {planViews.map(renderPlanCard)}
-            </div>
-
-            <div className="hidden grid-cols-1 gap-4 md:grid xl:hidden">
-              {planViews.map(renderPlanCard)}
-            </div>
-
-            <div className="relative -mx-4 overflow-hidden md:hidden">
+            <div className="relative -mx-4 md:mx-0">
               <div className="mb-3 flex items-center justify-center gap-2 text-xs text-white/70">
                 <span className="rounded-full bg-white/10 px-3 py-1">Current tier: {currentTierLabel}</span>
               </div>
               <div
-                className="flex transition-transform duration-500 ease-out"
-                style={{ transform: `translateX(-${mobilePlanIndex * 100}%)` }}
+                ref={planRailRef}
+                className="flex snap-x snap-mandatory gap-4 overflow-x-auto px-6 pb-2 [-ms-overflow-style:none] [scrollbar-width:none] md:grid md:grid-cols-1 md:overflow-visible md:px-0 xl:grid-cols-3 [&::-webkit-scrollbar]:hidden"
               >
                 {planViews.map((plan) => (
-                  <div key={plan.id} className="w-full shrink-0 px-6">
+                  <div key={plan.id} className="w-[min(86vw,430px)] shrink-0 snap-center md:w-auto">
                     {renderPlanCard(plan)}
                   </div>
                 ))}
@@ -530,7 +534,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
               <button
                 type="button"
                 aria-label="Previous plan"
-                onClick={() => setMobilePlanIndex((index) => (index - 1 + planViews.length) % planViews.length)}
+                onClick={() => showMobilePlan(mobilePlanIndex - 1)}
                 className="absolute left-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur"
               >
                 <ChevronLeft className="h-5 w-5" />
@@ -538,7 +542,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
               <button
                 type="button"
                 aria-label="Next plan"
-                onClick={() => setMobilePlanIndex((index) => (index + 1) % planViews.length)}
+                onClick={() => showMobilePlan(mobilePlanIndex + 1)}
                 className="absolute right-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur"
               >
                 <ChevronRight className="h-5 w-5" />
@@ -549,7 +553,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, reason, pushNo
                     key={plan.id}
                     type="button"
                     aria-label={`Show plan ${index + 1}`}
-                    onClick={() => setMobilePlanIndex(index)}
+                    onClick={() => showMobilePlan(index)}
                     className={`h-1.5 rounded-full transition-all ${index === mobilePlanIndex ? 'w-7 bg-pink-500' : 'w-2 bg-white/25'}`}
                   />
                 ))}
