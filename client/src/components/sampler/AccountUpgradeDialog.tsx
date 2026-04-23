@@ -421,6 +421,89 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   const requestSubmitButtonClass = selectedIsProMax
     ? 'bg-[#1d4df5] font-black text-white shadow-[0_14px_36px_rgba(29,77,245,0.32)] hover:bg-[#2860ff]'
     : 'bg-[#ed0d7c] font-black text-white shadow-[0_14px_36px_rgba(237,13,124,0.32)] hover:bg-[#ff168c]';
+  const skeletonShellClass = isDark
+    ? 'border-white/10 bg-[#0b0e12] shadow-[0_0_0_1px_rgba(255,255,255,0.02)]'
+    : 'border-slate-950/10 bg-white/70 shadow-[0_20px_70px_rgba(15,23,42,0.10)]';
+  const skeletonCardClass = isDark
+    ? 'bg-white/[0.045]'
+    : 'bg-slate-950/[0.045]';
+  const skeletonBlockClass = isDark
+    ? 'bg-white/[0.095]'
+    : 'bg-slate-950/[0.10]';
+  const skeletonFaintBlockClass = isDark
+    ? 'bg-white/[0.06]'
+    : 'bg-slate-950/[0.065]';
+  const skeletonLineBorderClass = isDark ? 'border-white/10' : 'border-slate-950/10';
+
+  const renderSkeletonPlanCard = (index: number) => (
+    <div
+      key={index}
+      className={`relative flex min-h-[610px] flex-col gap-3 rounded-2xl p-4 md:min-h-[690px] ${skeletonCardClass} ${
+        index === 1 ? isDark ? 'ring-1 ring-white/8' : 'ring-1 ring-slate-950/8' : ''
+      }`}
+    >
+      {index === 1 && <div className={`absolute -top-3 left-1/2 h-7 w-36 -translate-x-1/2 rounded-full ${skeletonBlockClass}`} />}
+      <div className="flex items-center gap-2 pt-3">
+        <div className={`h-7 w-24 rounded ${skeletonBlockClass}`} />
+        <div className={`h-6 w-16 rounded-full ${skeletonFaintBlockClass}`} />
+      </div>
+      <div className={`h-4 w-48 max-w-[80%] rounded ${skeletonFaintBlockClass}`} />
+      <div className="mt-2 flex flex-col gap-1">
+        <div className="flex items-baseline gap-2">
+          <div className={`h-6 w-12 rounded ${skeletonFaintBlockClass}`} />
+          <div className={`h-10 w-20 rounded ${skeletonBlockClass}`} />
+          <div className={`h-5 w-16 rounded ${skeletonFaintBlockClass}`} />
+        </div>
+        <div className={`h-4 w-32 rounded ${skeletonFaintBlockClass}`} />
+      </div>
+      <div className={`mt-2 h-12 w-full rounded-xl ${skeletonBlockClass}`} />
+      <div className={`h-10 w-full rounded-lg ${skeletonFaintBlockClass}`} />
+      <div className="mt-2 flex items-center gap-2">
+        <div className={`h-5 w-5 rounded ${skeletonFaintBlockClass}`} />
+        <div className={`h-5 w-32 rounded ${skeletonBlockClass}`} />
+      </div>
+      <div className={`ml-7 h-4 w-48 max-w-[70%] rounded ${skeletonFaintBlockClass}`} />
+      <div className={`my-2 border-t ${skeletonLineBorderClass}`} />
+      <div className="flex flex-col gap-3">
+        {[65, 80, 55, 90, 70, 60, 85, 75].map((width, rowIndex) => (
+          <div key={`main-${rowIndex}`} className="flex items-center justify-between gap-2">
+            <div className="flex flex-1 items-center gap-2">
+              <div className={`h-4 w-4 shrink-0 rounded ${skeletonFaintBlockClass}`} />
+              <div className={`h-4 rounded ${skeletonFaintBlockClass}`} style={{ width: `${width}%` }} />
+            </div>
+            {rowIndex % 3 === 0 && <div className={`h-5 w-20 shrink-0 rounded-full ${skeletonFaintBlockClass}`} />}
+          </div>
+        ))}
+      </div>
+      <div className={`mt-4 h-5 w-36 rounded ${skeletonBlockClass}`} />
+      <div className="flex flex-col gap-3">
+        {[50, 60, 45, 70].map((width, rowIndex) => (
+          <div key={`tools-${rowIndex}`} className="flex items-center justify-between gap-2">
+            <div className="flex flex-1 items-center gap-2">
+              <div className={`h-4 w-4 shrink-0 rounded ${skeletonFaintBlockClass}`} />
+              <div className={`h-4 rounded ${skeletonFaintBlockClass}`} style={{ width: `${width}%` }} />
+            </div>
+            <div className={`h-5 w-24 shrink-0 rounded-full ${skeletonFaintBlockClass}`} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderPlansLoadingSkeleton = () => (
+    <div className={`mt-5 rounded-2xl border p-4 ${skeletonShellClass}`}>
+      <div className="flex justify-center">
+        <div className={`h-11 w-64 rounded-full ${skeletonBlockClass} animate-pulse`} />
+      </div>
+      <div className="mt-5 flex snap-x snap-mandatory gap-4 overflow-x-auto px-2 pb-2 [-ms-overflow-style:none] [scrollbar-width:none] md:grid md:grid-cols-3 md:overflow-visible md:px-0 [&::-webkit-scrollbar]:hidden">
+        {[0, 1, 2].map((index) => (
+          <div key={index} className="w-[min(86vw,430px)] shrink-0 snap-center animate-pulse md:w-auto">
+            {renderSkeletonPlanCard(index)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   const renderPlanCard = (plan: PlanView) => {
     const tier = plan.tier;
@@ -671,10 +754,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
         </DialogHeader>
 
         {loading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-sm">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading upgrade options...
-          </div>
+          renderPlansLoadingSkeleton()
         ) : step === 'plans' ? (
           <div className="relative mt-5 space-y-5">
             <div className={`pointer-events-none absolute inset-x-0 top-20 mx-auto h-64 max-w-4xl rounded-full blur-3xl ${planAmbientGlowClass}`} />
