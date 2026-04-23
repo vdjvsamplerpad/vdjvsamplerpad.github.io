@@ -205,6 +205,7 @@ export function AdminAccessDialog({
     setStoreReqPage,
     setStoreReqSearch,
     setStoreRequestAutomationFilter,
+    setStoreRequestBankFilter,
     setStoreRequestChannelFilter,
     setStoreRequestDecisionFilter,
     setStoreRequestFilter,
@@ -238,12 +239,15 @@ export function AdminAccessDialog({
     storeReqHistoryCount,
     storeReqSearch,
     storeRequestAutomationFilter,
+    storeRequestBankFilter,
+    storeRequestBankOptions,
     storeRequestChannelFilter,
     storeRequestDecisionFilter,
     storeRequestFilter,
     storeRequestOcrStatusFilter,
     storeRequestStatusFilter,
     storeRequestToReject,
+    storeRequestFilteredCount,
     storeRequests,
     updateBannerDraft,
     visibleStoreBanners,
@@ -2234,6 +2238,9 @@ export function AdminAccessDialog({
                   rows={pagedRequests}
                   page={storeReqPage}
                   totalPages={reqTotalPages}
+                  filteredCount={storeRequestFilteredCount}
+                  bankFilter={storeRequestBankFilter}
+                  bankOptions={storeRequestBankOptions}
                   expandedId={expandedStoreRequestId}
                   pendingCount={storeReqPendingCount}
                   historyCount={storeReqHistoryCount}
@@ -2265,6 +2272,11 @@ export function AdminAccessDialog({
                     }}
                     onOcrStatusFilterChange={(value) => {
                       setStoreRequestOcrStatusFilter(value);
+                      setStoreReqPage(1);
+                      setExpandedStoreRequestId(null);
+                    }}
+                    onBankFilterChange={(value) => {
+                      setStoreRequestBankFilter(value);
                       setStoreReqPage(1);
                       setExpandedStoreRequestId(null);
                     }}

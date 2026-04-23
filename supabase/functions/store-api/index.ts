@@ -4689,6 +4689,8 @@ const listAdminInstallerPurchaseRequestGroups = async (req: Request) => {
   const decision = String(url.searchParams.get("decision") || "all").toLowerCase();
   const automation = String(url.searchParams.get("automation") || "all").toLowerCase();
   const ocrStatus = String(url.searchParams.get("ocrStatus") || "all").toLowerCase();
+  const versionFilter = normalizeInstallerBuyVersion(url.searchParams.get("version"));
+  const skuCodeFilter = asString(url.searchParams.get("skuCode"), 120)?.trim().toUpperCase() || "";
   const page = Math.max(1, Number(url.searchParams.get("page") || 1));
   const perPage = Math.max(1, Math.min(100, Number(url.searchParams.get("perPage") || 20)));
   const q = asString(url.searchParams.get("q"), 120)?.trim();
@@ -4700,6 +4702,12 @@ const listAdminInstallerPurchaseRequestGroups = async (req: Request) => {
 
   if (channel === "image_proof" || channel === "gcash_manual" || channel === "maya_manual") {
     query = query.eq("payment_channel", channel);
+  }
+  if (versionFilter) {
+    query = query.eq("version", versionFilter);
+  }
+  if (skuCodeFilter) {
+    query = query.eq("sku_code", skuCodeFilter);
   }
   if (decision === "manual" || decision === "automation") {
     query = query.eq("decision_source", decision);

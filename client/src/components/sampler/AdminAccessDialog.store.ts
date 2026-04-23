@@ -204,6 +204,7 @@ export function useAdminAccessStoreManager({
   const [storeRequestDecisionFilter, setStoreRequestDecisionFilter] = React.useState<RequestDecisionFilter>('all');
   const [storeRequestAutomationFilter, setStoreRequestAutomationFilter] = React.useState<RequestAutomationFilter>('all');
   const [storeRequestOcrStatusFilter, setStoreRequestOcrStatusFilter] = React.useState<RequestOcrStatusFilter>('all');
+  const [storeRequestBankFilter, setStoreRequestBankFilter] = React.useState('all');
   const [storeLoading, setStoreLoading] = React.useState(false);
   const [storeRequests, setStoreRequests] = React.useState<PurchaseRequest[]>([]);
   const [storeDrafts, setStoreDrafts] = React.useState<CatalogDraft[]>([]);
@@ -1511,6 +1512,7 @@ export function useAdminAccessStoreManager({
 
       result.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
       return result.filter((request) => {
+        if (storeRequestBankFilter !== 'all' && !request.bankNames.some((name) => name === storeRequestBankFilter)) return false;
         if (!storeReqSearch) return true;
         const query = storeReqSearch.toLowerCase();
         return request.bankNames.some((name) => name.toLowerCase().includes(query))
@@ -1522,9 +1524,23 @@ export function useAdminAccessStoreManager({
           || (request.user_profile?.email || '').toLowerCase().includes(query);
       });
     }, [
+      storeRequestBankFilter,
       storeReqSearch,
       storeRequests,
     ]);
+
+  const storeRequestBankOptions = React.useMemo(() => {
+    const names = new Set<string>();
+    storeRequests.forEach((request) => {
+      const itemType = request.bank_catalog_items?.item_type;
+      const title = itemType === 'bank_bundle'
+        ? (request.bank_catalog_items?.bundle_title || request.bank_catalog_items?.banks?.title || request.banks?.title || 'Untitled Bundle')
+        : (request.bank_catalog_items?.banks?.title || request.banks?.title || 'Unknown Bank');
+      const normalized = String(title || '').trim();
+      if (normalized) names.add(normalized);
+    });
+    return Array.from(names).sort((left, right) => left.localeCompare(right));
+  }, [storeRequests]);
 
   const reqTotalPages = Math.max(1, Math.ceil(groupedRequests.length / PAGE_SIZE));
   const pagedRequests = groupedRequests.slice((storeReqPage - 1) * PAGE_SIZE, storeReqPage * PAGE_SIZE);
@@ -1744,6 +1760,8 @@ export function useAdminAccessStoreManager({
     pagedDrafts,
     pagedRequests,
     reqTotalPages,
+    storeRequestBankOptions,
+    storeRequestFilteredCount: groupedRequests.length,
     promotionUserOptions,
     resetStoreCatalogFilters,
     resetBannerDraft,
@@ -1767,6 +1785,7 @@ export function useAdminAccessStoreManager({
     setStoreReqPage,
     setStoreReqSearch,
     setStoreRequestAutomationFilter,
+    setStoreRequestBankFilter,
     setStoreRequestChannelFilter,
     setStoreRequestDecisionFilter,
     setStoreRequestFilter,
@@ -1800,6 +1819,7 @@ export function useAdminAccessStoreManager({
     storeReqHistoryCount,
     storeReqSearch,
     storeRequestAutomationFilter,
+    storeRequestBankFilter,
     storeRequestChannelFilter,
     storeRequestDecisionFilter,
     storeRequestFilter,

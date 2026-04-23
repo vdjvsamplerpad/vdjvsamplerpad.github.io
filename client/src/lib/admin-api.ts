@@ -1275,6 +1275,8 @@ export const adminApi = {
     decision?: 'all' | 'manual' | 'automation';
     automation?: 'all' | 'approved' | 'manual_review_disabled' | 'outside_window' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'duplicate_reference' | 'wallet_number_mismatch' | 'amount_mismatch' | 'ocr_failed' | 'approval_error' | 'not_image_proof';
     ocrStatus?: 'all' | 'detected' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'failed' | 'unavailable' | 'skipped';
+    version?: 'all' | InstallerVersionKey;
+    skuCode?: string;
     page?: number;
     perPage?: number;
   }) {
@@ -1286,6 +1288,8 @@ export const adminApi = {
       decision: input.decision ?? 'all',
       automation: input.automation ?? 'all',
       ocrStatus: input.ocrStatus ?? 'all',
+      version: input.version && input.version !== 'all' ? input.version : undefined,
+      skuCode: input.skuCode,
       page: input.page ?? 1,
       perPage: input.perPage ?? 20,
     });

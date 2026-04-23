@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { CopyableValue, copyTextToClipboard } from '@/components/ui/copyable-value';
-import { adminApi, type AdminAccountRegistrationRequest, type AdminAccountUpgradeRequest, type AdminClientCrashReport, type AdminInstallerPurchaseRequestGroup, type DefaultBankRelease, type LandingDownloadConfig, type LandingPlatformKey, type LandingVersionKey } from '@/lib/admin-api';
+import { adminApi, type AdminAccountRegistrationRequest, type AdminAccountUpgradeRequest, type AdminClientCrashReport, type AdminInstallerPurchaseRequestGroup, type DefaultBankRelease, type InstallerBuyProduct, type LandingDownloadConfig, type LandingPlatformKey, type LandingVersionKey } from '@/lib/admin-api';
 import { prepareManagedImageUpload } from '@/lib/image-upload';
 import { uploadManagedStoreAsset } from '@/lib/store-asset-upload';
 import { Check, ChevronDown, ChevronUp, Copy, Download, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
@@ -119,6 +119,9 @@ interface StoreRequestsTabProps {
   rows: StoreRequestGroup[];
   page: number;
   totalPages: number;
+  filteredCount: number;
+  bankFilter: string;
+  bankOptions: string[];
   expandedId: string | null;
   pendingCount: number;
   historyCount: number;
@@ -128,6 +131,7 @@ interface StoreRequestsTabProps {
   onDecisionFilterChange: (value: RequestDecisionFilter) => void;
   onAutomationFilterChange: (value: RequestAutomationFilter) => void;
   onOcrStatusFilterChange: (value: RequestOcrStatusFilter) => void;
+  onBankFilterChange: (value: string) => void;
   onSearchChange: (value: string) => void;
   onRefresh: () => void;
   onPageChange: (page: number) => void;
@@ -548,22 +552,31 @@ function RequestFilterBar({
   const statusOptions = getRequestStatusOptions(scope);
 
   return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
-      <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as RequestStatusFilter)} className={selectClass}>
-        {statusOptions.map((option) => <option key={`status-${option.value}`} value={option.value}>{option.label}</option>)}
-      </select>
-      <select value={channelFilter} onChange={(event) => onChannelFilterChange(event.target.value as RequestChannelFilter)} className={selectClass}>
-        {REQUEST_CHANNEL_OPTIONS.map((option) => <option key={`channel-${option.value}`} value={option.value}>{option.label}</option>)}
-      </select>
-      <select value={decisionFilter} onChange={(event) => onDecisionFilterChange(event.target.value as RequestDecisionFilter)} className={selectClass}>
-        {REQUEST_DECISION_OPTIONS.map((option) => <option key={`decision-${option.value}`} value={option.value}>{option.label}</option>)}
-      </select>
-      <select value={automationFilter} onChange={(event) => onAutomationFilterChange(event.target.value as RequestAutomationFilter)} className={selectClass}>
-        {REQUEST_AUTOMATION_OPTIONS.map((option) => <option key={`automation-${option.value}`} value={option.value}>{option.label}</option>)}
-      </select>
-      <select value={ocrStatusFilter} onChange={(event) => onOcrStatusFilterChange(event.target.value as RequestOcrStatusFilter)} className={selectClass}>
-        {REQUEST_OCR_STATUS_OPTIONS.map((option) => <option key={`ocr-${option.value}`} value={option.value}>{option.label}</option>)}
-      </select>
+    <div className="space-y-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as RequestStatusFilter)} className={selectClass}>
+          {statusOptions.map((option) => <option key={`status-${option.value}`} value={option.value}>{option.label}</option>)}
+        </select>
+        <select value={channelFilter} onChange={(event) => onChannelFilterChange(event.target.value as RequestChannelFilter)} className={selectClass}>
+          {REQUEST_CHANNEL_OPTIONS.map((option) => <option key={`channel-${option.value}`} value={option.value}>{option.label}</option>)}
+        </select>
+        <select value={decisionFilter} onChange={(event) => onDecisionFilterChange(event.target.value as RequestDecisionFilter)} className={selectClass}>
+          {REQUEST_DECISION_OPTIONS.map((option) => <option key={`decision-${option.value}`} value={option.value}>{option.label}</option>)}
+        </select>
+      </div>
+      <details className={`rounded-md border px-3 py-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white/60'}`}>
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide opacity-70">
+          More filters
+        </summary>
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <select value={automationFilter} onChange={(event) => onAutomationFilterChange(event.target.value as RequestAutomationFilter)} className={selectClass}>
+            {REQUEST_AUTOMATION_OPTIONS.map((option) => <option key={`automation-${option.value}`} value={option.value}>{option.label}</option>)}
+          </select>
+          <select value={ocrStatusFilter} onChange={(event) => onOcrStatusFilterChange(event.target.value as RequestOcrStatusFilter)} className={selectClass}>
+            {REQUEST_OCR_STATUS_OPTIONS.map((option) => <option key={`ocr-${option.value}`} value={option.value}>{option.label}</option>)}
+          </select>
+        </div>
+      </details>
     </div>
   );
 }
@@ -1505,6 +1518,11 @@ export function AccountRequestsTab({
         onAutomationFilterChange={onAutomationFilterChange}
         onOcrStatusFilterChange={onOcrStatusFilterChange}
       />
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
+          Filtered: {rows.length + upgradeRows.length}
+        </span>
+      </div>
 
       {accountRowsLoading ? (
         <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div>
@@ -1914,6 +1932,9 @@ export function StoreRequestsTab({
   rows,
   page,
   totalPages,
+  filteredCount,
+  bankFilter,
+  bankOptions,
   expandedId,
   pendingCount,
   historyCount,
@@ -1923,6 +1944,7 @@ export function StoreRequestsTab({
   onDecisionFilterChange,
   onAutomationFilterChange,
   onOcrStatusFilterChange,
+  onBankFilterChange,
   onSearchChange,
   onRefresh,
   onPageChange,
@@ -1972,6 +1994,21 @@ export function StoreRequestsTab({
         onAutomationFilterChange={onAutomationFilterChange}
         onOcrStatusFilterChange={onOcrStatusFilterChange}
       />
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={bankFilter}
+          onChange={(event) => onBankFilterChange(event.target.value)}
+          className={`h-9 min-w-0 rounded-md border px-3 text-sm sm:min-w-64 ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+        >
+          <option value="all">All banks</option>
+          {bankOptions.map((bankName) => (
+            <option key={`store-request-bank-${bankName}`} value={bankName}>{bankName}</option>
+          ))}
+        </select>
+        <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
+          Filtered: {filteredCount}
+        </span>
+      </div>
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <>
         <div className="space-y-2">
@@ -2201,10 +2238,13 @@ export function InstallerRequestsTab({
   const [decisionFilter, setDecisionFilter] = React.useState<RequestDecisionFilter>('all');
   const [automationFilter, setAutomationFilter] = React.useState<RequestAutomationFilter>('all');
   const [ocrStatusFilter, setOcrStatusFilter] = React.useState<RequestOcrStatusFilter>('all');
+  const [installerItemFilter, setInstallerItemFilter] = React.useState('all');
+  const [installerProducts, setInstallerProducts] = React.useState<InstallerBuyProduct[]>([]);
   const [search, setSearch] = React.useState('');
   const [page, setPage] = React.useState(1);
   const [loading, setLoading] = React.useState(false);
   const [rows, setRows] = React.useState<AdminInstallerPurchaseRequestGroup[]>([]);
+  const [filteredCount, setFilteredCount] = React.useState(0);
   const [totalPages, setTotalPages] = React.useState(1);
   const [pendingCount, setPendingCount] = React.useState(0);
   const [historyCount, setHistoryCount] = React.useState(0);
@@ -2217,11 +2257,52 @@ export function InstallerRequestsTab({
   });
   const [refundRequest, setRefundRequest] = React.useState<AdminInstallerPurchaseRequestGroup | null>(null);
   const debouncedSearch = useDebouncedValue(search, 350);
+  const installerFilterParts = React.useMemo(() => {
+    if (installerItemFilter.startsWith('version:')) {
+      return { version: installerItemFilter.slice('version:'.length) as 'V2' | 'V3', skuCode: undefined };
+    }
+    if (installerItemFilter.startsWith('sku:')) {
+      const [, version, ...skuParts] = installerItemFilter.split(':');
+      return { version: version as 'V2' | 'V3', skuCode: skuParts.join(':') };
+    }
+    return { version: undefined, skuCode: undefined };
+  }, [installerItemFilter]);
+
+  const installerItemOptions = React.useMemo(() => {
+    const options: Array<{ value: string; label: string }> = [
+      { value: 'all', label: 'All versions / SKUs' },
+      { value: 'version:V2', label: 'All V2' },
+      { value: 'version:V3', label: 'All V3' },
+    ];
+    installerProducts
+      .filter((product) => product.enabled !== false)
+      .forEach((product) => {
+        options.push({
+          value: `sku:${product.version}:${product.skuCode}`,
+          label: `${product.version} - ${product.displayName || product.skuCode}`,
+        });
+      });
+    return options;
+  }, [installerProducts]);
 
   React.useEffect(() => {
     setStatusFilter('all');
     setPage(1);
   }, [filter]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    adminApi.listInstallerBuyProducts()
+      .then((response) => {
+        if (!cancelled) setInstallerProducts(Array.isArray(response.items) ? response.items : []);
+      })
+      .catch(() => {
+        if (!cancelled) setInstallerProducts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const loadRequests = React.useCallback(async () => {
     setLoading(true);
@@ -2234,10 +2315,13 @@ export function InstallerRequestsTab({
         decision: decisionFilter,
         automation: automationFilter,
         ocrStatus: ocrStatusFilter,
+        version: installerFilterParts.version || 'all',
+        skuCode: installerFilterParts.skuCode,
         page,
         perPage: 10,
       });
       setRows(response.items || []);
+      setFilteredCount(Number(response.total || 0));
       setTotalPages(Math.max(1, Math.ceil(Number(response.total || 0) / Number(response.perPage || 10))));
       setPendingCount(Number(response.pendingCount || 0));
       setHistoryCount(Number(response.historyCount || 0));
@@ -2246,7 +2330,7 @@ export function InstallerRequestsTab({
     } finally {
       setLoading(false);
     }
-  }, [automationFilter, channelFilter, debouncedSearch, decisionFilter, filter, ocrStatusFilter, page, pushNotice, statusFilter]);
+  }, [automationFilter, channelFilter, debouncedSearch, decisionFilter, filter, installerFilterParts.skuCode, installerFilterParts.version, ocrStatusFilter, page, pushNotice, statusFilter]);
 
   React.useEffect(() => {
     void loadRequests();
@@ -2334,6 +2418,20 @@ export function InstallerRequestsTab({
         onAutomationFilterChange={(value) => { setAutomationFilter(value); setPage(1); }}
         onOcrStatusFilterChange={(value) => { setOcrStatusFilter(value); setPage(1); }}
       />
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={installerItemFilter}
+          onChange={(event) => { setInstallerItemFilter(event.target.value); setPage(1); }}
+          className={`h-9 min-w-0 rounded-md border px-3 text-sm sm:min-w-72 ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+        >
+          {installerItemOptions.map((option) => (
+            <option key={`installer-filter-${option.value}`} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+        <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
+          Filtered: {filteredCount}
+        </span>
+      </div>
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <>
           <div className="space-y-2">
