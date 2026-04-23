@@ -34,6 +34,7 @@ import {
   RevenueAdvancedChart,
   SortHeader,
 } from './AdminAccessDialog.widgets';
+import { AdminPageScaffold, AdminStatsStrip } from './AdminAccessDialog.layout';
 
 interface HomeTabProps {
   theme: AdminDialogTheme;
@@ -299,7 +300,11 @@ function HomeTab({
   ];
 
   return (
-    <div className={`border rounded p-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
+    <AdminPageScaffold
+      panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
+      title="Admin Overview"
+      description="Operational snapshot, revenue trends, queues, and usage signals for the selected date range."
+    >
       <div className="flex flex-wrap items-center gap-2">
         <div>
           <div className="text-sm font-semibold">Admin Overview</div>
@@ -520,7 +525,7 @@ function HomeTab({
           </>
         ) : null}
       </div>
-    </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -562,6 +567,11 @@ function AssignmentsTab({
   onToggleBankSelection,
 }: AssignmentsTabProps) {
   return (
+    <AdminPageScaffold
+      panelClass={cardClass}
+      title="Assignments"
+      description="Grant and revoke bank access by selecting a user, then applying changes against the official bank list."
+    >
     <div className={`grid grid-cols-1 gap-3 lg:grid-cols-2 ${DESKTOP_FILL_CLASS} lg:overflow-hidden`}>
       <div className={`border rounded p-3 space-y-3 ${DESKTOP_SECTION_CARD_CLASS} ${cardClass}`}>
         <div className="flex items-center justify-between">
@@ -665,6 +675,7 @@ function AssignmentsTab({
         <Pagination page={assignmentBanksPage} totalPages={assignmentBanksTotalPages} onPageChange={onAssignmentBanksPageChange} />
       </div>
     </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -687,7 +698,11 @@ function BanksTab({
   onDeleteBank,
 }: BanksTabProps) {
   return (
-    <div className={`border rounded p-3 space-y-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
+    <AdminPageScaffold
+      panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
+      title="Banks"
+      description="Search, inspect, edit, and manage access for the banks currently stored in the system."
+    >
       <div className="flex flex-wrap gap-2 items-end">
         <div className="flex-1 space-y-1">
           <Label>Search Banks</Label>
@@ -735,7 +750,7 @@ function BanksTab({
         </Table>
       </div>
       <Pagination page={banksPage} totalPages={banksTotalPages} onPageChange={onBanksPageChange} />
-    </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -757,7 +772,11 @@ function UsersTab({
   onOpenUserDetails,
 }: UsersTabProps) {
   return (
-    <div className={`border rounded p-3 space-y-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
+    <AdminPageScaffold
+      panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
+      title="Users"
+      description="Search users, review tier and sign-in details, and open full account edits from one list."
+    >
       <div className="flex flex-wrap gap-2 items-end">
         <div className="flex-1 space-y-1">
           <Label>Search Users</Label>
@@ -834,7 +853,7 @@ function UsersTab({
         </Table>
       </div>
       <Pagination page={usersPage} totalPages={usersTotalPages} onPageChange={onUsersPageChange} />
-    </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -898,7 +917,20 @@ function ActiveTab({
   );
 
   return (
-      <div className={`border rounded p-3 space-y-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
+      <AdminPageScaffold
+        panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
+        title="Active Users"
+        description="Monitor current live sessions and today’s unique heartbeat activity."
+        stats={(
+          <AdminStatsStrip
+            items={[
+              { label: 'Active Users', value: activeCounts.activeUsers, detail: 'Unique live users', toneClass: 'text-cyan-500' },
+              { label: 'Active Sessions', value: activeCounts.activeSessions, detail: 'Current sessions', toneClass: 'text-blue-500' },
+              { label: 'Active Today', value: activeCounts.activeTodayUsers, detail: 'Today unique users', toneClass: 'text-sky-500' },
+            ]}
+          />
+        )}
+      >
         <div className="flex items-center justify-between">
           <div>
             <Label>Active Users</Label>
@@ -942,7 +974,7 @@ function ActiveTab({
             {renderActiveRows(activeTodayUsersRows, 'No users have heartbeat activity today', 'text-sky-600 dark:text-sky-400')}
             <Pagination page={activeTodayPage} totalPages={activeTodayTotalPages} onPageChange={onActiveTodayPageChange} />
           </div>
-        </div>
+      </AdminPageScaffold>
   );
 }
 
@@ -995,7 +1027,11 @@ function ActivityTab({
   const otherFilterCount = Number(otherActivityStatusFilter !== 'all') + Number(Boolean(otherActivitySearch.trim()));
 
   return (
-    <div className={`border rounded p-3 space-y-3 ${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}>
+    <AdminPageScaffold
+      panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
+      title="Activity"
+      description="Review export and non-export operational activity, with filters for outcome, phase, category, and user."
+    >
       <div className={`border rounded p-3 space-y-3 ${DESKTOP_SECTION_CARD_CLASS} ${cardClass}`}>
         <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-1">
@@ -1251,7 +1287,7 @@ function ActivityTab({
         </div>
         <Pagination page={otherActivityPage} totalPages={otherActivityTotalPages} onPageChange={onOtherActivityPageChange} />
       </div>
-    </div>
+    </AdminPageScaffold>
   );
 }
 

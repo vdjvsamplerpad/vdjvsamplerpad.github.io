@@ -3715,7 +3715,34 @@ export function StoreCatalogTab({
   }, [bundleBankIds, bundleComingSoon, bundleDescription, bundlePinned, bundlePrice, bundleThumbFile, bundleTitle, onCreateBundle, pushNotice, resetBundleDialog]);
 
   return (
-    <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Store Catalog"
+      description="Manage store catalog items, bundles, maintenance mode, and the storefront listing state used by Bank Store."
+      actions={(
+        <Button
+          size="sm"
+          onClick={() => {
+            resetBundleDialog();
+            setBundleDialogOpen(true);
+          }}
+          className={isDark ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}
+        >
+          <Plus className="w-3.5 h-3.5 mr-1.5" />
+          Create Bundle
+        </Button>
+      )}
+      stats={(
+        <AdminStatsStrip
+          items={[
+            { label: 'Total', value: stats.total, detail: 'All catalog items', toneClass: 'text-gray-500' },
+            { label: 'Published', value: stats.published, detail: 'Live in store', toneClass: 'text-emerald-500' },
+            { label: 'Coming Soon', value: stats.comingSoon, detail: 'Visible but locked', toneClass: 'text-violet-500' },
+            { label: 'Filtered', value: filteredCount, detail: hasFilters ? 'Filters active' : 'All results', toneClass: 'text-indigo-500' },
+          ]}
+        />
+      )}
+    >
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Manage store catalog items. Drafts are created automatically during Admin Export.</p>
@@ -4110,7 +4137,7 @@ export function StoreCatalogTab({
           <Pagination page={page} totalPages={totalPages} onPageChange={onPageChange} />
         </>
       )}
-    </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -4297,7 +4324,28 @@ function StorePromotionsSurface({
 
   return (
     <>
-      <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
+      <AdminPageScaffold
+        panelClass={panelClass}
+        title="Promotions"
+        description="Schedule temporary discounts and free-access windows without changing the base catalog price."
+        actions={(
+          <Button onClick={onCreate} disabled={loading} className={isDark ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}>
+            <Plus className="w-4 h-4 mr-2" />
+            New Promotion
+          </Button>
+        )}
+        stats={(
+          <AdminStatsStrip
+            items={[
+              { label: 'Total', value: stats.total, detail: 'All promotions', toneClass: 'text-gray-500' },
+              { label: 'Active', value: stats.active, detail: 'Live now', toneClass: 'text-emerald-500' },
+              { label: 'Scheduled', value: stats.scheduled, detail: 'Upcoming', toneClass: 'text-blue-500' },
+              { label: 'Expired', value: stats.expired, detail: 'Ended windows', toneClass: 'text-amber-500' },
+            ]}
+          />
+        )}
+      >
+      <div className="space-y-3">
         <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white'}`}>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="space-y-1">
@@ -4779,6 +4827,7 @@ function StorePromotionsSurface({
         }}
         theme={theme}
       />
+      </AdminPageScaffold>
     </>
   );
 }
@@ -4817,7 +4866,22 @@ export function StoreBannersTab({
 
   return (
     <>
-      <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
+      <AdminPageScaffold
+        panelClass={panelClass}
+        title="Store Banners"
+        description="Manage the rotating banners shown above the Bank Store list, including inactive rows and unsaved edits."
+        stats={(
+          <AdminStatsStrip
+            items={[
+              { label: 'Total', value: bannerStats.total, detail: 'All banners', toneClass: 'text-gray-500' },
+              { label: 'Active', value: bannerStats.active, detail: 'Live banners', toneClass: 'text-emerald-500' },
+              { label: 'Inactive', value: bannerStats.inactive, detail: 'Hidden banners', toneClass: 'text-amber-500' },
+              { label: 'Unsaved', value: bannerStats.dirty, detail: 'Draft edits', toneClass: 'text-blue-500' },
+            ]}
+          />
+        )}
+      >
+      <div className="space-y-3">
         <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white'}`}>
           <div className="flex flex-wrap items-start gap-3">
             <div className="space-y-1">
@@ -5102,6 +5166,7 @@ export function StoreBannersTab({
           setDeleteTarget(null);
         }}
       />
+      </AdminPageScaffold>
     </>
   );
 }
@@ -5326,7 +5391,22 @@ export function StoreConfigTab({
   };
 
   return (
-    <div className={`border rounded p-3 overflow-visible lg:h-full lg:min-h-0 lg:overflow-auto ${panelClass}`}>
+    <AdminPageScaffold
+      panelClass={`${panelClass} overflow-visible lg:h-full lg:min-h-0 lg:overflow-auto`}
+      title="Payment and Store Controls"
+      description="Configure checkout instructions, payment channels, QR support, automation, and decision emails from one place."
+      actions={<Button onClick={onSave} disabled={loading} className="w-full sm:w-auto sm:min-w-[220px]">Save Pay Config</Button>}
+      stats={(
+        <AdminStatsStrip
+          items={[
+            { label: 'Account Price', value: storeConfig.account_price_php || '0', detail: 'Current base price', toneClass: 'text-gray-500' },
+            { label: 'Banner Delay', value: `${storeConfig.banner_rotation_ms || '5000'} ms`, detail: 'Store banner autoplay', toneClass: 'text-blue-500' },
+            { label: 'Automation', value: `${runningAutomationCount}/4`, detail: 'Auto-approval flows', toneClass: 'text-emerald-500' },
+            { label: 'Checkout Support', value: hasQrImage ? 'QR ready' : 'No QR uploaded', detail: hasMessengerConfig ? 'Messenger ready' : 'Messenger not configured', toneClass: 'text-amber-500' },
+          ]}
+        />
+      )}
+    >
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <div className="space-y-5">
           <div className={`rounded-2xl border p-4 space-y-4 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white/90'}`}>
@@ -5530,6 +5610,6 @@ export function StoreConfigTab({
           setConfirmAction(null);
         }}
       />
-    </div>
+    </AdminPageScaffold>
   );
 }
