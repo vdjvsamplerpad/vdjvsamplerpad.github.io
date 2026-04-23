@@ -76,6 +76,16 @@ import { useAdminAccessStoreManager } from './AdminAccessDialog.store';
 
 const ADMIN_HOME_AUTO_REFRESH_MS = 5 * 60 * 1000;
 const ADMIN_HOME_FETCH_COOLDOWN_MS = 60 * 1000;
+const ASIA_MANILA_UTC_OFFSET_MINUTES = 8 * 60;
+const toManilaIsoDateOnly = (value = new Date()): string => {
+  const shifted = new Date(value.getTime() + (ASIA_MANILA_UTC_OFFSET_MINUTES * 60 * 1000));
+  return toIsoDateOnly(shifted);
+};
+const manilaDateDaysAgo = (daysAgo: number, value = new Date()): string => {
+  const shifted = new Date(value.getTime() + (ASIA_MANILA_UTC_OFFSET_MINUTES * 60 * 1000));
+  shifted.setUTCDate(shifted.getUTCDate() - Math.max(0, daysAgo));
+  return toIsoDateOnly(shifted);
+};
 const ADMIN_NAV_ORDER: TabKey[] = [
   'home',
   'account_requests',
@@ -306,13 +316,9 @@ export function AdminAccessDialog({
   const [homeLoading, setHomeLoading] = React.useState(false);
   const [homeData, setHomeData] = React.useState<AdminDashboardOverview | null>(null);
   const [homeError, setHomeError] = React.useState('');
-  const [homeWindowDays, setHomeWindowDays] = React.useState<number>(7);
-  const [homeFromDate, setHomeFromDate] = React.useState<string>(() => {
-    const today = new Date();
-    const from = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - 6));
-    return toIsoDateOnly(from);
-  });
-  const [homeToDate, setHomeToDate] = React.useState<string>(() => toIsoDateOnly(new Date()));
+  const [homeWindowDays, setHomeWindowDays] = React.useState<number>(1);
+  const [homeFromDate, setHomeFromDate] = React.useState<string>(() => toManilaIsoDateOnly());
+  const [homeToDate, setHomeToDate] = React.useState<string>(() => toManilaIsoDateOnly());
   const [homeLastRefresh, setHomeLastRefresh] = React.useState<string | null>(null);
   const homeFromDateRef = React.useRef(homeFromDate);
   const homeToDateRef = React.useRef(homeToDate);
@@ -915,9 +921,8 @@ export function AdminAccessDialog({
   }, []);
 
   const applyHomePresetRange = React.useCallback((days: number) => {
-    const today = new Date();
-    const end = toIsoDateOnly(today);
-    const from = toIsoDateOnly(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (days - 1))));
+    const end = toManilaIsoDateOnly();
+    const from = manilaDateDaysAgo(days - 1);
     setHomeWindowDays(days);
     setHomeFromDate(from);
     setHomeToDate(end);
@@ -1193,15 +1198,33 @@ export function AdminAccessDialog({
   const homeTrends = React.useMemo(() => {
     if (homeData?.trends && homeData.trends.length > 0) return homeData.trends;
     const fallback: AdminDashboardOverview['trends'] = [];
-    const today = new Date();
     const days = Math.max(1, homeWindowDays);
+    if (days === 1) {
+      for (let hour = 0; hour < 24; hour += 1) {
+        fallback.push({
+          date: `${String(hour).padStart(2, '0')}:00`,
+          activeUsers: 0,
+          exportSuccess: 0,
+          exportFailed: 0,
+          authSuccess: 0,
+          authFailed: 0,
+          importTotal: 0,
+          storeRevenueApproved: 0,
+          accountRevenueApproved: 0,
+          installerRevenueApproved: 0,
+          totalRevenueApproved: 0,
+          storeBuyersApproved: 0,
+          accountBuyersApproved: 0,
+          installerSalesApproved: 0,
+          importRequests: 0,
+        });
+      }
+      return fallback;
+    }
     for (let offset = days - 1; offset >= 0; offset -= 1) {
-      const day = new Date(today.getTime() - (offset * 24 * 60 * 60 * 1000));
-      const yyyy = day.getUTCFullYear();
-      const mm = String(day.getUTCMonth() + 1).padStart(2, '0');
-      const dd = String(day.getUTCDate()).padStart(2, '0');
+      const date = manilaDateDaysAgo(offset);
       fallback.push({
-        date: `${yyyy}-${mm}-${dd}`,
+        date,
         activeUsers: 0,
         exportSuccess: 0,
         exportFailed: 0,
@@ -1222,6 +1245,7 @@ export function AdminAccessDialog({
   }, [homeData, homeWindowDays]);
   const homePointLabels = React.useMemo(
     () => homeTrends.map((point) => {
+      if (/^\d{2}:00$/.test(point.date)) return point.date;
       const [year, month, day] = point.date.split('-');
       if (!year || !month || !day) return point.date;
       return `${month}/${day}`;
@@ -1238,7 +1262,8 @@ export function AdminAccessDialog({
   const homeRangeLabel = React.useMemo(() => {
     const start = homeData?.meta?.rangeStartDate || homeFromDate || '-';
     const end = homeData?.meta?.rangeEndDate || homeToDate || '-';
-    return `${start} to ${end}`;
+    const timeZone = homeData?.meta?.rangeTimeZone || homeData?.meta?.timeBasis || 'Asia/Manila';
+    return start === end ? `${start} (${timeZone})` : `${start} to ${end} (${timeZone})`;
   }, [homeData, homeFromDate, homeToDate]);
   const crashReportPlatformOptions = React.useMemo(
     () => Array.from(new Set(crashReportsRows.map((row) => String(row.platform || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),

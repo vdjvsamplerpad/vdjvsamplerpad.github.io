@@ -256,6 +256,10 @@ export interface AdminDashboardOverview {
   meta: {
     timeBasis: 'UTC' | string;
     activeTodayTimeBasis?: string;
+    rangeTimeZone?: string;
+    rangeStartIso?: string;
+    rangeEndIso?: string;
+    granularity?: 'hour' | 'day' | string;
     sampled: boolean;
     seriesCap: number;
     rangeStartDate?: string;

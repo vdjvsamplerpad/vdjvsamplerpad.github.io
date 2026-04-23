@@ -302,7 +302,7 @@ export const colorOptions = BANK_COLOR_NAMES
   .map((entry) => ({ label: entry!.name, value: entry!.hex }));
 
 export const PAGE_SIZE = 10;
-export const HOME_WINDOW_OPTIONS = [7, 14, 30, 90, 180, 365] as const;
+export const HOME_WINDOW_OPTIONS = [1, 7, 14, 30, 90, 180, 365] as const;
 export const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export const toIsoDateOnly = (value: Date): string => {

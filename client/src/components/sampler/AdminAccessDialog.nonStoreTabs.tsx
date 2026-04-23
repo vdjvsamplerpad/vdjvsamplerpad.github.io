@@ -285,17 +285,17 @@ function HomeTab({
     { label: 'Pending Store Requests', value: Number(homeData?.counts?.pendingStoreRequests || 0), tone: 'text-orange-500' },
     { label: 'Pending Installer Requests', value: Number(homeData?.counts?.pendingInstallerRequests || 0), tone: 'text-amber-500' },
     { label: 'Active Users', value: Number(homeData?.counts?.activeUsers || 0), tone: 'text-cyan-500' },
-    { label: 'Active Today', value: Number(homeData?.counts?.activeTodayUsers || 0), tone: 'text-sky-500' },
     { label: 'Published Catalog', value: Number(homeData?.counts?.publishedCatalog || 0), tone: 'text-emerald-500' },
   ];
 
-  const rolling24hCards = [
-    { label: 'Revenue (24h)', value: formatMoney(Number(homeData?.counts?.totalRevenue24h || 0)), tone: 'text-yellow-500' },
+  const todayCards = [
+    { label: 'Revenue', value: formatMoney(Number(homeData?.counts?.totalRevenue24h || 0)), tone: 'text-yellow-500' },
+    { label: 'Active Today', value: Number(homeData?.counts?.activeTodayUsers || 0), tone: 'text-sky-500' },
     { label: 'Total User', value: Number(homeData?.counts?.totalRegisteredUsers || 0), tone: 'text-blue-500' },
     { label: 'Total Installer License', value: Number(homeData?.counts?.totalInstallerLicenses || 0), tone: 'text-red-500' },
     { label: 'Total Store Request', value: Number(homeData?.counts?.approvedStoreRequestsTotal || 0), tone: 'text-amber-500' },
-    { label: 'Import Failures (24h)', value: Number(homeData?.counts?.importFailures24h || 0), tone: 'text-fuchsia-500' },
-    { label: 'Imports (24h)', value: Number(homeData?.counts?.imports24h || 0), tone: 'text-indigo-500' },
+    { label: 'Import Failures', value: Number(homeData?.counts?.importFailures24h || 0), tone: 'text-fuchsia-500' },
+    { label: 'Imports', value: Number(homeData?.counts?.imports24h || 0), tone: 'text-indigo-500' },
   ];
 
   return (
@@ -320,7 +320,7 @@ function HomeTab({
         <div className="flex flex-wrap gap-1">
           {HOME_WINDOW_OPTIONS.map((option) => (
             <Button key={option} type="button" size="sm" variant="outline" className="h-8 px-2 text-xs" onClick={() => onApplyPresetRange(option)}>
-              {option}d
+              {option === 1 ? 'Today' : `${option}d`}
             </Button>
           ))}
         </div>
@@ -344,7 +344,7 @@ function HomeTab({
               <div className="text-sm font-semibold">Selected Range</div>
               <div className="text-xs opacity-70">These cards change with the date range above.</div>
             </div>
-            <div className="text-[11px] opacity-70">{homeData?.meta?.timeBasis || 'UTC'}</div>
+            <div className="text-[11px] opacity-70">{homeData?.meta?.timeBasis || 'Asia/Manila'}</div>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
             {[
@@ -382,11 +382,11 @@ function HomeTab({
 
         <div className={`border rounded p-3 space-y-2 ${cardClass}`}>
           <div>
-            <div className="text-sm font-semibold">Rolling 24 Hours</div>
-            <div className="text-xs opacity-70">Operational health over the last 24 hours, independent of the selected range.</div>
+            <div className="text-sm font-semibold">Today</div>
+            <div className="text-xs opacity-70">Operational health from 12:00 AM to 11:59 PM Asia/Manila.</div>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-            {rolling24hCards.map((card) => (
+            {todayCards.map((card) => (
               <div key={card.label} className={`border rounded p-3 ${cardClass}`}>
                 <div className="text-[11px] opacity-75">{card.label}</div>
                 <div className={`text-xl font-semibold ${card.tone}`}>{card.value}</div>
@@ -506,7 +506,7 @@ function HomeTab({
       <div className="pt-2 text-[11px] opacity-70">
         <span>Last refresh: {homeLastRefresh ? new Date(homeLastRefresh).toLocaleString() : '-'}</span>
         <span className="mx-2">|</span>
-        <span>Time basis: {homeData?.meta?.timeBasis || 'UTC'}</span>
+        <span>Time basis: {homeData?.meta?.timeBasis || 'Asia/Manila'}</span>
         {homeData?.meta?.activeTodayTimeBasis ? (
           <>
             <span className="mx-2">|</span>

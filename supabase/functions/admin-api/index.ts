@@ -418,6 +418,14 @@ const startOfFixedOffsetDay = (value: Date, offsetMinutes: number): Date => {
   return new Date(shiftedStart.getTime() - (offsetMinutes * 60 * 1000));
 };
 
+const toFixedOffsetDateKey = (value: Date, offsetMinutes: number): string => {
+  const shifted = new Date(value.getTime() + (offsetMinutes * 60 * 1000));
+  return toUtcDateKey(shifted);
+};
+
+const fixedOffsetDateOnlyStart = (value: Date, offsetMinutes: number): Date =>
+  new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()) - (offsetMinutes * 60 * 1000));
+
 const asFiniteNumber = (value: unknown): number => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const parsed = Number(value);
@@ -1407,27 +1415,25 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   const parsedWindowDays = Math.max(1, Math.min(DASHBOARD_MAX_WINDOW_DAYS, Number.isFinite(rawWindowDays) ? Math.floor(rawWindowDays) : 7));
   const now = new Date();
   const nowIso = now.toISOString();
-  const since24hIso = new Date(now.getTime() - (24 * 60 * 60 * 1000)).toISOString();
-  const startOfTodayUtc = startOfUtcDay(now);
   const startOfTodayManila = startOfFixedOffsetDay(now, ASIA_MANILA_UTC_OFFSET_MINUTES);
+  const endOfTodayManila = new Date(startOfTodayManila.getTime() + (24 * 60 * 60 * 1000) - 1);
   const fromDateParam = parseDateOnlyParam(url.searchParams.get("fromDate"));
   const toDateParam = parseDateOnlyParam(url.searchParams.get("toDate"));
 
   let windowEnd = toDateParam
-    ? new Date(Date.UTC(toDateParam.getUTCFullYear(), toDateParam.getUTCMonth(), toDateParam.getUTCDate(), 23, 59, 59, 999))
-    : now;
-  if (windowEnd.getTime() > now.getTime()) windowEnd = now;
+    ? new Date(fixedOffsetDateOnlyStart(toDateParam, ASIA_MANILA_UTC_OFFSET_MINUTES).getTime() + (24 * 60 * 60 * 1000) - 1)
+    : endOfTodayManila;
 
-  const windowEndStartOfDay = startOfUtcDay(windowEnd);
+  const windowEndStartOfDay = startOfFixedOffsetDay(windowEnd, ASIA_MANILA_UTC_OFFSET_MINUTES);
   let windowStart = fromDateParam
-    ? startOfUtcDay(fromDateParam)
+    ? fixedOffsetDateOnlyStart(fromDateParam, ASIA_MANILA_UTC_OFFSET_MINUTES)
     : new Date(windowEndStartOfDay.getTime() - ((parsedWindowDays - 1) * 24 * 60 * 60 * 1000));
 
   if (windowStart.getTime() > windowEnd.getTime()) {
     windowStart = new Date(windowEndStartOfDay);
   }
 
-  let windowDays = Math.floor((windowEndStartOfDay.getTime() - startOfUtcDay(windowStart).getTime()) / (24 * 60 * 60 * 1000)) + 1;
+  let windowDays = Math.floor((windowEndStartOfDay.getTime() - startOfFixedOffsetDay(windowStart, ASIA_MANILA_UTC_OFFSET_MINUTES).getTime()) / (24 * 60 * 60 * 1000)) + 1;
   windowDays = Math.max(1, Math.min(DASHBOARD_MAX_WINDOW_DAYS, windowDays));
   if (windowDays >= DASHBOARD_MAX_WINDOW_DAYS) {
     windowStart = new Date(windowEndStartOfDay.getTime() - ((DASHBOARD_MAX_WINDOW_DAYS - 1) * 24 * 60 * 60 * 1000));
@@ -1436,8 +1442,11 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
 
   const windowStartIso = windowStart.toISOString();
   const windowEndIso = windowEnd.toISOString();
-  const windowStartDate = toUtcDateKey(windowStart);
-  const windowEndDate = toUtcDateKey(windowEndStartOfDay);
+  const windowStartDate = toFixedOffsetDateKey(windowStart, ASIA_MANILA_UTC_OFFSET_MINUTES);
+  const windowEndDate = toFixedOffsetDateKey(windowEndStartOfDay, ASIA_MANILA_UTC_OFFSET_MINUTES);
+  const isHourlyWindow = windowDays === 1;
+  const todayStartIso = startOfTodayManila.toISOString();
+  const todayEndIso = endOfTodayManila.toISOString();
 
   const { data: adminRows, error: adminRowsError } = await admin
     .from("profiles")
@@ -1522,32 +1531,37 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .select("id", { head: true, count: "exact" })
       .eq("event_type", "bank.import")
       .eq("status", "failed")
-      .gte("created_at", since24hIso),
+      .gte("created_at", todayStartIso)
+      .lte("created_at", todayEndIso),
     admin
       .from("activity_logs")
       .select("id", { head: true, count: "exact" })
       .eq("event_type", "bank.import")
-      .gte("created_at", since24hIso),
+      .gte("created_at", todayStartIso)
+      .lte("created_at", todayEndIso),
     admin
       .from("bank_purchase_requests")
       .select("price_php_snapshot")
       .eq("status", "approved")
       .eq("is_refunded", false)
-      .gte("created_at", since24hIso)
+      .gte("created_at", todayStartIso)
+      .lte("created_at", todayEndIso)
       .limit(5000),
     admin
       .from("account_registration_requests")
       .select("account_price_php_snapshot")
       .eq("status", "approved")
       .eq("is_refunded", false)
-      .gte("created_at", since24hIso)
+      .gte("created_at", todayStartIso)
+      .lte("created_at", todayEndIso)
       .limit(5000),
     admin
       .from("installer_purchase_requests")
       .select("receipt_reference, price_php_snapshot")
       .eq("status", "approved")
       .eq("is_refunded", false)
-      .gte("created_at", since24hIso)
+      .gte("created_at", todayStartIso)
+      .lte("created_at", todayEndIso)
       .limit(10000),
     admin
       .from("v_admin_dashboard_revenue_totals")
@@ -1583,6 +1597,9 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     accountQueueResp,
     storeQueueResp,
     trendRowsResp,
+    storeRevenueRangeResp,
+    accountRevenueRangeResp,
+    storeRequestRangeResp,
     revenueDailyResp,
     installerRevenueDailyResp,
     installerRequestDailyResp,
@@ -1606,6 +1623,31 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .lte("created_at", windowEndIso)
       .order("created_at", { ascending: true })
       .limit(Math.max(100, Math.min(10000, DASHBOARD_SERIES_CAP))),
+    admin
+      .from("bank_purchase_requests")
+      .select("created_at, price_php_snapshot")
+      .eq("status", "approved")
+      .eq("is_refunded", false)
+      .gte("created_at", windowStartIso)
+      .lte("created_at", windowEndIso)
+      .order("created_at", { ascending: true })
+      .limit(10000),
+    admin
+      .from("account_registration_requests")
+      .select("created_at, account_price_php_snapshot")
+      .eq("status", "approved")
+      .eq("is_refunded", false)
+      .gte("created_at", windowStartIso)
+      .lte("created_at", windowEndIso)
+      .order("created_at", { ascending: true })
+      .limit(10000),
+    admin
+      .from("bank_purchase_requests")
+      .select("created_at")
+      .gte("created_at", windowStartIso)
+      .lte("created_at", windowEndIso)
+      .order("created_at", { ascending: true })
+      .limit(10000),
     admin
       .from("v_admin_dashboard_revenue_daily")
       .select("date_utc,store_revenue_approved,account_revenue_approved,store_buyers_approved,account_buyers_approved,store_requests_total")
@@ -1634,6 +1676,9 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   if (accountQueueResp.error) return fail(500, accountQueueResp.error.message);
   if (storeQueueResp.error) return fail(500, storeQueueResp.error.message);
   if (trendRowsResp.error) return fail(500, trendRowsResp.error.message);
+  if (storeRevenueRangeResp.error) return fail(500, storeRevenueRangeResp.error.message);
+  if (accountRevenueRangeResp.error) return fail(500, accountRevenueRangeResp.error.message);
+  if (storeRequestRangeResp.error) return fail(500, storeRequestRangeResp.error.message);
   if (revenueDailyResp.error) return fail(500, revenueDailyResp.error.message);
   if (installerRevenueDailyResp.error) return fail(500, installerRevenueDailyResp.error.message);
   if (installerRequestDailyResp.error) return fail(500, installerRequestDailyResp.error.message);
@@ -1656,6 +1701,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
 
   const trendSeed = new Map<string, {
     date: string;
+    activeUsers: number;
     exportSuccess: number;
     exportFailed: number;
     authSuccess: number;
@@ -1670,50 +1716,72 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     installerSalesApproved: number;
     importRequests: number;
   }>();
-  for (let offset = 0; offset < windowDays; offset += 1) {
-    const day = new Date(windowStart.getTime() + (offset * 24 * 60 * 60 * 1000));
-    const date = toUtcDateKey(day);
-    trendSeed.set(date, {
-      date,
-      activeUsers: 0,
-      exportSuccess: 0,
-      exportFailed: 0,
-      authSuccess: 0,
-      authFailed: 0,
-      importTotal: 0,
-      storeRevenueApproved: 0,
-      accountRevenueApproved: 0,
-      installerRevenueApproved: 0,
-      totalRevenueApproved: 0,
-      storeBuyersApproved: 0,
-      accountBuyersApproved: 0,
-      installerSalesApproved: 0,
-      importRequests: 0,
-    });
+  const createEmptyTrendBucket = (date: string) => ({
+    date,
+    activeUsers: 0,
+    exportSuccess: 0,
+    exportFailed: 0,
+    authSuccess: 0,
+    authFailed: 0,
+    importTotal: 0,
+    storeRevenueApproved: 0,
+    accountRevenueApproved: 0,
+    installerRevenueApproved: 0,
+    totalRevenueApproved: 0,
+    storeBuyersApproved: 0,
+    accountBuyersApproved: 0,
+    installerSalesApproved: 0,
+    importRequests: 0,
+  });
+  const toTrendBucketKey = (value: Date): string => {
+    if (!isHourlyWindow) return toFixedOffsetDateKey(value, ASIA_MANILA_UTC_OFFSET_MINUTES);
+    const shifted = new Date(value.getTime() + (ASIA_MANILA_UTC_OFFSET_MINUTES * 60 * 1000));
+    return `${String(shifted.getUTCHours()).padStart(2, "0")}:00`;
+  };
+  if (isHourlyWindow) {
+    for (let hour = 0; hour < 24; hour += 1) {
+      const label = `${String(hour).padStart(2, "0")}:00`;
+      trendSeed.set(label, createEmptyTrendBucket(label));
+    }
+  } else {
+    for (let offset = 0; offset < windowDays; offset += 1) {
+      const day = new Date(windowStart.getTime() + (offset * 24 * 60 * 60 * 1000));
+      const date = toFixedOffsetDateKey(day, ASIA_MANILA_UTC_OFFSET_MINUTES);
+      trendSeed.set(date, createEmptyTrendBucket(date));
+    }
   }
 
-  const revenueRows = revenueDailyResp.data || [];
-  for (const row of revenueRows) {
-    const rawDate = String((row as any).date_utc || "");
-    if (!rawDate) continue;
-    const date = rawDate.slice(0, 10);
-    const bucket = trendSeed.get(date);
+  for (const row of storeRevenueRangeResp.data || []) {
+    const createdAt = new Date(String((row as any).created_at || ""));
+    if (Number.isNaN(createdAt.getTime())) continue;
+    const bucket = trendSeed.get(toTrendBucketKey(createdAt));
     if (!bucket) continue;
-    const storeRevenue = asFiniteNumber((row as any).store_revenue_approved);
-    const accountRevenue = asFiniteNumber((row as any).account_revenue_approved);
-    bucket.storeRevenueApproved = storeRevenue;
-    bucket.accountRevenueApproved = accountRevenue;
-    bucket.totalRevenueApproved = storeRevenue + accountRevenue + bucket.installerRevenueApproved;
-    bucket.storeBuyersApproved = Math.max(0, Math.floor(asFiniteNumber((row as any).store_buyers_approved)));
-    bucket.accountBuyersApproved = Math.max(0, Math.floor(asFiniteNumber((row as any).account_buyers_approved)));
-    bucket.importRequests = Math.max(0, Math.floor(asFiniteNumber((row as any).store_requests_total)));
+    bucket.storeRevenueApproved += asFiniteNumber((row as any).price_php_snapshot);
+    bucket.storeBuyersApproved += 1;
+    bucket.totalRevenueApproved = bucket.storeRevenueApproved + bucket.accountRevenueApproved + bucket.installerRevenueApproved;
+  }
+  for (const row of accountRevenueRangeResp.data || []) {
+    const createdAt = new Date(String((row as any).created_at || ""));
+    if (Number.isNaN(createdAt.getTime())) continue;
+    const bucket = trendSeed.get(toTrendBucketKey(createdAt));
+    if (!bucket) continue;
+    bucket.accountRevenueApproved += asFiniteNumber((row as any).account_price_php_snapshot);
+    bucket.accountBuyersApproved += 1;
+    bucket.totalRevenueApproved = bucket.storeRevenueApproved + bucket.accountRevenueApproved + bucket.installerRevenueApproved;
+  }
+  for (const row of storeRequestRangeResp.data || []) {
+    const createdAt = new Date(String((row as any).created_at || ""));
+    if (Number.isNaN(createdAt.getTime())) continue;
+    const bucket = trendSeed.get(toTrendBucketKey(createdAt));
+    if (!bucket) continue;
+    bucket.importRequests += 1;
   }
 
   const installerRevenueDailyMap = new Map<string, { revenue: number; receiptRefs: Set<string> }>();
   for (const row of installerRevenueDailyResp.data || []) {
     const createdAt = new Date(String((row as any).created_at || ""));
     if (Number.isNaN(createdAt.getTime())) continue;
-    const date = toUtcDateKey(createdAt);
+    const date = toTrendBucketKey(createdAt);
     const daily = installerRevenueDailyMap.get(date) || { revenue: 0, receiptRefs: new Set<string>() };
     daily.revenue += asFiniteNumber((row as any).price_php_snapshot);
     const receiptReference = asString((row as any).receipt_reference, 160) || "";
@@ -1732,7 +1800,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   for (const row of installerRequestDailyResp.data || []) {
     const createdAt = new Date(String((row as any).created_at || ""));
     if (Number.isNaN(createdAt.getTime())) continue;
-    const date = toUtcDateKey(createdAt);
+    const date = toTrendBucketKey(createdAt);
     const daily = installerRequestDailyMap.get(date) || new Set<string>();
     const rawReceiptReference = asString((row as any).receipt_reference, 160) || "";
     const requestKey = rawReceiptReference || `row:${asString((row as any).id, 160) || ""}`;
@@ -1751,7 +1819,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   for (const row of trendRows) {
     const createdAt = new Date(String((row as any).created_at || ""));
     if (Number.isNaN(createdAt.getTime())) continue;
-    const date = toUtcDateKey(createdAt);
+    const date = toTrendBucketKey(createdAt);
     const bucket = trendSeed.get(date);
     if (!bucket) continue;
 
@@ -1883,8 +1951,12 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       storeRequests,
     },
     meta: {
-      timeBasis: "UTC",
+      timeBasis: "Asia/Manila",
       activeTodayTimeBasis: "Asia/Manila",
+      rangeTimeZone: "Asia/Manila",
+      rangeStartIso: windowStartIso,
+      rangeEndIso: windowEndIso,
+      granularity: isHourlyWindow ? "hour" : "day",
       sampled: trendRows.length >= Math.max(100, Math.min(10000, DASHBOARD_SERIES_CAP)),
       seriesCap: Math.max(100, Math.min(10000, DASHBOARD_SERIES_CAP)),
       rangeStartDate: windowStartDate,
