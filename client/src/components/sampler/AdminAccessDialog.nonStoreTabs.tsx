@@ -281,6 +281,7 @@ function HomeTab({
   }, [homeTrends]);
 
   const liveSnapshotCards = [
+    { label: 'Revenue', value: formatMoney(Number(homeData?.counts?.totalRevenue24h || 0)), tone: 'text-yellow-500' },
     { label: 'Pending Account Requests', value: Number(homeData?.counts?.pendingAccountRequests || 0), tone: 'text-rose-500' },
     { label: 'Pending Store Requests', value: Number(homeData?.counts?.pendingStoreRequests || 0), tone: 'text-orange-500' },
     { label: 'Pending Installer Requests', value: Number(homeData?.counts?.pendingInstallerRequests || 0), tone: 'text-amber-500' },
@@ -289,7 +290,6 @@ function HomeTab({
   ];
 
   const todayCards = [
-    { label: 'Revenue', value: formatMoney(Number(homeData?.counts?.totalRevenue24h || 0)), tone: 'text-yellow-500' },
     { label: 'Active Today', value: Number(homeData?.counts?.activeTodayUsers || 0), tone: 'text-sky-500' },
     { label: 'Total User', value: Number(homeData?.counts?.totalRegisteredUsers || 0), tone: 'text-blue-500' },
     { label: 'Total Installer License', value: Number(homeData?.counts?.totalInstallerLicenses || 0), tone: 'text-red-500' },
@@ -368,7 +368,7 @@ function HomeTab({
         <div className={`border rounded p-3 space-y-2 ${cardClass}`}>
           <div>
             <div className="text-sm font-semibold">Live Snapshot</div>
-            <div className="text-xs opacity-70">Current queue and catalog state. These are not filtered by the selected range.</div>
+            <div className="text-xs opacity-70">Current queue, catalog state, and today's Manila revenue. These are not filtered by the selected range.</div>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
             {liveSnapshotCards.map((card) => (
