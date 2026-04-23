@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { CopyableValue, copyTextToClipboard } from '@/components/ui/copyable-value';
-import { adminApi, type AdminAccountRegistrationRequest, type AdminClientCrashReport, type AdminInstallerPurchaseRequestGroup, type DefaultBankRelease, type LandingDownloadConfig, type LandingPlatformKey, type LandingVersionKey } from '@/lib/admin-api';
+import { adminApi, type AdminAccountRegistrationRequest, type AdminAccountUpgradeRequest, type AdminClientCrashReport, type AdminInstallerPurchaseRequestGroup, type DefaultBankRelease, type LandingDownloadConfig, type LandingPlatformKey, type LandingVersionKey } from '@/lib/admin-api';
 import { prepareManagedImageUpload } from '@/lib/image-upload';
 import { uploadManagedStoreAsset } from '@/lib/store-asset-upload';
 import { Check, ChevronDown, ChevronUp, Copy, Download, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
@@ -60,6 +60,7 @@ interface AccountRequestsTabProps {
   onReject: (id: string) => void;
   onRetryEmail: (id: string) => void;
   onRefund: (id: string) => Promise<void>;
+  pushNotice: (notice: { variant: 'success' | 'error' | 'info'; message: string }) => void;
 }
 
 interface StoreRequestItem {
@@ -437,6 +438,19 @@ const formatOcrErrorLabel = (value: string | null | undefined): string => {
 const formatOcrAmount = (value: number | null | undefined): string => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
   return `PHP ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const formatRequestMoney = (value: number | null | undefined): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'PHP 0';
+  return `PHP ${value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+};
+
+const formatAccountTierLabel = (value: string | null | undefined): string => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'pro_max') return 'PRO MAX';
+  if (normalized === 'pro') return 'PRO';
+  if (normalized === 'free') return 'FREE';
+  return normalized ? normalized.replace(/_/g, ' ').toUpperCase() : '-';
 };
 
 const isManualWalletPaymentChannel = (value: string | null | undefined): boolean => {
@@ -1362,20 +1376,108 @@ export function AccountRequestsTab({
   onReject,
   onRetryEmail,
   onRefund,
+  pushNotice,
 }: AccountRequestsTabProps) {
   const [selectedRequest, setSelectedRequest] = React.useState<AdminAccountRegistrationRequest | null>(null);
   const [refundRequest, setRefundRequest] = React.useState<AdminAccountRegistrationRequest | null>(null);
+  const [upgradeRows, setUpgradeRows] = React.useState<AdminAccountUpgradeRequest[]>([]);
+  const [upgradePendingCount, setUpgradePendingCount] = React.useState(0);
+  const [upgradeHistoryCount, setUpgradeHistoryCount] = React.useState(0);
+  const [upgradeLoading, setUpgradeLoading] = React.useState(false);
+  const [selectedUpgradeRequest, setSelectedUpgradeRequest] = React.useState<AdminAccountUpgradeRequest | null>(null);
+  const [rejectUpgradeRequest, setRejectUpgradeRequest] = React.useState<AdminAccountUpgradeRequest | null>(null);
+  const [rejectUpgradeMessage, setRejectUpgradeMessage] = React.useState('');
+  const [upgradeBusyId, setUpgradeBusyId] = React.useState<string | null>(null);
+
+  const loadUpgradeRequests = React.useCallback(async () => {
+    setUpgradeLoading(true);
+    try {
+      const normalizedStatus = filter === 'pending'
+        ? 'pending'
+        : (statusFilter === 'pending' ? 'all' : statusFilter);
+      const [requestsResult, pendingResult, allResult] = await Promise.all([
+        adminApi.listAccountUpgradeRequests({
+          q: search.trim() || undefined,
+          status: normalizedStatus as 'all' | 'pending' | 'approved' | 'rejected',
+          page: 1,
+          perPage: 50,
+        }),
+        adminApi.listAccountUpgradeRequests({ status: 'pending', page: 1, perPage: 1 }),
+        adminApi.listAccountUpgradeRequests({ status: 'all', page: 1, perPage: 1 }),
+      ]);
+      const nextRows = Array.isArray(requestsResult.requests) ? requestsResult.requests : [];
+      const filteredRows = nextRows.filter((row) => {
+        if (filter === 'history' && row.status === 'pending') return false;
+        if (filter === 'pending' && row.status !== 'pending') return false;
+        if (channelFilter !== 'all' && row.payment_channel !== channelFilter) return false;
+        if (decisionFilter !== 'all') return false;
+        if (automationFilter !== 'all') return false;
+        if (ocrStatusFilter !== 'all') return false;
+        return true;
+      });
+      setUpgradeRows(filteredRows);
+      const pendingTotal = Number(pendingResult.total || 0);
+      setUpgradePendingCount(pendingTotal);
+      setUpgradeHistoryCount(Math.max(0, Number(allResult.total || 0) - pendingTotal));
+    } catch (error) {
+      pushNotice({ variant: 'error', message: error instanceof Error ? error.message : 'Could not load upgrade requests.' });
+      setUpgradeRows([]);
+      setUpgradePendingCount(0);
+      setUpgradeHistoryCount(0);
+    } finally {
+      setUpgradeLoading(false);
+    }
+  }, [automationFilter, channelFilter, decisionFilter, filter, ocrStatusFilter, pushNotice, search, statusFilter]);
+
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadUpgradeRequests();
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [loadUpgradeRequests]);
+
+  const handleUpgradeDecision = async (
+    request: AdminAccountUpgradeRequest,
+    action: 'approve' | 'reject',
+    rejectionMessage?: string,
+  ) => {
+    setUpgradeBusyId(request.id);
+    try {
+      await adminApi.accountUpgradeDecision(request.id, action, rejectionMessage || undefined);
+      pushNotice({ variant: 'success', message: action === 'approve' ? 'Upgrade request approved.' : 'Upgrade request rejected.' });
+      setSelectedUpgradeRequest(null);
+      setRejectUpgradeRequest(null);
+      setRejectUpgradeMessage('');
+      await Promise.all([loadUpgradeRequests(), onRefresh()]);
+    } catch (error) {
+      pushNotice({ variant: 'error', message: error instanceof Error ? error.message : 'Upgrade request update failed.' });
+    } finally {
+      setUpgradeBusyId(null);
+    }
+  };
+
+  const accountPendingTotal = pendingCount + upgradePendingCount;
+  const accountHistoryTotal = historyCount + upgradeHistoryCount;
+  const accountRowsLoading = loading || upgradeLoading;
   return (
       <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
         <div className="flex flex-wrap gap-2 items-center">
           <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
-            Pending ({pendingCount})
+            Pending ({accountPendingTotal})
           </Button>
           <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
-            History ({historyCount})
+            History ({accountHistoryTotal})
           </Button>
-          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
-            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              onRefresh();
+              void loadUpgradeRequests();
+            }}
+            disabled={accountRowsLoading}
+          >
+            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${accountRowsLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
           <div className="flex-1" />
@@ -1404,14 +1506,61 @@ export function AccountRequestsTab({
         onOcrStatusFilterChange={onOcrStatusFilterChange}
       />
 
-      {loading ? (
+      {accountRowsLoading ? (
         <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div>
       ) : (
         <>
         <div className="space-y-2">
-          {rows.length === 0 ? (
-              <p className="text-center py-8 opacity-50 text-sm">No {filter} account registration requests.</p>
-            ) : rows.map((req) => {
+          {rows.length === 0 && upgradeRows.length === 0 ? (
+              <p className="text-center py-8 opacity-50 text-sm">No {filter} account or upgrade requests.</p>
+            ) : (
+              <>
+              {upgradeRows.map((req) => (
+                <div key={`upgrade-${req.id}`} className={`p-3 rounded-lg border ${cardClass}`}>
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <h4 className="font-bold text-sm truncate">{req.display_name || req.email || 'No Name'}</h4>
+                            <RequestSummaryChip theme={theme} label="Type" value={`Upgrade ${formatAccountTierLabel(req.target_tier)}`} tone="auto" />
+                          </div>
+                          <div className={`mt-0.5 flex items-center gap-1 text-[11px] ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>
+                            <CopyableValue
+                              value={req.email || '-'}
+                              label="upgrade request email"
+                              className="min-w-0 max-w-full"
+                              valueClassName="text-inherit"
+                              buttonClassName="h-5 w-5"
+                            />
+                          </div>
+                        </div>
+                        <div className={`shrink-0 text-sm font-semibold ${theme === 'dark' ? 'text-gray-100' : 'text-gray-900'}`}>{formatRequestMoney(req.quote_price_php_snapshot)}</div>
+                      </div>
+                      <div className={`mt-1 grid grid-cols-1 gap-y-0.5 text-xs sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+                        <div><span className="opacity-70">Channel:</span> <span className="uppercase font-medium">{req.payment_channel || '-'}</span></div>
+                        <div><span className="opacity-70">Date:</span> {new Date(req.created_at).toLocaleString()}</div>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <RequestSummaryChip theme={theme} label="Decision" value={req.status === 'pending' ? 'Pending' : 'Manual'} tone="decision" />
+                        {req.status !== 'pending' && <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />}
+                        <RequestSummaryChip theme={theme} label="Quote" value={`${formatRequestMoney(req.base_price_php_snapshot)} - ${formatRequestMoney(req.store_credit_php_snapshot)}`} tone="default" />
+                      </div>
+                      {req.status === 'rejected' && req.rejection_message && (
+                        <div className={`mt-2 text-[11px] ${theme === 'dark' ? 'text-red-300/80' : 'text-red-600'}`} title={req.rejection_message}>
+                          Reject reason: {req.rejection_message}
+                        </div>
+                      )}
+                    </div>
+                    <div className="shrink-0">
+                      <Button size="sm" variant={req.status === 'pending' ? 'default' : 'outline'} onClick={() => setSelectedUpgradeRequest(req)} className="h-7 px-2.5 text-[11px]">
+                        {req.status === 'pending' ? 'Review' : 'View Details'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {rows.map((req) => {
               const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
               const amountLabel = typeof req.ocr_amount_php === 'number'
                 ? formatOcrAmount(req.ocr_amount_php)
@@ -1461,6 +1610,8 @@ export function AccountRequestsTab({
               </div>
               );
             })}
+            </>
+            )}
           </div>
           <Pagination page={page} totalPages={totalPages} onPageChange={onPageChange} />
           <Dialog open={selectedRequest !== null} onOpenChange={(open) => { if (!open) setSelectedRequest(null); }} useHistory={false}>
@@ -1591,6 +1742,140 @@ export function AccountRequestsTab({
                     </>
                   );
                 })()
+              ) : null}
+            </DialogContent>
+          </Dialog>
+          <Dialog open={selectedUpgradeRequest !== null} onOpenChange={(open) => { if (!open) setSelectedUpgradeRequest(null); }} useHistory={false}>
+            <DialogContent className={`${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : ''} sm:max-w-3xl`}>
+              {selectedUpgradeRequest ? (
+                (() => {
+                  const req = selectedUpgradeRequest;
+                  return (
+                    <>
+                      <DialogHeader>
+                        <DialogTitle>{req.status === 'pending' ? 'Review Account Upgrade' : 'Account Upgrade Details'}</DialogTitle>
+                        <DialogDescription>
+                          Review payment proof, tier target, quote snapshot, and decision history.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+                        <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold">{req.display_name || req.email || 'No Name'}</div>
+                              <div className={`mt-0.5 text-xs ${theme === 'dark' ? 'text-indigo-300' : 'text-indigo-700'}`}>{req.email || '-'}</div>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              <RequestSummaryChip theme={theme} label="Type" value={`Upgrade ${formatAccountTierLabel(req.target_tier)}`} tone="auto" />
+                              <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_280px]">
+                          <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                            <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Request Details</div>
+                            <div className={`grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                              <div><span className="opacity-70">Target Tier:</span> {formatAccountTierLabel(req.target_tier)}</div>
+                              <div><span className="opacity-70">Quote:</span> {formatRequestMoney(req.quote_price_php_snapshot)}</div>
+                              <div><span className="opacity-70">Base Price:</span> {formatRequestMoney(req.base_price_php_snapshot)}</div>
+                              <div><span className="opacity-70">Store Credit:</span> {formatRequestMoney(req.store_credit_php_snapshot)}</div>
+                              <div><span className="opacity-70">Channel:</span> {req.payment_channel || '-'}</div>
+                              <div><span className="opacity-70">Payer:</span> {req.payer_name || '-'}</div>
+                              <div><span className="opacity-70">Submitted:</span> {new Date(req.created_at).toLocaleString()}</div>
+                              <div><span className="opacity-70">Receipt:</span> {req.receipt_reference || '-'}</div>
+                              <div className="sm:col-span-2">
+                                <span className="opacity-70">Reference:</span>{' '}
+                                <CopyableValue value={req.reference_no || '-'} label="upgrade request reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                              </div>
+                              <div className="sm:col-span-2">
+                                <span className="opacity-70">Request ID:</span>{' '}
+                                <CopyableValue value={req.id} label="upgrade request id" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                              </div>
+                              {req.user_id && (
+                                <div className="sm:col-span-2">
+                                  <span className="opacity-70">User ID:</span>{' '}
+                                  <CopyableValue value={req.user_id} label="upgrade request user id" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                                </div>
+                              )}
+                              {req.reviewed_at && <div className="sm:col-span-2"><span className="opacity-70">Reviewed:</span> {new Date(req.reviewed_at).toLocaleString()}{req.reviewed_by ? ` by ${req.reviewed_by.slice(0, 8)}...` : ''}</div>}
+                              {req.notes && <div className="sm:col-span-2"><span className="opacity-70">Notes:</span> {req.notes}</div>}
+                              {req.status === 'rejected' && req.rejection_message && <div className="sm:col-span-2"><span className="opacity-70">Reject Reason:</span> {req.rejection_message}</div>}
+                            </div>
+                          </div>
+                          <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                            <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Proof</div>
+                            {req.proof_path ? <ProofImagePreview path={req.proof_path} /> : <div className="text-sm opacity-60">No proof image</div>}
+                          </div>
+                        </div>
+                      </div>
+                      <DialogFooter className="gap-2">
+                        {req.status === 'pending' ? (
+                          <>
+                            <Button
+                              variant="destructive"
+                              onClick={() => {
+                                setRejectUpgradeRequest(req);
+                                setRejectUpgradeMessage(req.rejection_message || '');
+                              }}
+                              disabled={upgradeBusyId === req.id}
+                            >
+                              <X className="w-4 h-4 mr-2" /> Reject
+                            </Button>
+                            <Button
+                              onClick={() => void handleUpgradeDecision(req, 'approve')}
+                              disabled={upgradeBusyId === req.id}
+                              className="bg-green-600 hover:bg-green-700 text-white"
+                            >
+                              <Check className="w-4 h-4 mr-2" /> Approve
+                            </Button>
+                          </>
+                        ) : (
+                          <Button variant="outline" onClick={() => setSelectedUpgradeRequest(null)}>
+                            Close
+                          </Button>
+                        )}
+                      </DialogFooter>
+                    </>
+                  );
+                })()
+              ) : null}
+            </DialogContent>
+          </Dialog>
+          <Dialog open={rejectUpgradeRequest !== null} onOpenChange={(open) => {
+            if (!open) {
+              setRejectUpgradeRequest(null);
+              setRejectUpgradeMessage('');
+            }
+          }} useHistory={false}>
+            <DialogContent className={`${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : ''} sm:max-w-lg`}>
+              {rejectUpgradeRequest ? (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>Reject Account Upgrade</DialogTitle>
+                    <DialogDescription>Send a clear reason so the user knows what to fix or resend.</DialogDescription>
+                  </DialogHeader>
+                  <div className={`rounded-lg border p-3 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                    <div className="font-medium">{rejectUpgradeRequest.display_name || rejectUpgradeRequest.email || 'User'}</div>
+                    <div className="text-xs opacity-70">{rejectUpgradeRequest.email || '-'}</div>
+                    <div className="mt-1 text-xs font-semibold uppercase">{formatAccountTierLabel(rejectUpgradeRequest.target_tier)}</div>
+                  </div>
+                  <textarea
+                    value={rejectUpgradeMessage}
+                    onChange={(event) => setRejectUpgradeMessage(event.target.value)}
+                    className={`min-h-28 w-full rounded-md border px-3 py-2 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-800 text-gray-100' : 'border-gray-300 bg-white text-gray-900'}`}
+                    placeholder="Example: Payment reference was not found. Please resend a clear receipt."
+                  />
+                  <DialogFooter className="gap-2">
+                    <Button variant="outline" onClick={() => setRejectUpgradeRequest(null)}>Cancel</Button>
+                    <Button
+                      variant="destructive"
+                      disabled={upgradeBusyId === rejectUpgradeRequest.id}
+                      onClick={() => void handleUpgradeDecision(rejectUpgradeRequest, 'reject', rejectUpgradeMessage.trim() || 'Rejected by admin.')}
+                    >
+                      Reject Request
+                    </Button>
+                  </DialogFooter>
+                </>
               ) : null}
             </DialogContent>
           </Dialog>

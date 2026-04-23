@@ -2162,6 +2162,7 @@ export function AdminAccessDialog({
                   onReject={(id) => setAccountReqToReject({ id, message: '' })}
                   onRetryEmail={(id) => void handleAccountRequestRetryEmail(id)}
                   onRefund={(id) => handleAccountRequestAction(id, 'refund')}
+                  pushNotice={pushNotice}
                 />
               )}
 

@@ -132,21 +132,20 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
   const [campaignExpiresAt, setCampaignExpiresAt] = React.useState('');
   const [campaignTargetEmail, setCampaignTargetEmail] = React.useState('');
   const [campaignNotes, setCampaignNotes] = React.useState('');
-  const [activeSection, setActiveSection] = React.useState<AccountAdminSection>('requests');
+  const [activeSection, setActiveSection] = React.useState<AccountAdminSection>('vouchers');
   const [rejectRequest, setRejectRequest] = React.useState<AdminAccountUpgradeRequest | null>(null);
   const [rejectMessage, setRejectMessage] = React.useState('');
 
   const loadData = React.useCallback(async () => {
     setLoading(true);
     try {
-      const [tiersResult, upgradesResult, vouchersResult] = await Promise.all([
+      const [tiersResult, vouchersResult] = await Promise.all([
         adminApi.listAccountTierConfigs(),
-        adminApi.listAccountUpgradeRequests({ q: upgradeSearch, status: upgradeStatus, page: 1, perPage: 50 }),
         adminApi.listVoucherCampaigns(),
       ]);
       setTierConfigs(tiersResult.tiers || []);
       setTierDrafts(Object.fromEntries((tiersResult.tiers || []).map((tier) => [tier.tier, buildTierDraft(tier)])));
-      setUpgradeRows(upgradesResult.requests || []);
+      setUpgradeRows([]);
       setVoucherCampaigns(vouchersResult.campaigns || []);
     } catch (error) {
       pushNotice('error', error instanceof Error ? error.message : 'Failed to load account upgrades.');
@@ -302,8 +301,8 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
     <div className={`${panelClass} space-y-4`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold">Account Upgrades</h3>
-          <p className="text-xs text-gray-500">Approve PRO/PRO MAX requests, tune tier rules, and issue one-time voucher codes.</p>
+          <h3 className="text-sm font-semibold">Tier & Vouchers</h3>
+          <p className="text-xs text-gray-500">Tune tier rules and issue one-time voucher codes. Approval queue is unified under Account Requests.</p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void loadData()} disabled={loading}>
           {loading ? 'Refreshing...' : 'Refresh'}
@@ -312,7 +311,6 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
 
       <div className="flex flex-wrap gap-2">
         {([
-          ['requests', 'Upgrade Requests'],
           ['vouchers', 'Vouchers'],
           ['tiers', 'Tier Config'],
         ] as Array<[AccountAdminSection, string]>).map(([section, label]) => (
