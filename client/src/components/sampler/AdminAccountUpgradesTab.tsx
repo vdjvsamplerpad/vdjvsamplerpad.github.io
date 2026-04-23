@@ -11,6 +11,12 @@ import {
   type AdminAccountUpgradeRequest,
   type AdminVoucherCampaign,
 } from '@/lib/admin-api';
+import {
+  AdminControlsBar,
+  AdminPageScaffold,
+  AdminSectionTabs,
+  AdminStatsStrip,
+} from './AdminAccessDialog.layout';
 
 type UpgradeStatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'cancelled';
 type AccountAdminSection = 'requests' | 'vouchers' | 'tiers';
@@ -297,34 +303,53 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
     }
   };
 
+  const tierStats = React.useMemo(() => {
+    const activeTiers = tierConfigs.filter((tier) => tier.is_active !== false).length;
+    const liveCampaigns = voucherCampaigns.filter((campaign) => campaign.is_active).length;
+    const reservedCodes = voucherCampaigns.reduce((sum, campaign) => sum + Number(campaign.reserved_count || 0), 0);
+    const redeemedCodes = voucherCampaigns.reduce((sum, campaign) => sum + Number(campaign.redeemed_count || 0), 0);
+    return [
+      { label: 'Active Tiers', value: activeTiers, detail: `${tierConfigs.length} configured`, toneClass: 'text-violet-500' },
+      { label: 'Voucher Campaigns', value: voucherCampaigns.length, detail: `${liveCampaigns} live`, toneClass: 'text-fuchsia-500' },
+      { label: 'Reserved Codes', value: reservedCodes, detail: 'Issued once via copy-next', toneClass: 'text-amber-500' },
+      { label: 'Redeemed Codes', value: redeemedCodes, detail: 'Single-use activations', toneClass: 'text-emerald-500' },
+    ];
+  }, [tierConfigs, voucherCampaigns]);
+
   return (
-    <div className={`${panelClass} space-y-4`}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold">Tier & Vouchers</h3>
-          <p className="text-xs text-gray-500">Tune tier rules and issue one-time voucher codes. Approval queue is unified under Account Requests.</p>
-        </div>
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Tier & Vouchers"
+      description="Configure account tiers and issue one-time upgrade codes from the same admin shell. Upgrade approvals stay unified under Account Requests."
+      actions={(
         <Button variant="outline" size="sm" onClick={() => void loadData()} disabled={loading}>
           {loading ? 'Refreshing...' : 'Refresh'}
         </Button>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        {([
-          ['vouchers', 'Vouchers'],
-          ['tiers', 'Tier Config'],
-        ] as Array<[AccountAdminSection, string]>).map(([section, label]) => (
-          <Button
-            key={section}
-            type="button"
-            size="sm"
-            variant={activeSection === section ? 'default' : 'outline'}
-            onClick={() => setActiveSection(section)}
-          >
-            {label}
-          </Button>
-        ))}
-      </div>
+      )}
+      stats={<AdminStatsStrip items={tierStats} />}
+      controls={(
+        <AdminControlsBar
+          left={(
+            <div className="space-y-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">Sections</div>
+              <AdminSectionTabs
+                sections={[
+                  { key: 'vouchers', label: 'Vouchers' },
+                  { key: 'tiers', label: 'Tier Config' },
+                ]}
+                active={activeSection}
+                onChange={(next) => setActiveSection(next as AccountAdminSection)}
+              />
+            </div>
+          )}
+          right={(
+            <div className="rounded-xl border px-3 py-2 text-xs bg-black/[0.02] dark:bg-white/[0.03]">
+              Voucher plaintext is only shown once when copied. Revoke latest unused code to rotate safely.
+            </div>
+          )}
+        />
+      )}
+    >
 
       {activeSection === 'tiers' && (
       <div className={`rounded-lg border p-3 ${cardClass}`}>
@@ -636,6 +661,6 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </AdminPageScaffold>
   );
 }

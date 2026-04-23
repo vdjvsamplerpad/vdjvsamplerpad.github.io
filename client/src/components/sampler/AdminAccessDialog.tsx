@@ -9,15 +9,16 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { adminApi, type AccessEntry, type ActiveSessionRow, type AdminAccountRegistrationRequest, type AdminActivityRow, type AdminBank, type AdminClientCrashReport, type AdminDashboardOverview, type AdminUser, type BankAccessEntry, type DefaultBankRelease, type LandingDownloadConfig, type SortDirection } from '@/lib/admin-api';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { DEFAULT_LANDING_DOWNLOAD_CONFIG, normalizeLandingDownloadConfig } from '@/components/landing/download-config';
+import { normalizeAdminLegalDocuments, normalizeLegalDocument, type AdminLegalDocumentState, type LegalDocument, type LegalDocumentKey } from '@/lib/legal-content';
 import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig, type SamplerAppConfig } from './samplerAppConfig';
 import { Edit, Eye, EyeOff, Plus, RefreshCw, Shield, Trash2, UserPlus, Users, Loader2, Store, CreditCard, History, Save, Check, X, Search, Menu } from 'lucide-react';
 import { useAuthState } from '@/hooks/useAuth';
 import {
+  ADMIN_TAB_SPECS,
   ACTIVE_SORT_STORAGE_KEY,
   HOME_WINDOW_OPTIONS,
   MS_PER_DAY,
   PAGE_SIZE,
-  TABS,
   TAB_CONTENT_TONE_CLASSES,
   TAB_TONE_CLASSES,
   colorOptions,
@@ -61,6 +62,7 @@ import {
   DefaultBankTab,
   InstallerRequestsTab,
   LandingDownloadTab,
+  LegalPagesTab,
   SamplerDefaultsTab,
   StoreBannersTab,
   StoreCatalogTab,
@@ -73,6 +75,7 @@ import { AdminAccountUpgradesTab } from './AdminAccountUpgradesTab';
 import { AdminAccessNonStoreTabs } from './AdminAccessDialog.nonStoreTabs';
 import { AdminAccessDialogModals } from './AdminAccessDialog.dialogs';
 import { useAdminAccessStoreManager } from './AdminAccessDialog.store';
+import { AdminNavIcon } from './AdminAccessDialog.layout';
 
 const ADMIN_HOME_AUTO_REFRESH_MS = 5 * 60 * 1000;
 const ADMIN_HOME_FETCH_COOLDOWN_MS = 60 * 1000;
@@ -103,6 +106,7 @@ const ADMIN_NAV_ORDER: TabKey[] = [
   'store_banners',
   'store_promotions',
   'landing_download',
+  'legal_pages',
   'store_config',
   'installer',
   'crash_reports',
@@ -384,6 +388,12 @@ export function AdminAccessDialog({
   const [landingDownloadSaving, setLandingDownloadSaving] = React.useState(false);
   const [landingDownloadConfig, setLandingDownloadConfig] = React.useState<LandingDownloadConfig>(() =>
     normalizeLandingDownloadConfig(DEFAULT_LANDING_DOWNLOAD_CONFIG)
+  );
+  const [legalDocumentsLoading, setLegalDocumentsLoading] = React.useState(false);
+  const [legalSavingKey, setLegalSavingKey] = React.useState<LegalDocumentKey | null>(null);
+  const [legalPublishingKey, setLegalPublishingKey] = React.useState<LegalDocumentKey | null>(null);
+  const [legalDocuments, setLegalDocuments] = React.useState<AdminLegalDocumentState>(() =>
+    normalizeAdminLegalDocuments(null)
   );
   const [samplerDefaultsLoading, setSamplerDefaultsLoading] = React.useState(false);
   const [samplerDefaultsSaving, setSamplerDefaultsSaving] = React.useState(false);
@@ -675,7 +685,7 @@ export function AdminAccessDialog({
       setLandingDownloadConfig(normalizeLandingDownloadConfig(data.config));
       setError('');
     } catch (e: any) {
-      setError(e?.message || 'Could not load landing download config.');
+      setError(e?.message || 'Could not load landing page settings.');
       setLandingDownloadConfig(normalizeLandingDownloadConfig(DEFAULT_LANDING_DOWNLOAD_CONFIG));
     } finally {
       setLandingDownloadLoading(false);
@@ -688,14 +698,88 @@ export function AdminAccessDialog({
       const normalized = normalizeLandingDownloadConfig(landingDownloadConfig);
       const data = await adminApi.saveLandingDownloadConfig(normalized);
       setLandingDownloadConfig(normalizeLandingDownloadConfig(data.config));
-      setInfo('Landing download config saved.');
+      setInfo('Landing page settings saved.');
       setError('');
     } catch (e: any) {
-      setError(e?.message || 'Could not save landing download config.');
+      setError(e?.message || 'Could not save landing page settings.');
     } finally {
       setLandingDownloadSaving(false);
     }
   }, [landingDownloadConfig]);
+
+  const refreshLegalDocuments = React.useCallback(async () => {
+    setLegalDocumentsLoading(true);
+    try {
+      const data = await adminApi.getLegalDocuments();
+      setLegalDocuments(normalizeAdminLegalDocuments(data.documents));
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not load legal pages.');
+      setLegalDocuments(normalizeAdminLegalDocuments(null));
+    } finally {
+      setLegalDocumentsLoading(false);
+    }
+  }, []);
+
+  const handleLegalDraftChange = React.useCallback((documentKey: LegalDocumentKey, draft: LegalDocument) => {
+    setLegalDocuments((prev) => ({
+      ...prev,
+      [documentKey]: {
+        ...prev[documentKey],
+        draft,
+      },
+    }));
+  }, []);
+
+  const handleSaveLegalDocumentDraft = React.useCallback(async (documentKey: LegalDocumentKey) => {
+    setLegalSavingKey(documentKey);
+    try {
+      const normalized = normalizeLegalDocument(documentKey, legalDocuments[documentKey].draft, {
+        ...legalDocuments[documentKey].published,
+        status: 'draft',
+        publishedAt: null,
+      });
+      const data = await adminApi.saveLegalDocumentDraft(normalized);
+      setLegalDocuments((prev) => ({
+        ...prev,
+        [documentKey]: {
+          ...prev[documentKey],
+          draft: normalizeLegalDocument(documentKey, data.document, normalized),
+        },
+      }));
+      setInfo(`${normalized.title} draft saved.`);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not save legal draft.');
+    } finally {
+      setLegalSavingKey(null);
+    }
+  }, [legalDocuments]);
+
+  const handlePublishLegalDocument = React.useCallback(async (documentKey: LegalDocumentKey) => {
+    setLegalPublishingKey(documentKey);
+    try {
+      const data = await adminApi.publishLegalDocument(documentKey);
+      const published = normalizeLegalDocument(documentKey, data.document);
+      setLegalDocuments((prev) => ({
+        ...prev,
+        [documentKey]: {
+          draft: {
+            ...published,
+            status: 'draft',
+            publishedAt: null,
+          },
+          published,
+        },
+      }));
+      setInfo(`${published.title} published.`);
+      setError('');
+    } catch (e: any) {
+      setError(e?.message || 'Could not publish legal page.');
+    } finally {
+      setLegalPublishingKey(null);
+    }
+  }, []);
 
   const refreshSamplerDefaultsConfig = React.useCallback(async () => {
     setSamplerDefaultsLoading(true);
@@ -737,6 +821,12 @@ export function AdminAccessDialog({
     if (tab !== 'landing_download') return;
     void refreshLandingDownloadConfig();
   }, [isAdmin, open, refreshLandingDownloadConfig, tab]);
+
+  React.useEffect(() => {
+    if (!open || !isAdmin) return;
+    if (tab !== 'legal_pages') return;
+    void refreshLegalDocuments();
+  }, [isAdmin, open, refreshLegalDocuments, tab]);
 
   React.useEffect(() => {
     if (!open || !isAdmin) return;
@@ -1802,14 +1892,14 @@ export function AdminAccessDialog({
     setBankAccessOpen(true);
   };
 
-  const tabMap = React.useMemo(() => new Map(TABS.map((item) => [item.key, item])), []);
+  const tabMap = React.useMemo(() => new Map(ADMIN_TAB_SPECS.map((item) => [item.key, item])), []);
   const navTabs = React.useMemo(
-    () => ADMIN_NAV_ORDER.map((key) => tabMap.get(key)).filter(Boolean) as typeof TABS,
+    () => ADMIN_NAV_ORDER.map((key) => tabMap.get(key)).filter(Boolean) as typeof ADMIN_TAB_SPECS,
     [tabMap],
   );
 
-  const activeTab = tabMap.get(tab) || TABS[0];
-  const tabToneForKey = (tabKey: TabKey) => (tabMap.get(tabKey) || TABS[0]).tone;
+  const activeTab = tabMap.get(tab) || ADMIN_TAB_SPECS[0];
+  const tabToneForKey = (tabKey: TabKey) => (tabMap.get(tabKey) || ADMIN_TAB_SPECS[0]).tone;
   const tabButtonClass = (tabKey: TabKey): string => {
     const config = tabMap.get(tabKey);
     if (!config) return '';
@@ -1849,7 +1939,10 @@ export function AdminAccessDialog({
             <aside className={`hidden lg:flex border rounded p-3 flex-col gap-2 min-h-0 overflow-auto w-[240px] min-w-[240px] max-w-[240px] ${tabCardToneClass(activeTab.key)}`}>
               <div className="text-sm font-semibold">Navigation</div>
               <div className={`text-xs rounded border px-2 py-1 min-h-[52px] flex flex-col justify-center overflow-hidden ${tabCardToneClass(activeTab.key)}`}>
-                <span className={`font-medium truncate ${tabTitleToneClass(activeTab.key)}`}>{activeTab.emoji} {activeTab.label}</span>
+                <span className={`font-medium truncate flex items-center gap-2 ${tabTitleToneClass(activeTab.key)}`}>
+                  <AdminNavIcon icon={activeTab.icon} active />
+                  {activeTab.label}
+                </span>
                 <div className="opacity-75 mt-0.5 truncate whitespace-nowrap" title={activeTab.hint}>{activeTab.hint}</div>
               </div>
               <div className="space-y-2">
@@ -1861,7 +1954,7 @@ export function AdminAccessDialog({
                     className={tabButtonClass(t.key)}
                     onClick={() => setTab(t.key)}
                   >
-                    <span className="mr-2 shrink-0">{t.emoji}</span>
+                    <AdminNavIcon icon={t.icon} />
                     <span className="truncate">{t.label}</span>
                   </Button>
                 ))}
@@ -1874,7 +1967,10 @@ export function AdminAccessDialog({
                   Menu
                 </Button>
                 <div className={`flex-1 rounded border px-2 py-1 text-xs ${tabCardToneClass(activeTab.key)}`}>
-                  <span className={`font-medium ${tabTitleToneClass(activeTab.key)}`}>{activeTab.emoji} {activeTab.label}</span>
+                  <span className={`font-medium flex items-center gap-2 ${tabTitleToneClass(activeTab.key)}`}>
+                    <AdminNavIcon icon={activeTab.icon} active />
+                    {activeTab.label}
+                  </span>
                   <span className="opacity-70"> | {activeTab.hint}</span>
                 </div>
               </div>
@@ -1950,7 +2046,7 @@ export function AdminAccessDialog({
                 }}
                 banks={{
                   theme,
-                  panelClass: tabPanelToneClass('active'),
+                  panelClass: tabPanelToneClass('banks'),
                   banksLoading,
                   banksQuery,
                   banks: pagedBanks,
@@ -2000,7 +2096,7 @@ export function AdminAccessDialog({
                 }}
                 active={{
                   theme,
-                  panelClass: tabPanelToneClass('banks'),
+                  panelClass: tabPanelToneClass('active'),
                   cardClass: tabCardToneClass('active'),
                   titleClass: tabTitleToneClass('active'),
                     activeLoading,
@@ -2094,6 +2190,21 @@ export function AdminAccessDialog({
                   onConfigChange={setLandingDownloadConfig}
                   onRefresh={() => void refreshLandingDownloadConfig()}
                   onSave={() => void handleSaveLandingDownloadConfig()}
+                />
+              )}
+
+              {tab === 'legal_pages' && (
+                <LegalPagesTab
+                  theme={theme}
+                  panelClass={tabPanelToneClass('legal_pages')}
+                  loading={legalDocumentsLoading}
+                  savingKey={legalSavingKey}
+                  publishingKey={legalPublishingKey}
+                  documents={legalDocuments}
+                  onDraftChange={handleLegalDraftChange}
+                  onRefresh={() => void refreshLegalDocuments()}
+                  onSaveDraft={(documentKey) => void handleSaveLegalDocumentDraft(documentKey)}
+                  onPublish={(documentKey) => void handlePublishLegalDocument(documentKey)}
                 />
               )}
 
@@ -2462,7 +2573,10 @@ export function AdminAccessDialog({
                   </Button>
                 </div>
                 <div className={`text-xs rounded border px-2 py-1 mb-2 ${tabCardToneClass(activeTab.key)}`}>
-                  <span className={`font-medium ${tabTitleToneClass(activeTab.key)}`}>{activeTab.emoji} {activeTab.label}</span>
+                  <span className={`font-medium flex items-center gap-2 ${tabTitleToneClass(activeTab.key)}`}>
+                    <AdminNavIcon icon={activeTab.icon} active />
+                    {activeTab.label}
+                  </span>
                   <div className="opacity-75 mt-0.5">{activeTab.hint}</div>
                 </div>
                 <div className="space-y-2 overflow-auto max-h-[calc(100vh-120px)] pr-1">
@@ -2478,7 +2592,7 @@ export function AdminAccessDialog({
                         setIsNavOpen(false);
                       }}
                     >
-                      <span className="mr-2 shrink-0">{t.emoji}</span>
+                      <AdminNavIcon icon={t.icon} />
                       <span className="truncate">{t.label}</span>
                     </Button>
                   ))}

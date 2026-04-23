@@ -25,6 +25,11 @@ import {
   type InstallerPackage,
   type InstallerVersionKey,
 } from '@/lib/admin-api';
+import {
+  AdminPageScaffold,
+  AdminSectionTabs,
+  AdminStatsStrip,
+} from './AdminAccessDialog.layout';
 
 type Props = {
   theme: 'light' | 'dark';
@@ -142,17 +147,6 @@ const inputClass = (theme: 'light' | 'dark') =>
 
 const selectClass = (theme: 'light' | 'dark') =>
   `h-9 rounded-md border px-3 text-sm ${inputClass(theme)}`;
-
-const subTabClass = (active: boolean, theme: 'light' | 'dark') => {
-  if (active) {
-    return theme === 'dark'
-      ? 'bg-fuchsia-500 border-fuchsia-400 text-white'
-      : 'bg-fuchsia-600 border-fuchsia-600 text-white';
-  }
-  return theme === 'dark'
-    ? 'border-fuchsia-500/40 text-fuchsia-200 hover:bg-fuchsia-500/10'
-    : 'border-fuchsia-300 text-fuchsia-700 hover:bg-fuchsia-50';
-};
 
 const statusBadgeClass = (theme: 'light' | 'dark', status: string) => {
   const normalized = String(status || '').toLowerCase();
@@ -1090,24 +1084,57 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     (view === 'requests' && requestsLoading) ||
     (view === 'events' && eventsLoading);
 
+  const installerStats = React.useMemo(() => {
+    const packageCount = allPackages.length;
+    const activePackageCount = allPackages.filter((item) => item.enabled).length;
+    const licenseCount = Number(licenseTotals.V2 || 0) + Number(licenseTotals.V3 || 0);
+    const pendingRequests = [...requestsByVersion.V2, ...requestsByVersion.V3].filter((item) => item.status === 'pending').length;
+    const eventCount = Number(eventTotals.V2 || 0) + Number(eventTotals.V3 || 0);
+    return [
+      { label: 'Packages', value: packageCount, detail: `${activePackageCount} enabled`, toneClass: 'text-fuchsia-500' },
+      { label: 'Licenses', value: licenseCount, detail: 'V2 + V3 inventory', toneClass: 'text-blue-500' },
+      { label: 'Pending Requests', value: pendingRequests, detail: 'Buyer approvals waiting', toneClass: 'text-amber-500' },
+      { label: 'Events', value: eventCount, detail: 'Recent Worker activity', toneClass: 'text-emerald-500' },
+    ];
+  }, [allPackages, eventTotals, licenseTotals, requestsByVersion]);
+
   return (
-    <div className={`rounded-2xl border p-4 md:p-5 space-y-5 ${panelClass}`}>
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div>
-          <div className="text-lg font-semibold">Installer Manager</div>
-          <div className={`text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>Manage V2 and V3 packages, customer licenses, and installer events from one admin surface.</div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'licenses', theme)} onClick={() => setView('licenses')}>Licenses</Button>
-          <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'packages', theme)} onClick={() => setView('packages')}>Packages</Button>
-          <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'catalog', theme)} onClick={() => setView('catalog')}>Catalog</Button>
-          <Button type="button" size="sm" variant="outline" className={subTabClass(view === 'events', theme)} onClick={() => setView('events')}>Events</Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => { if (view === 'packages') void reloadPackages(); if (view === 'licenses') void loadLicenses(); if (view === 'catalog') void loadCatalog(); if (view === 'events') void loadEvents(); }}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${currentViewLoading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
-        </div>
-      </div>
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Installer Manager"
+      description="Manage V2 and V3 packages, licenses, buy catalog, buyer requests, and event history from one aligned admin workspace."
+      actions={(
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            if (view === 'packages') void reloadPackages();
+            if (view === 'licenses') void loadLicenses();
+            if (view === 'catalog') void loadCatalog();
+            if (view === 'requests') void loadRequests();
+            if (view === 'events') void loadEvents();
+          }}
+        >
+          <RefreshCw className={`mr-2 h-4 w-4 ${currentViewLoading ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
+      )}
+      stats={<AdminStatsStrip items={installerStats} />}
+      controls={(
+        <AdminSectionTabs
+          sections={[
+            { key: 'licenses', label: 'Licenses' },
+            { key: 'packages', label: 'Packages' },
+            { key: 'catalog', label: 'Catalog' },
+            { key: 'requests', label: 'Requests' },
+            { key: 'events', label: 'Events' },
+          ]}
+          active={view}
+          onChange={(next) => setView(next as ViewKey)}
+        />
+      )}
+    >
 
       {view === 'packages' && (
         <>
@@ -1413,6 +1440,6 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
           if (action) void action();
         }}
       />
-    </div>
+    </AdminPageScaffold>
   );
 }

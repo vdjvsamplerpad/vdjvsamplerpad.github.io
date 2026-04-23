@@ -1,5 +1,6 @@
 import { edgeFunctionUrl, getAuthHeaders } from '@/lib/edge-api';
 import type { SamplerAppConfig } from '@/components/sampler/samplerAppConfig';
+import type { AdminLegalDocumentState, LegalDocument, LegalDocumentKey } from '@/lib/legal-content';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -412,11 +413,19 @@ export interface LandingBuySection {
   defaultInstallerDownloadLink: string;
 }
 
+export type LandingSocialKey = 'facebook' | 'instagram' | 'youtube';
+
+export interface LandingSocialLink {
+  label: string;
+  url: string;
+}
+
 export interface LandingDownloadConfig {
   downloadLinks: Record<LandingVersionKey, Record<LandingPlatformKey, string>>;
   platformDescriptions: Record<LandingVersionKey, Record<LandingPlatformKey, string>>;
   versionDescriptions: Record<LandingVersionKey, LandingVersionDescription>;
   buySections: Record<LandingVersionKey, LandingBuySection>;
+  socialLinks: Record<LandingSocialKey, LandingSocialLink>;
 }
 
 export type InstallerVersionKey = 'V2' | 'V3';
@@ -988,6 +997,18 @@ export const adminApi = {
 
   async saveLandingDownloadConfig(input: LandingDownloadConfig) {
     return callStoreApi<{ config: LandingDownloadConfig }>('POST', 'admin/store/landing-config', input);
+  },
+
+  async getLegalDocuments() {
+    return callStoreApi<{ documents: AdminLegalDocumentState }>('GET', 'admin/store/legal-documents');
+  },
+
+  async saveLegalDocumentDraft(input: LegalDocument) {
+    return callStoreApi<{ document: LegalDocument }>('POST', 'admin/store/legal-documents/draft', input);
+  },
+
+  async publishLegalDocument(documentKey: LegalDocumentKey) {
+    return callStoreApi<{ document: LegalDocument }>('POST', 'admin/store/legal-documents/publish', { documentKey });
   },
 
   async getSamplerAppConfig() {

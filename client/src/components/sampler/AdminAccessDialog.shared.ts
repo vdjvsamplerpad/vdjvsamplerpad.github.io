@@ -5,6 +5,28 @@ import type {
 } from '@/lib/admin-api';
 import { validateManagedImageFile } from '@/lib/image-upload';
 import { LED_COLOR_PALETTE } from '@/lib/led-colors';
+import type { LucideIcon } from 'lucide-react';
+import {
+  Activity,
+  BadgeDollarSign,
+  BookText,
+  CircleGauge,
+  FileStack,
+  Globe,
+  Images,
+  Landmark,
+  LayoutDashboard,
+  Package2,
+  ReceiptText,
+  Settings2,
+  ShoppingBag,
+  Siren,
+  SlidersHorizontal,
+  Store,
+  TicketPercent,
+  UserCog,
+  Users,
+} from 'lucide-react';
 
 export interface AdminAccessDialogProps {
   open: boolean;
@@ -42,6 +64,7 @@ export type TabKey =
   | 'store_promotions'
   | 'store_banners'
   | 'landing_download'
+  | 'legal_pages'
   | 'store_config'
   | 'installer';
 export type UserSortBy = 'display_name' | 'email' | 'created_at' | 'last_sign_in_at' | 'ban_status';
@@ -126,9 +149,39 @@ export const TABS: Array<{
   { key: 'store_banners', label: 'Banners', emoji: '🖼️', hint: 'Manage marketing banners for store homepage', tone: 'teal' },
   { key: 'store_promotions', label: 'Promotions', emoji: 'SALE', hint: 'Schedule discounts and flash sales', tone: 'teal' },
   { key: 'default_bank', label: 'Default Bank', emoji: 'DB', hint: 'Publish and roll back versioned default-bank releases', tone: 'teal' },
-  { key: 'landing_download', label: 'Landing Download', emoji: 'LD', hint: 'Manage landing page download links and descriptions', tone: 'fuchsia' },
+  { key: 'landing_download', label: 'Landing Page', emoji: 'LD', hint: 'Manage landing downloads, footer links, and social links', tone: 'fuchsia' },
+  { key: 'legal_pages', label: 'Legal Pages', emoji: 'LG', hint: 'Edit privacy and terms drafts, then publish public legal copy', tone: 'fuchsia' },
   { key: 'store_config', label: 'Pay Config', emoji: '💳', hint: 'Configure payment details and QR', tone: 'fuchsia' },
   { key: 'installer', label: 'Installer', emoji: 'IN', hint: 'Manage V2 and V3 installer packages and licenses', tone: 'fuchsia' },
+];
+
+export const ADMIN_TAB_SPECS: Array<{
+  key: TabKey;
+  label: string;
+  icon: LucideIcon;
+  hint: string;
+  tone: TabTone;
+}> = [
+  { key: 'home', label: 'Home', icon: LayoutDashboard, hint: 'Overview dashboard for priority admin signals', tone: 'blue' },
+  { key: 'assignments', label: 'Assignments', icon: UserCog, hint: 'Grant and revoke bank access', tone: 'blue' },
+  { key: 'banks', label: 'Banks', icon: FileStack, hint: 'Manage bank metadata and archive', tone: 'emerald' },
+  { key: 'users', label: 'Users', icon: Users, hint: 'Manage user accounts and status', tone: 'violet' },
+  { key: 'active', label: 'Active', icon: CircleGauge, hint: 'Monitor online user sessions', tone: 'cyan' },
+  { key: 'activity', label: 'Activity', icon: Activity, hint: 'Review export/import audit logs', tone: 'amber' },
+  { key: 'sampler_defaults', label: 'Sampler Defaults', icon: SlidersHorizontal, hint: 'Control first-run sampler defaults and limits', tone: 'violet' },
+  { key: 'account_requests', label: 'Account Requests', icon: ReceiptText, hint: 'Approve registrations and PRO upgrade requests', tone: 'rose' },
+  { key: 'account_upgrades', label: 'Tier & Vouchers', icon: BadgeDollarSign, hint: 'Configure account tiers and issue vouchers', tone: 'rose' },
+  { key: 'crash_reports', label: 'Crash Reports', icon: Siren, hint: 'Review client-submitted crash diagnostics', tone: 'amber' },
+  { key: 'store_requests', label: 'Store Requests', icon: ShoppingBag, hint: 'Handle purchase requests', tone: 'orange' },
+  { key: 'installer_requests', label: 'Installer Requests', icon: TicketPercent, hint: 'Review bundled installer purchase requests', tone: 'orange' },
+  { key: 'store_catalog', label: 'Catalog', icon: Store, hint: 'Prepare and publish store catalog items', tone: 'teal' },
+  { key: 'store_banners', label: 'Banners', icon: Images, hint: 'Manage marketing banners for store homepage', tone: 'teal' },
+  { key: 'store_promotions', label: 'Promotions', icon: Landmark, hint: 'Schedule discounts and flash sales', tone: 'teal' },
+  { key: 'default_bank', label: 'Default Bank', icon: Package2, hint: 'Publish and roll back versioned default-bank releases', tone: 'teal' },
+  { key: 'landing_download', label: 'Landing Page', icon: Globe, hint: 'Manage landing downloads, footer links, and social links', tone: 'fuchsia' },
+  { key: 'legal_pages', label: 'Legal Pages', icon: BookText, hint: 'Edit privacy and terms drafts, then publish public legal copy', tone: 'fuchsia' },
+  { key: 'store_config', label: 'Pay Config', icon: BadgeDollarSign, hint: 'Configure payment details and QR', tone: 'fuchsia' },
+  { key: 'installer', label: 'Installer', icon: Settings2, hint: 'Manage V2 and V3 installer packages and licenses', tone: 'fuchsia' },
 ];
 
 export const TAB_TONE_CLASSES: Record<

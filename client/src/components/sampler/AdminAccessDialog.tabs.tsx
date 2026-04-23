@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { CopyableValue, copyTextToClipboard } from '@/components/ui/copyable-value';
-import { adminApi, type AdminAccountRegistrationRequest, type AdminAccountUpgradeRequest, type AdminClientCrashReport, type AdminInstallerPurchaseRequestGroup, type DefaultBankRelease, type InstallerBuyProduct, type LandingDownloadConfig, type LandingPlatformKey, type LandingVersionKey } from '@/lib/admin-api';
+import { adminApi, type AdminAccountRegistrationRequest, type AdminAccountUpgradeRequest, type AdminClientCrashReport, type AdminInstallerPurchaseRequestGroup, type DefaultBankRelease, type InstallerBuyProduct, type LandingDownloadConfig, type LandingPlatformKey, type LandingSocialKey, type LandingVersionKey } from '@/lib/admin-api';
+import type { AdminLegalDocumentState, LegalDocument, LegalDocumentKey, LegalSection } from '@/lib/legal-content';
 import { prepareManagedImageUpload } from '@/lib/image-upload';
 import { uploadManagedStoreAsset } from '@/lib/store-asset-upload';
 import { Check, ChevronDown, ChevronUp, Copy, Download, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
@@ -28,6 +29,12 @@ import type {
   StoreCatalogTypeFilter,
 } from './AdminAccessDialog.shared';
 import { CatalogCard, Pagination, ProofImagePreview } from './AdminAccessDialog.widgets';
+import {
+  AdminControlsBar,
+  AdminPageScaffold,
+  AdminReviewDialog,
+  AdminStatsStrip,
+} from './AdminAccessDialog.layout';
 
 interface AccountRequestsTabProps {
   theme: AdminDialogTheme;
@@ -336,6 +343,19 @@ interface LandingDownloadTabProps {
   onConfigChange: (next: LandingDownloadConfig) => void;
   onRefresh: () => void;
   onSave: () => void;
+}
+
+interface LegalPagesTabProps {
+  theme: AdminDialogTheme;
+  panelClass: string;
+  loading: boolean;
+  savingKey: LegalDocumentKey | null;
+  publishingKey: LegalDocumentKey | null;
+  documents: AdminLegalDocumentState;
+  onDraftChange: (documentKey: LegalDocumentKey, draft: LegalDocument) => void;
+  onRefresh: () => void;
+  onSaveDraft: (documentKey: LegalDocumentKey) => void;
+  onPublish: (documentKey: LegalDocumentKey) => void;
 }
 
 interface SamplerDefaultsTabProps {
@@ -704,6 +724,11 @@ const useDebouncedValue = <T,>(value: T, delayMs: number) => {
 
 const LANDING_VERSION_OPTIONS: LandingVersionKey[] = ['V1', 'V2', 'V3'];
 const LANDING_PLATFORM_OPTIONS: LandingPlatformKey[] = ['android', 'ios', 'windows', 'macos'];
+const LANDING_SOCIAL_OPTIONS: Array<{ key: LandingSocialKey; label: string; helper: string }> = [
+  { key: 'facebook', label: 'Facebook', helper: 'Main page or community profile shown in the landing footer.' },
+  { key: 'instagram', label: 'Instagram', helper: 'Visual updates, reels, and short-form promo content.' },
+  { key: 'youtube', label: 'YouTube', helper: 'Long-form demos, tutorials, and official video uploads.' },
+];
 
 export function LandingDownloadTab({
   theme,
@@ -716,6 +741,7 @@ export function LandingDownloadTab({
   onSave,
 }: LandingDownloadTabProps) {
   const isDark = theme === 'dark';
+  const [activeSection, setActiveSection] = React.useState<'downloads' | 'social'>('downloads');
   const totalPlatformSlots = LANDING_VERSION_OPTIONS.length * LANDING_PLATFORM_OPTIONS.length;
   const configuredLinkCount = LANDING_VERSION_OPTIONS.reduce((sum, version) => (
     sum + LANDING_PLATFORM_OPTIONS.filter((platform) => String(config.downloadLinks[version][platform] || '').trim()).length
@@ -723,15 +749,41 @@ export function LandingDownloadTab({
   const configuredPlatformDescriptionCount = LANDING_VERSION_OPTIONS.reduce((sum, version) => (
     sum + LANDING_PLATFORM_OPTIONS.filter((platform) => String(config.platformDescriptions[version][platform] || '').trim()).length
   ), 0);
+  const configuredSocialLinkCount = LANDING_SOCIAL_OPTIONS.filter(({ key }) => {
+    const entry = config.socialLinks[key];
+    return Boolean(String(entry?.label || '').trim() && String(entry?.url || '').trim());
+  }).length;
+  const landingStats = [
+    { label: 'Versions', value: LANDING_VERSION_OPTIONS.length, detail: 'Landing variants', toneClass: 'text-violet-500' },
+    { label: 'Links Ready', value: `${configuredLinkCount}/${totalPlatformSlots}`, detail: 'Platform slots configured', toneClass: 'text-emerald-500' },
+    { label: 'Descriptions', value: `${configuredPlatformDescriptionCount}/${totalPlatformSlots}`, detail: 'Platform copy filled', toneClass: 'text-blue-500' },
+    { label: 'Social Links', value: `${configuredSocialLinkCount}/${LANDING_SOCIAL_OPTIONS.length}`, detail: 'Footer connections', toneClass: 'text-fuchsia-500' },
+  ];
 
   return (
-    <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Landing Download"
+      description="Manage landing page installer links, version copy, buy-section content, and social links from one admin form."
+      actions={(
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || saving}>
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
+          </Button>
+          <Button size="sm" onClick={onSave} disabled={loading || saving}>
+            {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
+            Save Changes
+          </Button>
+        </div>
+      )}
+      stats={<AdminStatsStrip items={landingStats} />}
+    >
       <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white'}`}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-1">
-            <div className="text-base font-semibold">Landing Download Config</div>
+            <div className="text-base font-semibold">Landing Page Management</div>
             <div className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
-              Manage version copy, platform descriptions, and download links without touching the landing page source.
+              Manage landing downloads, version copy, and footer social links without touching the landing page source.
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -745,7 +797,7 @@ export function LandingDownloadTab({
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+        <div className="mt-4 grid grid-cols-2 gap-2 xl:grid-cols-5">
           <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
             <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Versions</div>
             <div className="mt-1 text-xl font-semibold">{LANDING_VERSION_OPTIONS.length}</div>
@@ -758,89 +810,91 @@ export function LandingDownloadTab({
             <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Descriptions</div>
             <div className="mt-1 text-xl font-semibold">{configuredPlatformDescriptionCount}/{totalPlatformSlots}</div>
           </div>
+          <div className={`rounded-xl border p-3 ${isDark ? 'border-fuchsia-700/60 bg-fuchsia-500/10' : 'border-fuchsia-200 bg-fuchsia-50'}`}>
+            <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-fuchsia-300' : 'text-fuchsia-700'}`}>Social Links</div>
+            <div className="mt-1 text-xl font-semibold">{configuredSocialLinkCount}/{LANDING_SOCIAL_OPTIONS.length}</div>
+          </div>
           <div className={`rounded-xl border p-3 ${isDark ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
             <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Guidance</div>
-            <div className="mt-1 text-xs font-medium">Keep version copy short and platform links explicit.</div>
+            <div className="mt-1 text-xs font-medium">Keep public links current and version copy short.</div>
+          </div>
+        </div>
+
+        <div className={`mt-4 rounded-2xl border p-1 ${isDark ? 'border-gray-700 bg-gray-950/50' : 'border-gray-200 bg-slate-50'}`}>
+          <div className="grid gap-1 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setActiveSection('downloads')}
+              className={`rounded-xl px-4 py-3 text-left transition ${
+                activeSection === 'downloads'
+                  ? (isDark ? 'bg-gray-800 text-white shadow-sm' : 'bg-white text-slate-950 shadow-sm')
+                  : (isDark ? 'text-gray-300 hover:bg-gray-900/70' : 'text-slate-600 hover:bg-white/70')
+              }`}
+            >
+              <div className="text-sm font-semibold">Downloads</div>
+              <div className={`text-xs ${activeSection === 'downloads' ? (isDark ? 'text-gray-300' : 'text-slate-500') : (isDark ? 'text-gray-400' : 'text-slate-500')}`}>
+                Version copy, buy section content, and platform download links.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSection('social')}
+              className={`rounded-xl px-4 py-3 text-left transition ${
+                activeSection === 'social'
+                  ? (isDark ? 'bg-gray-800 text-white shadow-sm' : 'bg-white text-slate-950 shadow-sm')
+                  : (isDark ? 'text-gray-300 hover:bg-gray-900/70' : 'text-slate-600 hover:bg-white/70')
+              }`}
+            >
+              <div className="text-sm font-semibold">Social Links</div>
+              <div className={`text-xs ${activeSection === 'social' ? (isDark ? 'text-gray-300' : 'text-slate-500') : (isDark ? 'text-gray-400' : 'text-slate-500')}`}>
+                Footer buttons for Facebook, Instagram, and YouTube.
+              </div>
+            </button>
           </div>
         </div>
       </div>
 
-      <div className="space-y-4 pr-1">
-        {LANDING_VERSION_OPTIONS.map((version) => (
-          <div key={version} className={`rounded-xl border p-4 space-y-3 ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="text-sm font-semibold">{version}</div>
-                <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-                  {LANDING_PLATFORM_OPTIONS.filter((platform) => String(config.downloadLinks[version][platform] || '').trim()).length}/{LANDING_PLATFORM_OPTIONS.length} platform links configured
+      {activeSection === 'downloads' ? (
+        <div className="space-y-4 pr-1">
+          {LANDING_VERSION_OPTIONS.map((version) => (
+            <div key={version} className={`rounded-xl border p-4 space-y-3 ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold">{version}</div>
+                  <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                    {LANDING_PLATFORM_OPTIONS.filter((platform) => String(config.downloadLinks[version][platform] || '').trim()).length}/{LANDING_PLATFORM_OPTIONS.length} platform links configured
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {LANDING_PLATFORM_OPTIONS.map((platform) => {
+                    const hasLink = Boolean(String(config.downloadLinks[version][platform] || '').trim());
+                    return (
+                      <span
+                        key={`${version}-${platform}-status`}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase border ${
+                          hasLink
+                            ? (isDark ? 'border-emerald-700/60 text-emerald-300 bg-emerald-950/20' : 'border-emerald-300 text-emerald-700 bg-emerald-50')
+                            : (isDark ? 'border-gray-700 text-gray-300 bg-gray-900/30' : 'border-gray-300 text-gray-700 bg-gray-50')
+                        }`}
+                      >
+                        {platform}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {LANDING_PLATFORM_OPTIONS.map((platform) => {
-                  const hasLink = Boolean(String(config.downloadLinks[version][platform] || '').trim());
-                  return (
-                    <span
-                      key={`${version}-${platform}-status`}
-                      className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase border ${
-                        hasLink
-                          ? (isDark ? 'border-emerald-700/60 text-emerald-300 bg-emerald-950/20' : 'border-emerald-300 text-emerald-700 bg-emerald-50')
-                          : (isDark ? 'border-gray-700 text-gray-300 bg-gray-900/30' : 'border-gray-300 text-gray-700 bg-gray-50')
-                      }`}
-                    >
-                      {platform}
-                    </span>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-3">
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <Label>{version} Title</Label>
-                  <Input
-                    value={config.versionDescriptions[version].title}
-                    onChange={(event) => onConfigChange({
-                      ...config,
-                      versionDescriptions: {
-                        ...config.versionDescriptions,
-                        [version]: {
-                          ...config.versionDescriptions[version],
-                          title: event.target.value,
-                        },
-                      },
-                    })}
-                    className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label>{version} Description</Label>
-                  <textarea
-                    value={config.versionDescriptions[version].desc}
-                    onChange={(event) => onConfigChange({
-                      ...config,
-                      versionDescriptions: {
-                        ...config.versionDescriptions,
-                        [version]: {
-                          ...config.versionDescriptions[version],
-                          desc: event.target.value,
-                        },
-                      },
-                    })}
-                    className={`w-full min-h-[140px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`}
-                  />
-                </div>
-                <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-fuchsia-900/60 bg-fuchsia-950/20' : 'border-fuchsia-200 bg-fuchsia-50/60'}`}>
-                  <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Buy Section</div>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[240px_minmax(0,1fr)]">
+                <div className="space-y-3">
                   <div className="space-y-1">
-                    <Label>{version} Buy Title</Label>
+                    <Label>{version} Title</Label>
                     <Input
-                      value={config.buySections[version].title}
+                      value={config.versionDescriptions[version].title}
                       onChange={(event) => onConfigChange({
                         ...config,
-                        buySections: {
-                          ...config.buySections,
+                        versionDescriptions: {
+                          ...config.versionDescriptions,
                           [version]: {
-                            ...config.buySections[version],
+                            ...config.versionDescriptions[version],
                             title: event.target.value,
                           },
                         },
@@ -849,78 +903,69 @@ export function LandingDownloadTab({
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label>{version} Buy Description</Label>
+                    <Label>{version} Description</Label>
                     <textarea
-                      value={config.buySections[version].description}
+                      value={config.versionDescriptions[version].desc}
                       onChange={(event) => onConfigChange({
                         ...config,
-                        buySections: {
-                          ...config.buySections,
+                        versionDescriptions: {
+                          ...config.versionDescriptions,
                           [version]: {
-                            ...config.buySections[version],
-                            description: event.target.value,
+                            ...config.versionDescriptions[version],
+                            desc: event.target.value,
                           },
                         },
                       })}
-                      className={`w-full min-h-[120px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`}
+                      className={`w-full min-h-[140px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`}
                     />
                   </div>
-                  <div className="space-y-1">
-                    <Label>{version} Buy Image URL</Label>
-                    <Input
-                      value={config.buySections[version].imageUrl}
-                      onChange={(event) => onConfigChange({
-                        ...config,
-                        buySections: {
-                          ...config.buySections,
-                          [version]: {
-                            ...config.buySections[version],
-                            imageUrl: event.target.value,
-                          },
-                        },
-                      })}
-                      className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
-                    />
-                  </div>
-
-                </div>
-              </div>
-              <div className="space-y-3">
-                {LANDING_PLATFORM_OPTIONS.map((platform) => (
-                  <div key={`${version}-${platform}`} className={`rounded-lg border p-3 space-y-2 ${theme === 'dark' ? 'border-gray-800 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
-                    <div className="text-xs font-semibold uppercase tracking-wide opacity-70">{platform}</div>
+                  <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-fuchsia-900/60 bg-fuchsia-950/20' : 'border-fuchsia-200 bg-fuchsia-50/60'}`}>
+                    <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Buy Section</div>
                     <div className="space-y-1">
-                      <Label>Download Link</Label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          value={config.downloadLinks[version][platform]}
-                          onChange={(event) => onConfigChange({
-                            ...config,
-                            downloadLinks: {
-                              ...config.downloadLinks,
-                              [version]: {
-                                ...config.downloadLinks[version],
-                                [platform]: event.target.value,
-                              },
-                            },
-                          })}
-                          placeholder="https://..."
-                          className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
-                        />
-                        <InlineCopyButton value={config.downloadLinks[version][platform]} label={`${version} ${platform} download link`} />
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <Label>Platform Description</Label>
+                      <Label>{version} Buy Title</Label>
                       <Input
-                        value={config.platformDescriptions[version][platform]}
+                        value={config.buySections[version].title}
                         onChange={(event) => onConfigChange({
                           ...config,
-                          platformDescriptions: {
-                            ...config.platformDescriptions,
+                          buySections: {
+                            ...config.buySections,
                             [version]: {
-                              ...config.platformDescriptions[version],
-                              [platform]: event.target.value,
+                              ...config.buySections[version],
+                              title: event.target.value,
+                            },
+                          },
+                        })}
+                        className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>{version} Buy Description</Label>
+                      <textarea
+                        value={config.buySections[version].description}
+                        onChange={(event) => onConfigChange({
+                          ...config,
+                          buySections: {
+                            ...config.buySections,
+                            [version]: {
+                              ...config.buySections[version],
+                              description: event.target.value,
+                            },
+                          },
+                        })}
+                        className={`w-full min-h-[120px] rounded-md border p-2 text-sm outline-none resize-y ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-white border-gray-300'}`}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>{version} Buy Image URL</Label>
+                      <Input
+                        value={config.buySections[version].imageUrl}
+                        onChange={(event) => onConfigChange({
+                          ...config,
+                          buySections: {
+                            ...config.buySections,
+                            [version]: {
+                              ...config.buySections[version],
+                              imageUrl: event.target.value,
                             },
                           },
                         })}
@@ -928,13 +973,313 @@ export function LandingDownloadTab({
                       />
                     </div>
                   </div>
-                ))}
+                </div>
+                <div className="space-y-3">
+                  {LANDING_PLATFORM_OPTIONS.map((platform) => (
+                    <div key={`${version}-${platform}`} className={`rounded-lg border p-3 space-y-2 ${theme === 'dark' ? 'border-gray-800 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+                      <div className="text-xs font-semibold uppercase tracking-wide opacity-70">{platform}</div>
+                      <div className="space-y-1">
+                        <Label>Download Link</Label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={config.downloadLinks[version][platform]}
+                            onChange={(event) => onConfigChange({
+                              ...config,
+                              downloadLinks: {
+                                ...config.downloadLinks,
+                                [version]: {
+                                  ...config.downloadLinks[version],
+                                  [platform]: event.target.value,
+                                },
+                              },
+                            })}
+                            placeholder="https://..."
+                            className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                          />
+                          <InlineCopyButton value={config.downloadLinks[version][platform]} label={`${version} ${platform} download link`} />
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Platform Description</Label>
+                        <Input
+                          value={config.platformDescriptions[version][platform]}
+                          onChange={(event) => onConfigChange({
+                            ...config,
+                            platformDescriptions: {
+                              ...config.platformDescriptions,
+                              [version]: {
+                                ...config.platformDescriptions[version],
+                                [platform]: event.target.value,
+                              },
+                            },
+                          })}
+                          className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-4 pr-1">
+          <div className={`rounded-xl border p-4 ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+            <div className="space-y-1">
+              <div className="text-sm font-semibold">Footer Social Links</div>
+              <div className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+                These links appear in the landing page footer and are intended for external browser tabs in web and Capacitor flows.
               </div>
             </div>
           </div>
-        ))}
+
+          <div className="grid gap-3 lg:grid-cols-3">
+            {LANDING_SOCIAL_OPTIONS.map(({ key, label, helper }) => (
+              <div key={key} className={`rounded-xl border p-4 space-y-3 ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold">{label}</div>
+                  <div className={`text-xs leading-5 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{helper}</div>
+                </div>
+                <div className="space-y-1">
+                  <Label>{label} Button Label</Label>
+                  <Input
+                    value={config.socialLinks[key].label}
+                    onChange={(event) => onConfigChange({
+                      ...config,
+                      socialLinks: {
+                        ...config.socialLinks,
+                        [key]: {
+                          ...config.socialLinks[key],
+                          label: event.target.value,
+                        },
+                      },
+                    })}
+                    placeholder={label}
+                    className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>{label} URL</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={config.socialLinks[key].url}
+                      onChange={(event) => onConfigChange({
+                        ...config,
+                        socialLinks: {
+                          ...config.socialLinks,
+                          [key]: {
+                            ...config.socialLinks[key],
+                            url: event.target.value,
+                          },
+                        },
+                      })}
+                      placeholder="https://..."
+                      className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                    />
+                    <InlineCopyButton value={config.socialLinks[key].url} label={`${label} URL`} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </AdminPageScaffold>
+  );
+}
+
+export function LegalPagesTab({
+  theme,
+  panelClass,
+  loading,
+  savingKey,
+  publishingKey,
+  documents,
+  onDraftChange,
+  onRefresh,
+  onSaveDraft,
+  onPublish,
+}: LegalPagesTabProps) {
+  const isDark = theme === 'dark';
+  const cardClass = isDark ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white';
+  const mutedText = isDark ? 'text-gray-400' : 'text-gray-600';
+  const inputClass = isDark ? 'bg-gray-950 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900';
+  const textareaClass = `min-h-[120px] w-full rounded-md border px-3 py-2 text-sm leading-6 outline-none focus:ring-2 focus:ring-fuchsia-500 ${inputClass}`;
+  const keys: LegalDocumentKey[] = ['privacy', 'terms'];
+  const legalStats = keys.map((documentKey) => {
+    const state = documents[documentKey];
+    return {
+      label: documentKey === 'privacy' ? 'Privacy' : 'Terms',
+      value: state.draft.sections.length,
+      detail: `${state.draft.sections.length} draft sections`,
+      toneClass: documentKey === 'privacy' ? 'text-blue-500' : 'text-fuchsia-500',
+    };
+  });
+
+  const updateDraft = (documentKey: LegalDocumentKey, patch: Partial<LegalDocument>) => {
+    onDraftChange(documentKey, {
+      ...documents[documentKey].draft,
+      ...patch,
+      documentKey,
+      status: 'draft',
+      publishedAt: null,
+    });
+  };
+
+  const updateSection = (documentKey: LegalDocumentKey, index: number, patch: Partial<LegalSection>) => {
+    const draft = documents[documentKey].draft;
+    const sections = draft.sections.map((section, sectionIndex) => (
+      sectionIndex === index ? { ...section, ...patch } : section
+    ));
+    updateDraft(documentKey, { sections });
+  };
+
+  const addSection = (documentKey: LegalDocumentKey) => {
+    const draft = documents[documentKey].draft;
+    updateDraft(documentKey, {
+      sections: [...draft.sections, { title: 'New Section', body: 'Add the legal copy for this section.' }],
+    });
+  };
+
+  const removeSection = (documentKey: LegalDocumentKey, index: number) => {
+    const draft = documents[documentKey].draft;
+    const sections = draft.sections.filter((_, sectionIndex) => sectionIndex !== index);
+    updateDraft(documentKey, { sections: sections.length ? sections : draft.sections });
+  };
+
+  const renderDocumentEditor = (documentKey: LegalDocumentKey) => {
+    const label = documentKey === 'privacy' ? 'Privacy Policy' : 'Terms of Service';
+    const pair = documents[documentKey];
+    const draft = pair.draft;
+    const published = pair.published;
+    const saving = savingKey === documentKey;
+    const publishing = publishingKey === documentKey;
+    const disabled = loading || saving || publishing;
+
+    return (
+      <div key={documentKey} className={`rounded-2xl border p-4 ${cardClass}`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1">
+            <div className="text-base font-semibold">{label}</div>
+            <div className={`text-sm ${mutedText}`}>
+              Draft edits stay private until you publish. Published content is what `/privacy` and `/terms` show.
+            </div>
+            <div className={`text-xs ${mutedText}`}>
+              Published: {published.publishedAt || published.updatedAt || 'Bundled fallback'}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => onSaveDraft(documentKey)} disabled={disabled}>
+              {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
+              Save Draft
+            </Button>
+            <Button size="sm" onClick={() => onPublish(documentKey)} disabled={disabled}>
+              {publishing ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Check className="w-3.5 h-3.5 mr-2" />}
+              Publish
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3">
+          <div className="grid gap-2">
+            <Label>Title</Label>
+            <Input
+              className={inputClass}
+              value={draft.title}
+              onChange={(event) => updateDraft(documentKey, { title: event.target.value })}
+              disabled={disabled}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>Intro</Label>
+            <textarea
+              className={textareaClass}
+              value={draft.intro}
+              onChange={(event) => updateDraft(documentKey, { intro: event.target.value })}
+              disabled={disabled}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-semibold">Sections</div>
+            <Button size="sm" variant="outline" onClick={() => addSection(documentKey)} disabled={disabled}>
+              <Plus className="w-3.5 h-3.5 mr-2" />
+              Add Section
+            </Button>
+          </div>
+          <div className="grid gap-3">
+            {draft.sections.map((section, index) => (
+              <div key={`${documentKey}-${index}`} className={`rounded-lg border p-3 ${isDark ? 'border-gray-700 bg-gray-950/60' : 'border-gray-200 bg-gray-50'}`}>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div className={`text-xs font-semibold uppercase ${mutedText}`}>Section {index + 1}</div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => removeSection(documentKey, index)}
+                    disabled={disabled || draft.sections.length <= 1}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+                <div className="grid gap-3">
+                  <div className="grid gap-2">
+                    <Label>Heading</Label>
+                    <Input
+                      className={inputClass}
+                      value={section.title}
+                      onChange={(event) => updateSection(documentKey, index, { title: event.target.value })}
+                      disabled={disabled}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Body</Label>
+                    <textarea
+                      className={textareaClass}
+                      value={section.body}
+                      onChange={(event) => updateSection(documentKey, index, { body: event.target.value })}
+                      disabled={disabled}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
-    </div>
+    );
+  };
+
+  return (
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Legal Pages"
+      description="Edit the public privacy and terms pages with separate draft and published states."
+      actions={(
+        <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || Boolean(savingKey) || Boolean(publishingKey)}>
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-2" />}
+          Refresh
+        </Button>
+      )}
+      stats={<AdminStatsStrip items={legalStats} />}
+    >
+      <div className={`rounded-2xl border p-4 ${cardClass}`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1">
+            <div className="text-base font-semibold">Legal Pages</div>
+            <div className={`text-sm ${mutedText}`}>
+              Controlled admin edits for public legal pages. Drafts are stored separately from published pages.
+            </div>
+          </div>
+          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || Boolean(savingKey) || Boolean(publishingKey)}>
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-2" />}
+            Refresh
+          </Button>
+        </div>
+      </div>
+      <div className="grid gap-3 xl:grid-cols-2">
+        {keys.map(renderDocumentEditor)}
+      </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -982,9 +1327,35 @@ export function SamplerDefaultsTab({
   const isDark = theme === 'dark';
   const cardClass = isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white';
   const mutedText = isDark ? 'text-gray-400' : 'text-gray-600';
+  const samplerStats = [
+    { label: 'Channels', value: `${config.uiDefaults.defaultChannelCountMobile}/${config.uiDefaults.defaultChannelCountDesktop}`, detail: 'Mobile / desktop defaults', toneClass: 'text-cyan-500' },
+    { label: 'Owned Quota', value: config.quotaDefaults.ownedBankQuota, detail: 'Owned bank default quota', toneClass: 'text-violet-500' },
+    { label: 'Pad Cap', value: config.quotaDefaults.ownedBankPadCap, detail: 'Owned bank pad cap', toneClass: 'text-amber-500' },
+    { label: 'Audio Limit', value: `${Math.round(config.audioLimits.maxPadAudioBytes / 1024 / 1024)} MB`, detail: `${Math.round(config.audioLimits.maxPadAudioDurationMs / 1000)}s max duration`, toneClass: 'text-fuchsia-500' },
+  ];
 
   return (
-    <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Sampler Defaults"
+      description="Set first-run defaults for the sampler UI, new banks, new pads, quotas, shortcuts, and upload limits."
+      actions={(
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || saving}>
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
+          </Button>
+          <Button size="sm" variant="outline" onClick={onReset} disabled={loading || saving}>
+            <RotateCcw className="w-3.5 h-3.5 mr-2" />
+            Reset
+          </Button>
+          <Button size="sm" onClick={onSave} disabled={loading || saving}>
+            {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
+            Save Defaults
+          </Button>
+        </div>
+      )}
+      stats={<AdminStatsStrip items={samplerStats} />}
+    >
       <div className={`rounded-2xl border p-4 ${cardClass}`}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-1">
@@ -1203,7 +1574,7 @@ export function SamplerDefaultsTab({
           ))}
         </div>
       </div>
-    </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -1227,8 +1598,30 @@ export function DefaultBankTab({
   onPublish,
   onRollback,
 }: DefaultBankTabProps) {
+  const releaseStats = [
+    { label: 'Next Version', value: `v${nextVersion}`, detail: 'Ready to publish', toneClass: 'text-violet-500' },
+    { label: 'Sources', value: sourceOptions.length, detail: 'Loaded banks available', toneClass: 'text-blue-500' },
+    { label: 'History', value: releases.length, detail: currentRelease ? `Current v${currentRelease.version}` : 'No active release', toneClass: 'text-emerald-500' },
+    { label: 'Min App', value: minAppVersion || '-', detail: 'Publish requirement', toneClass: 'text-amber-500' },
+  ];
   return (
-    <div className={`border rounded p-3 space-y-3 overflow-visible lg:h-full lg:min-h-0 lg:flex lg:flex-col lg:overflow-hidden ${panelClass}`}>
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Default Bank"
+      description="Publish, inspect, and roll back the remote default-bank release used by the app."
+      actions={(
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
+          </Button>
+          <Button onClick={onPublish} disabled={publishLoading || !selectedSourceId} className="h-9">
+            {publishLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+            Publish New Version
+          </Button>
+        </div>
+      )}
+      stats={<AdminStatsStrip items={releaseStats} />}
+    >
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)] gap-3">
         <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
           <div className="flex items-center justify-between gap-2">
@@ -1354,7 +1747,7 @@ export function DefaultBankTab({
           </table>
         </div>
       </div>
-    </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -1472,57 +1865,76 @@ export function AccountRequestsTab({
   const accountPendingTotal = pendingCount + upgradePendingCount;
   const accountHistoryTotal = historyCount + upgradeHistoryCount;
   const accountRowsLoading = loading || upgradeLoading;
+  const accountStats = [
+    { label: 'Pending Queue', value: accountPendingTotal, detail: 'Legacy + upgrade requests', toneClass: 'text-amber-500' },
+    { label: 'History', value: accountHistoryTotal, detail: 'Reviewed account decisions', toneClass: 'text-blue-500' },
+    { label: 'Visible', value: rows.length + upgradeRows.length, detail: filter === 'pending' ? 'Current pending scope' : 'Current history scope', toneClass: 'text-violet-500' },
+  ];
   return (
-      <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
-        <div className="flex flex-wrap gap-2 items-center">
-          <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
-            Pending ({accountPendingTotal})
-          </Button>
-          <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
-            History ({accountHistoryTotal})
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              onRefresh();
-              void loadUpgradeRequests();
-            }}
-            disabled={accountRowsLoading}
-          >
-            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${accountRowsLoading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
-          <div className="flex-1" />
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
-          <Input
-            value={search}
-            onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="Search requests..."
-            className={`h-9 w-full pl-8 text-sm sm:w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
-          />
-        </div>
-      </div>
-      <RequestFilterBar
-        theme={theme}
-        scope={filter}
-        statusFilter={statusFilter}
-        channelFilter={channelFilter}
-        decisionFilter={decisionFilter}
-        automationFilter={automationFilter}
-        ocrStatusFilter={ocrStatusFilter}
-        onStatusFilterChange={onStatusFilterChange}
-        onChannelFilterChange={onChannelFilterChange}
-        onDecisionFilterChange={onDecisionFilterChange}
-        onAutomationFilterChange={onAutomationFilterChange}
-        onOcrStatusFilterChange={onOcrStatusFilterChange}
-      />
-      <div className="flex flex-wrap items-center gap-2">
-        <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
-          Filtered: {rows.length + upgradeRows.length}
-        </span>
-      </div>
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Account Requests"
+      description="Review legacy account registrations and tier upgrade requests in one approval queue."
+      stats={<AdminStatsStrip items={accountStats} />}
+      controls={(
+        <AdminControlsBar
+          left={(
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
+                  Pending ({accountPendingTotal})
+                </Button>
+                <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
+                  History ({accountHistoryTotal})
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    onRefresh();
+                    void loadUpgradeRequests();
+                  }}
+                  disabled={accountRowsLoading}
+                >
+                  <RefreshCw className={`mr-1 h-3.5 w-3.5 ${accountRowsLoading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+              </div>
+              <RequestFilterBar
+                theme={theme}
+                scope={filter}
+                statusFilter={statusFilter}
+                channelFilter={channelFilter}
+                decisionFilter={decisionFilter}
+                automationFilter={automationFilter}
+                ocrStatusFilter={ocrStatusFilter}
+                onStatusFilterChange={onStatusFilterChange}
+                onChannelFilterChange={onChannelFilterChange}
+                onDecisionFilterChange={onDecisionFilterChange}
+                onAutomationFilterChange={onAutomationFilterChange}
+                onOcrStatusFilterChange={onOcrStatusFilterChange}
+              />
+            </div>
+          )}
+          right={(
+            <div className="flex flex-col gap-3 sm:items-end">
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
+                <Input
+                  value={search}
+                  onChange={(event) => onSearchChange(event.target.value)}
+                  placeholder="Search requests..."
+                  className={`h-9 w-full pl-8 text-sm sm:w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
+                />
+              </div>
+              <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
+                Filtered: {rows.length + upgradeRows.length}
+              </span>
+            </div>
+          )}
+        />
+      )}
+    >
 
       {accountRowsLoading ? (
         <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div>
@@ -1913,7 +2325,7 @@ export function AccountRequestsTab({
           />
         </>
       )}
-    </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -1956,59 +2368,80 @@ export function StoreRequestsTab({
 }: StoreRequestsTabProps) {
   const [selectedRequest, setSelectedRequest] = React.useState<StoreRequestGroup | null>(null);
   const [refundRequest, setRefundRequest] = React.useState<StoreRequestGroup | null>(null);
+  const storeRequestStats = [
+    { label: 'Pending Queue', value: pendingCount, detail: 'Awaiting review', toneClass: 'text-amber-500' },
+    { label: 'History', value: historyCount, detail: 'Completed decisions', toneClass: 'text-blue-500' },
+    { label: 'Visible', value: filteredCount, detail: bankFilter === 'all' ? 'All banks' : bankFilter, toneClass: 'text-violet-500' },
+  ];
   return (
-    <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
-        <div className="flex flex-wrap gap-2 items-center">
-          <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
-            Pending ({pendingCount})
-          </Button>
-          <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
-            History ({historyCount})
-          </Button>
-          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
-            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
-          <div className="flex-1" />
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
-          <Input
-            value={search}
-            onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="Search requests..."
-            className={`h-9 w-full pl-8 text-sm sm:w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
-          />
-        </div>
-      </div>
-      <RequestFilterBar
-        theme={theme}
-        scope={filter}
-        statusFilter={statusFilter}
-        channelFilter={channelFilter}
-        decisionFilter={decisionFilter}
-        automationFilter={automationFilter}
-        ocrStatusFilter={ocrStatusFilter}
-        onStatusFilterChange={onStatusFilterChange}
-        onChannelFilterChange={onChannelFilterChange}
-        onDecisionFilterChange={onDecisionFilterChange}
-        onAutomationFilterChange={onAutomationFilterChange}
-        onOcrStatusFilterChange={onOcrStatusFilterChange}
-      />
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={bankFilter}
-          onChange={(event) => onBankFilterChange(event.target.value)}
-          className={`h-9 min-w-0 rounded-md border px-3 text-sm sm:min-w-64 ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
-        >
-          <option value="all">All banks</option>
-          {bankOptions.map((bankName) => (
-            <option key={`store-request-bank-${bankName}`} value={bankName}>{bankName}</option>
-          ))}
-        </select>
-        <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
-          Filtered: {filteredCount}
-        </span>
-      </div>
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Store Requests"
+      description="Review bank-store checkout proofs, OCR results, and fulfillment decisions in a single queue."
+      stats={<AdminStatsStrip items={storeRequestStats} />}
+      controls={(
+        <AdminControlsBar
+          left={(
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
+                  Pending ({pendingCount})
+                </Button>
+                <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
+                  History ({historyCount})
+                </Button>
+                <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
+                  <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+              </div>
+              <RequestFilterBar
+                theme={theme}
+                scope={filter}
+                statusFilter={statusFilter}
+                channelFilter={channelFilter}
+                decisionFilter={decisionFilter}
+                automationFilter={automationFilter}
+                ocrStatusFilter={ocrStatusFilter}
+                onStatusFilterChange={onStatusFilterChange}
+                onChannelFilterChange={onChannelFilterChange}
+                onDecisionFilterChange={onDecisionFilterChange}
+                onAutomationFilterChange={onAutomationFilterChange}
+                onOcrStatusFilterChange={onOcrStatusFilterChange}
+              />
+            </div>
+          )}
+          right={(
+            <div className="flex flex-col gap-3 sm:items-end">
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
+                <Input
+                  value={search}
+                  onChange={(event) => onSearchChange(event.target.value)}
+                  placeholder="Search requests..."
+                  className={`h-9 w-full pl-8 text-sm sm:w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <select
+                  value={bankFilter}
+                  onChange={(event) => onBankFilterChange(event.target.value)}
+                  className={`h-9 min-w-0 rounded-md border px-3 text-sm sm:min-w-64 ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+                >
+                  <option value="all">All banks</option>
+                  {bankOptions.map((bankName) => (
+                    <option key={`store-request-bank-${bankName}`} value={bankName}>{bankName}</option>
+                  ))}
+                </select>
+                <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
+                  Filtered: {filteredCount}
+                </span>
+              </div>
+            </div>
+          )}
+        />
+      )}
+    >
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <>
         <div className="space-y-2">
@@ -2222,7 +2655,7 @@ export function StoreRequestsTab({
           />
         </>
       )}
-    </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -2379,59 +2812,80 @@ export function InstallerRequestsTab({
       setActionKey('');
     }
   }, [loadRequests, pushNotice]);
+  const installerRequestStats = [
+    { label: 'Pending Queue', value: pendingCount, detail: 'Buyer approvals waiting', toneClass: 'text-amber-500' },
+    { label: 'History', value: historyCount, detail: 'Reviewed installer requests', toneClass: 'text-blue-500' },
+    { label: 'Visible', value: filteredCount, detail: installerItemFilter === 'all' ? 'All versions / SKUs' : 'Filtered by installer item', toneClass: 'text-violet-500' },
+  ];
 
   return (
-    <div className={`border rounded p-3 space-y-2 ${panelClass}`}>
-      <div className="flex flex-wrap gap-2 items-center">
-        <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => setFilter('pending')}>
-          Pending ({pendingCount})
-        </Button>
-        <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => setFilter('history')}>
-          History ({historyCount})
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => void loadRequests()} disabled={loading}>
-          <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
-        <div className="flex-1" />
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
-          <Input
-            value={search}
-            onChange={(event) => { setSearch(event.target.value); setPage(1); }}
-            placeholder="Search email, SKU, receipt, or license..."
-            className={`h-9 w-full pl-8 text-sm sm:w-64 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
-          />
-        </div>
-      </div>
-      <RequestFilterBar
-        theme={theme}
-        scope={filter}
-        statusFilter={statusFilter}
-        channelFilter={channelFilter}
-        decisionFilter={decisionFilter}
-        automationFilter={automationFilter}
-        ocrStatusFilter={ocrStatusFilter}
-        onStatusFilterChange={(value) => { setStatusFilter(value); setPage(1); }}
-        onChannelFilterChange={(value) => { setChannelFilter(value); setPage(1); }}
-        onDecisionFilterChange={(value) => { setDecisionFilter(value); setPage(1); }}
-        onAutomationFilterChange={(value) => { setAutomationFilter(value); setPage(1); }}
-        onOcrStatusFilterChange={(value) => { setOcrStatusFilter(value); setPage(1); }}
-      />
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={installerItemFilter}
-          onChange={(event) => { setInstallerItemFilter(event.target.value); setPage(1); }}
-          className={`h-9 min-w-0 rounded-md border px-3 text-sm sm:min-w-72 ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
-        >
-          {installerItemOptions.map((option) => (
-            <option key={`installer-filter-${option.value}`} value={option.value}>{option.label}</option>
-          ))}
-        </select>
-        <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
-          Filtered: {filteredCount}
-        </span>
-      </div>
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Installer Requests"
+      description="Review V2 and V3 installer purchase proofs, OCR results, and license fulfillment decisions in one queue."
+      stats={<AdminStatsStrip items={installerRequestStats} />}
+      controls={(
+        <AdminControlsBar
+          left={(
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => setFilter('pending')}>
+                  Pending ({pendingCount})
+                </Button>
+                <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => setFilter('history')}>
+                  History ({historyCount})
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => void loadRequests()} disabled={loading}>
+                  <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+              </div>
+              <RequestFilterBar
+                theme={theme}
+                scope={filter}
+                statusFilter={statusFilter}
+                channelFilter={channelFilter}
+                decisionFilter={decisionFilter}
+                automationFilter={automationFilter}
+                ocrStatusFilter={ocrStatusFilter}
+                onStatusFilterChange={(value) => { setStatusFilter(value); setPage(1); }}
+                onChannelFilterChange={(value) => { setChannelFilter(value); setPage(1); }}
+                onDecisionFilterChange={(value) => { setDecisionFilter(value); setPage(1); }}
+                onAutomationFilterChange={(value) => { setAutomationFilter(value); setPage(1); }}
+                onOcrStatusFilterChange={(value) => { setOcrStatusFilter(value); setPage(1); }}
+              />
+            </div>
+          )}
+          right={(
+            <div className="flex flex-col gap-3 sm:items-end">
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
+                <Input
+                  value={search}
+                  onChange={(event) => { setSearch(event.target.value); setPage(1); }}
+                  placeholder="Search email, SKU, receipt, or license..."
+                  className={`h-9 w-full pl-8 text-sm sm:w-64 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <select
+                  value={installerItemFilter}
+                  onChange={(event) => { setInstallerItemFilter(event.target.value); setPage(1); }}
+                  className={`h-9 min-w-0 rounded-md border px-3 text-sm sm:min-w-72 ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+                >
+                  {installerItemOptions.map((option) => (
+                    <option key={`installer-filter-${option.value}`} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
+                  Filtered: {filteredCount}
+                </span>
+              </div>
+            </div>
+          )}
+        />
+      )}
+    >
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <>
           <div className="space-y-2">
@@ -2655,7 +3109,7 @@ export function InstallerRequestsTab({
           await handleRefund(refundRequest);
         }}
       />
-    </div>
+    </AdminPageScaffold>
   );
 }
 
@@ -2725,6 +3179,7 @@ export function CrashReportsTab({
   const [logViewerOpen, setLogViewerOpen] = React.useState(false);
   const [logViewerTitle, setLogViewerTitle] = React.useState('');
   const [logViewerContent, setLogViewerContent] = React.useState('');
+  const [selectedReport, setSelectedReport] = React.useState<AdminClientCrashReport | null>(null);
 
   const buildCrashReportDownloadFileName = React.useCallback((row: AdminClientCrashReport): string => {
     const objectName = String(row.report_object_key || '').split('/').pop()?.trim();
@@ -2801,8 +3256,32 @@ export function CrashReportsTab({
     }
   }, [buildCrashReportDownloadFileName]);
 
+  const visiblePlaybackCount = rows.filter((row) => row.domain === 'playback').length;
+  const visibleStoreCount = rows.filter((row) => row.domain === 'bank_store').length;
+  const visibleFixedCount = rows.filter((row) => row.status === 'fixed').length;
+
   return (
-    <div className={`border rounded p-3 space-y-3 ${panelClass}`}>
+    <AdminPageScaffold
+      panelClass={panelClass}
+      title="Client Crash Reports"
+      description="Review crash submissions with the same queue-first admin surface used by the request flows."
+      actions={(
+        <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
+          Refresh
+        </Button>
+      )}
+      stats={(
+        <AdminStatsStrip
+          items={[
+            { label: 'New', value: newCount, detail: 'Needs review', toneClass: 'text-amber-500' },
+            { label: 'Visible', value: rows.length, detail: `${totalCount} total`, toneClass: 'text-blue-500' },
+            { label: 'Playback', value: visiblePlaybackCount, detail: `${visibleStoreCount} bank store`, toneClass: 'text-fuchsia-500' },
+            { label: 'Fixed', value: visibleFixedCount, detail: 'Within current filters', toneClass: 'text-emerald-500' },
+          ]}
+        />
+      )}
+    >
       <div className={`rounded-lg border p-3 space-y-3 ${cardClass}`}>
         <div className="flex flex-wrap items-center gap-2">
           <div className="text-sm font-semibold">Client Crash Reports</div>
@@ -2893,6 +3372,9 @@ export function CrashReportsTab({
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    <Button size="sm" variant={row.status === 'new' ? 'default' : 'outline'} onClick={() => setSelectedReport(row)}>
+                      {row.status === 'new' ? 'Review' : 'View Details'}
+                    </Button>
                     <select
                       value={row.status}
                       onChange={(event) => onStatusUpdate(row.id, event.target.value as AdminClientCrashReport['status'])}
@@ -2970,9 +3452,106 @@ export function CrashReportsTab({
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+            <AdminReviewDialog
+              open={selectedReport !== null}
+              onOpenChange={(open) => {
+                if (!open) setSelectedReport(null);
+              }}
+              title={selectedReport?.status === 'new' ? 'Review Crash Report' : 'Crash Report Details'}
+              description="Open the latest log, confirm the diagnosis, and then move the report to its final status."
+              summary={selectedReport ? (
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm font-semibold">{selectedReport.report_title}</div>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                      selectedReport.status === 'new'
+                        ? 'bg-red-500/15 text-red-500'
+                        : selectedReport.status === 'fixed'
+                          ? 'bg-emerald-500/15 text-emerald-500'
+                          : selectedReport.status === 'ignored'
+                            ? 'bg-gray-500/15 text-gray-500'
+                            : 'bg-amber-500/15 text-amber-500'
+                    }`}>
+                      {formatCrashReportStatusLabel(selectedReport.status)}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${theme === 'dark' ? 'bg-slate-800 text-slate-200' : 'bg-slate-100 text-slate-700'}`}>
+                      {formatCrashReportDomainLabel(selectedReport.domain)}
+                    </span>
+                  </div>
+                  <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                    {selectedReport.user_profile?.display_name || 'Unknown User'} | {selectedReport.user_profile?.email || 'No email'} | {selectedReport.platform || 'unknown platform'} | {selectedReport.app_version || 'unknown version'}
+                  </div>
+                </div>
+              ) : null}
+              footer={selectedReport ? (
+                <>
+                  <select
+                    value={selectedReport.status}
+                    onChange={(event) => onStatusUpdate(selectedReport.id, event.target.value as AdminClientCrashReport['status'])}
+                    className={selectClass}
+                  >
+                    {CRASH_REPORT_STATUS_OPTIONS.filter((option) => option.value !== 'all').map((option) => (
+                      <option key={`selected-${option.value}`} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  {selectedReport.report_download_url ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        onClick={() => void handleOpenCrashReport(selectedReport)}
+                        disabled={openingReportId === selectedReport.id}
+                      >
+                        {openingReportId === selectedReport.id ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : null}
+                        Open Log
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => void handleDownloadCrashReport(selectedReport)}
+                        disabled={downloadingReportId === selectedReport.id}
+                      >
+                        {downloadingReportId === selectedReport.id ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-2" />}
+                        Download Log
+                      </Button>
+                    </>
+                  ) : null}
+                  <Button variant="outline" onClick={() => setSelectedReport(null)}>Close</Button>
+                </>
+              ) : null}
+            >
+              {selectedReport ? (
+                <div className="space-y-3">
+                  <div className={`grid grid-cols-1 gap-3 md:grid-cols-2 text-xs ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                    <div className={`rounded border p-3 ${cardClass}`}>
+                      <div className="font-semibold mb-2">Report</div>
+                      <div><span className="opacity-70">Last seen:</span> {selectedReport.last_seen_at ? new Date(selectedReport.last_seen_at).toLocaleString() : '-'}</div>
+                      <div><span className="opacity-70">Repeat count:</span> {selectedReport.repeat_count}</div>
+                      <div><span className="opacity-70">Size:</span> {formatCrashReportSize(selectedReport.report_size_bytes)}</div>
+                      <div className="break-all"><span className="opacity-70">Object key:</span> {selectedReport.report_object_key || '-'}</div>
+                    </div>
+                    <div className={`rounded border p-3 ${cardClass}`}>
+                      <div className="font-semibold mb-2">Latest Operation</div>
+                      <div><span className="opacity-70">Operation:</span> {selectedReport.latest_operation || '-'}</div>
+                      <div><span className="opacity-70">Phase:</span> {selectedReport.latest_phase || '-'}</div>
+                      <div className="break-all"><span className="opacity-70">Stage:</span> {selectedReport.latest_stage || '-'}</div>
+                      <div className="break-all"><span className="opacity-70">Pattern:</span> {selectedReport.recent_event_pattern || '-'}</div>
+                    </div>
+                  </div>
+                  <div className={`rounded border p-3 text-sm leading-6 ${cardClass}`}>
+                    <div className="font-semibold mb-2">Summary</div>
+                    {selectedReport.latest_summary ? (
+                      <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs leading-5">
+                        {JSON.stringify(selectedReport.latest_summary, null, 2)}
+                      </pre>
+                    ) : (
+                      <div>No structured summary provided.</div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </AdminReviewDialog>
           </>
         )}
-      </div>
+    </AdminPageScaffold>
   );
 }
 
