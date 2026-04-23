@@ -346,7 +346,6 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     const forwardDistance = (normalized - mobilePlanIndex + planViews.length) % planViews.length;
     const backwardDistance = (mobilePlanIndex - normalized + planViews.length) % planViews.length;
     setMobileSlideDirection(forwardDistance <= backwardDistance ? 'next' : 'prev');
-    setMobilePlanIndex(normalized);
     window.requestAnimationFrame(() => {
       const rail = planRailRef.current;
       const target = rail?.children.item(normalized) as HTMLElement | null;
@@ -642,6 +641,17 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
           ) : (
             <div className={`mt-2 text-xs ${noteTextClass}`}>{isFree ? 'Upgrade offer available anytime.' : 'Admin reviews payment proof before activation.'}</div>
           )}
+          <button
+            type="button"
+            onClick={() => tier ? selectPlan(tier) : undefined}
+            disabled={disabled}
+            className={`mt-4 flex h-12 w-full items-center justify-center rounded-[10px] text-sm font-black transition disabled:cursor-default ${
+              disabled && !isFree ? disabledCtaClass : ctaClass
+            }`}
+          >
+            {cta}
+            {!disabled && <ArrowRight className="ml-2 h-4 w-4" />}
+          </button>
         </div>
 
         {pending && (
@@ -683,18 +693,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
           </div>
         </div>
 
-        <div className="relative mt-auto px-4 pb-4 pt-6">
-          <button
-            type="button"
-            onClick={() => tier ? selectPlan(tier) : undefined}
-            disabled={disabled}
-            className={`flex h-12 w-full items-center justify-center rounded-[10px] text-sm font-black transition disabled:cursor-default ${
-            disabled && !isFree ? disabledCtaClass : ctaClass
-          }`}>
-            {cta}
-            {!disabled && <ArrowRight className="ml-2 h-4 w-4" />}
-          </button>
-        </div>
+        <div className="mt-auto pb-4" />
       </div>
     );
   };
@@ -788,7 +787,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
                 type="button"
                 aria-label="Previous plan"
                 onClick={() => showMobilePlan(mobilePlanIndex - 1)}
-                className="absolute left-1 top-[36%] z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
+                className="absolute left-1 top-24 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
@@ -796,7 +795,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
                 type="button"
                 aria-label="Next plan"
                 onClick={() => showMobilePlan(mobilePlanIndex + 1)}
-                className="absolute right-1 top-[36%] z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
+                className="absolute right-1 top-24 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
               >
                 <ChevronRight className="h-5 w-5" />
               </button>
