@@ -281,6 +281,7 @@ function HomeTab({
     });
   }, [homeTrends]);
 
+  const isDark = theme === 'dark';
   const liveSnapshotCards = [
     { label: 'Revenue', value: formatMoney(Number(homeData?.counts?.totalRevenue24h || 0)), tone: 'text-yellow-500' },
     { label: 'Pending Account Requests', value: Number(homeData?.counts?.pendingAccountRequests || 0), tone: 'text-rose-500' },
@@ -289,7 +290,6 @@ function HomeTab({
     { label: 'Active Users', value: Number(homeData?.counts?.activeUsers || 0), tone: 'text-cyan-500' },
     { label: 'Published Catalog', value: Number(homeData?.counts?.publishedCatalog || 0), tone: 'text-emerald-500' },
   ];
-
   const todayCards = [
     { label: 'Active Today', value: Number(homeData?.counts?.activeTodayUsers || 0), tone: 'text-sky-500' },
     { label: 'Total User', value: Number(homeData?.counts?.totalRegisteredUsers || 0), tone: 'text-blue-500' },
@@ -298,232 +298,358 @@ function HomeTab({
     { label: 'Import Failures', value: Number(homeData?.counts?.importFailures24h || 0), tone: 'text-fuchsia-500' },
     { label: 'Imports', value: Number(homeData?.counts?.imports24h || 0), tone: 'text-indigo-500' },
   ];
+  const pendingRequestsTotal = Number(homeData?.counts?.pendingAccountRequests || 0)
+    + Number(homeData?.counts?.pendingStoreRequests || 0)
+    + Number(homeData?.counts?.pendingInstallerRequests || 0);
+  const primaryStats = [
+    { label: 'Range Revenue', value: formatMoney(selectedRangeStats.totalRevenue), detail: homeRangeLabel, toneClass: 'text-emerald-500' },
+    { label: 'Pending Queues', value: pendingRequestsTotal, detail: 'Account, store, installer', toneClass: 'text-amber-500' },
+    { label: 'Active Today', value: Number(homeData?.counts?.activeTodayUsers || 0), detail: 'Asia/Manila', toneClass: 'text-sky-500' },
+    { label: 'Import Failures', value: Number(homeData?.counts?.importFailures24h || 0), detail: 'Today', toneClass: 'text-fuchsia-500' },
+  ];
+  const heroShellClass = isDark
+    ? 'relative overflow-hidden rounded-[24px] border border-white/10 bg-[radial-gradient(110%_95%_at_90%_0%,rgba(255,20,132,0.3),transparent_48%),radial-gradient(100%_80%_at_0%_0%,rgba(74,144,255,0.22),transparent_42%),linear-gradient(180deg,rgba(18,22,33,0.98),rgba(13,16,26,0.96))] p-4 shadow-[0_28px_80px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.06)]'
+    : 'relative overflow-hidden rounded-[24px] border border-slate-900/10 bg-[radial-gradient(110%_95%_at_90%_0%,rgba(255,20,132,0.12),transparent_48%),radial-gradient(100%_80%_at_0%_0%,rgba(74,144,255,0.1),transparent_42%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(246,248,255,0.96))] p-4 shadow-[0_28px_80px_rgba(15,23,42,0.1),inset_0_1px_0_rgba(255,255,255,0.88)]';
+  const heroSubPanelClass = isDark
+    ? 'rounded-[18px] border border-white/10 bg-white/[0.05] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+    : 'rounded-[18px] border border-slate-900/10 bg-white/72 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]';
+  const heroMiniCardClass = isDark
+    ? 'rounded-[16px] border border-white/8 bg-white/[0.04] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]'
+    : 'rounded-[16px] border border-slate-900/8 bg-white/78 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]';
+  const moduleShellClass = `${cardClass} relative overflow-hidden rounded-[22px] border p-4 shadow-[0_20px_48px_rgba(15,23,42,0.08),inset_0_1px_0_rgba(255,255,255,0.75)] dark:shadow-[0_20px_48px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.05)]`;
+  const compactMetricClass = isDark
+    ? 'rounded-[16px] border border-white/8 bg-white/[0.045] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
+    : 'rounded-[16px] border border-slate-900/8 bg-white/78 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]';
+  const queueRowClass = isDark
+    ? 'rounded-[14px] border border-white/8 bg-white/[0.045] px-3 py-2.5'
+    : 'rounded-[14px] border border-slate-900/8 bg-white/76 px-3 py-2.5';
+  const queueMetaClass = isDark
+    ? 'rounded-full border border-white/10 bg-white/[0.06] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white/68'
+    : 'rounded-full border border-slate-900/10 bg-slate-900/[0.04] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600';
+  const footerPillClass = isDark
+    ? 'rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1'
+    : 'rounded-full border border-slate-900/10 bg-white/72 px-2.5 py-1';
+  const skeletonBlockClass = isDark ? 'bg-white/10' : 'bg-slate-900/8';
+  const rangeBreakdownCards = [
+    { label: 'Store Revenue', value: formatMoney(selectedRangeStats.storeRevenue), detail: `${selectedRangeStats.storeBuyers} buyers`, tone: 'text-emerald-500' },
+    { label: 'Account Revenue', value: formatMoney(selectedRangeStats.accountRevenue), detail: `${selectedRangeStats.accountBuyers} account buyers`, tone: 'text-cyan-500' },
+    { label: 'Installer Revenue', value: formatMoney(selectedRangeStats.installerRevenue), detail: `${selectedRangeStats.installerSales} installer sales`, tone: 'text-amber-500' },
+    { label: 'Purchase Requests', value: selectedRangeStats.importRequests, detail: `${selectedRangeStats.importTotal} imports processed`, tone: 'text-fuchsia-500' },
+  ];
+  const rangePulseCards = [
+    { label: 'Export Success', value: selectedRangeStats.exportSuccess, detail: 'Completed exports', tone: 'text-emerald-500' },
+    { label: 'Export Failed', value: selectedRangeStats.exportFailed, detail: 'Needs review', tone: 'text-rose-500' },
+    { label: 'Auth Success', value: selectedRangeStats.authSuccess, detail: 'Successful auth', tone: 'text-blue-500' },
+    { label: 'Auth Failed', value: selectedRangeStats.authFailed, detail: 'Login issues', tone: 'text-amber-500' },
+  ];
+  const renderQueuePreview = (
+    title: string,
+    subtitle: string,
+    rows: Array<{ id: string; title: string; meta: string }>,
+    count: number,
+    toneClass: string,
+    actionLabel: string,
+    onAction: () => void,
+  ) => (
+    <div className={moduleShellClass}>
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.16),transparent)] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.05),transparent)]" />
+      <div className="relative flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">{title}</div>
+          <div className="mt-1 text-lg font-black tracking-tight">{count}</div>
+          <div className="text-xs opacity-70">{subtitle}</div>
+        </div>
+        <Button size="sm" variant="outline" onClick={onAction} className="rounded-full">
+          {actionLabel}
+        </Button>
+      </div>
+      <div className="mt-4 space-y-2">
+        {rows.length > 0 ? rows.map((row) => (
+          <div key={row.id} className={queueRowClass}>
+            <div className="truncate text-sm font-semibold">{row.title}</div>
+            <div className="mt-1 flex items-center gap-2 min-w-0">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${toneClass}`} />
+              <div className="truncate text-xs opacity-70">{row.meta}</div>
+            </div>
+          </div>
+        )) : (
+          <div className={queueRowClass}>
+            <div className="text-sm font-semibold">Queue clear</div>
+            <div className="mt-1 text-xs opacity-70">No pending items right now.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+  const renderHomeLoadingSkeleton = () => (
+    <div className="space-y-4">
+      <div className={`rounded-[24px] border p-4 ${skeletonBlockClass}/40`}>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_420px]">
+          <div className="space-y-4">
+            <div className={`h-5 w-40 rounded-full ${skeletonBlockClass} animate-pulse`} />
+            <div className={`h-10 w-72 rounded-xl ${skeletonBlockClass} animate-pulse`} />
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[0, 1, 2, 3].map((index) => (
+                <div key={index} className={`h-24 rounded-[18px] ${skeletonBlockClass} animate-pulse`} />
+              ))}
+            </div>
+          </div>
+          <div className={`rounded-[18px] ${skeletonBlockClass} animate-pulse`} />
+        </div>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        {[0, 1, 2, 3].map((index) => (
+          <div key={index} className={`h-64 rounded-[22px] border ${skeletonBlockClass}/40`}>
+            <div className="space-y-3 p-4">
+              <div className={`h-4 w-32 rounded-full ${skeletonBlockClass} animate-pulse`} />
+              <div className={`h-20 rounded-[16px] ${skeletonBlockClass} animate-pulse`} />
+              <div className={`h-20 rounded-[16px] ${skeletonBlockClass} animate-pulse`} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+  const accountQueueRows = (homeData?.queues?.accountRequests || []).map((row) => ({
+    id: row.id,
+    title: row.display_name || row.email || 'Unknown',
+    meta: `${row.email || '-'} | ${row.payment_channel || '-'}`,
+  }));
+  const storeQueueRows = (homeData?.queues?.storeRequests || []).map((row) => ({
+    id: row.id,
+    title: row.user_label || 'Unknown User',
+    meta: `${row.bank_name || '-'} | ${row.payment_channel || '-'}`,
+  }));
 
   return (
     <AdminPageScaffold
       panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
-      title="Admin Overview"
-      description="Operational snapshot, revenue trends, queues, and usage signals for the selected date range."
+      title="ADMIN OVERVIEW"
+      description="Operational dashboard for revenue, approvals, activity, and import health. Premium visual treatment, utility-first structure."
+      stats={<AdminStatsStrip items={primaryStats} />}
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <div>
-          <div className="text-sm font-semibold">Admin Overview</div>
-          <div className="text-xs opacity-70">Selected range: {homeRangeLabel}</div>
-        </div>
-        <Input
-          type="date"
-          value={homeFromDate}
-          onChange={(event) => onHomeFromDateChange(event.target.value)}
-          className={`h-8 w-[142px] text-xs ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
-        />
-        <Input
-          type="date"
-          value={homeToDate}
-          onChange={(event) => onHomeToDateChange(event.target.value)}
-          className={`h-8 w-[142px] text-xs ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
-        />
-        <div className="flex flex-wrap gap-1">
-          {HOME_WINDOW_OPTIONS.map((option) => (
-            <Button key={option} type="button" size="sm" variant="outline" className="h-8 px-2 text-xs" onClick={() => onApplyPresetRange(option)}>
-              {option === 1 ? 'Today' : `${option}d`}
-            </Button>
-          ))}
-        </div>
-        <div className="flex-1" />
-        <Button variant="outline" size="sm" onClick={onRefresh} disabled={homeLoading}>
-          <RefreshCw className={`w-4 h-4 mr-1 ${homeLoading ? 'animate-spin' : ''}`} />
-          Apply
-        </Button>
-      </div>
-
-      <div className={`${DESKTOP_SCROLL_REGION_CLASS} space-y-3 pr-0 lg:pr-1`}>
+      <div className={`${DESKTOP_SCROLL_REGION_CLASS} space-y-4 pr-0 lg:pr-1`}>
         {homeError && (
           <div className={`border rounded p-3 text-sm ${theme === 'dark' ? 'border-red-500/40 bg-red-500/10 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`}>
             {homeError}
           </div>
         )}
 
-        <div className={`border rounded p-3 space-y-2 ${cardClass}`}>
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-sm font-semibold">Selected Range</div>
-              <div className="text-xs opacity-70">These cards change with the date range above.</div>
-            </div>
-            <div className="text-[11px] opacity-70">{homeData?.meta?.timeBasis || 'Asia/Manila'}</div>
-          </div>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-            {[
-              { label: 'Revenue', value: formatMoney(selectedRangeStats.totalRevenue), tone: 'text-emerald-500' },
-              { label: 'Store Revenue', value: formatMoney(selectedRangeStats.storeRevenue), tone: 'text-green-500' },
-              { label: 'Account Revenue', value: formatMoney(selectedRangeStats.accountRevenue), tone: 'text-lime-500' },
-              { label: 'Installer Revenue', value: formatMoney(selectedRangeStats.installerRevenue), tone: 'text-yellow-500' },
-              { label: 'Store Buyers', value: selectedRangeStats.storeBuyers, tone: 'text-cyan-500' },
-              { label: 'Account Buyers', value: selectedRangeStats.accountBuyers, tone: 'text-sky-500' },
-              { label: 'Installer Sales', value: selectedRangeStats.installerSales, tone: 'text-amber-500' },
-              { label: 'Purchase Requests', value: selectedRangeStats.importRequests, tone: 'text-orange-500' },
-            ].map((card) => (
-              <div key={card.label} className={`border rounded p-3 ${cardClass}`}>
-                <div className="text-[11px] opacity-75">{card.label}</div>
-                <div className={`text-xl font-semibold ${card.tone}`}>{card.value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className={`border rounded p-3 space-y-2 ${cardClass}`}>
-          <div>
-            <div className="text-sm font-semibold">Live Snapshot</div>
-            <div className="text-xs opacity-70">Current queue, catalog state, and today's Manila revenue. These are not filtered by the selected range.</div>
-          </div>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-            {liveSnapshotCards.map((card) => (
-              <div key={card.label} className={`border rounded p-3 ${cardClass}`}>
-                <div className="text-[11px] opacity-75">{card.label}</div>
-                <div className={`text-xl font-semibold ${card.tone}`}>{card.value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className={`border rounded p-3 space-y-2 ${cardClass}`}>
-          <div>
-            <div className="text-sm font-semibold">Today</div>
-            <div className="text-xs opacity-70">Operational health from 12:00 AM to 11:59 PM Asia/Manila.</div>
-          </div>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-            {todayCards.map((card) => (
-              <div key={card.label} className={`border rounded p-3 ${cardClass}`}>
-                <div className="text-[11px] opacity-75">{card.label}</div>
-                <div className={`text-xl font-semibold ${card.tone}`}>{card.value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-          <div className={`border rounded p-3 space-y-2 ${cardClass}`}>
-            <div className="flex items-center">
-              <div>
-                <div className="text-sm font-semibold">Pending Account Requests</div>
-                <div className="text-xs opacity-70">
-                  {Number(homeData?.counts?.pendingAccountRequests || 0)} currently pending
-                </div>
-              </div>
-              <div className="flex-1" />
-              <Button size="sm" variant="outline" onClick={onOpenAccountRequests}>
-                Open Account Requests
-              </Button>
-            </div>
-            <div className="space-y-1">
-              {(homeData?.queues?.accountRequests || []).map((row) => (
-                <div key={row.id} className={`rounded border px-2 py-1 text-xs ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
-                  <div className="font-medium truncate">{row.display_name || row.email || 'Unknown'}</div>
-                  <div className="flex items-center gap-1 opacity-70 min-w-0">
-                    <CopyableValue
-                      value={row.email || '-'}
-                      label="account request email"
-                      className="max-w-full min-w-0 flex-1"
-                      valueClassName="text-inherit"
-                      buttonClassName="h-5 w-5"
-                    />
-                    <span className="shrink-0">| {row.payment_channel || '-'}</span>
+        {homeLoading && !homeData ? renderHomeLoadingSkeleton() : (
+          <>
+            <div className={heroShellClass}>
+              <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(112deg,rgba(255,255,255,0.16),transparent_24%,transparent_70%,rgba(255,255,255,0.08))] dark:bg-[linear-gradient(112deg,rgba(255,255,255,0.08),transparent_24%,transparent_70%,rgba(255,255,255,0.03))]" />
+              <div className="relative grid gap-4 xl:grid-cols-[minmax(0,1.12fr)_420px]">
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={queueMetaClass}>Selected range</span>
+                    <span className={queueMetaClass}>{homeData?.meta?.timeBasis || 'Asia/Manila'}</span>
+                    {homeData?.meta?.sampled ? <span className={queueMetaClass}>Sampled</span> : null}
+                  </div>
+                  <div>
+                    <div className={`text-[11px] font-black uppercase tracking-[0.22em] ${isDark ? 'text-white/58' : 'text-slate-500'}`}>Operational focus</div>
+                    <div className="mt-2 text-3xl font-black tracking-tight sm:text-[2.6rem]">{homeRangeLabel}</div>
+                    <div className={`mt-2 max-w-2xl text-sm leading-relaxed ${isDark ? 'text-white/68' : 'text-slate-600'}`}>
+                      Revenue, request volume, buyer flow, and import health for the selected window. Keep this view analytical, not promotional.
+                    </div>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    {rangeBreakdownCards.map((card) => (
+                      <div key={card.label} className={heroMiniCardClass}>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-65">{card.label}</div>
+                        <div className={`mt-2 text-xl font-black tracking-tight ${card.tone}`}>{card.value}</div>
+                        <div className="mt-1 text-[11px] opacity-70">{card.detail}</div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ))}
-              {!homeLoading && (homeData?.queues?.accountRequests || []).length === 0 && (
-                <div className="text-xs opacity-70">No pending account requests.</div>
-              )}
-            </div>
-          </div>
-
-          <div className={`border rounded p-3 space-y-2 ${cardClass}`}>
-            <div className="flex items-center">
-              <div>
-                <div className="text-sm font-semibold">Pending Store Requests</div>
-                <div className="text-xs opacity-70">
-                  {Number(homeData?.counts?.pendingStoreRequests || 0)} currently pending
+                <div className={heroSubPanelClass}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-black tracking-tight">Control Rail</div>
+                      <div className="text-xs opacity-70">Date range, quick presets, and refresh state.</div>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={onRefresh} disabled={homeLoading} className="rounded-full">
+                      <RefreshCw className={`w-4 h-4 mr-1 ${homeLoading ? 'animate-spin' : ''}`} />
+                      Apply
+                    </Button>
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <Input
+                      type="date"
+                      value={homeFromDate}
+                      onChange={(event) => onHomeFromDateChange(event.target.value)}
+                      className={`h-10 text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
+                    />
+                    <Input
+                      type="date"
+                      value={homeToDate}
+                      onChange={(event) => onHomeToDateChange(event.target.value)}
+                      className={`h-10 text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
+                    />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {HOME_WINDOW_OPTIONS.map((option) => (
+                      <Button
+                        key={option}
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-9 rounded-full px-3 text-xs"
+                        onClick={() => onApplyPresetRange(option)}
+                      >
+                        {option === 1 ? 'Today' : `${option}d`}
+                      </Button>
+                    ))}
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {rangePulseCards.map((card) => (
+                      <div key={card.label} className={compactMetricClass}>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-65">{card.label}</div>
+                        <div className={`mt-2 text-lg font-black tracking-tight ${card.tone}`}>{card.value}</div>
+                        <div className="mt-1 text-[11px] opacity-70">{card.detail}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div className="flex-1" />
-              <Button size="sm" variant="outline" onClick={onOpenStoreRequests}>
-                Open Store Requests
-              </Button>
             </div>
-            <div className="space-y-1">
-              {(homeData?.queues?.storeRequests || []).map((row) => (
-                <div key={row.id} className={`rounded border px-2 py-1 text-xs ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
-                  <div className="font-medium truncate">{row.user_label || 'Unknown User'}</div>
-                  <div className="opacity-70 truncate">{row.bank_name || '-'} | {row.payment_channel || '-'}</div>
+
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.95fr)]">
+              <div className={moduleShellClass}>
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.16),transparent)] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.05),transparent)]" />
+                <div className="relative">
+                  <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Live Snapshot</div>
+                  <div className="mt-1 text-lg font-black tracking-tight">Current queues and store state</div>
+                  <div className="text-xs opacity-70">These stay operationally live and are not filtered by the selected range.</div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {liveSnapshotCards.map((card) => (
+                      <div key={card.label} className={compactMetricClass}>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-65">{card.label}</div>
+                        <div className={`mt-2 text-xl font-black tracking-tight ${card.tone}`}>{card.value}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
-              {!homeLoading && (homeData?.queues?.storeRequests || []).length === 0 && (
-                <div className="text-xs opacity-70">No pending store requests.</div>
+              </div>
+
+              <div className={moduleShellClass}>
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.16),transparent)] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.05),transparent)]" />
+                <div className="relative">
+                  <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Today</div>
+                  <div className="mt-1 text-lg font-black tracking-tight">Midnight to 11:59 PM Manila</div>
+                  <div className="text-xs opacity-70">Today-only operational totals, including activity, imports, and approved requests.</div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {todayCards.map((card) => (
+                      <div key={card.label} className={compactMetricClass}>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-65">{card.label}</div>
+                        <div className={`mt-2 text-xl font-black tracking-tight ${card.tone}`}>{card.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+              {renderQueuePreview(
+                'Account Queue',
+                `${Number(homeData?.counts?.pendingAccountRequests || 0)} pending account requests`,
+                (homeData?.queues?.accountRequests || []).map((row) => ({
+                  id: row.id,
+                  title: row.display_name || row.email || 'Unknown',
+                  meta: `${row.email || '-'} | ${row.payment_channel || '-'}`,
+                })),
+                Number(homeData?.counts?.pendingAccountRequests || 0),
+                'bg-rose-400',
+                'Open Account Requests',
+                onOpenAccountRequests,
+              )}
+              {renderQueuePreview(
+                'Store Queue',
+                `${Number(homeData?.counts?.pendingStoreRequests || 0)} pending store requests`,
+                (homeData?.queues?.storeRequests || []).map((row) => ({
+                  id: row.id,
+                  title: row.user_label || 'Unknown User',
+                  meta: `${row.bank_name || '-'} | ${row.payment_channel || '-'}`,
+                })),
+                Number(homeData?.counts?.pendingStoreRequests || 0),
+                'bg-amber-400',
+                'Open Store Requests',
+                onOpenStoreRequests,
               )}
             </div>
-          </div>
-        </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-stretch">
-          <div className={`border rounded p-3 h-full flex flex-col ${cardClass}`}>
-            <div className="text-sm font-semibold">Revenue Trend</div>
-            <div className="text-xs opacity-70 mb-1">Range: {homeRangeLabel}</div>
-            <RevenueAdvancedChart rows={homeTrends} theme={theme} formatMoney={formatMoney} />
-          </div>
-          <div className={`border rounded p-3 h-full flex flex-col ${cardClass}`}>
-            <div className="text-sm font-semibold">Buyer & Import Trend</div>
-            <div className="text-xs opacity-70 mb-1">Range: {homeRangeLabel}</div>
-            <MiniGroupedBarChart
-              points={homePointLabels}
-              authSuccess={homeStoreBuyersSeries}
-              authFailed={homeAccountBuyersSeries}
-              imports={homeInstallerSalesSeries}
-              seriesALabel="Store Buyers"
-              seriesBLabel="Account Buyers"
-              seriesCLabel="Installer Sales"
-              theme={theme}
-            />
-          </div>
-        </div>
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+              <div className={moduleShellClass}>
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.16),transparent)] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.05),transparent)]" />
+                <div className="relative flex h-full flex-col">
+                  <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Revenue Trend</div>
+                  <div className="mt-1 text-lg font-black tracking-tight">Selected revenue movement</div>
+                  <div className="mb-3 text-xs opacity-70">Range: {homeRangeLabel}</div>
+                  <RevenueAdvancedChart rows={homeTrends} theme={theme} formatMoney={formatMoney} />
+                </div>
+              </div>
+              <div className={moduleShellClass}>
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.16),transparent)] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.05),transparent)]" />
+                <div className="relative flex h-full flex-col">
+                  <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Buyer and Import Trend</div>
+                  <div className="mt-1 text-lg font-black tracking-tight">Store, account, and installer flow</div>
+                  <div className="mb-3 text-xs opacity-70">Range: {homeRangeLabel}</div>
+                  <MiniGroupedBarChart
+                    points={homePointLabels}
+                    authSuccess={homeStoreBuyersSeries}
+                    authFailed={homeAccountBuyersSeries}
+                    imports={homeInstallerSalesSeries}
+                    seriesALabel="Store Buyers"
+                    seriesBLabel="Account Buyers"
+                    seriesCLabel="Installer Sales"
+                    theme={theme}
+                  />
+                </div>
+              </div>
+            </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-stretch">
-          <div className={`border rounded p-3 h-full flex flex-col ${cardClass}`}>
-            <div className="text-sm font-semibold">Active Today Trend</div>
-            <div className="text-xs opacity-70 mb-1">Range: {homeRangeLabel}</div>
-            <ActiveUsersTrendChart points={homePointLabels} activeUsers={homeActiveUsersSeries} theme={theme} />
-          </div>
-          <div className={`border rounded p-3 h-full flex flex-col ${cardClass}`}>
-            <div className="text-sm font-semibold">Auth & Import</div>
-            <div className="text-xs opacity-70 mb-1">Range: {homeRangeLabel}</div>
-            <MiniGroupedBarChart
-              points={homePointLabels}
-              authSuccess={homeAuthSuccessSeries}
-              authFailed={homeAuthFailedSeries}
-              imports={homeImportSeries}
-              seriesALabel="Auth OK"
-              seriesBLabel="Auth Failed"
-              seriesCLabel="Imports"
-              theme={theme}
-            />
-          </div>
-        </div>
-      </div>
-
-      <div className="pt-2 text-[11px] opacity-70">
-        <span>Last refresh: {homeLastRefresh ? new Date(homeLastRefresh).toLocaleString() : '-'}</span>
-        <span className="mx-2">|</span>
-        <span>Time basis: {homeData?.meta?.timeBasis || 'Asia/Manila'}</span>
-        {homeData?.meta?.activeTodayTimeBasis ? (
-          <>
-            <span className="mx-2">|</span>
-            <span>Active Today: {homeData.meta.activeTodayTimeBasis}</span>
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+              <div className={moduleShellClass}>
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.16),transparent)] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.05),transparent)]" />
+                <div className="relative flex h-full flex-col">
+                  <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Active Today Trend</div>
+                  <div className="mt-1 text-lg font-black tracking-tight">Heartbeat activity curve</div>
+                  <div className="mb-3 text-xs opacity-70">Range: {homeRangeLabel}</div>
+                  <ActiveUsersTrendChart points={homePointLabels} activeUsers={homeActiveUsersSeries} theme={theme} />
+                </div>
+              </div>
+              <div className={moduleShellClass}>
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.16),transparent)] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.05),transparent)]" />
+                <div className="relative flex h-full flex-col">
+                  <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Auth and Import Health</div>
+                  <div className="mt-1 text-lg font-black tracking-tight">Operational reliability</div>
+                  <div className="mb-3 text-xs opacity-70">Range: {homeRangeLabel}</div>
+                  <MiniGroupedBarChart
+                    points={homePointLabels}
+                    authSuccess={homeAuthSuccessSeries}
+                    authFailed={homeAuthFailedSeries}
+                    imports={homeImportSeries}
+                    seriesALabel="Auth OK"
+                    seriesBLabel="Auth Failed"
+                    seriesCLabel="Imports"
+                    theme={theme}
+                  />
+                </div>
+              </div>
+            </div>
           </>
-        ) : null}
-        {homeData?.meta?.sampled ? (
-          <>
-            <span className="mx-2">|</span>
-            <span>Sampled at cap {homeData?.meta?.seriesCap || 0}</span>
-          </>
-        ) : null}
+        )}
+
+        <div className="pt-2 text-[11px] opacity-70">
+          <div className="flex flex-wrap gap-2">
+            <span className={footerPillClass}>Last refresh: {homeLastRefresh ? new Date(homeLastRefresh).toLocaleString() : '-'}</span>
+            <span className={footerPillClass}>Time basis: {homeData?.meta?.timeBasis || 'Asia/Manila'}</span>
+            {homeData?.meta?.activeTodayTimeBasis ? <span className={footerPillClass}>Active Today: {homeData.meta.activeTodayTimeBasis}</span> : null}
+            {homeData?.meta?.sampled ? <span className={footerPillClass}>Sampled at cap {homeData?.meta?.seriesCap || 0}</span> : null}
+          </div>
+        </div>
       </div>
     </AdminPageScaffold>
   );
