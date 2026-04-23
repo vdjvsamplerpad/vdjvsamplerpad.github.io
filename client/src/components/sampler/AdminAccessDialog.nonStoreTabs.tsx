@@ -214,7 +214,7 @@ interface AdminAccessNonStoreTabsProps {
 }
 
 const DESKTOP_FILL_CLASS = 'overflow-visible lg:h-full lg:min-h-0';
-const DESKTOP_FLEX_PANEL_CLASS = 'overflow-visible lg:h-full lg:min-h-0 lg:flex lg:flex-col lg:overflow-hidden';
+const DESKTOP_FLEX_PANEL_CLASS = 'overflow-visible lg:h-full lg:min-h-0 lg:flex lg:flex-col';
 const DESKTOP_SCROLL_REGION_CLASS = 'overflow-visible lg:flex-1 lg:min-h-0 lg:overflow-auto';
 const DESKTOP_SECTION_CARD_CLASS = 'overflow-visible lg:min-h-0 lg:flex lg:flex-col';
 const TABLE_SHELL_CLASS = 'border rounded overflow-hidden lg:flex-1 lg:min-h-0 lg:overflow-hidden';
@@ -282,6 +282,25 @@ function HomeTab({
   }, [homeTrends]);
 
   const isDark = theme === 'dark';
+  const heroRangeMeta = React.useMemo(() => {
+    const start = homeData?.meta?.rangeStartDate || homeFromDate;
+    const end = homeData?.meta?.rangeEndDate || homeToDate;
+    const rangeZone = homeData?.meta?.rangeTimeZone || 'Asia/Manila';
+    const parseDate = (value: string) => {
+      if (!value) return null;
+      const parsed = new Date(`${value}T00:00:00`);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+    const startDate = parseDate(start);
+    const endDate = parseDate(end);
+    if (!startDate || !endDate) return rangeZone;
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    return `${formatter.format(startDate)} to ${formatter.format(endDate)} • ${rangeZone}`;
+  }, [homeData?.meta?.rangeEndDate, homeData?.meta?.rangeStartDate, homeData?.meta?.rangeTimeZone, homeFromDate, homeToDate]);
   const liveSnapshotCards = [
     { label: 'Revenue', value: formatMoney(Number(homeData?.counts?.totalRevenue24h || 0)), tone: 'text-yellow-500' },
     { label: 'Pending Account Requests', value: Number(homeData?.counts?.pendingAccountRequests || 0), tone: 'text-rose-500' },
@@ -301,11 +320,12 @@ function HomeTab({
   const pendingRequestsTotal = Number(homeData?.counts?.pendingAccountRequests || 0)
     + Number(homeData?.counts?.pendingStoreRequests || 0)
     + Number(homeData?.counts?.pendingInstallerRequests || 0);
+  const todayRequestTotal = Number(homeData?.counts?.todayRequestTotal || 0);
   const primaryStats = [
-    { label: 'Range Revenue', value: formatMoney(selectedRangeStats.totalRevenue), detail: homeRangeLabel, toneClass: 'text-emerald-500' },
+    { label: 'Range Revenue', value: formatMoney(selectedRangeStats.totalRevenue), detail: heroRangeMeta, toneClass: 'text-emerald-500' },
     { label: 'Pending Queues', value: pendingRequestsTotal, detail: 'Account, store, installer', toneClass: 'text-amber-500' },
     { label: 'Active Today', value: Number(homeData?.counts?.activeTodayUsers || 0), detail: 'Asia/Manila', toneClass: 'text-sky-500' },
-    { label: 'Import Failures', value: Number(homeData?.counts?.importFailures24h || 0), detail: 'Today', toneClass: 'text-fuchsia-500' },
+    { label: 'Today Requests', value: todayRequestTotal, detail: 'Account, store, installer', toneClass: 'text-fuchsia-500' },
   ];
   const heroShellClass = isDark
     ? 'relative overflow-hidden rounded-[24px] border border-white/10 bg-[radial-gradient(110%_95%_at_90%_0%,rgba(255,20,132,0.3),transparent_48%),radial-gradient(100%_80%_at_0%_0%,rgba(74,144,255,0.22),transparent_42%),linear-gradient(180deg,rgba(18,22,33,0.98),rgba(13,16,26,0.96))] p-4 shadow-[0_28px_80px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.06)]'
@@ -320,6 +340,12 @@ function HomeTab({
   const compactMetricClass = isDark
     ? 'rounded-[16px] border border-white/8 bg-white/[0.045] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
     : 'rounded-[16px] border border-slate-900/8 bg-white/78 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]';
+  const pulseStripClass = isDark
+    ? 'rounded-[18px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.025))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]'
+    : 'rounded-[18px] border border-slate-900/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.84),rgba(255,255,255,0.68))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]';
+  const pulseMetricClass = isDark
+    ? 'rounded-[14px] border border-white/6 bg-white/[0.04] px-3 py-2.5'
+    : 'rounded-[14px] border border-slate-900/8 bg-white/76 px-3 py-2.5';
   const queueRowClass = isDark
     ? 'rounded-[14px] border border-white/8 bg-white/[0.045] px-3 py-2.5'
     : 'rounded-[14px] border border-slate-900/8 bg-white/76 px-3 py-2.5';
@@ -425,7 +451,7 @@ function HomeTab({
     <AdminPageScaffold
       panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
       title="ADMIN OVERVIEW"
-      description="Operational dashboard for revenue, approvals, activity, and import health. Premium visual treatment, utility-first structure."
+      description="Revenue, queues, and activity in Manila time."
       stats={<AdminStatsStrip items={primaryStats} />}
     >
       <div className={`${DESKTOP_SCROLL_REGION_CLASS} space-y-4 pr-0 lg:pr-1`}>
@@ -448,12 +474,10 @@ function HomeTab({
                   </div>
                   <div>
                     <div className={`text-[11px] font-black uppercase tracking-[0.22em] ${isDark ? 'text-white/58' : 'text-slate-500'}`}>Operational focus</div>
-                    <div className="mt-2 text-3xl font-black tracking-tight sm:text-[2.6rem]">{homeRangeLabel}</div>
-                    <div className={`mt-2 max-w-2xl text-sm leading-relaxed ${isDark ? 'text-white/68' : 'text-slate-600'}`}>
-                      Revenue, request volume, buyer flow, and import health for the selected window. Keep this view analytical, not promotional.
-                    </div>
+                    <div className="mt-2 text-2xl font-black tracking-tight sm:text-[2.35rem]">Revenue and activity overview</div>
+                    <div className={`mt-2 text-sm font-medium ${isDark ? 'text-white/62' : 'text-slate-600'}`}>{heroRangeMeta}</div>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
                     {rangeBreakdownCards.map((card) => (
                       <div key={card.label} className={heroMiniCardClass}>
                         <div className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-65">{card.label}</div>
@@ -462,12 +486,27 @@ function HomeTab({
                       </div>
                     ))}
                   </div>
+                  <div className={pulseStripClass}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-[10px] font-black uppercase tracking-[0.2em] opacity-60">Range Pulse</div>
+                      <div className="text-[11px] opacity-65">Exports and auth health</div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
+                      {rangePulseCards.map((card) => (
+                        <div key={card.label} className={pulseMetricClass}>
+                          <div className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-60">{card.label}</div>
+                          <div className={`mt-1.5 text-lg font-black tracking-tight ${card.tone}`}>{card.value}</div>
+                          <div className="mt-1 text-[11px] opacity-65">{card.detail}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
                 <div className={heroSubPanelClass}>
                   <div className="flex items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-black tracking-tight">Control Rail</div>
-                      <div className="text-xs opacity-70">Date range, quick presets, and refresh state.</div>
+                      <div className="text-xs opacity-70">Date range and quick presets.</div>
                     </div>
                     <Button variant="outline" size="sm" onClick={onRefresh} disabled={homeLoading} className="rounded-full">
                       <RefreshCw className={`w-4 h-4 mr-1 ${homeLoading ? 'animate-spin' : ''}`} />
@@ -502,14 +541,10 @@ function HomeTab({
                       </Button>
                     ))}
                   </div>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    {rangePulseCards.map((card) => (
-                      <div key={card.label} className={compactMetricClass}>
-                        <div className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-65">{card.label}</div>
-                        <div className={`mt-2 text-lg font-black tracking-tight ${card.tone}`}>{card.value}</div>
-                        <div className="mt-1 text-[11px] opacity-70">{card.detail}</div>
-                      </div>
-                    ))}
+                  <div className="mt-4 rounded-[16px] border border-white/10 bg-white/[0.04] px-3 py-3 dark:bg-white/[0.035]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] opacity-60">Refresh State</div>
+                    <div className="mt-1.5 text-sm font-semibold tracking-tight">Last refresh: {homeLastRefresh ? new Date(homeLastRefresh).toLocaleString() : '-'}</div>
+                    <div className="mt-1 text-[11px] opacity-65">Use presets for fast jumps, then apply a custom window when needed.</div>
                   </div>
                 </div>
               </div>
@@ -521,8 +556,8 @@ function HomeTab({
                 <div className="relative">
                   <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Live Snapshot</div>
                   <div className="mt-1 text-lg font-black tracking-tight">Current queues and store state</div>
-                  <div className="text-xs opacity-70">These stay operationally live and are not filtered by the selected range.</div>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <div className="text-xs opacity-70">Always live. Not tied to the selected range.</div>
+                  <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-3">
                     {liveSnapshotCards.map((card) => (
                       <div key={card.label} className={compactMetricClass}>
                         <div className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-65">{card.label}</div>
@@ -538,8 +573,8 @@ function HomeTab({
                 <div className="relative">
                   <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Today</div>
                   <div className="mt-1 text-lg font-black tracking-tight">Midnight to 11:59 PM Manila</div>
-                  <div className="text-xs opacity-70">Today-only operational totals, including activity, imports, and approved requests.</div>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="text-xs opacity-70">Today-only totals for activity, imports, and approvals.</div>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
                     {todayCards.map((card) => (
                       <div key={card.label} className={compactMetricClass}>
                         <div className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-65">{card.label}</div>
@@ -586,7 +621,7 @@ function HomeTab({
                 <div className="relative flex h-full flex-col">
                   <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Revenue Trend</div>
                   <div className="mt-1 text-lg font-black tracking-tight">Selected revenue movement</div>
-                  <div className="mb-3 text-xs opacity-70">Range: {homeRangeLabel}</div>
+                  <div className="mb-3 text-xs opacity-70">{heroRangeMeta}</div>
                   <RevenueAdvancedChart rows={homeTrends} theme={theme} formatMoney={formatMoney} />
                 </div>
               </div>
@@ -595,7 +630,7 @@ function HomeTab({
                 <div className="relative flex h-full flex-col">
                   <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Buyer and Import Trend</div>
                   <div className="mt-1 text-lg font-black tracking-tight">Store, account, and installer flow</div>
-                  <div className="mb-3 text-xs opacity-70">Range: {homeRangeLabel}</div>
+                  <div className="mb-3 text-xs opacity-70">{heroRangeMeta}</div>
                   <MiniGroupedBarChart
                     points={homePointLabels}
                     authSuccess={homeStoreBuyersSeries}
@@ -616,7 +651,7 @@ function HomeTab({
                 <div className="relative flex h-full flex-col">
                   <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Active Today Trend</div>
                   <div className="mt-1 text-lg font-black tracking-tight">Heartbeat activity curve</div>
-                  <div className="mb-3 text-xs opacity-70">Range: {homeRangeLabel}</div>
+                  <div className="mb-3 text-xs opacity-70">{heroRangeMeta}</div>
                   <ActiveUsersTrendChart points={homePointLabels} activeUsers={homeActiveUsersSeries} theme={theme} />
                 </div>
               </div>
@@ -625,7 +660,7 @@ function HomeTab({
                 <div className="relative flex h-full flex-col">
                   <div className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">Auth and Import Health</div>
                   <div className="mt-1 text-lg font-black tracking-tight">Operational reliability</div>
-                  <div className="mb-3 text-xs opacity-70">Range: {homeRangeLabel}</div>
+                  <div className="mb-3 text-xs opacity-70">{heroRangeMeta}</div>
                   <MiniGroupedBarChart
                     points={homePointLabels}
                     authSuccess={homeAuthSuccessSeries}
@@ -642,14 +677,13 @@ function HomeTab({
           </>
         )}
 
-        <div className="pt-2 text-[11px] opacity-70">
-          <div className="flex flex-wrap gap-2">
+      <div className="pt-2 text-[11px] opacity-70">
+        <div className="flex flex-wrap gap-2">
             <span className={footerPillClass}>Last refresh: {homeLastRefresh ? new Date(homeLastRefresh).toLocaleString() : '-'}</span>
             <span className={footerPillClass}>Time basis: {homeData?.meta?.timeBasis || 'Asia/Manila'}</span>
-            {homeData?.meta?.activeTodayTimeBasis ? <span className={footerPillClass}>Active Today: {homeData.meta.activeTodayTimeBasis}</span> : null}
             {homeData?.meta?.sampled ? <span className={footerPillClass}>Sampled at cap {homeData?.meta?.seriesCap || 0}</span> : null}
-          </div>
         </div>
+      </div>
       </div>
     </AdminPageScaffold>
   );

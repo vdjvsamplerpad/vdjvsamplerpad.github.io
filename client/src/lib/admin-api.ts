@@ -219,6 +219,7 @@ export interface AdminDashboardOverview {
     totalRegisteredUsers: number;
     totalInstallerLicenses: number;
     approvedStoreRequestsTotal: number;
+    todayRequestTotal: number;
     importFailures24h: number;
     imports24h: number;
     storeRevenueApprovedTotal: number;

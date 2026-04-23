@@ -1473,6 +1473,9 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     pendingAccountCountResp,
     pendingStoreCountResp,
     pendingInstallerCountResp,
+    todayAccountRequestsResp,
+    todayStoreRequestsResp,
+    todayInstallerRequestsResp,
     publishedCatalogCountResp,
     draftCatalogCountResp,
     totalRegisteredUsersResp,
@@ -1504,6 +1507,21 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .from("installer_purchase_requests")
       .select("id", { head: true, count: "exact" })
       .eq("status", "pending"),
+    admin
+      .from("account_registration_requests")
+      .select("id", { head: true, count: "exact" })
+      .gte("created_at", todayStartIso)
+      .lte("created_at", todayEndIso),
+    admin
+      .from("bank_purchase_requests")
+      .select("id", { head: true, count: "exact" })
+      .gte("created_at", todayStartIso)
+      .lte("created_at", todayEndIso),
+    admin
+      .from("installer_purchase_requests")
+      .select("id", { head: true, count: "exact" })
+      .gte("created_at", todayStartIso)
+      .lte("created_at", todayEndIso),
     admin
       .from("bank_catalog_items")
       .select("id", { head: true, count: "exact" })
@@ -1580,6 +1598,9 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   if (pendingAccountCountResp.error) return fail(500, pendingAccountCountResp.error.message);
   if (pendingStoreCountResp.error) return fail(500, pendingStoreCountResp.error.message);
   if (pendingInstallerCountResp.error) return fail(500, pendingInstallerCountResp.error.message);
+  if (todayAccountRequestsResp.error) return fail(500, todayAccountRequestsResp.error.message);
+  if (todayStoreRequestsResp.error) return fail(500, todayStoreRequestsResp.error.message);
+  if (todayInstallerRequestsResp.error) return fail(500, todayInstallerRequestsResp.error.message);
   if (publishedCatalogCountResp.error) return fail(500, publishedCatalogCountResp.error.message);
   if (draftCatalogCountResp.error) return fail(500, draftCatalogCountResp.error.message);
   if (totalRegisteredUsersResp.error) return fail(500, totalRegisteredUsersResp.error.message);
@@ -1915,6 +1936,10 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .map((row: any) => String(row?.user_id || ""))
       .filter((userId) => Boolean(userId) && !adminIds.has(userId)),
   ).size;
+  const todayRequestTotal =
+    Number(todayAccountRequestsResp.count || 0)
+    + Number(todayStoreRequestsResp.count || 0)
+    + Number(todayInstallerRequestsResp.count || 0);
 
   return ok({
     refreshedAt: nowIso,
@@ -1929,6 +1954,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       totalRegisteredUsers: Number(totalRegisteredUsersResp.count || 0),
       totalInstallerLicenses,
       approvedStoreRequestsTotal: Number(approvedStoreRequestsResp.count || 0),
+      todayRequestTotal,
       importFailures24h: Number(importFailures24hResp.count || 0),
       imports24h: Number(imports24hResp.count || 0),
       storeRevenueApprovedTotal,

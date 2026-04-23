@@ -52,10 +52,12 @@ export function AdminPageScaffold({
   children,
 }: AdminPageScaffoldProps) {
   return (
-    <div className={`relative overflow-hidden rounded-[26px] border ${panelClass}`}>
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.5),transparent_22%)] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.06),transparent_18%)]" />
-      <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 rounded-full bg-fuchsia-500/10 blur-3xl dark:bg-fuchsia-500/12" />
-      <div className="pointer-events-none absolute bottom-0 left-0 h-36 w-36 rounded-full bg-blue-500/10 blur-3xl dark:bg-blue-500/12" />
+    <div className={`relative rounded-[26px] border ${panelClass}`}>
+      <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[26px]">
+        <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.5),transparent_22%)] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.06),transparent_18%)]" />
+        <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-fuchsia-500/10 blur-3xl dark:bg-fuchsia-500/12" />
+        <div className="absolute bottom-0 left-0 h-36 w-36 rounded-full bg-blue-500/10 blur-3xl dark:bg-blue-500/12" />
+      </div>
       <div className="relative space-y-5 p-4 md:p-5">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-1.5 min-w-0">
