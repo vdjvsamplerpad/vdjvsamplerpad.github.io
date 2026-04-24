@@ -112,20 +112,6 @@ const writeCachedUpgradeOptions = (userId: string | null | undefined, tiers: Upg
 const isUpgradeOptionsCacheFresh = (cached: CachedUpgradeOptions | null): boolean =>
   Boolean(cached && Date.now() - cached.fetchedAt < UPGRADE_OPTIONS_REVALIDATE_MS);
 
-const formatCacheTimestamp = (value: number | null): string => {
-  if (!value) return '';
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    }).format(new Date(value));
-  } catch {
-    return new Date(value).toLocaleString();
-  }
-};
-
 const formatPhp = (value: number): string =>
   new Intl.NumberFormat('en-PH', {
     style: 'currency',
@@ -190,9 +176,6 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   const { user, profile, capabilities } = useAuthState();
   const { refreshAccountCapabilities } = useAuthActions();
   const [loading, setLoading] = React.useState(false);
-  const [refreshingOptions, setRefreshingOptions] = React.useState(false);
-  const [usingCachedOptions, setUsingCachedOptions] = React.useState(false);
-  const [optionsFetchedAt, setOptionsFetchedAt] = React.useState<number | null>(null);
   const [optionsLoadMessage, setOptionsLoadMessage] = React.useState<string | null>(null);
   const [online, setOnline] = React.useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   const [submitting, setSubmitting] = React.useState(false);
@@ -254,14 +237,10 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     const applyOptions = (
       nextTiers: UpgradeTierOption[],
       nextPaymentConfig: PaymentConfig | null,
-      fetchedAt: number | null,
-      fromCache: boolean,
     ) => {
       if (cancelled) return;
       setTiers(nextTiers);
       setPaymentConfig(nextPaymentConfig);
-      setOptionsFetchedAt(fetchedAt);
-      setUsingCachedOptions(fromCache);
       const firstAvailable = nextTiers.find((tier) => tier.available)?.tier || 'pro';
       const currentSelection = selectedTierRef.current;
       const nextSelected = nextTiers.some((tier) => tier.tier === currentSelection) ? currentSelection : firstAvailable;
@@ -271,13 +250,12 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     };
 
     setLoading(!hasCachedOptions);
-    setRefreshingOptions(false);
     setOptionsLoadMessage(null);
     setStep('plans');
     setSuccessMessage(null);
 
     if (cached?.tiers?.length) {
-      applyOptions(cached.tiers, cached.paymentConfig, cached.fetchedAt, true);
+      applyOptions(cached.tiers, cached.paymentConfig);
       if (isUpgradeOptionsCacheFresh(cached)) {
         setLoading(false);
         return () => {
@@ -288,15 +266,12 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
 
     if (!online) {
       setLoading(false);
-      setOptionsLoadMessage(hasCachedOptions
-        ? 'Showing cached upgrade pricing. Reconnect to refresh or submit.'
-        : 'Reconnect to load upgrade pricing.');
+      setOptionsLoadMessage(hasCachedOptions ? '' : 'Reconnect to load upgrade pricing.');
       return () => {
         cancelled = true;
       };
     }
 
-    setRefreshingOptions(hasCachedOptions);
     void (async () => {
       try {
         const { data } = await supabase.auth.getSession();
@@ -319,15 +294,13 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
         const nextTiers = Array.isArray(optionsData?.tiers) ? optionsData.tiers as UpgradeTierOption[] : [];
         if (cancelled) return;
         const nextPaymentConfig = (paymentData?.config || null) as PaymentConfig | null;
-        const fetchedAt = writeCachedUpgradeOptions(userId, nextTiers, nextPaymentConfig);
-        applyOptions(nextTiers, nextPaymentConfig, fetchedAt, false);
+        writeCachedUpgradeOptions(userId, nextTiers, nextPaymentConfig);
+        applyOptions(nextTiers, nextPaymentConfig);
         setOptionsLoadMessage(null);
       } catch (error) {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : 'Could not load upgrade options.';
-          setOptionsLoadMessage(hasCachedOptions
-            ? `Showing cached upgrade pricing. Latest refresh failed: ${message}`
-            : message);
+          setOptionsLoadMessage(hasCachedOptions ? '' : message);
           if (!hasCachedOptions) {
             pushNotice?.({ variant: 'error', message });
           }
@@ -335,7 +308,6 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
       } finally {
         if (!cancelled) {
           setLoading(false);
-          setRefreshingOptions(false);
         }
       }
     })();
@@ -354,11 +326,6 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   const heroPromoPercent = tiers.length
     ? Math.max(...tiers.map((tier) => getPromoDiscountPercent(tier)))
     : DEFAULT_PROMO_DISCOUNT_PERCENT;
-  const optionsStatusLabel = refreshingOptions
-    ? 'Refreshing latest pricing...'
-    : optionsFetchedAt
-      ? `${usingCachedOptions ? 'Cached pricing' : 'Updated pricing'} ${formatCacheTimestamp(optionsFetchedAt)}`
-      : '';
   const currentTierLabel = capabilities.effectiveTier === 'pro_max' ? 'PRO MAX' : capabilities.effectiveTier.toUpperCase();
   const freeDailyPlaysLabel = typeof capabilities.limits.defaultBankDailyPlays === 'number'
     ? String(capabilities.limits.defaultBankDailyPlays)
@@ -383,7 +350,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   const submitUpgrade = React.useCallback(async () => {
     if (!selected || !selected.available || submitting) return;
     if (!online) {
-      pushNotice?.({ variant: 'error', message: 'Reconnect before submitting an upgrade request. Cached pricing is only a preview.' });
+      pushNotice?.({ variant: 'error', message: 'Reconnect before submitting an upgrade request.' });
       return;
     }
     if (quotePrice > 0 && paymentChannel === 'image_proof') {
@@ -913,17 +880,12 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
             <div className={`hidden items-center justify-center gap-3 text-xs font-black uppercase tracking-wide md:flex ${planMetaClass}`}>
               <span className="rounded-[8px] bg-[#f21984] px-3 py-1.5 text-white shadow-[0_0_28px_rgba(242,25,132,0.34)]">{heroPromoPercent}% off</span>
               <span>One-time upgrade pricing</span>
-              {optionsStatusLabel ? <span>{optionsStatusLabel}</span> : null}
             </div>
-            {(optionsLoadMessage || usingCachedOptions || refreshingOptions) && (
+            {optionsLoadMessage && (
               <div className={`mx-auto max-w-3xl rounded-2xl border px-4 py-3 text-xs leading-relaxed ${
-                optionsLoadMessage
-                  ? isDark ? 'border-amber-400/35 bg-amber-400/10 text-amber-100' : 'border-amber-300 bg-amber-50 text-amber-800'
-                  : isDark ? 'border-white/10 bg-white/[0.04] text-white/62' : 'border-slate-950/10 bg-white/82 text-slate-600'
+                isDark ? 'border-amber-400/35 bg-amber-400/10 text-amber-100' : 'border-amber-300 bg-amber-50 text-amber-800'
               }`}>
-                {optionsLoadMessage || (refreshingOptions
-                  ? 'Showing cached pricing while checking for the latest admin updates.'
-                  : 'Showing cached pricing for faster loading. Submit still confirms the latest server quote.')}
+                {optionsLoadMessage}
               </div>
             )}
 
@@ -1004,15 +966,11 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
               </div>
             </div>
 
-            {(usingCachedOptions || !online || optionsLoadMessage) && (
+            {!online && (
               <div className={`rounded-[14px] border px-4 py-3 text-sm ${
-                !online
-                  ? isDark ? 'border-amber-400/35 bg-amber-400/10 text-amber-100' : 'border-amber-300 bg-amber-50 text-amber-800'
-                  : isDark ? 'border-white/10 bg-white/[0.045] text-white/68' : 'border-slate-950/10 bg-slate-50 text-slate-600'
+                isDark ? 'border-amber-400/35 bg-amber-400/10 text-amber-100' : 'border-amber-300 bg-amber-50 text-amber-800'
               }`}>
-                {!online
-                  ? 'You can view cached pricing offline, but reconnect before submitting an upgrade request.'
-                  : 'This request will use the latest server quote when submitted, even if the plan view loaded from cache.'}
+                Reconnect before submitting an upgrade request.
               </div>
             )}
 
