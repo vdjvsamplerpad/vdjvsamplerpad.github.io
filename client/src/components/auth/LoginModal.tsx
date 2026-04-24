@@ -11,8 +11,9 @@ import { ensureActivityRuntime, logActivityEvent } from '@/lib/activityLogger'
 import { edgeFunctionUrl } from '@/lib/edge-api'
 import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links'
 import { optimizeReceiptProofFile, runReceiptOcr } from '@/lib/receipt-ocr'
+import { getPrivacyPagePath, getTermsPagePath } from '@/lib/runtime-routes'
 import { supabase } from '@/lib/supabase'
-import { ArrowRight, Download, Eye, EyeOff, ExternalLink, Loader2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Download, Eye, EyeOff, ExternalLink, Loader2, X } from 'lucide-react'
 
 interface LoginModalProps {
   open: boolean
@@ -221,7 +222,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [email, setEmail] = React.useState('')
   const [password, setPassword] = React.useState('')
   const [confirmPassword, setConfirmPassword] = React.useState('')
-  const [termsAccepted, setTermsAccepted] = React.useState(false)
   const [mode, setMode] = React.useState<Mode>('signin')
   const [loading, setLoading] = React.useState(false)
   const [googleLoading, setGoogleLoading] = React.useState(false)
@@ -268,9 +268,43 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     clearSessionConflictReason,
   } = useAuthActions()
 
-  const colorText = theme === 'dark' ? 'text-white' : 'text-gray-900'
-  const panelClass = `sm:max-w-xl ${theme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'}`
   const isDark = theme === 'dark'
+  const colorText = isDark ? 'text-white' : 'text-gray-900'
+  const privacyPagePath = React.useMemo(() => getPrivacyPagePath(), [])
+  const termsPagePath = React.useMemo(() => getTermsPagePath(), [])
+  const panelClass = [
+    'max-sm:left-0 max-sm:top-0 max-sm:h-[100dvh] max-sm:max-h-[100dvh] max-sm:w-screen max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none',
+    'sm:max-w-[34rem] overflow-hidden border p-0 shadow-[0_30px_90px_rgba(0,0,0,0.45)]',
+    isDark
+      ? 'border-white/10 bg-[#101113] text-white'
+      : 'border-slate-200 bg-[#f6f7f2] text-slate-950',
+  ].join(' ')
+  const authShellClass = [
+    'relative min-h-[100dvh] overflow-y-auto px-7 pb-8 pt-7 sm:min-h-0 sm:px-10 sm:pb-10 sm:pt-8',
+    isDark
+      ? 'bg-[radial-gradient(circle_at_50%_-20%,rgba(185,255,18,0.10),transparent_34%),linear-gradient(180deg,#151719_0%,#101113_58%,#0b0c0d_100%)]'
+      : 'bg-[radial-gradient(circle_at_50%_-20%,rgba(185,255,18,0.22),transparent_35%),linear-gradient(180deg,#fffffb_0%,#f3f4ed_100%)]',
+  ].join(' ')
+  const authInputClass = [
+    'h-[54px] rounded-[14px] border px-4 text-[15px] font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition focus-visible:ring-2 focus-visible:ring-[#b9ff12]/40',
+    isDark
+      ? 'border-white/15 bg-white/[0.025] text-white placeholder:text-white/50 hover:border-white/25'
+      : 'border-slate-950/15 bg-white/80 text-slate-950 placeholder:text-slate-500 hover:border-slate-950/25',
+  ].join(' ')
+  const authPrimaryButtonClass = [
+    'h-[54px] rounded-[14px] text-[15px] font-black shadow-[0_18px_42px_rgba(185,255,18,0.14)] transition active:scale-[0.99]',
+    isDark
+      ? 'bg-[#202329] text-white hover:bg-[#2a2d34]'
+      : 'bg-slate-950 text-white hover:bg-slate-800',
+  ].join(' ')
+  const authGhostButtonClass = [
+    'h-[54px] rounded-[14px] border text-[15px] font-black transition',
+    isDark
+      ? 'border-white/15 bg-white/[0.02] text-white hover:bg-white/[0.055]'
+      : 'border-slate-950/15 bg-white/70 text-slate-950 hover:bg-white',
+  ].join(' ')
+  const authMutedTextClass = isDark ? 'text-white/60' : 'text-slate-500'
+  const authLinkClass = isDark ? 'text-white underline decoration-white/40 underline-offset-4 hover:text-[#b9ff12]' : 'text-slate-950 underline decoration-slate-500/50 underline-offset-4 hover:text-slate-700'
   const isSignInSyncing = authTransition.status === 'signing_in'
   const isSignInBusy = loading || googleLoading || awaitingSignInSync || isSignInSyncing
   const isLoginSubmitting = mode === 'signin' && isSignInBusy
@@ -345,7 +379,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setEmail('')
       setPassword('')
       setConfirmPassword('')
-      setTermsAccepted(false)
       setMode('signin')
       setResetCooldown(0)
       setShowPassword(false)
@@ -550,10 +583,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         pushNotice?.({ variant: 'error', message: 'Enter a valid email address.' })
         return
       }
-      if (!termsAccepted) {
-        pushNotice?.({ variant: 'error', message: 'Accept the Privacy and Terms agreement to create an account.' })
-        return
-      }
       if (password.length < 8) {
         pushNotice?.({ variant: 'error', message: 'Password must be at least 8 characters.' })
         return
@@ -582,7 +611,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         setEmail('')
         setPassword('')
         setConfirmPassword('')
-        setTermsAccepted(false)
         if (data.session) {
           pushNotice?.({ variant: 'success', message: 'Free account created.' })
           onOpenChange(false)
@@ -596,7 +624,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         setLoading(false)
       }
     },
-    [appReturnUrl, confirmPassword, email, onOpenChange, password, pushNotice, termsAccepted],
+    [appReturnUrl, confirmPassword, email, onOpenChange, password, pushNotice],
   )
 
   React.useEffect(() => {
@@ -1026,14 +1054,53 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const Title = () => {
     switch (mode) {
       case 'buy':
-        return <>Registration</>
+        return <>Create an account</>
       case 'forgot':
         return <>Forgot Password</>
       case 'reset':
         return <>Reset Password</>
       default:
-        return <>Login</>
+        return <>Welcome to VDJV</>
     }
+  }
+
+  const authSubtitle = mode === 'signin'
+    ? 'Sign in and keep your sampler ready for events'
+    : mode === 'buy'
+      ? 'Create a free account and upgrade when ready'
+      : mode === 'forgot'
+        ? 'Request a secure reset code by email'
+        : 'Enter your code and choose a new password'
+
+  const AuthLegalFootnote = () => (
+    <p className={`mx-auto max-w-sm text-center text-xs font-semibold leading-relaxed ${authMutedTextClass}`}>
+      By continuing, you acknowledge the{' '}
+      <a href={privacyPagePath} target="_blank" rel="noopener noreferrer" className={authLinkClass}>
+        Privacy Policy
+      </a>
+      {' '}and agree to the{' '}
+      <a href={termsPagePath} target="_blank" rel="noopener noreferrer" className={authLinkClass}>
+        Terms of Use
+      </a>
+      .
+    </p>
+  )
+
+  const showBackButton = mode === 'buy' || mode === 'forgot' || mode === 'reset'
+
+  const handleAuthBack = () => {
+    if (mode === 'buy') {
+      if (buyStep === 'payment') {
+        setBuyStep('account')
+        return
+      }
+      setMode('signin')
+      return
+    }
+    if (mode === 'reset' && resetCodeVerified) {
+      setResetCodeVerified(false)
+    }
+    setMode('signin')
   }
 
   if (banned && !allowLoginWhileBanned) {
@@ -1089,25 +1156,48 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       open={open}
       onOpenChange={handleDialogOpenChange}
     >
-      <DialogContent className={panelClass} aria-describedby={undefined} hideCloseButton>
-        <DialogHeader>
-          <div className="flex items-start justify-between gap-3">
-            <DialogTitle className={colorText}>
+      <DialogContent className={panelClass} aria-describedby={undefined} hideCloseButton overlayClassName="bg-black/80 backdrop-blur-sm">
+        <div className={authShellClass}>
+          {showBackButton && (
+            <button
+              type="button"
+              onClick={handleAuthBack}
+              disabled={isSignInBusy || loading}
+              className={`absolute left-4 top-4 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full border transition sm:left-5 sm:top-5 ${
+                isDark
+                  ? 'border-white/10 bg-white/[0.055] text-white hover:bg-white/10'
+                  : 'border-slate-950/10 bg-white/70 text-slate-800 hover:bg-white'
+              }`}
+              aria-label="Back"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+          )}
+          <button
+            type="button"
+            className={`absolute right-4 top-4 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full border transition sm:right-5 sm:top-5 ${
+              isDark
+                ? 'border-white/10 bg-white/[0.045] text-white hover:bg-white/10'
+                : 'border-slate-950/10 bg-white/70 text-slate-800 hover:bg-white'
+            }`}
+            onClick={() => handleDialogOpenChange(false)}
+            disabled={isSignInBusy}
+            aria-label="Close login dialog"
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          <DialogHeader className="mx-auto max-w-md items-center space-y-0 pt-1 text-center">
+            <div className="mb-5 flex h-9 w-9 items-center justify-center rounded-[10px] bg-[#b9ff12] text-[18px] font-black text-slate-950 shadow-[0_0_38px_rgba(185,255,18,0.34)]">
+              V
+            </div>
+            <DialogTitle className={`text-center text-[28px] font-black leading-tight tracking-[-0.04em] sm:text-[30px] ${colorText}`}>
               <Title />
             </DialogTitle>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={`h-8 w-8 shrink-0 ${isDark ? 'text-gray-300 hover:bg-gray-700 hover:text-white' : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'}`}
-              onClick={() => handleDialogOpenChange(false)}
-              disabled={isSignInBusy}
-              aria-label="Close login dialog"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-        </DialogHeader>
+            <p className={`mt-3 text-center text-sm font-medium ${authMutedTextClass}`}>
+              {authSubtitle}
+            </p>
+          </DialogHeader>
 
         <DialogDescription className="sr-only">
           {mode === 'signin' && 'Sign in to your account.'}
@@ -1326,29 +1416,27 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               id="signin-form"
               data-testid="signin-form"
               onSubmit={handleSignIn}
-              className="relative space-y-4"
+              className="relative mx-auto mt-10 max-w-sm space-y-4 sm:mt-9"
             >
               <Button
                 type="button"
                 variant="outline"
-                className={`w-full justify-center gap-2 ${isDark ? 'border-gray-600 bg-gray-900 text-white hover:bg-gray-800' : 'border-gray-300 bg-white text-gray-900 hover:bg-gray-50'}`}
+                className={`w-full justify-center gap-2 ${authGhostButtonClass}`}
                 onClick={handleGoogleSignIn}
                 disabled={isSignInBusy}
               >
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-sm font-bold text-gray-900 shadow-sm">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-sm font-black text-[#4285f4] shadow-sm">
                   G
                 </span>
                 {googleLoading ? 'Opening Google...' : 'Continue with Google'}
               </Button>
 
-              <div className="flex items-center gap-3">
-                <div className={`h-px flex-1 ${isDark ? 'bg-gray-700' : 'bg-gray-200'}`} />
-                <span className={`text-[11px] font-medium uppercase tracking-[0.2em] ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>or</span>
-                <div className={`h-px flex-1 ${isDark ? 'bg-gray-700' : 'bg-gray-200'}`} />
+              <div className="py-2 text-center">
+                <span className={`text-[11px] font-bold uppercase tracking-[0.16em] ${authMutedTextClass}`}>or</span>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="signinEmail" className={colorText}>
+              <div>
+                <Label htmlFor="signinEmail" className="sr-only">
                   Email
                 </Label>
                 <Input
@@ -1359,15 +1447,16 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                     setEmail(e.target.value)
                     if (signInError) setSignInError(null)
                   }}
-                  placeholder="Enter your email"
+                  placeholder="Email"
                   required
                   disabled={loading}
                   autoComplete="email"
+                  className={authInputClass}
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="signinPassword" className={colorText}>
+              <div>
+                <Label htmlFor="signinPassword" className="sr-only">
                   Password
                 </Label>
                 <div className="relative">
@@ -1379,16 +1468,16 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                       setPassword(e.target.value)
                       if (signInError) setSignInError(null)
                     }}
-                    placeholder="Enter your password"
+                    placeholder="Password"
                     required
                     disabled={isSignInBusy || signInCooldownSeconds > 0}
                     minLength={6}
                     autoComplete="current-password"
-                    className="pr-10"
+                    className={`${authInputClass} pr-11`}
                   />
                   <button
                     type="button"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-800"
+                    className={`absolute right-4 top-1/2 -translate-y-1/2 transition ${isDark ? 'text-white/45 hover:text-white' : 'text-slate-500 hover:text-slate-950'}`}
                     onClick={() => setShowPassword((v) => !v)}
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
                   >
@@ -1402,49 +1491,53 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 ) : null}
               </div>
 
-              <div className="flex items-center justify-between gap-2">
-                <Button
-                  type="button"
-                  variant="link"
-                  className="px-0 text-sm"
-                  onClick={() => setMode('forgot')}
-                  disabled={isSignInBusy}
-                >
-                  Forgot password?
-                </Button>
-                <Button
-                  type="button"
-                  className={`text-xs ${isDark ? 'bg-emerald-500 text-white hover:bg-emerald-400' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
-                  onClick={() => {
-                    setMode('buy')
-                    setSignInError(null)
-                    setSignInPendingState(null)
-                    setBuyStep('account')
-                    setPassword('')
-                    setConfirmPassword('')
-                    setTermsAccepted(false)
-                    setPayerName('')
-                    setReferenceNo('')
-                    setNotes('')
-                    setProofFile(null)
-                    setBuyReceipt(null)
-                  }}
-                  disabled={isSignInBusy}
-                >
-                  Create Account
-                </Button>
-              </div>
-
               <Button
                 id="signin-submit"
                 data-testid="signin-submit"
                 name="signin-submit"
                 type="submit"
-                className="w-full"
+                className={`w-full ${authPrimaryButtonClass}`}
                 disabled={isSignInBusy || signInCooldownSeconds > 0 || !email || !password}
               >
-                {isSignInBusy ? 'Signing in...' : signInCooldownSeconds > 0 ? `Try again in ${signInCooldownSeconds}s` : 'Log In'}
+                {isSignInBusy ? 'Signing in...' : signInCooldownSeconds > 0 ? `Try again in ${signInCooldownSeconds}s` : 'Log in'}
               </Button>
+
+              <div className={`flex items-center justify-between gap-2 pt-1 text-sm font-semibold ${authMutedTextClass}`}>
+                <Button
+                  type="button"
+                  variant="link"
+                  className={`h-auto px-0 py-0 text-sm font-semibold ${authMutedTextClass}`}
+                  onClick={() => setMode('forgot')}
+                  disabled={isSignInBusy}
+                >
+                  Forgot password?
+                </Button>
+                <div>
+                  <span>Don't have an account? </span>
+                  <button
+                    type="button"
+                    className={authLinkClass}
+                    onClick={() => {
+                      setMode('buy')
+                      setSignInError(null)
+                      setSignInPendingState(null)
+                      setBuyStep('account')
+                      setPassword('')
+                      setConfirmPassword('')
+                      setPayerName('')
+                      setReferenceNo('')
+                      setNotes('')
+                      setProofFile(null)
+                      setBuyReceipt(null)
+                    }}
+                    disabled={isSignInBusy}
+                  >
+                    Sign up
+                  </button>
+                </div>
+              </div>
+
+              <AuthLegalFootnote />
 
               {isLoginSubmitting && (
                 <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-gray-950/72' : 'bg-white/72'}`}>
@@ -1464,7 +1557,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         )}
 
         {mode === 'buy' && (
-          <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+          <div className={buyStep === 'account' ? 'mx-auto mt-10 max-w-sm space-y-4 sm:mt-9' : 'mt-6 space-y-4 max-h-[68vh] overflow-y-auto pr-1'}>
             {buyReceipt ? (
               <PaymentReceiptCard
                 theme={theme}
@@ -1498,59 +1591,58 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               />
             ) : (
               <>
-                <div className={`rounded-xl border px-4 py-3 text-sm ${isDark ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-100' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`}>
-                  <div className="font-semibold">Create Free Account</div>
-                  <div className="mt-1 text-xs opacity-85">Account creation is free. Payment proof is only required later if you request PRO or PRO MAX from your account settings.</div>
-                </div>
                 <form onSubmit={handleBuyNext} className="relative space-y-3">
                   {buyStep === 'account' && (
                     <>
                       {paymentConfig?.messenger_url && (
-                        <div className={`rounded-xl border px-4 py-3 text-sm ${isDark ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-100' : 'border-cyan-200 bg-cyan-50 text-cyan-800'}`}>
+                        <div className={`mb-4 rounded-[18px] border px-4 py-3 text-center text-sm font-semibold shadow-[0_18px_55px_rgba(6,182,212,0.10)] ${
+                          isDark ? 'border-cyan-300/20 bg-cyan-300/10 text-cyan-50' : 'border-cyan-500/20 bg-cyan-50/80 text-cyan-950'
+                        }`}>
                           <button
                             type="button"
                             onClick={() => window.open(paymentConfig.messenger_url, '_blank', 'noopener,noreferrer')}
-                            className={`font-semibold underline underline-offset-4 ${isDark ? 'text-white' : 'text-cyan-900'}`}
+                            className={`font-black underline underline-offset-4 ${isDark ? 'text-white hover:text-[#b9ff12]' : 'text-cyan-950 hover:text-cyan-700'}`}
                           >
                             Message us on Facebook
                           </button>
-                          {' '}for help.
+                          {' '}if you need account or payment help.
                         </div>
                       )}
 
-                      <div className="space-y-1.5">
-                        <Label htmlFor="buyEmail" className={colorText}>Email</Label>
+                      <div>
+                        <Label htmlFor="buyEmail" className="sr-only">Email</Label>
                         <Input
                           id="buyEmail"
                           type="email"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
-                          placeholder="Enter your email"
+                          placeholder="Email"
                           required
                           disabled={loading}
                           autoComplete="email"
+                          className={authInputClass}
                         />
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="space-y-1.5">
-                          <Label htmlFor="buyPassword" className={colorText}>Password</Label>
+                      <div className="space-y-3">
+                        <div>
+                          <Label htmlFor="buyPassword" className="sr-only">Password</Label>
                           <div className="relative">
                             <Input
                               id="buyPassword"
                               type={showPassword ? 'text' : 'password'}
                               value={password}
                               onChange={(e) => setPassword(e.target.value)}
-                              placeholder="Minimum 8 characters"
+                              placeholder="Password"
                               required
                               disabled={loading}
                               minLength={8}
                               autoComplete="new-password"
-                              className="pr-10"
+                              className={`${authInputClass} pr-11`}
                             />
                             <button
                               type="button"
-                              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-800"
+                              className={`absolute right-4 top-1/2 -translate-y-1/2 transition ${isDark ? 'text-white/45 hover:text-white' : 'text-slate-500 hover:text-slate-950'}`}
                               onClick={() => setShowPassword((v) => !v)}
                               aria-label={showPassword ? 'Hide password' : 'Show password'}
                             >
@@ -1558,24 +1650,24 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                             </button>
                           </div>
                         </div>
-                        <div className="space-y-1.5">
-                          <Label htmlFor="buyConfirmPassword" className={colorText}>Confirm Password</Label>
+                        <div>
+                          <Label htmlFor="buyConfirmPassword" className="sr-only">Confirm Password</Label>
                           <div className="relative">
                             <Input
                               id="buyConfirmPassword"
                               type={showConfirmPassword ? 'text' : 'password'}
                               value={confirmPassword}
                               onChange={(e) => setConfirmPassword(e.target.value)}
-                              placeholder="Confirm password"
+                              placeholder="Password Confirm"
                               required
                               disabled={loading}
                               minLength={8}
                               autoComplete="new-password"
-                              className="pr-10"
+                              className={`${authInputClass} pr-11`}
                             />
                             <button
                               type="button"
-                              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-800"
+                              className={`absolute right-4 top-1/2 -translate-y-1/2 transition ${isDark ? 'text-white/45 hover:text-white' : 'text-slate-500 hover:text-slate-950'}`}
                               onClick={() => setShowConfirmPassword((v) => !v)}
                               aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
                             >
@@ -1585,21 +1677,27 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                         </div>
                       </div>
 
-                      <label className={`flex gap-3 rounded-xl border px-3 py-3 text-xs leading-relaxed ${isDark ? 'border-slate-700 bg-slate-900/50 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
-                        <input
-                          type="checkbox"
-                          checked={termsAccepted}
-                          onChange={(event) => setTermsAccepted(event.target.checked)}
+                      <Button
+                        type="submit"
+                        className={`w-full ${authPrimaryButtonClass}`}
+                        disabled={loading}
+                      >
+                        {loading ? 'Creating account...' : 'Continue with Email'}
+                      </Button>
+
+                      <div className={`pt-1 text-center text-sm font-semibold ${authMutedTextClass}`}>
+                        <span>Already have an account? </span>
+                        <button
+                          type="button"
+                          className={authLinkClass}
+                          onClick={() => setMode('signin')}
                           disabled={loading}
-                          required
-                          className="mt-0.5 h-4 w-4 shrink-0"
-                        />
-                        <span>
-                          I agree to the VDJV Terms and Privacy Policy. VDJV stores my email, display name, device/session
-                          details, purchase or upgrade proof metadata, crash/import logs, and app activity needed for support,
-                          payments, offline access, and account safety. I am responsible for my account and imported content.
-                        </span>
-                      </label>
+                        >
+                          Log in
+                        </button>
+                      </div>
+
+                      <AuthLegalFootnote />
                     </>
                   )}
 
@@ -1786,6 +1884,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                     </>
                   )}
 
+                  {buyStep !== 'account' && (
                   <div className="flex gap-2 pt-1">
                     <Button
                       type="button"
@@ -1805,12 +1904,13 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                     <Button
                       type="submit"
                       className={`flex-1 ${isDark ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
-                      disabled={loading || (buyStep === 'account' && !termsAccepted)}
+                      disabled={loading}
                     >
                       <ArrowRight className="w-4 h-4 mr-2" />
                       Create Free Account
                     </Button>
                   </div>
+                  )}
                   {isBuySubmitting && (
                     <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-gray-950/72' : 'bg-white/72'}`}>
                       <div className={`mx-4 w-full max-w-sm rounded-2xl border px-6 py-7 text-center shadow-2xl ${isDark ? 'border-white/10 bg-gray-900/95 text-white' : 'border-gray-200 bg-white/95 text-gray-900'}`}>
@@ -1857,6 +1957,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
             )}
           </div>
         )}
+        </div>
       </DialogContent>
     </Dialog>
   )
