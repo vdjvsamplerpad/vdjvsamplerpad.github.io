@@ -3627,7 +3627,7 @@ export function StoreCatalogTab({
             { label: 'Total', value: stats.total, detail: 'All catalog items', toneClass: 'text-gray-500' },
             { label: 'Published', value: stats.published, detail: 'Live in store', toneClass: 'text-emerald-500' },
             { label: 'Coming Soon', value: stats.comingSoon, detail: 'Visible but locked', toneClass: 'text-violet-500' },
-            { label: 'Filtered', value: filteredCount, detail: hasFilters ? 'Filters active' : 'All results', toneClass: 'text-indigo-500' },
+            { label: 'Draft', value: stats.draft, detail: 'Needs publishing', toneClass: 'text-amber-500' },
           ]}
         />
       )}
@@ -3635,17 +3635,6 @@ export function StoreCatalogTab({
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Manage store catalog items. Drafts are created automatically during Admin Export.</p>
-          <Button
-            size="sm"
-            onClick={() => {
-              resetBundleDialog();
-              setBundleDialogOpen(true);
-            }}
-            className={isDark ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}
-          >
-            <Plus className="w-3.5 h-3.5 mr-1.5" />
-            Create Bundle
-          </Button>
         </div>
         <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-amber-700/40 bg-amber-500/10' : 'border-amber-200 bg-amber-50/80'}`}>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -3995,14 +3984,6 @@ export function StoreCatalogTab({
             )}
           </div>
         </div>
-        <div className="flex flex-wrap gap-1.5 text-[11px]">
-          <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-gray-700 text-gray-300' : 'border-gray-300 text-gray-700'}`}>Total {stats.total}</span>
-          <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-emerald-700/60 text-emerald-300' : 'border-emerald-300 text-emerald-700'}`}>Published {stats.published}</span>
-          <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-violet-700/60 text-violet-300' : 'border-violet-300 text-violet-700'}`}>Coming Soon {stats.comingSoon}</span>
-          <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-amber-700/60 text-amber-300' : 'border-amber-300 text-amber-700'}`}>Draft {stats.draft}</span>
-          <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-blue-700/60 text-blue-300' : 'border-blue-300 text-blue-700'}`}>Paid {stats.paid}</span>
-          <span className={`px-2 py-0.5 rounded border ${theme === 'dark' ? 'border-fuchsia-700/60 text-fuchsia-300' : 'border-fuchsia-300 text-fuchsia-700'}`}>Pinned {stats.pinned}</span>
-        </div>
       </div>
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <>
@@ -4235,44 +4216,6 @@ function StorePromotionsSurface({
         )}
       >
       <div className="space-y-3">
-        <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white'}`}>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="space-y-1">
-              <div className="text-lg font-semibold">Promotions</div>
-              <div className={`text-sm ${mutedToneClass}`}>
-                Schedule temporary discounts without touching the base catalog price. Flash sales feel urgent in the storefront, while standard promotions stay calmer.
-              </div>
-            </div>
-            <Button onClick={onCreate} disabled={loading} className={isDark ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}>
-              <Plus className="w-4 h-4 mr-2" />
-              New Promotion
-            </Button>
-          </div>
-
-          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-5">
-            <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
-              <div className={`text-[11px] uppercase tracking-wide ${mutedToneClass}`}>Total</div>
-              <div className="mt-1 text-xl font-semibold">{stats.total}</div>
-            </div>
-            <div className={`rounded-xl border p-3 ${isDark ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
-              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>Active</div>
-              <div className="mt-1 text-xl font-semibold">{stats.active}</div>
-            </div>
-            <div className={`rounded-xl border p-3 ${isDark ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
-              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Scheduled</div>
-              <div className="mt-1 text-xl font-semibold">{stats.scheduled}</div>
-            </div>
-            <div className={`rounded-xl border p-3 ${isDark ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
-              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Expired</div>
-              <div className="mt-1 text-xl font-semibold">{stats.expired}</div>
-            </div>
-            <div className={`rounded-xl border p-3 ${isDark ? 'border-rose-700/60 bg-rose-500/10' : 'border-rose-200 bg-rose-50'}`}>
-              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-rose-300' : 'text-rose-700'}`}>Inactive</div>
-              <div className="mt-1 text-xl font-semibold">{stats.inactive}</div>
-            </div>
-          </div>
-        </div>
-
         <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
           <div className="flex items-center justify-between gap-3 mb-3">
             <div>
@@ -4771,40 +4714,6 @@ export function StoreBannersTab({
         )}
       >
       <div className="space-y-3">
-        <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white'}`}>
-          <div className="flex flex-wrap items-start gap-3">
-            <div className="space-y-1">
-              <div className="text-base font-semibold">Marketing Banners</div>
-              <p className={`text-sm max-w-2xl ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
-                Manage the rotating banner shown above the Bank Store list. Draft edits stay visible here so you can review before saving.
-              </p>
-            </div>
-            <div className="flex-1" />
-            <label className="flex items-center gap-2 text-xs rounded-md border px-2.5 py-1.5 self-start">
-              <input type="checkbox" checked={showInactive} onChange={(event) => onShowInactiveChange(event.target.checked)} />
-              Show inactive
-            </label>
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-            <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
-              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Total</div>
-              <div className="mt-1 text-xl font-semibold">{bannerStats.total}</div>
-            </div>
-            <div className={`rounded-xl border p-3 ${isDark ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
-              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>Active</div>
-              <div className="mt-1 text-xl font-semibold">{bannerStats.active}</div>
-            </div>
-            <div className={`rounded-xl border p-3 ${isDark ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
-              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Inactive</div>
-              <div className="mt-1 text-xl font-semibold">{bannerStats.inactive}</div>
-            </div>
-            <div className={`rounded-xl border p-3 ${isDark ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
-              <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Unsaved</div>
-              <div className="mt-1 text-xl font-semibold">{bannerStats.dirty}</div>
-            </div>
-          </div>
-        </div>
-
         {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
           <div className="pr-1">
             <div className="space-y-4">
@@ -4869,9 +4778,13 @@ export function StoreBannersTab({
                     Inactive rows hidden after save
                   </span>
                 ) : null}
+                <div className="flex-1" />
+                <label className="flex items-center gap-2 text-xs rounded-md border px-2.5 py-1.5">
+                  <input type="checkbox" checked={showInactive} onChange={(event) => onShowInactiveChange(event.target.checked)} />
+                  Show inactive
+                </label>
               </div>
 
-            <div className={`rounded-xl border p-4 space-y-3 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
               <div className="space-y-3">
                 {banners.length === 0 ? (
                   <div className={`rounded-lg border border-dashed px-4 py-10 text-center ${isDark ? 'border-gray-700 text-gray-400' : 'border-gray-300 text-gray-500'}`}>
@@ -5033,8 +4946,7 @@ export function StoreBannersTab({
                 )}
               </div>
             </div>
-            </div>
-            </div>
+          </div>
           </div>
         )}
       </div>
@@ -5298,17 +5210,6 @@ export function StoreConfigTab({
     >
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
         <div className="space-y-5">
-          <div className={`rounded-2xl border p-4 space-y-4 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white/90'}`}>
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div className="space-y-1">
-                <div className="text-base font-semibold">Payment and Store Controls</div>
-                <div className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
-                  Configure checkout instructions, payment channels, QR support, automation, and email outcomes from one place.
-                </div>
-              </div>
-            </div>
-          </div>
-
           <div className={`rounded-2xl border p-4 space-y-4 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white/90'}`}>
             <div className="flex flex-col gap-1">
               <div className="text-base font-semibold">Payment Setup</div>

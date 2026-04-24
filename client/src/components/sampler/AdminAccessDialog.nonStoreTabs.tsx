@@ -324,7 +324,7 @@ function HomeTab({
   const primaryStats = [
     { label: 'Range Revenue', value: formatMoney(selectedRangeStats.totalRevenue), detail: heroRangeMeta, toneClass: 'text-emerald-500' },
     { label: 'Pending Queues', value: pendingRequestsTotal, detail: 'Account, store, installer', toneClass: 'text-amber-500' },
-    { label: 'Active Today', value: Number(homeData?.counts?.activeTodayUsers || 0), detail: 'Asia/Manila', toneClass: 'text-sky-500' },
+    { label: 'Active Today', value: Number(homeData?.counts?.activeTodayUsers || 0), detail: 'Today', toneClass: 'text-sky-500' },
     { label: 'Today Requests', value: todayRequestTotal, detail: 'Account, store, installer', toneClass: 'text-fuchsia-500' },
   ];
   const heroShellClass = isDark
@@ -469,7 +469,6 @@ function HomeTab({
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={queueMetaClass}>Selected range</span>
-                    <span className={queueMetaClass}>{homeData?.meta?.timeBasis || 'Asia/Manila'}</span>
                     {homeData?.meta?.sampled ? <span className={queueMetaClass}>Sampled</span> : null}
                   </div>
                   <div>
@@ -669,12 +668,13 @@ function HomeTab({
           </>
         )}
 
-      <div className="pt-2 text-[11px] opacity-70">
-        <div className="flex flex-wrap gap-2">
-            <span className={footerPillClass}>Time basis: {homeData?.meta?.timeBasis || 'Asia/Manila'}</span>
-            {homeData?.meta?.sampled ? <span className={footerPillClass}>Sampled at cap {homeData?.meta?.seriesCap || 0}</span> : null}
+      {homeData?.meta?.sampled ? (
+        <div className="pt-2 text-[11px] opacity-70">
+          <div className="flex flex-wrap gap-2">
+            <span className={footerPillClass}>Sampled at cap {homeData?.meta?.seriesCap || 0}</span>
+          </div>
         </div>
-      </div>
+      ) : null}
       </div>
     </AdminPageScaffold>
   );
