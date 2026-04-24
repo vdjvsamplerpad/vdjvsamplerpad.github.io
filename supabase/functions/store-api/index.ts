@@ -3,6 +3,16 @@ import { badRequest, buildCorsHeaders, handleCorsPreflight, json } from "../_sha
 import { createPresignedGetUrl, createPresignedPutUrl, deleteObject } from "../_shared/r2-storage.ts";
 import { createSignedEntitlementToken, isEntitlementTokenSigningEnabled } from "../_shared/entitlement-token.ts";
 import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig } from "../_shared/sampler-app-config.ts";
+import {
+  DEFAULT_LEGAL_DOCUMENTS,
+  LEGAL_DOCUMENT_KEYS,
+  normalizeLegalDocument,
+  normalizeLegalDocumentKey,
+  type AdminLegalDocumentState,
+  type LegalDocument,
+  type LegalDocumentKey,
+  type LegalDocumentStatus,
+} from "../_shared/legal-content.ts";
 import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_shared/supabase.ts";
 import { asNumber, asString, asUuid } from "../_shared/validate.ts";
 import { consumeRateLimit } from "../_shared/rate-limit.ts";
@@ -1801,6 +1811,14 @@ const absolutizePublicSiteUrl = (value: string): string => {
   return `${siteBase}${trimmed}`;
 };
 
+const canonicalizeExternalUrl = (value: string): string => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(trimmed)) return `https://${trimmed}`;
+  return trimmed;
+};
+
 const buildStoreApiBaseUrl = (req?: Request): string | null => {
   const explicit = asString(Deno.env.get("APP_SUPABASE_URL") || Deno.env.get("SUPABASE_URL"), 500);
   if (explicit) return `${explicit.replace(/\/+$/, "")}/functions/v1/store-api`;
@@ -2961,6 +2979,35 @@ const getAccountMe = async (req: Request) => {
   });
 };
 
+const deleteOwnAccount = async (req: Request, body: any) => {
+  const admin = createServiceClient();
+  const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
+  if (!user?.id) return fail(401, "NOT_AUTHENTICATED");
+  if (body?.confirm !== true) return badRequest("Deletion confirmation is required");
+
+  const userId = user.id;
+  const targetEmail = user.email || null;
+
+  const { error: authDeleteError } = await admin.auth.admin.deleteUser(userId);
+  if (authDeleteError) return fail(500, authDeleteError.message);
+
+  const profileDelete = await admin.from("profiles").delete().eq("id", userId);
+  if (profileDelete.error) return fail(500, profileDelete.error.message);
+
+  await swallowDiscordError(() =>
+    sendDiscordAdminActionEvent({
+      severity: "critical",
+      title: "User Deleted Own Account",
+      description: "A signed-in user deleted their account from app settings.",
+      actorUserId: userId,
+      targetUserId: userId,
+      extraFields: targetEmail ? [{ name: "Email", value: targetEmail, inline: true }] : [],
+    })
+  );
+
+  return ok({ userId });
+};
+
 const getAccountUpgradeOptions = async (req: Request) => {
   const admin = createServiceClient();
   const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
@@ -3262,8 +3309,10 @@ const redeemAccountVoucher = async (req: Request, body: any) => {
 
 const LANDING_VERSION_KEYS = ["V1", "V2", "V3"] as const;
 const LANDING_PLATFORM_KEYS = ["android", "ios", "windows", "macos"] as const;
+const LANDING_SOCIAL_KEYS = ["facebook", "instagram", "youtube"] as const;
 type LandingVersionKey = typeof LANDING_VERSION_KEYS[number];
 type LandingPlatformKey = typeof LANDING_PLATFORM_KEYS[number];
+type LandingSocialKey = typeof LANDING_SOCIAL_KEYS[number];
 const DEFAULT_LANDING_DOWNLOAD_LINKS = {
   V1: {
     android: "/android/",
@@ -3356,16 +3405,43 @@ const DEFAULT_LANDING_BUY_SECTIONS = {
   },
 } as const;
 
+const DEFAULT_LANDING_SOCIAL_LINKS = {
+  facebook: {
+    label: "Facebook",
+    url: "https://facebook.com/vdjvsampler",
+  },
+  instagram: {
+    label: "Instagram",
+    url: "https://instagram.com/vdjvsampler",
+  },
+  youtube: {
+    label: "YouTube",
+    url: "https://youtube.com/@vdjvsampler",
+  },
+} as const;
+
 const normalizeLandingDownloadConfig = (row: any) => {
-  const downloadLinksRaw = row?.download_links && typeof row.download_links === "object" ? row.download_links : {};
-  const platformDescriptionsRaw = row?.platform_descriptions && typeof row.platform_descriptions === "object" ? row.platform_descriptions : {};
-  const versionDescriptionsRaw = row?.version_descriptions && typeof row.version_descriptions === "object" ? row.version_descriptions : {};
-  const buySectionsRaw = row?.buy_sections && typeof row.buy_sections === "object" ? row.buy_sections : {};
+  const downloadLinksRaw = row?.download_links && typeof row.download_links === "object"
+    ? row.download_links
+    : (row?.downloadLinks && typeof row.downloadLinks === "object" ? row.downloadLinks : {});
+  const platformDescriptionsRaw = row?.platform_descriptions && typeof row.platform_descriptions === "object"
+    ? row.platform_descriptions
+    : (row?.platformDescriptions && typeof row.platformDescriptions === "object" ? row.platformDescriptions : {});
+  const versionDescriptionsRaw = row?.version_descriptions && typeof row.version_descriptions === "object"
+    ? row.version_descriptions
+    : (row?.versionDescriptions && typeof row.versionDescriptions === "object" ? row.versionDescriptions : {});
+  const buySectionsRaw = row?.buy_sections && typeof row.buy_sections === "object"
+    ? row.buy_sections
+    : (row?.buySections && typeof row.buySections === "object" ? row.buySections : {});
+  const socialLinksRaw = row?.social_links && typeof row.social_links === "object"
+    ? row.social_links
+    : (row?.socialLinks && typeof row.socialLinks === "object" ? row.socialLinks : {});
 
   const downloadLinks: Record<string, Record<string, string>> = {};
   const platformDescriptions: Record<string, Record<string, string>> = {};
   const versionDescriptions: Record<string, { title: string; desc: string }> = {};
   const buySections: Record<string, { title: string; description: string; imageUrl: string; defaultInstallerDownloadLink: string }> = {};
+  const socialLinks: Record<string, { label: string; url: string }> = {};
 
   LANDING_VERSION_KEYS.forEach((version) => {
     const downloadEntry = downloadLinksRaw?.[version] && typeof downloadLinksRaw[version] === "object" ? downloadLinksRaw[version] : {};
@@ -3394,7 +3470,15 @@ const normalizeLandingDownloadConfig = (row: any) => {
     };
   });
 
-  return { downloadLinks, platformDescriptions, versionDescriptions, buySections };
+  LANDING_SOCIAL_KEYS.forEach((platform) => {
+    const socialEntry = socialLinksRaw?.[platform] && typeof socialLinksRaw[platform] === "object" ? socialLinksRaw[platform] : {};
+    socialLinks[platform] = {
+      label: asString(socialEntry?.label, 80) || DEFAULT_LANDING_SOCIAL_LINKS[platform].label,
+      url: canonicalizeExternalUrl(asString(socialEntry?.url, 2000) || DEFAULT_LANDING_SOCIAL_LINKS[platform].url),
+    };
+  });
+
+  return { downloadLinks, platformDescriptions, versionDescriptions, buySections, socialLinks };
 };
 
 const getSamplerAppConfigRecord = async (admin: ReturnType<typeof createServiceClient>) => {
@@ -3428,7 +3512,7 @@ const getLandingDownloadConfig = async () => {
   const admin = createServiceClient();
   const { data, error } = await admin
     .from("landing_download_config")
-    .select("download_links,platform_descriptions,version_descriptions,buy_sections")
+    .select("*")
     .eq("id", "default")
     .eq("is_active", true)
     .maybeSingle();
@@ -3638,7 +3722,7 @@ const listEnabledInstallerBuyProducts = async (admin: ReturnType<typeof createSe
 const getPublicBuyConfig = async () => {
   const admin = createServiceClient();
   const [{ data: landingRow, error: landingError }, { data: paymentRow, error: paymentError }, products] = await Promise.all([
-    admin.from("landing_download_config").select("download_links,platform_descriptions,version_descriptions,buy_sections").eq("id", "default").eq("is_active", true).maybeSingle(),
+    admin.from("landing_download_config").select("*").eq("id", "default").eq("is_active", true).maybeSingle(),
     admin.from("store_payment_settings").select("instructions,gcash_number,maya_number,messenger_url,qr_image_path,account_price_php").eq("id", "default").eq("is_active", true).maybeSingle(),
     listEnabledInstallerBuyProducts(admin),
   ]);
@@ -3661,7 +3745,7 @@ const getPublicBuyConfig = async () => {
 const getNormalizedLandingConfigRecord = async (admin: ReturnType<typeof createServiceClient>) => {
   const { data, error } = await admin
     .from("landing_download_config")
-    .select("download_links,platform_descriptions,version_descriptions,buy_sections")
+    .select("*")
     .eq("id", "default")
     .eq("is_active", true)
     .maybeSingle();
@@ -8997,6 +9081,161 @@ const deleteAdminStoreBanner = async (bannerId: string) => {
   return ok({ deleted: true, cleanup_warning: cleanupWarning });
 };
 
+const isMissingLegalDocumentsTableError = (error: any): boolean => {
+  const message = String(error?.message || "");
+  return error?.code === "42P01" || /legal_documents/i.test(message) && /does not exist|schema cache/i.test(message);
+};
+
+const legalFallback = (documentKey: LegalDocumentKey, status: LegalDocumentStatus): LegalDocument => ({
+  ...DEFAULT_LEGAL_DOCUMENTS[documentKey],
+  status,
+  publishedAt: status === "published" ? DEFAULT_LEGAL_DOCUMENTS[documentKey].publishedAt : null,
+});
+
+const mapLegalDocumentRow = (
+  row: any,
+  documentKey: LegalDocumentKey,
+  status: LegalDocumentStatus,
+  fallback: LegalDocument = legalFallback(documentKey, status),
+): LegalDocument => {
+  if (!row) return fallback;
+  return normalizeLegalDocument(documentKey, {
+    documentKey,
+    status,
+    title: row.title,
+    intro: row.intro,
+    sections: row.sections,
+    updatedAt: row.updated_at,
+    publishedAt: row.published_at,
+  }, fallback);
+};
+
+const getPublicLegalDocument = async (documentKey: LegalDocumentKey) => {
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .from("legal_documents")
+    .select("document_key,status,title,intro,sections,updated_at,published_at")
+    .eq("document_key", documentKey)
+    .eq("status", "published")
+    .maybeSingle();
+  if (error) {
+    if (isMissingLegalDocumentsTableError(error)) return ok({ document: legalFallback(documentKey, "published") });
+    return fail(500, error.message);
+  }
+  return ok({ document: mapLegalDocumentRow(data, documentKey, "published") });
+};
+
+const getAdminLegalDocuments = async () => {
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .from("legal_documents")
+    .select("document_key,status,title,intro,sections,updated_at,published_at");
+  if (error) {
+    if (isMissingLegalDocumentsTableError(error)) {
+      const documents = LEGAL_DOCUMENT_KEYS.reduce((acc, key) => {
+        acc[key] = {
+          draft: legalFallback(key, "draft"),
+          published: legalFallback(key, "published"),
+        };
+        return acc;
+      }, {} as AdminLegalDocumentState);
+      return ok({ documents });
+    }
+    return fail(500, error.message);
+  }
+
+  const rows = Array.isArray(data) ? data : [];
+  const documents = LEGAL_DOCUMENT_KEYS.reduce((acc, key) => {
+    const publishedRow = rows.find((row) => row.document_key === key && row.status === "published");
+    const draftRow = rows.find((row) => row.document_key === key && row.status === "draft");
+    const published = mapLegalDocumentRow(publishedRow, key, "published");
+    const draft = mapLegalDocumentRow(draftRow, key, "draft", legalFallback(key, "draft"));
+    acc[key] = { draft, published };
+    return acc;
+  }, {} as AdminLegalDocumentState);
+
+  return ok({ documents });
+};
+
+const saveAdminLegalDocumentDraft = async (body: any, adminUserId: string) => {
+  const documentKey = normalizeLegalDocumentKey(body?.documentKey ?? body?.document_key);
+  if (!documentKey) return badRequest("Invalid legal document key");
+  const document = normalizeLegalDocument(documentKey, { ...body, status: "draft" }, legalFallback(documentKey, "draft"));
+  const admin = createServiceClient();
+  const now = new Date().toISOString();
+  const row = {
+    document_key: documentKey,
+    status: "draft",
+    title: document.title,
+    intro: document.intro,
+    sections: document.sections,
+    updated_by: adminUserId,
+    updated_at: now,
+    published_at: null,
+  };
+
+  const { data, error } = await admin
+    .from("legal_documents")
+    .upsert(row, { onConflict: "document_key,status" })
+    .select("document_key,status,title,intro,sections,updated_at,published_at")
+    .single();
+  if (error) return fail(500, error.message);
+
+  await admin.from("legal_document_revisions").insert({
+    document_key: documentKey,
+    status: "draft",
+    title: document.title,
+    intro: document.intro,
+    sections: document.sections,
+    edited_by: adminUserId,
+  });
+
+  return ok({ document: mapLegalDocumentRow(data, documentKey, "draft") });
+};
+
+const publishAdminLegalDocument = async (body: any, adminUserId: string) => {
+  const documentKey = normalizeLegalDocumentKey(body?.documentKey ?? body?.document_key);
+  if (!documentKey) return badRequest("Invalid legal document key");
+  const admin = createServiceClient();
+  const { data: draftRow, error: draftError } = await admin
+    .from("legal_documents")
+    .select("document_key,status,title,intro,sections,updated_at,published_at")
+    .eq("document_key", documentKey)
+    .eq("status", "draft")
+    .maybeSingle();
+  if (draftError) return fail(500, draftError.message);
+
+  const draft = mapLegalDocumentRow(draftRow, documentKey, "draft");
+  const now = new Date().toISOString();
+  const row = {
+    document_key: documentKey,
+    status: "published",
+    title: draft.title,
+    intro: draft.intro,
+    sections: draft.sections,
+    updated_by: adminUserId,
+    updated_at: now,
+    published_at: now,
+  };
+  const { data, error } = await admin
+    .from("legal_documents")
+    .upsert(row, { onConflict: "document_key,status" })
+    .select("document_key,status,title,intro,sections,updated_at,published_at")
+    .single();
+  if (error) return fail(500, error.message);
+
+  await admin.from("legal_document_revisions").insert({
+    document_key: documentKey,
+    status: "published",
+    title: draft.title,
+    intro: draft.intro,
+    sections: draft.sections,
+    edited_by: adminUserId,
+  });
+
+  return ok({ document: mapLegalDocumentRow(data, documentKey, "published") });
+};
+
 const getAdminStoreConfig = async () => {
   const admin = createServiceClient();
   await disableExpiredCountdowns(admin);
@@ -9061,6 +9300,7 @@ const saveAdminLandingDownloadConfig = async (body: any, adminUserId: string) =>
     platform_descriptions: body?.platformDescriptions,
     version_descriptions: body?.versionDescriptions,
     buy_sections: body?.buySections,
+    social_links: body?.socialLinks,
   });
   const admin = createServiceClient();
   const row = {
@@ -9070,6 +9310,7 @@ const saveAdminLandingDownloadConfig = async (body: any, adminUserId: string) =>
     platform_descriptions: payload.platformDescriptions,
     version_descriptions: payload.versionDescriptions,
     buy_sections: payload.buySections,
+    social_links: payload.socialLinks,
     updated_by: adminUserId,
     updated_at: new Date().toISOString(),
   };
@@ -9339,8 +9580,17 @@ Deno.serve(async (req) => {
     if (req.method === "GET" && scoped[0] === "landing-config" && scoped.length === 1) return await getLandingDownloadConfig();
     if (req.method === "GET" && scoped[0] === "buy-config" && scoped.length === 1) return await getPublicBuyConfig();
     if (req.method === "GET" && scoped[0] === "sampler-config" && scoped.length === 1) return await getPublicSamplerAppConfig();
+    if (req.method === "GET" && scoped[0] === "legal" && scoped.length === 2) {
+      const documentKey = normalizeLegalDocumentKey(scoped[1]);
+      if (!documentKey) return badRequest("Invalid legal document key");
+      return await getPublicLegalDocument(documentKey);
+    }
     if (req.method === "GET" && scoped[0] === "account" && scoped[1] === "me" && scoped.length === 2) {
       return await getAccountMe(req);
+    }
+    if (req.method === "POST" && scoped[0] === "account" && scoped[1] === "delete" && scoped.length === 2) {
+      const body = await req.json().catch(() => ({}));
+      return await deleteOwnAccount(req, body);
     }
     if (req.method === "GET" && scoped[0] === "account" && scoped[1] === "upgrade-options" && scoped.length === 2) {
       return await getAccountUpgradeOptions(req);
@@ -9629,6 +9879,17 @@ Deno.serve(async (req) => {
     if (req.method === "POST" && scoped[2] === "landing-config" && scoped.length === 3) {
       const body = await req.json().catch(() => ({}));
       return await saveAdminLandingDownloadConfig(body, adminUserId);
+    }
+    if (req.method === "GET" && scoped[2] === "legal-documents" && scoped.length === 3) {
+      return await getAdminLegalDocuments();
+    }
+    if (req.method === "POST" && scoped[2] === "legal-documents" && scoped[3] === "draft" && scoped.length === 4) {
+      const body = await req.json().catch(() => ({}));
+      return await saveAdminLegalDocumentDraft(body, adminUserId);
+    }
+    if (req.method === "POST" && scoped[2] === "legal-documents" && scoped[3] === "publish" && scoped.length === 4) {
+      const body = await req.json().catch(() => ({}));
+      return await publishAdminLegalDocument(body, adminUserId);
     }
     if (req.method === "GET" && scoped[2] === "sampler-config" && scoped.length === 3) return await getAdminSamplerAppConfig();
     if (req.method === "POST" && scoped[2] === "sampler-config" && scoped.length === 3) {
