@@ -13,7 +13,7 @@ import type {
   AdminUser,
   SortDirection,
 } from '@/lib/admin-api';
-import { Edit, Plus, RefreshCw, Search, Trash2, Users } from 'lucide-react';
+import { Edit, Plus, Search, Trash2, Users } from 'lucide-react';
 import {
   HOME_WINDOW_OPTIONS,
   type HomeTrendRows,
@@ -34,7 +34,7 @@ import {
   RevenueAdvancedChart,
   SortHeader,
 } from './AdminAccessDialog.widgets';
-import { AdminPageScaffold, AdminStatsStrip } from './AdminAccessDialog.layout';
+import { AdminActionCluster, AdminPageScaffold, AdminRefreshButton, AdminStatsStrip } from './AdminAccessDialog.layout';
 
 interface HomeTabProps {
   theme: AdminDialogTheme;
@@ -299,7 +299,7 @@ function HomeTab({
       day: 'numeric',
       year: 'numeric',
     });
-    return `${formatter.format(startDate)} to ${formatter.format(endDate)} • ${rangeZone}`;
+    return `${formatter.format(startDate)} to ${formatter.format(endDate)} - ${rangeZone}`;
   }, [homeData?.meta?.rangeEndDate, homeData?.meta?.rangeStartDate, homeData?.meta?.rangeTimeZone, homeFromDate, homeToDate]);
   const liveSnapshotCards = [
     { label: 'Revenue', value: formatMoney(Number(homeData?.counts?.totalRevenue24h || 0)), tone: 'text-yellow-500' },
@@ -508,10 +508,7 @@ function HomeTab({
                       <div className="text-sm font-black tracking-tight">Control Rail</div>
                       <div className="text-xs opacity-70">Date range and quick presets.</div>
                     </div>
-                    <Button variant="outline" size="sm" onClick={onRefresh} disabled={homeLoading} className="rounded-full">
-                      <RefreshCw className={`w-4 h-4 mr-1 ${homeLoading ? 'animate-spin' : ''}`} />
-                      Apply
-                    </Button>
+                    <AdminRefreshButton loading={homeLoading} label="Apply" onClick={onRefresh} />
                   </div>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <Input
@@ -540,11 +537,6 @@ function HomeTab({
                         {option === 1 ? 'Today' : `${option}d`}
                       </Button>
                     ))}
-                  </div>
-                  <div className="mt-4 rounded-[16px] border border-white/10 bg-white/[0.04] px-3 py-3 dark:bg-white/[0.035]">
-                    <div className="text-[10px] font-black uppercase tracking-[0.18em] opacity-60">Refresh State</div>
-                    <div className="mt-1.5 text-sm font-semibold tracking-tight">Last refresh: {homeLastRefresh ? new Date(homeLastRefresh).toLocaleString() : '-'}</div>
-                    <div className="mt-1 text-[11px] opacity-65">Use presets for fast jumps, then apply a custom window when needed.</div>
                   </div>
                 </div>
               </div>
@@ -679,7 +671,6 @@ function HomeTab({
 
       <div className="pt-2 text-[11px] opacity-70">
         <div className="flex flex-wrap gap-2">
-            <span className={footerPillClass}>Last refresh: {homeLastRefresh ? new Date(homeLastRefresh).toLocaleString() : '-'}</span>
             <span className={footerPillClass}>Time basis: {homeData?.meta?.timeBasis || 'Asia/Manila'}</span>
             {homeData?.meta?.sampled ? <span className={footerPillClass}>Sampled at cap {homeData?.meta?.seriesCap || 0}</span> : null}
         </div>
@@ -736,14 +727,12 @@ function AssignmentsTab({
       <div className={`border rounded p-3 space-y-3 ${DESKTOP_SECTION_CARD_CLASS} ${cardClass}`}>
         <div className="flex items-center justify-between">
           <Label>Select User</Label>
-          <div className="flex items-center gap-1">
+          <AdminActionCluster>
             <Button size="sm" variant={assignmentUserSortBy === 'created_at' ? 'secondary' : 'outline'} onClick={() => onToggleAssignmentUserSort('created_at')}>
               Newest
             </Button>
-            <Button size="sm" variant="outline" onClick={onRefreshUsers} disabled={usersLoading}>
-              <RefreshCw className={`w-4 h-4 ${usersLoading ? 'animate-spin' : ''}`} />
-            </Button>
-          </div>
+            <AdminRefreshButton loading={usersLoading} label="Refresh" onClick={onRefreshUsers} />
+          </AdminActionCluster>
         </div>
         <Input value={usersQuery} onChange={(event) => onUsersQueryChange(event.target.value)} placeholder="Search users..." onKeyDown={(event) => event.key === 'Enter' && onRefreshUsers()} className="h-9 text-sm" />
         <div className={TABLE_SHELL_CLASS}>
@@ -792,12 +781,12 @@ function AssignmentsTab({
             {accessLoading ? 'Loading access...' : selectedUser ? `${selectedUser.display_name} (${selectedUser.email || 'no email'})` : 'Select a user first'}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => onGrant(selectedGrantIds)} disabled={!selectedUserId || selectedGrantIds.length === 0 || bulkLoading}>Grant Selected ({selectedGrantIds.length})</Button>
-          <Button size="sm" variant="outline" onClick={() => onRevoke(selectedRevokeIds)} disabled={!selectedUserId || selectedRevokeIds.length === 0 || bulkLoading}>Revoke Selected ({selectedRevokeIds.length})</Button>
-          <Button size="sm" variant="secondary" onClick={() => onGrant(allGrantIds)} disabled={!selectedUserId || allGrantIds.length === 0 || bulkLoading}>Grant All ({allGrantIds.length})</Button>
-          <Button size="sm" variant="outline" onClick={() => onRevoke(allRevokeIds)} disabled={!selectedUserId || allRevokeIds.length === 0 || bulkLoading}>Revoke All ({allRevokeIds.length})</Button>
-        </div>
+        <AdminActionCluster>
+          <Button size="sm" className="rounded-[14px]" onClick={() => onGrant(selectedGrantIds)} disabled={!selectedUserId || selectedGrantIds.length === 0 || bulkLoading}>Grant Selected ({selectedGrantIds.length})</Button>
+          <Button size="sm" className="rounded-[14px]" variant="outline" onClick={() => onRevoke(selectedRevokeIds)} disabled={!selectedUserId || selectedRevokeIds.length === 0 || bulkLoading}>Revoke Selected ({selectedRevokeIds.length})</Button>
+          <Button size="sm" className="rounded-[14px]" variant="secondary" onClick={() => onGrant(allGrantIds)} disabled={!selectedUserId || allGrantIds.length === 0 || bulkLoading}>Grant All ({allGrantIds.length})</Button>
+          <Button size="sm" className="rounded-[14px]" variant="outline" onClick={() => onRevoke(allRevokeIds)} disabled={!selectedUserId || allRevokeIds.length === 0 || bulkLoading}>Revoke All ({allRevokeIds.length})</Button>
+        </AdminActionCluster>
         <div className={TABLE_SHELL_CLASS}>
           <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[860px] block md:table">
             <TableHeader className="hidden md:table-header-group">
@@ -868,10 +857,7 @@ function BanksTab({
           <Label>Search Banks</Label>
           <Input value={banksQuery} onChange={(event) => onBanksQueryChange(event.target.value)} placeholder="Search title or description..." onKeyDown={(event) => event.key === 'Enter' && onRefreshBanks()} />
         </div>
-        <Button variant="outline" onClick={onRefreshBanks} disabled={banksLoading}>
-          <RefreshCw className={`w-4 h-4 mr-1 ${banksLoading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+        <AdminRefreshButton loading={banksLoading} onClick={onRefreshBanks} />
       </div>
       <div className={TABLE_SHELL_CLASS}>
         <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
@@ -943,10 +929,7 @@ function UsersTab({
           <Input value={usersQuery} onChange={(event) => onUsersQueryChange(event.target.value)} placeholder="Search name, email, id..." onKeyDown={(event) => event.key === 'Enter' && onRefreshUsers()} />
         </div>
         <Button onClick={onOpenCreateUser}><Plus className="w-4 h-4 mr-1" />Add User</Button>
-        <Button variant="outline" onClick={onRefreshUsers} disabled={usersLoading}>
-          <RefreshCw className={`w-4 h-4 mr-1 ${usersLoading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+        <AdminRefreshButton loading={usersLoading} onClick={onRefreshUsers} />
       </div>
       <div className={TABLE_SHELL_CLASS}>
         <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
@@ -1096,10 +1079,7 @@ function ActiveTab({
             <Label>Active Users</Label>
             <div className="text-xs opacity-70">Current live sessions, including admins, stay in the first table. Today&apos;s unique non-admin users are listed below.</div>
           </div>
-          <Button variant="outline" onClick={onRefreshActive} disabled={activeLoading}>
-            <RefreshCw className={`w-4 h-4 mr-1 ${activeLoading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
+          <AdminRefreshButton loading={activeLoading} onClick={onRefreshActive} />
         </div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Users</div><div className="text-xl font-semibold">{activeCounts.activeUsers}</div></div>
@@ -1196,26 +1176,9 @@ function ActivityTab({
         <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-1">
             <div className="text-sm font-semibold">Export Activity</div>
-            <div className="text-xs opacity-70">Track export requests, upload stages, and recovery events in a layout that scrolls naturally on mobile.</div>
+            <div className="text-xs opacity-70">Page {activityPage}/{activityTotalPages} - {exportFilterCount} active filters</div>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-white'}`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-70">Visible</div>
-              <div className="text-base font-semibold">{activityRows.length}</div>
-            </div>
-            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-70">Page</div>
-              <div className="text-base font-semibold">{activityPage}/{activityTotalPages}</div>
-            </div>
-            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-70">Filters</div>
-              <div className="text-base font-semibold">{exportFilterCount}</div>
-            </div>
-            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-70">State</div>
-              <div className="text-sm font-medium">{activityLoading ? 'Loading' : 'Ready'}</div>
-            </div>
-          </div>
+          <AdminRefreshButton loading={activityLoading} label="Refresh" onClick={onRefreshActivity} />
         </div>
 
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
@@ -1262,10 +1225,6 @@ function ActivityTab({
                 <Input value={activitySearch} onChange={(event) => { onActivitySearchChange(event.target.value); onActivityPageChange(1); }} placeholder="Search bank, email, event..." className={`h-9 w-full pl-8 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`} />
               </div>
             </div>
-            <Button variant="outline" size="sm" className="h-9 w-full justify-center" onClick={onRefreshActivity} disabled={activityLoading}>
-              <RefreshCw className={`w-4 h-4 mr-1 ${activityLoading ? 'animate-spin' : ''}`} />
-              Refresh Export Activity
-            </Button>
           </div>
         </div>
 
@@ -1366,22 +1325,9 @@ function ActivityTab({
         <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-1">
             <div className="text-sm font-semibold">Other Activity</div>
-            <div className="text-xs opacity-70">Auth, import, and system events with full-width mobile controls and clearer filter state.</div>
+            <div className="text-xs opacity-70">Page {otherActivityPage}/{otherActivityTotalPages} - {otherFilterCount} active filters</div>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-white'}`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-70">Visible</div>
-              <div className="text-base font-semibold">{otherActivityRows.length}</div>
-            </div>
-            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-70">Page</div>
-              <div className="text-base font-semibold">{otherActivityPage}/{otherActivityTotalPages}</div>
-            </div>
-            <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
-              <div className="text-[10px] uppercase tracking-wide opacity-70">Filters</div>
-              <div className="text-base font-semibold">{otherFilterCount}</div>
-            </div>
-          </div>
+          <AdminRefreshButton loading={otherActivityLoading} label="Refresh" onClick={onRefreshOtherActivity} />
         </div>
 
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
@@ -1402,10 +1348,6 @@ function ActivityTab({
                 <Input value={otherActivitySearch} onChange={(event) => { onOtherActivitySearchChange(event.target.value); onOtherActivityPageChange(1); }} placeholder="Search user, event, bank..." className={`h-9 w-full pl-8 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`} />
               </div>
             </div>
-            <Button variant="outline" size="sm" className="h-9 w-full justify-center" onClick={onRefreshOtherActivity} disabled={otherActivityLoading}>
-              <RefreshCw className={`w-4 h-4 mr-1 ${otherActivityLoading ? 'animate-spin' : ''}`} />
-              Refresh Other Activity
-            </Button>
           </div>
         </div>
 

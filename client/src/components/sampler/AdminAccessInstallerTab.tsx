@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Loader2, Plus, RefreshCw, RotateCcw, Save, Trash2 } from 'lucide-react';
+import { Loader2, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -27,6 +27,7 @@ import {
 } from '@/lib/admin-api';
 import {
   AdminPageScaffold,
+  AdminRefreshButton,
   AdminSectionTabs,
   AdminStatsStrip,
 } from './AdminAccessDialog.layout';
@@ -1104,10 +1105,8 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
       title="Installer Manager"
       description="Manage V2 and V3 packages, licenses, buy catalog, buyer requests, and event history from one aligned admin workspace."
       actions={(
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
+        <AdminRefreshButton
+          loading={currentViewLoading}
           onClick={() => {
             if (view === 'packages') void reloadPackages();
             if (view === 'licenses') void loadLicenses();
@@ -1115,10 +1114,7 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
             if (view === 'requests') void loadRequests();
             if (view === 'events') void loadEvents();
           }}
-        >
-          <RefreshCw className={`mr-2 h-4 w-4 ${currentViewLoading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+        />
       )}
       stats={<AdminStatsStrip items={installerStats} />}
       controls={(

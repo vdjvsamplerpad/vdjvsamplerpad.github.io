@@ -1,25 +1,23 @@
 import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
   adminApi,
   type AdminAccountTierConfig,
-  type AdminAccountUpgradeRequest,
   type AdminVoucherCampaign,
 } from '@/lib/admin-api';
 import {
   AdminControlsBar,
   AdminPageScaffold,
+  AdminRefreshButton,
   AdminSectionTabs,
   AdminStatsStrip,
 } from './AdminAccessDialog.layout';
 
-type UpgradeStatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'cancelled';
-type AccountAdminSection = 'requests' | 'vouchers' | 'tiers';
+type AccountAdminSection = 'vouchers' | 'tiers';
 
 interface TierDraft {
   displayName: string;
@@ -36,15 +34,6 @@ interface AdminAccountUpgradesTabProps {
   cardClass: string;
   pushNotice: (kind: 'success' | 'error' | 'info', message: string) => void;
 }
-
-const formatMoney = (value: number): string => {
-  if (!Number.isFinite(value)) return 'PHP 0';
-  return new Intl.NumberFormat('en-PH', {
-    style: 'currency',
-    currency: 'PHP',
-    maximumFractionDigits: 0,
-  }).format(value);
-};
 
 const formatDateTime = (value?: string | null): string => {
   if (!value) return '-';
@@ -124,13 +113,9 @@ const parseJsonObject = (value: string): Record<string, unknown> => {
 export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: AdminAccountUpgradesTabProps) {
   const [loading, setLoading] = React.useState(false);
   const [savingTier, setSavingTier] = React.useState<string | null>(null);
-  const [upgradeBusyId, setUpgradeBusyId] = React.useState<string | null>(null);
   const [voucherBusyId, setVoucherBusyId] = React.useState<string | null>(null);
   const [tierConfigs, setTierConfigs] = React.useState<AdminAccountTierConfig[]>([]);
   const [tierDrafts, setTierDrafts] = React.useState<Record<string, TierDraft>>({});
-  const [upgradeRows, setUpgradeRows] = React.useState<AdminAccountUpgradeRequest[]>([]);
-  const [upgradeStatus, setUpgradeStatus] = React.useState<UpgradeStatusFilter>('pending');
-  const [upgradeSearch, setUpgradeSearch] = React.useState('');
   const [voucherCampaigns, setVoucherCampaigns] = React.useState<AdminVoucherCampaign[]>([]);
   const [campaignName, setCampaignName] = React.useState('');
   const [campaignTargetTier, setCampaignTargetTier] = React.useState<'pro' | 'pro_max'>('pro');
@@ -139,8 +124,6 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
   const [campaignTargetEmail, setCampaignTargetEmail] = React.useState('');
   const [campaignNotes, setCampaignNotes] = React.useState('');
   const [activeSection, setActiveSection] = React.useState<AccountAdminSection>('vouchers');
-  const [rejectRequest, setRejectRequest] = React.useState<AdminAccountUpgradeRequest | null>(null);
-  const [rejectMessage, setRejectMessage] = React.useState('');
 
   const loadData = React.useCallback(async () => {
     setLoading(true);
@@ -151,14 +134,13 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
       ]);
       setTierConfigs(tiersResult.tiers || []);
       setTierDrafts(Object.fromEntries((tiersResult.tiers || []).map((tier) => [tier.tier, buildTierDraft(tier)])));
-      setUpgradeRows([]);
       setVoucherCampaigns(vouchersResult.campaigns || []);
     } catch (error) {
       pushNotice('error', error instanceof Error ? error.message : 'Failed to load account upgrades.');
     } finally {
       setLoading(false);
     }
-  }, [pushNotice, upgradeSearch, upgradeStatus]);
+  }, [pushNotice]);
 
   React.useEffect(() => {
     void loadData();
@@ -224,21 +206,6 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
       pushNotice('error', error instanceof Error ? error.message : 'Tier config save failed.');
     } finally {
       setSavingTier(null);
-    }
-  };
-
-  const decideUpgrade = async (request: AdminAccountUpgradeRequest, action: 'approve' | 'reject', rejectionMessage?: string) => {
-    setUpgradeBusyId(request.id);
-    try {
-      await adminApi.accountUpgradeDecision(request.id, action, rejectionMessage || undefined);
-      pushNotice('success', action === 'approve' ? 'Upgrade approved.' : 'Upgrade rejected.');
-      setRejectRequest(null);
-      setRejectMessage('');
-      await loadData();
-    } catch (error) {
-      pushNotice('error', error instanceof Error ? error.message : 'Upgrade decision failed.');
-    } finally {
-      setUpgradeBusyId(null);
     }
   };
 
@@ -322,9 +289,7 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
       title="Tier & Vouchers"
       description="Configure account tiers and issue one-time upgrade codes from the same admin shell. Upgrade approvals stay unified under Account Requests."
       actions={(
-        <Button variant="outline" size="sm" onClick={() => void loadData()} disabled={loading}>
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </Button>
+        <AdminRefreshButton loading={loading} onClick={() => void loadData()} />
       )}
       stats={<AdminStatsStrip items={tierStats} />}
       controls={(
@@ -453,94 +418,6 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
       </div>
       )}
 
-      {activeSection === 'requests' && (
-      <div className={`rounded-lg border p-3 ${cardClass}`}>
-        <div className="mb-3 flex flex-wrap items-end gap-2">
-          <div className="space-y-1">
-            <Label>Status</Label>
-            <select
-              value={upgradeStatus}
-              onChange={(event) => setUpgradeStatus(event.target.value as UpgradeStatusFilter)}
-              className="h-9 rounded-md border bg-transparent px-2 text-sm"
-            >
-              <option value="pending">Pending</option>
-              <option value="all">All</option>
-              <option value="approved">Approved</option>
-              <option value="rejected">Rejected</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </div>
-          <div className="min-w-64 flex-1 space-y-1">
-            <Label>Search</Label>
-            <Input value={upgradeSearch} onChange={(event) => setUpgradeSearch(event.target.value)} placeholder="Email, name, reference, receipt" />
-          </div>
-          <Button variant="outline" onClick={() => void loadData()}>Apply</Button>
-        </div>
-        <div className="overflow-x-auto rounded border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>User</TableHead>
-                <TableHead>Tier</TableHead>
-                <TableHead>Payment</TableHead>
-                <TableHead>Quote</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="text-right">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {upgradeRows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="py-6 text-center text-sm text-gray-500">No upgrade requests found.</TableCell>
-                </TableRow>
-              ) : upgradeRows.map((request) => (
-                <TableRow key={request.id}>
-                  <TableCell>
-                    <div className="font-medium">{request.display_name || request.email}</div>
-                    <div className="text-xs text-gray-500">{request.email}</div>
-                  </TableCell>
-                  <TableCell className="uppercase">{request.target_tier.replace('_', ' ')}</TableCell>
-                  <TableCell>
-                    <div>{request.payment_channel || '-'}</div>
-                    <div className="text-xs text-gray-500">{request.reference_no || request.receipt_reference || '-'}</div>
-                  </TableCell>
-                  <TableCell>
-                    <div>{formatMoney(request.quote_price_php_snapshot)}</div>
-                    <div className="text-xs text-gray-500">
-                      Base {formatMoney(request.base_price_php_snapshot)} - credit {formatMoney(request.store_credit_php_snapshot)}
-                    </div>
-                  </TableCell>
-                  <TableCell className="uppercase">{request.status}</TableCell>
-                  <TableCell>{formatDateTime(request.created_at)}</TableCell>
-                  <TableCell className="text-right">
-                    {request.status === 'pending' ? (
-                      <div className="flex justify-end gap-2">
-                        <Button size="sm" onClick={() => void decideUpgrade(request, 'approve')} disabled={upgradeBusyId === request.id}>Approve</Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setRejectRequest(request);
-                            setRejectMessage(request.rejection_message || '');
-                          }}
-                          disabled={upgradeBusyId === request.id}
-                        >
-                          Reject
-                        </Button>
-                      </div>
-                    ) : (
-                      <span className="text-xs text-gray-500">{request.reviewed_at ? formatDateTime(request.reviewed_at) : '-'}</span>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      </div>
-      )}
-
       {activeSection === 'vouchers' && (
       <div className={`rounded-lg border p-3 ${cardClass}`}>
         <h4 className="mb-3 text-sm font-semibold">Voucher Campaigns</h4>
@@ -620,47 +497,6 @@ export function AdminAccountUpgradesTab({ panelClass, cardClass, pushNotice }: A
       </div>
       )}
 
-      <Dialog open={Boolean(rejectRequest)} onOpenChange={(open) => {
-        if (!open) {
-          setRejectRequest(null);
-          setRejectMessage('');
-        }
-      }}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Reject Upgrade Request</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="rounded-lg border bg-gray-50 p-3 text-sm dark:bg-gray-900/40">
-              <div className="font-medium">{rejectRequest?.display_name || rejectRequest?.email || 'User'}</div>
-              <div className="text-xs text-gray-500">{rejectRequest?.email}</div>
-              <div className="mt-1 text-xs uppercase text-gray-500">{rejectRequest?.target_tier?.replace('_', ' ')}</div>
-            </div>
-            <div className="space-y-1">
-              <Label>Rejection Reason</Label>
-              <textarea
-                value={rejectMessage}
-                onChange={(event) => setRejectMessage(event.target.value)}
-                className="min-h-28 w-full rounded-md border bg-transparent px-3 py-2 text-sm"
-                placeholder="Explain what the user needs to fix or resend."
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setRejectRequest(null)}>Cancel</Button>
-              <Button
-                type="button"
-                variant="destructive"
-                disabled={!rejectRequest || upgradeBusyId === rejectRequest.id}
-                onClick={() => {
-                  if (rejectRequest) void decideUpgrade(rejectRequest, 'reject', rejectMessage.trim() || 'Rejected by admin.');
-                }}
-              >
-                {rejectRequest && upgradeBusyId === rejectRequest.id ? 'Rejecting...' : 'Reject Request'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </AdminPageScaffold>
   );
 }

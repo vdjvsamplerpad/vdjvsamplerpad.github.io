@@ -10,7 +10,7 @@ import { adminApi, type AdminAccountRegistrationRequest, type AdminAccountUpgrad
 import type { AdminLegalDocumentState, LegalDocument, LegalDocumentKey, LegalSection } from '@/lib/legal-content';
 import { prepareManagedImageUpload } from '@/lib/image-upload';
 import { uploadManagedStoreAsset } from '@/lib/store-asset-upload';
-import { Check, ChevronDown, ChevronUp, Copy, Download, EyeOff, Loader2, Plus, RefreshCw, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, Download, EyeOff, Loader2, Plus, RotateCcw, Save, Search, Store, Trash2, Upload, X } from 'lucide-react';
 import type { SamplerAppConfig, SamplerShortcutAction } from './samplerAppConfig';
 import type {
   AdminDialogTheme,
@@ -30,8 +30,10 @@ import type {
 } from './AdminAccessDialog.shared';
 import { CatalogCard, Pagination, ProofImagePreview } from './AdminAccessDialog.widgets';
 import {
+  AdminActionCluster,
   AdminControlsBar,
   AdminPageScaffold,
+  AdminRefreshButton,
   AdminReviewDialog,
   AdminStatsStrip,
 } from './AdminAccessDialog.layout';
@@ -766,15 +768,13 @@ export function LandingDownloadTab({
       title="Landing Download"
       description="Manage landing page installer links, version copy, buy-section content, and social links from one admin form."
       actions={(
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || saving}>
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
-          </Button>
-          <Button size="sm" onClick={onSave} disabled={loading || saving}>
+        <>
+          <AdminRefreshButton loading={loading} disabled={saving} onClick={onRefresh} />
+          <Button size="sm" className="rounded-[14px]" onClick={onSave} disabled={loading || saving}>
             {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
             Save Changes
           </Button>
-        </div>
+        </>
       )}
       stats={<AdminStatsStrip items={landingStats} />}
     >
@@ -785,38 +785,6 @@ export function LandingDownloadTab({
             <div className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
               Manage landing downloads, version copy, and footer social links without touching the landing page source.
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || saving}>
-              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
-            </Button>
-            <Button size="sm" onClick={onSave} disabled={loading || saving}>
-              {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
-              Save Changes
-            </Button>
-          </div>
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-2 xl:grid-cols-5">
-          <div className={`rounded-xl border p-3 ${isDark ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
-            <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Versions</div>
-            <div className="mt-1 text-xl font-semibold">{LANDING_VERSION_OPTIONS.length}</div>
-          </div>
-          <div className={`rounded-xl border p-3 ${isDark ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
-            <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>Links Ready</div>
-            <div className="mt-1 text-xl font-semibold">{configuredLinkCount}/{totalPlatformSlots}</div>
-          </div>
-          <div className={`rounded-xl border p-3 ${isDark ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
-            <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Descriptions</div>
-            <div className="mt-1 text-xl font-semibold">{configuredPlatformDescriptionCount}/{totalPlatformSlots}</div>
-          </div>
-          <div className={`rounded-xl border p-3 ${isDark ? 'border-fuchsia-700/60 bg-fuchsia-500/10' : 'border-fuchsia-200 bg-fuchsia-50'}`}>
-            <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-fuchsia-300' : 'text-fuchsia-700'}`}>Social Links</div>
-            <div className="mt-1 text-xl font-semibold">{configuredSocialLinkCount}/{LANDING_SOCIAL_OPTIONS.length}</div>
-          </div>
-          <div className={`rounded-xl border p-3 ${isDark ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
-            <div className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Guidance</div>
-            <div className="mt-1 text-xs font-medium">Keep public links current and version copy short.</div>
           </div>
         </div>
 
@@ -1255,10 +1223,7 @@ export function LegalPagesTab({
       title="Legal Pages"
       description="Edit the public privacy and terms pages with separate draft and published states."
       actions={(
-        <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || Boolean(savingKey) || Boolean(publishingKey)}>
-          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-2" />}
-          Refresh
-        </Button>
+        <AdminRefreshButton loading={loading} disabled={Boolean(savingKey) || Boolean(publishingKey)} onClick={onRefresh} />
       )}
       stats={<AdminStatsStrip items={legalStats} />}
     >
@@ -1270,10 +1235,6 @@ export function LegalPagesTab({
               Controlled admin edits for public legal pages. Drafts are stored separately from published pages.
             </div>
           </div>
-          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || Boolean(savingKey) || Boolean(publishingKey)}>
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-2" />}
-            Refresh
-          </Button>
         </div>
       </div>
       <div className="grid gap-3 xl:grid-cols-2">
@@ -1340,19 +1301,17 @@ export function SamplerDefaultsTab({
       title="Sampler Defaults"
       description="Set first-run defaults for the sampler UI, new banks, new pads, quotas, shortcuts, and upload limits."
       actions={(
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || saving}>
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
-          </Button>
-          <Button size="sm" variant="outline" onClick={onReset} disabled={loading || saving}>
+        <>
+          <AdminRefreshButton loading={loading} disabled={saving} onClick={onRefresh} />
+          <Button size="sm" className="rounded-[14px]" variant="outline" onClick={onReset} disabled={loading || saving}>
             <RotateCcw className="w-3.5 h-3.5 mr-2" />
             Reset
           </Button>
-          <Button size="sm" onClick={onSave} disabled={loading || saving}>
+          <Button size="sm" className="rounded-[14px]" onClick={onSave} disabled={loading || saving}>
             {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
             Save Defaults
           </Button>
-        </div>
+        </>
       )}
       stats={<AdminStatsStrip items={samplerStats} />}
     >
@@ -1363,19 +1322,6 @@ export function SamplerDefaultsTab({
             <div className={`text-sm ${mutedText}`}>
               These values seed first-run app behavior, blank default-bank setup, new pad creation, quota fallbacks, and upload limits.
             </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading || saving}>
-              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
-            </Button>
-            <Button size="sm" variant="outline" onClick={onReset} disabled={loading || saving}>
-              <RotateCcw className="w-3.5 h-3.5 mr-2" />
-              Reset
-            </Button>
-            <Button size="sm" onClick={onSave} disabled={loading || saving}>
-              {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
-              Save Defaults
-            </Button>
           </div>
         </div>
       </div>
@@ -1610,15 +1556,13 @@ export function DefaultBankTab({
       title="Default Bank"
       description="Publish, inspect, and roll back the remote default-bank release used by the app."
       actions={(
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
-          </Button>
-          <Button onClick={onPublish} disabled={publishLoading || !selectedSourceId} className="h-9">
+        <>
+          <AdminRefreshButton loading={loading} onClick={onRefresh} />
+          <Button onClick={onPublish} disabled={publishLoading || !selectedSourceId} className="h-9 rounded-[14px]">
             {publishLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
             Publish New Version
           </Button>
-        </div>
+        </>
       )}
       stats={<AdminStatsStrip items={releaseStats} />}
     >
@@ -1629,9 +1573,6 @@ export function DefaultBankTab({
               <div className="text-sm font-semibold">Publish Default Bank</div>
               <div className="text-xs opacity-70">Next release will be v{nextVersion}</div>
             </div>
-            <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
-              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Refresh'}
-            </Button>
           </div>
 
           <div className="space-y-1">
@@ -1865,41 +1806,30 @@ export function AccountRequestsTab({
   const accountPendingTotal = pendingCount + upgradePendingCount;
   const accountHistoryTotal = historyCount + upgradeHistoryCount;
   const accountRowsLoading = loading || upgradeLoading;
-  const accountStats = [
-    { label: 'Pending Queue', value: accountPendingTotal, detail: 'Legacy + upgrade requests', toneClass: 'text-amber-500' },
-    { label: 'History', value: accountHistoryTotal, detail: 'Reviewed account decisions', toneClass: 'text-blue-500' },
-    { label: 'Visible', value: rows.length + upgradeRows.length, detail: filter === 'pending' ? 'Current pending scope' : 'Current history scope', toneClass: 'text-violet-500' },
-  ];
   return (
     <AdminPageScaffold
       panelClass={panelClass}
       title="Account Requests"
       description="Review legacy account registrations and tier upgrade requests in one approval queue."
-      stats={<AdminStatsStrip items={accountStats} />}
       controls={(
         <AdminControlsBar
           left={(
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
+              <AdminActionCluster>
+                <Button size="sm" className="rounded-[14px]" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
                   Pending ({accountPendingTotal})
                 </Button>
-                <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
+                <Button size="sm" className="rounded-[14px]" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
                   History ({accountHistoryTotal})
                 </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
+                <AdminRefreshButton
+                  loading={accountRowsLoading}
                   onClick={() => {
                     onRefresh();
                     void loadUpgradeRequests();
                   }}
-                  disabled={accountRowsLoading}
-                >
-                  <RefreshCw className={`mr-1 h-3.5 w-3.5 ${accountRowsLoading ? 'animate-spin' : ''}`} />
-                  Refresh
-                </Button>
-              </div>
+                />
+              </AdminActionCluster>
               <RequestFilterBar
                 theme={theme}
                 scope={filter}
@@ -1927,9 +1857,6 @@ export function AccountRequestsTab({
                   className={`h-9 w-full pl-8 text-sm sm:w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
                 />
               </div>
-              <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
-                Filtered: {rows.length + upgradeRows.length}
-              </span>
             </div>
           )}
         />
@@ -2368,33 +2295,24 @@ export function StoreRequestsTab({
 }: StoreRequestsTabProps) {
   const [selectedRequest, setSelectedRequest] = React.useState<StoreRequestGroup | null>(null);
   const [refundRequest, setRefundRequest] = React.useState<StoreRequestGroup | null>(null);
-  const storeRequestStats = [
-    { label: 'Pending Queue', value: pendingCount, detail: 'Awaiting review', toneClass: 'text-amber-500' },
-    { label: 'History', value: historyCount, detail: 'Completed decisions', toneClass: 'text-blue-500' },
-    { label: 'Visible', value: filteredCount, detail: bankFilter === 'all' ? 'All banks' : bankFilter, toneClass: 'text-violet-500' },
-  ];
   return (
     <AdminPageScaffold
       panelClass={panelClass}
       title="Store Requests"
       description="Review bank-store checkout proofs, OCR results, and fulfillment decisions in a single queue."
-      stats={<AdminStatsStrip items={storeRequestStats} />}
       controls={(
         <AdminControlsBar
           left={(
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
+              <AdminActionCluster>
+                <Button size="sm" className="rounded-[14px]" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
                   Pending ({pendingCount})
                 </Button>
-                <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
+                <Button size="sm" className="rounded-[14px]" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
                   History ({historyCount})
                 </Button>
-                <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
-                  <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-                  Refresh
-                </Button>
-              </div>
+                <AdminRefreshButton loading={loading} onClick={onRefresh} />
+              </AdminActionCluster>
               <RequestFilterBar
                 theme={theme}
                 scope={filter}
@@ -2433,9 +2351,6 @@ export function StoreRequestsTab({
                     <option key={`store-request-bank-${bankName}`} value={bankName}>{bankName}</option>
                   ))}
                 </select>
-                <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
-                  Filtered: {filteredCount}
-                </span>
               </div>
             </div>
           )}
@@ -2812,34 +2727,24 @@ export function InstallerRequestsTab({
       setActionKey('');
     }
   }, [loadRequests, pushNotice]);
-  const installerRequestStats = [
-    { label: 'Pending Queue', value: pendingCount, detail: 'Buyer approvals waiting', toneClass: 'text-amber-500' },
-    { label: 'History', value: historyCount, detail: 'Reviewed installer requests', toneClass: 'text-blue-500' },
-    { label: 'Visible', value: filteredCount, detail: installerItemFilter === 'all' ? 'All versions / SKUs' : 'Filtered by installer item', toneClass: 'text-violet-500' },
-  ];
-
   return (
     <AdminPageScaffold
       panelClass={panelClass}
       title="Installer Requests"
       description="Review V2 and V3 installer purchase proofs, OCR results, and license fulfillment decisions in one queue."
-      stats={<AdminStatsStrip items={installerRequestStats} />}
       controls={(
         <AdminControlsBar
           left={(
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => setFilter('pending')}>
+              <AdminActionCluster>
+                <Button size="sm" className="rounded-[14px]" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => setFilter('pending')}>
                   Pending ({pendingCount})
                 </Button>
-                <Button size="sm" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => setFilter('history')}>
+                <Button size="sm" className="rounded-[14px]" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => setFilter('history')}>
                   History ({historyCount})
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => void loadRequests()} disabled={loading}>
-                  <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-                  Refresh
-                </Button>
-              </div>
+                <AdminRefreshButton loading={loading} onClick={() => void loadRequests()} />
+              </AdminActionCluster>
               <RequestFilterBar
                 theme={theme}
                 scope={filter}
@@ -2877,9 +2782,6 @@ export function InstallerRequestsTab({
                     <option key={`installer-filter-${option.value}`} value={option.value}>{option.label}</option>
                   ))}
                 </select>
-                <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${theme === 'dark' ? 'border-indigo-700/60 bg-indigo-500/10 text-indigo-200' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
-                  Filtered: {filteredCount}
-                </span>
               </div>
             </div>
           )}
@@ -3266,16 +3168,13 @@ export function CrashReportsTab({
       title="Client Crash Reports"
       description="Review crash submissions with the same queue-first admin surface used by the request flows."
       actions={(
-        <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
-          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
-          Refresh
-        </Button>
+        <AdminRefreshButton loading={loading} onClick={onRefresh} />
       )}
       stats={(
         <AdminStatsStrip
           items={[
             { label: 'New', value: newCount, detail: 'Needs review', toneClass: 'text-amber-500' },
-            { label: 'Visible', value: rows.length, detail: `${totalCount} total`, toneClass: 'text-blue-500' },
+            { label: 'Total Reports', value: totalCount, detail: 'Current filter scope', toneClass: 'text-blue-500' },
             { label: 'Playback', value: visiblePlaybackCount, detail: `${visibleStoreCount} bank store`, toneClass: 'text-fuchsia-500' },
             { label: 'Fixed', value: visibleFixedCount, detail: 'Within current filters', toneClass: 'text-emerald-500' },
           ]}
@@ -3285,17 +3184,7 @@ export function CrashReportsTab({
       <div className={`rounded-lg border p-3 space-y-3 ${cardClass}`}>
         <div className="flex flex-wrap items-center gap-2">
           <div className="text-sm font-semibold">Client Crash Reports</div>
-          <span className={`px-2 py-0.5 rounded border text-[11px] ${theme === 'dark' ? 'border-amber-700/60 text-amber-300' : 'border-amber-300 text-amber-700'}`}>
-            New {newCount}
-          </span>
-          <span className={`px-2 py-0.5 rounded border text-[11px] ${theme === 'dark' ? 'border-gray-700 text-gray-300' : 'border-gray-300 text-gray-700'}`}>
-            Total {totalCount}
-          </span>
           <div className="flex-1" />
-          <Button size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
-            Refresh
-          </Button>
         </div>
 
         <div className="grid grid-cols-1 gap-2 lg:grid-cols-5">
@@ -5395,7 +5284,7 @@ export function StoreConfigTab({
       panelClass={`${panelClass} overflow-visible lg:h-full lg:min-h-0 lg:overflow-auto`}
       title="Payment and Store Controls"
       description="Configure checkout instructions, payment channels, QR support, automation, and decision emails from one place."
-      actions={<Button onClick={onSave} disabled={loading} className="w-full sm:w-auto sm:min-w-[220px]">Save Pay Config</Button>}
+      actions={<Button onClick={onSave} disabled={loading} className="w-full rounded-[14px] sm:w-auto sm:min-w-[220px]">Save Pay Config</Button>}
       stats={(
         <AdminStatsStrip
           items={[
@@ -5416,26 +5305,6 @@ export function StoreConfigTab({
                 <div className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
                   Configure checkout instructions, payment channels, QR support, automation, and email outcomes from one place.
                 </div>
-              </div>
-              <Button onClick={onSave} disabled={loading} className="w-full sm:w-auto sm:min-w-[220px]">Save Pay Config</Button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/40' : 'border-gray-200 bg-gray-50'}`}>
-                <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Account Price</div>
-                <div className="mt-1 text-xl font-semibold">{storeConfig.account_price_php || '0'}</div>
-              </div>
-              <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-blue-700/60 bg-blue-500/10' : 'border-blue-200 bg-blue-50'}`}>
-                <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-blue-300' : 'text-blue-700'}`}>Banner Delay</div>
-                <div className="mt-1 text-xl font-semibold">{storeConfig.banner_rotation_ms || '5000'} ms</div>
-              </div>
-              <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-emerald-700/60 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50'}`}>
-                <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-emerald-300' : 'text-emerald-700'}`}>Automation</div>
-                <div className="mt-1 text-xl font-semibold">{runningAutomationCount}/4</div>
-              </div>
-              <div className={`rounded-xl border p-3 ${theme === 'dark' ? 'border-amber-700/60 bg-amber-500/10' : 'border-amber-200 bg-amber-50'}`}>
-                <div className={`text-[11px] uppercase tracking-wide ${theme === 'dark' ? 'text-amber-300' : 'text-amber-700'}`}>Checkout Support</div>
-                <div className="mt-1 text-xs font-medium">{hasQrImage ? 'QR ready' : 'No QR uploaded'}{hasMessengerConfig ? ' | Messenger ready' : ''}</div>
               </div>
             </div>
           </div>
@@ -5578,9 +5447,6 @@ export function StoreConfigTab({
             </div>
           </div>
 
-          <div className="flex justify-end">
-            <Button onClick={onSave} disabled={loading} className="w-full sm:w-auto sm:min-w-[220px]">Save Pay Config</Button>
-          </div>
         </div>
       )}
 

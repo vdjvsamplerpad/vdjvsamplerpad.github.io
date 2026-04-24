@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { RefreshCw } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -23,6 +24,20 @@ type AdminStatsStripItem = {
 type AdminControlsBarProps = {
   left?: React.ReactNode;
   right?: React.ReactNode;
+};
+
+type AdminActionClusterProps = {
+  children: React.ReactNode;
+  className?: string;
+};
+
+type AdminRefreshButtonProps = {
+  loading?: boolean;
+  disabled?: boolean;
+  label?: string;
+  size?: 'sm' | 'default' | 'lg' | 'icon';
+  className?: string;
+  onClick: () => void;
 };
 
 type AdminSectionTabsProps<T extends string> = {
@@ -64,7 +79,7 @@ export function AdminPageScaffold({
             <div className="text-lg font-black tracking-tight md:text-[1.35rem]">{title}</div>
             {description ? <div className="max-w-3xl text-sm leading-relaxed opacity-75">{description}</div> : null}
           </div>
-          {actions ? <div className="flex flex-wrap gap-2 rounded-full border border-white/10 bg-white/55 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] dark:bg-white/[0.04] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">{actions}</div> : null}
+          {actions ? <AdminActionCluster>{actions}</AdminActionCluster> : null}
         </div>
         {stats}
         {controls}
@@ -95,6 +110,37 @@ export function AdminStatsStrip({ items }: { items: AdminStatsStripItem[] }) {
   );
 }
 
+export function AdminActionCluster({ children, className }: AdminActionClusterProps) {
+  return (
+    <div className={`inline-flex flex-wrap items-center gap-2 rounded-[18px] border border-white/12 bg-white/55 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] dark:bg-white/[0.04] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] ${className || ''}`}>
+      {children}
+    </div>
+  );
+}
+
+export function AdminRefreshButton({
+  loading = false,
+  disabled = false,
+  label = 'Refresh',
+  size = 'sm',
+  className,
+  onClick,
+}: AdminRefreshButtonProps) {
+  return (
+    <Button
+      type="button"
+      size={size}
+      variant="outline"
+      onClick={onClick}
+      disabled={disabled || loading}
+      className={`rounded-[14px] px-3 ${className || ''}`}
+    >
+      <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+      {label}
+    </Button>
+  );
+}
+
 export function AdminControlsBar({ left, right }: AdminControlsBarProps) {
   if (!left && !right) return null;
   return (
@@ -113,20 +159,20 @@ export function AdminSectionTabs<T extends string>({
   onChange,
 }: AdminSectionTabsProps<T>) {
   return (
-    <div className="inline-flex flex-wrap gap-2 rounded-full border border-white/15 bg-white/45 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] dark:bg-white/[0.04] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+    <AdminActionCluster>
       {sections.map((section) => (
         <Button
           key={section.key}
           type="button"
           size="sm"
           variant={active === section.key ? 'default' : 'outline'}
-          className={active === section.key ? 'shadow-sm' : 'border-transparent bg-transparent'}
+          className={active === section.key ? 'rounded-[14px] shadow-sm' : 'rounded-[14px] border-transparent bg-transparent'}
           onClick={() => onChange(section.key)}
         >
           {section.label}
         </Button>
       ))}
-    </div>
+    </AdminActionCluster>
   );
 }
 
