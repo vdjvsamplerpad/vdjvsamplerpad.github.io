@@ -66,6 +66,15 @@ const RESET_CODE_MAX_ATTEMPTS = 5
 const RESET_CODE_LOCKOUT_MINUTES = 10
 const RESET_CODE_LOCKOUT_MS = RESET_CODE_LOCKOUT_MINUTES * 60 * 1000
 
+const GoogleMark = ({ className = 'h-5 w-5' }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+    <path fill="#FBBC05" d="M5.84 14.1c-.22-.66-.35-1.36-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.84z" />
+    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06L5.84 9.9C6.71 7.31 9.14 5.38 12 5.38z" />
+  </svg>
+)
+
 function getResetVerifyAttemptKey(email: string): string {
   return `password_reset_verify_${email.trim().toLowerCase()}`
 }
@@ -280,22 +289,22 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       : 'border-slate-200 bg-[#f6f7f2] text-slate-950',
   ].join(' ')
   const authShellClass = [
-    'relative min-h-[100dvh] overflow-y-auto px-7 pb-8 pt-7 sm:min-h-0 sm:px-10 sm:pb-10 sm:pt-8',
+    'relative flex min-h-[100dvh] flex-col overflow-y-auto px-7 pb-8 pt-7 sm:block sm:min-h-0 sm:px-10 sm:pb-10 sm:pt-8',
     isDark
-      ? 'bg-[radial-gradient(circle_at_50%_-20%,rgba(185,255,18,0.10),transparent_34%),linear-gradient(180deg,#151719_0%,#101113_58%,#0b0c0d_100%)]'
-      : 'bg-[radial-gradient(circle_at_50%_-20%,rgba(185,255,18,0.22),transparent_35%),linear-gradient(180deg,#fffffb_0%,#f3f4ed_100%)]',
+      ? 'bg-[radial-gradient(circle_at_50%_-18%,rgba(239,68,68,0.28),transparent_36%),radial-gradient(circle_at_12%_18%,rgba(185,28,28,0.22),transparent_34%),linear-gradient(180deg,#171010_0%,#101113_58%,#090909_100%)]'
+      : 'bg-[radial-gradient(circle_at_50%_-18%,rgba(239,68,68,0.20),transparent_38%),radial-gradient(circle_at_12%_18%,rgba(220,38,38,0.16),transparent_34%),linear-gradient(180deg,#fff7f5_0%,#f7f1ee_100%)]',
   ].join(' ')
   const authInputClass = [
-    'h-[54px] rounded-[14px] border px-4 text-[15px] font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition focus-visible:ring-2 focus-visible:ring-[#b9ff12]/40',
+    'h-[54px] rounded-[14px] border px-4 text-[15px] font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition focus-visible:ring-2 focus-visible:ring-red-500/35',
     isDark
       ? 'border-white/15 bg-white/[0.025] text-white placeholder:text-white/50 hover:border-white/25'
       : 'border-slate-950/15 bg-white/80 text-slate-950 placeholder:text-slate-500 hover:border-slate-950/25',
   ].join(' ')
   const authPrimaryButtonClass = [
-    'h-[54px] rounded-[14px] text-[15px] font-black shadow-[0_18px_42px_rgba(185,255,18,0.14)] transition active:scale-[0.99]',
+    'h-[54px] rounded-[14px] text-[15px] font-black shadow-[0_18px_42px_rgba(239,68,68,0.18)] transition active:scale-[0.99]',
     isDark
-      ? 'bg-[#202329] text-white hover:bg-[#2a2d34]'
-      : 'bg-slate-950 text-white hover:bg-slate-800',
+      ? 'bg-gradient-to-b from-[#2a2020] to-[#1f2329] text-white hover:from-[#3a2020] hover:to-[#292d34]'
+      : 'bg-gradient-to-b from-slate-950 to-red-950 text-white hover:from-slate-900 hover:to-red-900',
   ].join(' ')
   const authGhostButtonClass = [
     'h-[54px] rounded-[14px] border text-[15px] font-black transition',
@@ -304,7 +313,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       : 'border-slate-950/15 bg-white/70 text-slate-950 hover:bg-white',
   ].join(' ')
   const authMutedTextClass = isDark ? 'text-white/60' : 'text-slate-500'
-  const authLinkClass = isDark ? 'text-white underline decoration-white/40 underline-offset-4 hover:text-[#b9ff12]' : 'text-slate-950 underline decoration-slate-500/50 underline-offset-4 hover:text-slate-700'
+  const authLinkClass = isDark ? 'text-white underline decoration-white/40 underline-offset-4 hover:text-red-300' : 'text-slate-950 underline decoration-slate-500/50 underline-offset-4 hover:text-red-700'
   const isSignInSyncing = authTransition.status === 'signing_in'
   const isSignInBusy = loading || googleLoading || awaitingSignInSync || isSignInSyncing
   const isLoginSubmitting = mode === 'signin' && isSignInBusy
@@ -1087,6 +1096,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   )
 
   const showBackButton = mode === 'buy' || mode === 'forgot' || mode === 'reset'
+  const centerAuthContentOnMobile = mode === 'signin' || (mode === 'buy' && buyStep === 'account' && !buyReceipt)
 
   const handleAuthBack = () => {
     if (mode === 'buy') {
@@ -1187,9 +1197,11 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
             <X className="h-4 w-4" />
           </button>
 
-          <DialogHeader className="mx-auto max-w-md items-center space-y-0 pt-1 text-center">
-            <div className="mb-5 flex h-9 w-9 items-center justify-center rounded-[10px] bg-[#b9ff12] text-[18px] font-black text-slate-950 shadow-[0_0_38px_rgba(185,255,18,0.34)]">
-              V
+          <DialogHeader className={`mx-auto max-w-md items-center space-y-0 pt-1 text-center ${centerAuthContentOnMobile ? 'max-sm:mt-auto' : ''}`}>
+            <div className={`mb-5 flex h-14 w-14 items-center justify-center rounded-[16px] border shadow-[0_0_46px_rgba(239,68,68,0.36)] ${
+              isDark ? 'border-red-300/20 bg-black/20' : 'border-red-500/20 bg-white/70'
+            }`}>
+              <img src="/assets/logo.png" alt="VDJV" className="h-12 w-12 object-contain drop-shadow-[0_10px_22px_rgba(0,0,0,0.40)]" />
             </div>
             <DialogTitle className={`text-center text-[28px] font-black leading-tight tracking-[-0.04em] sm:text-[30px] ${colorText}`}>
               <Title />
@@ -1416,7 +1428,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               id="signin-form"
               data-testid="signin-form"
               onSubmit={handleSignIn}
-              className="relative mx-auto mt-10 max-w-sm space-y-4 sm:mt-9"
+              className="relative mx-auto mt-8 max-w-sm space-y-4 sm:mt-9 max-sm:mb-auto"
             >
               <Button
                 type="button"
@@ -1425,9 +1437,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 onClick={handleGoogleSignIn}
                 disabled={isSignInBusy}
               >
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-sm font-black text-[#4285f4] shadow-sm">
-                  G
-                </span>
+                <GoogleMark />
                 {googleLoading ? 'Opening Google...' : 'Continue with Google'}
               </Button>
 
@@ -1557,7 +1567,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         )}
 
         {mode === 'buy' && (
-          <div className={buyStep === 'account' ? 'mx-auto mt-10 max-w-sm space-y-4 sm:mt-9' : 'mt-6 space-y-4 max-h-[68vh] overflow-y-auto pr-1'}>
+          <div className={buyStep === 'account' ? 'mx-auto mt-8 max-w-sm space-y-4 sm:mt-9 max-sm:mb-auto' : 'mt-6 space-y-4 max-h-[68vh] overflow-y-auto pr-1'}>
             {buyReceipt ? (
               <PaymentReceiptCard
                 theme={theme}
@@ -1601,7 +1611,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                           <button
                             type="button"
                             onClick={() => window.open(paymentConfig.messenger_url, '_blank', 'noopener,noreferrer')}
-                            className={`font-black underline underline-offset-4 ${isDark ? 'text-white hover:text-[#b9ff12]' : 'text-cyan-950 hover:text-cyan-700'}`}
+                            className={`font-black underline underline-offset-4 ${isDark ? 'text-white hover:text-red-300' : 'text-cyan-950 hover:text-cyan-700'}`}
                           >
                             Message us on Facebook
                           </button>
