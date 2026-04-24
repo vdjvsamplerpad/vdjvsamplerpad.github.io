@@ -50,12 +50,81 @@ type PaymentConfig = {
   qr_image_path?: string;
 };
 
+type CachedUpgradeOptions = {
+  version: 1;
+  userId: string;
+  tiers: UpgradeTierOption[];
+  paymentConfig: PaymentConfig | null;
+  fetchedAt: number;
+};
+
 interface AccountUpgradeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   theme: 'light' | 'dark';
   pushNotice?: (notice: { variant: 'success' | 'error' | 'info'; message: string }) => void;
 }
+
+const UPGRADE_OPTIONS_CACHE_VERSION = 1;
+const UPGRADE_OPTIONS_CACHE_PREFIX = 'vdjv-account-upgrade-options-v1';
+const UPGRADE_OPTIONS_REVALIDATE_MS = 5 * 60 * 1000;
+
+const getUpgradeOptionsCacheKey = (userId: string): string => `${UPGRADE_OPTIONS_CACHE_PREFIX}:${userId}`;
+
+const readCachedUpgradeOptions = (userId: string | null | undefined): CachedUpgradeOptions | null => {
+  if (!userId || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(getUpgradeOptionsCacheKey(userId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CachedUpgradeOptions>;
+    if (parsed.version !== UPGRADE_OPTIONS_CACHE_VERSION) return null;
+    if (parsed.userId !== userId || !Array.isArray(parsed.tiers) || !Number.isFinite(parsed.fetchedAt)) return null;
+    return {
+      version: UPGRADE_OPTIONS_CACHE_VERSION,
+      userId,
+      tiers: parsed.tiers as UpgradeTierOption[],
+      paymentConfig: (parsed.paymentConfig || null) as PaymentConfig | null,
+      fetchedAt: Number(parsed.fetchedAt),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeCachedUpgradeOptions = (userId: string | null | undefined, tiers: UpgradeTierOption[], paymentConfig: PaymentConfig | null): number => {
+  const fetchedAt = Date.now();
+  if (!userId || typeof window === 'undefined') return fetchedAt;
+  try {
+    const payload: CachedUpgradeOptions = {
+      version: UPGRADE_OPTIONS_CACHE_VERSION,
+      userId,
+      tiers,
+      paymentConfig,
+      fetchedAt,
+    };
+    window.localStorage.setItem(getUpgradeOptionsCacheKey(userId), JSON.stringify(payload));
+  } catch {
+    // Cache is a speed/offline optimization only. Submission remains server-authoritative.
+  }
+  return fetchedAt;
+};
+
+const isUpgradeOptionsCacheFresh = (cached: CachedUpgradeOptions | null): boolean =>
+  Boolean(cached && Date.now() - cached.fetchedAt < UPGRADE_OPTIONS_REVALIDATE_MS);
+
+const formatCacheTimestamp = (value: number | null): string => {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(value));
+  } catch {
+    return new Date(value).toLocaleString();
+  }
+};
 
 const formatPhp = (value: number): string =>
   new Intl.NumberFormat('en-PH', {
@@ -118,9 +187,14 @@ const getBeforePromoPrice = (price: number, discountPercent: number): number => 
 };
 
 export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: AccountUpgradeDialogProps) {
-  const { profile, capabilities } = useAuthState();
+  const { user, profile, capabilities } = useAuthState();
   const { refreshAccountCapabilities } = useAuthActions();
   const [loading, setLoading] = React.useState(false);
+  const [refreshingOptions, setRefreshingOptions] = React.useState(false);
+  const [usingCachedOptions, setUsingCachedOptions] = React.useState(false);
+  const [optionsFetchedAt, setOptionsFetchedAt] = React.useState<number | null>(null);
+  const [optionsLoadMessage, setOptionsLoadMessage] = React.useState<string | null>(null);
+  const [online, setOnline] = React.useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   const [submitting, setSubmitting] = React.useState(false);
   const [step, setStep] = React.useState<DialogStep>('plans');
   const [tiers, setTiers] = React.useState<UpgradeTierOption[]>([]);
@@ -137,7 +211,23 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
   const planRailRef = React.useRef<HTMLDivElement | null>(null);
   const planRailScrollSyncRef = React.useRef<number | null>(null);
+  const selectedTierRef = React.useRef<TargetTier>(selectedTier);
   const isDark = theme === 'dark';
+
+  React.useEffect(() => {
+    selectedTierRef.current = selectedTier;
+  }, [selectedTier]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const updateOnline = () => setOnline(navigator.onLine);
+    window.addEventListener('online', updateOnline);
+    window.addEventListener('offline', updateOnline);
+    return () => {
+      window.removeEventListener('online', updateOnline);
+      window.removeEventListener('offline', updateOnline);
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!proofFile) {
@@ -158,9 +248,55 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   React.useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setLoading(true);
+    const userId = user?.id || profile?.id || null;
+    const cached = readCachedUpgradeOptions(userId);
+    const hasCachedOptions = Boolean(cached?.tiers?.length);
+    const applyOptions = (
+      nextTiers: UpgradeTierOption[],
+      nextPaymentConfig: PaymentConfig | null,
+      fetchedAt: number | null,
+      fromCache: boolean,
+    ) => {
+      if (cancelled) return;
+      setTiers(nextTiers);
+      setPaymentConfig(nextPaymentConfig);
+      setOptionsFetchedAt(fetchedAt);
+      setUsingCachedOptions(fromCache);
+      const firstAvailable = nextTiers.find((tier) => tier.available)?.tier || 'pro';
+      const currentSelection = selectedTierRef.current;
+      const nextSelected = nextTiers.some((tier) => tier.tier === currentSelection) ? currentSelection : firstAvailable;
+      selectedTierRef.current = nextSelected;
+      setSelectedTier(nextSelected);
+      setMobilePlanIndex(Math.max(0, nextTiers.findIndex((tier) => tier.tier === nextSelected) + 1));
+    };
+
+    setLoading(!hasCachedOptions);
+    setRefreshingOptions(false);
+    setOptionsLoadMessage(null);
     setStep('plans');
     setSuccessMessage(null);
+
+    if (cached?.tiers?.length) {
+      applyOptions(cached.tiers, cached.paymentConfig, cached.fetchedAt, true);
+      if (isUpgradeOptionsCacheFresh(cached)) {
+        setLoading(false);
+        return () => {
+          cancelled = true;
+        };
+      }
+    }
+
+    if (!online) {
+      setLoading(false);
+      setOptionsLoadMessage(hasCachedOptions
+        ? 'Showing cached upgrade pricing. Reconnect to refresh or submit.'
+        : 'Reconnect to load upgrade pricing.');
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setRefreshingOptions(hasCachedOptions);
     void (async () => {
       try {
         const { data } = await supabase.auth.getSession();
@@ -182,23 +318,31 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
         const paymentData = paymentPayload?.data && typeof paymentPayload.data === 'object' ? paymentPayload.data : paymentPayload;
         const nextTiers = Array.isArray(optionsData?.tiers) ? optionsData.tiers as UpgradeTierOption[] : [];
         if (cancelled) return;
-        setTiers(nextTiers);
-        setPaymentConfig((paymentData?.config || null) as PaymentConfig | null);
-        const firstAvailable = nextTiers.find((tier) => tier.available)?.tier || 'pro';
-        setSelectedTier(firstAvailable);
-        setMobilePlanIndex(Math.max(0, nextTiers.findIndex((tier) => tier.tier === firstAvailable) + 1));
+        const nextPaymentConfig = (paymentData?.config || null) as PaymentConfig | null;
+        const fetchedAt = writeCachedUpgradeOptions(userId, nextTiers, nextPaymentConfig);
+        applyOptions(nextTiers, nextPaymentConfig, fetchedAt, false);
+        setOptionsLoadMessage(null);
       } catch (error) {
         if (!cancelled) {
-          pushNotice?.({ variant: 'error', message: error instanceof Error ? error.message : 'Could not load upgrade options.' });
+          const message = error instanceof Error ? error.message : 'Could not load upgrade options.';
+          setOptionsLoadMessage(hasCachedOptions
+            ? `Showing cached upgrade pricing. Latest refresh failed: ${message}`
+            : message);
+          if (!hasCachedOptions) {
+            pushNotice?.({ variant: 'error', message });
+          }
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setRefreshingOptions(false);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [open, pushNotice]);
+  }, [online, open, profile?.id, pushNotice, user?.id]);
 
   const selected = tiers.find((tier) => tier.tier === selectedTier) || tiers[0] || null;
   const selectedIsProMax = selected?.tier === 'pro_max';
@@ -210,6 +354,11 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   const heroPromoPercent = tiers.length
     ? Math.max(...tiers.map((tier) => getPromoDiscountPercent(tier)))
     : DEFAULT_PROMO_DISCOUNT_PERCENT;
+  const optionsStatusLabel = refreshingOptions
+    ? 'Refreshing latest pricing...'
+    : optionsFetchedAt
+      ? `${usingCachedOptions ? 'Cached pricing' : 'Updated pricing'} ${formatCacheTimestamp(optionsFetchedAt)}`
+      : '';
   const currentTierLabel = capabilities.effectiveTier === 'pro_max' ? 'PRO MAX' : capabilities.effectiveTier.toUpperCase();
   const freeDailyPlaysLabel = typeof capabilities.limits.defaultBankDailyPlays === 'number'
     ? String(capabilities.limits.defaultBankDailyPlays)
@@ -233,6 +382,10 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
 
   const submitUpgrade = React.useCallback(async () => {
     if (!selected || !selected.available || submitting) return;
+    if (!online) {
+      pushNotice?.({ variant: 'error', message: 'Reconnect before submitting an upgrade request. Cached pricing is only a preview.' });
+      return;
+    }
     if (quotePrice > 0 && paymentChannel === 'image_proof') {
       const proofError = validateProofFile(proofFile);
       if (proofError) {
@@ -316,7 +469,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     } finally {
       setSubmitting(false);
     }
-  }, [notes, payerName, paymentChannel, proofFile, pushNotice, quotePrice, refreshAccountCapabilities, referenceNo, selected, submitting]);
+  }, [notes, online, payerName, paymentChannel, proofFile, pushNotice, quotePrice, refreshAccountCapabilities, referenceNo, selected, submitting]);
 
   const selectPlan = React.useCallback((tier: UpgradeTierOption) => {
     setSelectedTier(tier.tier);
@@ -743,7 +896,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
             ? `text-3xl font-black tracking-tight sm:text-5xl ${planTitleClass}`
             : 'text-2xl font-black tracking-tight sm:text-3xl'}
           >
-            {step === 'plans' ? 'PICK YOUR PLAN' : `Request ${selected ? tierLabel(selected.tier) : 'upgrade'}`}
+            {step === 'plans' ? 'UPGRADE PRICING' : `Request ${selected ? tierLabel(selected.tier) : 'upgrade'}`}
           </DialogTitle>
           <DialogDescription className={step === 'plans' ? planDescriptionClass : undefined}>
             {step === 'plans'
@@ -760,7 +913,19 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
             <div className={`hidden items-center justify-center gap-3 text-xs font-black uppercase tracking-wide md:flex ${planMetaClass}`}>
               <span className="rounded-[8px] bg-[#f21984] px-3 py-1.5 text-white shadow-[0_0_28px_rgba(242,25,132,0.34)]">{heroPromoPercent}% off</span>
               <span>One-time upgrade pricing</span>
+              {optionsStatusLabel ? <span>{optionsStatusLabel}</span> : null}
             </div>
+            {(optionsLoadMessage || usingCachedOptions || refreshingOptions) && (
+              <div className={`mx-auto max-w-3xl rounded-2xl border px-4 py-3 text-xs leading-relaxed ${
+                optionsLoadMessage
+                  ? isDark ? 'border-amber-400/35 bg-amber-400/10 text-amber-100' : 'border-amber-300 bg-amber-50 text-amber-800'
+                  : isDark ? 'border-white/10 bg-white/[0.04] text-white/62' : 'border-slate-950/10 bg-white/82 text-slate-600'
+              }`}>
+                {optionsLoadMessage || (refreshingOptions
+                  ? 'Showing cached pricing while checking for the latest admin updates.'
+                  : 'Showing cached pricing for faster loading. Submit still confirms the latest server quote.')}
+              </div>
+            )}
 
             <div className={`relative -mx-4 rounded-[1.6rem] border py-4 md:mx-0 md:border-0 md:bg-transparent md:px-0 md:shadow-none ${planRailShellClass}`}>
               <div className="mb-3 flex items-center justify-center gap-2 text-xs">
@@ -838,6 +1003,18 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
                 </div>
               </div>
             </div>
+
+            {(usingCachedOptions || !online || optionsLoadMessage) && (
+              <div className={`rounded-[14px] border px-4 py-3 text-sm ${
+                !online
+                  ? isDark ? 'border-amber-400/35 bg-amber-400/10 text-amber-100' : 'border-amber-300 bg-amber-50 text-amber-800'
+                  : isDark ? 'border-white/10 bg-white/[0.045] text-white/68' : 'border-slate-950/10 bg-slate-50 text-slate-600'
+              }`}>
+                {!online
+                  ? 'You can view cached pricing offline, but reconnect before submitting an upgrade request.'
+                  : 'This request will use the latest server quote when submitted, even if the plan view loaded from cache.'}
+              </div>
+            )}
 
             {quotePrice > 0 ? (
               <>
@@ -1004,7 +1181,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back to Plans
               </Button>
-              <Button type="button" onClick={() => void submitUpgrade()} disabled={submitting || !selected.available} className={`flex-1 ${requestSubmitButtonClass}`}>
+              <Button type="button" onClick={() => void submitUpgrade()} disabled={submitting || !selected.available || !online} className={`flex-1 ${requestSubmitButtonClass}`}>
                 {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : quotePrice > 0 ? <Upload className="mr-2 h-4 w-4" /> : <ArrowRight className="mr-2 h-4 w-4" />}
                 {submitting ? 'Submitting...' : quotePrice > 0 ? 'Submit Upgrade Request' : 'Apply Upgrade'}
               </Button>
