@@ -995,7 +995,7 @@ export function BankEditDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className={`grid h-[100dvh] max-h-[100dvh] w-[calc(100vw-1rem)] grid-rows-[auto_1fr] overflow-hidden backdrop-blur-md sm:h-auto sm:max-h-[80vh] sm:w-full sm:max-w-md ${theme === 'dark' ? 'bg-gray-800/90' : 'bg-white/90'
+        <DialogContent className={`grid h-[100dvh] max-h-[100dvh] w-[calc(100vw-1rem)] grid-rows-[auto_1fr] overflow-hidden sm:h-auto sm:max-h-[80vh] sm:w-full sm:max-w-md ${theme === 'dark' ? 'bg-gray-900' : 'bg-white'
           }`} aria-describedby={undefined} onOpenAutoFocus={(event) => event.preventDefault()}>
           <DialogHeader>
             <DialogTitle>Edit Bank</DialogTitle>

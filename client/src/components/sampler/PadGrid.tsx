@@ -4,11 +4,12 @@ import { PadData, SamplerBank, StopMode } from './types/sampler';
 import { buildPadSearchAnchorId } from './samplerSearch';
 import { parsePadDragTransferPayload } from './padDragTransfer';
 import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
+import { Upload } from 'lucide-react';
 
 const EMPTY_BANKS: SamplerBank[] = [];
 const EMPTY_PADS: PadData[] = [];
 
-const normalizeSearchHitColor = (value: string | undefined, fallback = '#ef174f'): string => {
+const normalizeSearchHitColor = (value: string | undefined, fallback = '#22d3ee'): string => {
   if (!value) return fallback;
   const trimmed = value.trim();
   const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;
@@ -209,6 +210,12 @@ export const PadGrid = React.memo(function PadGrid({
     if (onFileUpload) {
       fileInputRef.current?.click();
     }
+  };
+
+  const handleUploadTileClick = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (channelLoadArmed || !onFileUpload) return;
+    fileInputRef.current?.click();
   };
 
   const handlePadDragStartFromPad = (e: React.DragEvent, pad: PadData, sourceBankId: string, index: number) => {
@@ -446,6 +453,36 @@ export const PadGrid = React.memo(function PadGrid({
           />
         </div>
       ))}
+      {onFileUpload && (
+        <button
+          type="button"
+          className={`relative min-w-0 max-w-full ${aspectRatio} rounded-xl border-2 border-dashed transition-colors ${
+            theme === 'dark'
+              ? 'border-slate-600 bg-slate-900 text-slate-200 hover:border-red-400 hover:bg-slate-800'
+              : 'border-slate-300 bg-white text-slate-700 hover:border-red-400 hover:bg-red-50'
+          } ${channelLoadArmed ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'}`}
+          onClick={handleUploadTileClick}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          disabled={channelLoadArmed}
+          aria-label={`Upload audio to ${bankName || 'current bank'}`}
+        >
+          <span className="flex h-full w-full flex-col items-center justify-center gap-2 p-2 text-center">
+            <span className={`flex h-10 w-10 items-center justify-center rounded-full border ${
+              theme === 'dark'
+                ? 'border-red-400/50 bg-red-500/12 text-red-100'
+                : 'border-red-200 bg-red-50 text-red-600'
+            }`}>
+              <Upload className="h-5 w-5" />
+            </span>
+            <span className="text-xs font-bold uppercase tracking-wide">Add Pad</span>
+            {!isMobile && supportsDesktopDragDrop ? (
+              <span className="text-[10px] opacity-70">Drop audio here</span>
+            ) : null}
+          </span>
+        </button>
+      )}
     </div>
   );
 }

@@ -438,7 +438,8 @@ export function SideMenu({
   const accountIdentityLabel = effectiveUser ? `${accountTierLabel} - ${displayName}` : 'GUEST';
   const isLowestGraphics = graphicsTier === 'lowest';
   const panelClass = cn(
-    'vdjv-surface fixed inset-y-0 left-0 z-50 flex h-[100dvh] w-64 flex-col border-r transition-transform duration-200 will-change-transform',
+    'fixed inset-y-0 left-0 z-50 flex h-[100dvh] w-64 flex-col border-r transition-transform duration-200 will-change-transform',
+    theme === 'dark' ? 'border-slate-800 bg-slate-950 text-slate-100' : 'border-slate-200 bg-white text-slate-900',
     open ? 'translate-x-0' : '-translate-x-full',
     !isLowestGraphics && 'perf-high:shadow-2xl',
   );

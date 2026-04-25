@@ -158,6 +158,12 @@
 @layer components {
   .vdjv-app-bg {
     background:
+      radial-gradient(circle at 12% 0%, hsl(var(--vdjv-brand) / 0.08), transparent 24rem),
+      linear-gradient(180deg, hsl(var(--background)), hsl(var(--vdjv-panel-strong)));
+  }
+
+  .perf-high .vdjv-app-bg {
+    background:
       radial-gradient(circle at 12% 0%, hsl(var(--vdjv-brand) / 0.16), transparent 26rem),
       radial-gradient(circle at 84% 8%, hsl(var(--vdjv-info) / 0.1), transparent 24rem),
       linear-gradient(180deg, hsl(var(--background)), hsl(var(--vdjv-panel-strong)));
@@ -165,14 +171,36 @@
 
   .vdjv-surface {
     border: 1px solid hsl(var(--vdjv-panel-border) / 0.82);
+    background: hsl(var(--vdjv-panel));
+    box-shadow: 0 8px 20px hsl(222 42% 4% / 0.08);
+  }
+
+  .dark .vdjv-surface {
+    background: hsl(var(--vdjv-panel-strong));
+    box-shadow: 0 8px 20px hsl(222 42% 3% / 0.24);
+  }
+
+  .vdjv-glass {
+    border: 1px solid hsl(var(--vdjv-panel-border) / 0.72);
+    background: hsl(var(--vdjv-panel) / 0.98);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.08);
+  }
+
+  .perf-high .vdjv-glass,
+  .perf-high .vdjv-surface {
+    backdrop-filter: blur(14px);
+  }
+
+  .perf-high .vdjv-surface {
     background:
-      linear-gradient(145deg, hsl(var(--vdjv-panel) / 0.94), hsl(var(--vdjv-panel-muted) / 0.86));
+      radial-gradient(circle at 20% 0%, hsl(var(--vdjv-brand) / 0.08), transparent 18rem),
+      linear-gradient(145deg, hsl(var(--vdjv-panel) / 0.94), hsl(var(--vdjv-panel-muted) / 0.88));
     box-shadow:
       inset 0 1px 0 hsl(0 0% 100% / 0.08),
       0 18px 38px hsl(222 42% 4% / 0.16);
   }
 
-  .dark .vdjv-surface {
+  .dark.perf-high .vdjv-surface {
     background:
       radial-gradient(circle at 20% 0%, hsl(var(--vdjv-brand) / 0.08), transparent 18rem),
       linear-gradient(145deg, hsl(var(--vdjv-panel) / 0.94), hsl(var(--vdjv-panel-strong) / 0.9));
@@ -181,15 +209,22 @@
       0 18px 42px hsl(222 42% 3% / 0.42);
   }
 
-  .vdjv-glass {
-    border: 1px solid hsl(var(--vdjv-panel-border) / 0.72);
+  .perf-high .vdjv-glass {
     background: hsl(var(--vdjv-panel) / 0.78);
-    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.08);
   }
 
-  .perf-high .vdjv-glass,
-  .perf-high .vdjv-surface {
-    backdrop-filter: blur(14px);
+  .perf-low .vdjv-glass,
+  .perf-lowest .vdjv-glass,
+  .perf-low .vdjv-surface,
+  .perf-lowest .vdjv-surface {
+    box-shadow: none;
+  }
+
+  .perf-medium [class*="backdrop-blur"],
+  .perf-low [class*="backdrop-blur"],
+  .perf-lowest [class*="backdrop-blur"] {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
   }
 
   .vdjv-control {

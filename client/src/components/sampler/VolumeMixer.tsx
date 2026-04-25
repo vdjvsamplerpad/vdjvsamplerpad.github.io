@@ -1152,12 +1152,12 @@ export function VolumeMixer({
   }, [isElectronWindowControlsAvailable]);
 
   const panelClasses = theme === 'dark'
-    ? 'vdjv-surface text-white'
-    : 'vdjv-surface text-slate-950';
+    ? 'border-slate-800 bg-slate-950 text-white'
+    : 'border-slate-200 bg-white text-slate-950';
 
   const sectionClasses = theme === 'dark'
-    ? 'vdjv-glass border-red-500/15 shadow-sm'
-    : 'vdjv-glass border-red-200/70 shadow-sm';
+    ? 'border border-slate-800 bg-slate-900 shadow-sm'
+    : 'border border-slate-200 bg-slate-50 shadow-sm';
   const masterPercent = clamp(Math.round(masterVolume * 100), 0, 100);
   const masterDbLabel = masterPercent <= 0
     ? '-inf dB'

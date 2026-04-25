@@ -1506,10 +1506,10 @@ export function PadEditDialog({
               </p>
             )}
 
-            <div className="grid gap-2 pt-4 grid-cols-3">
+            <div className="grid grid-cols-3 gap-1 rounded-2xl border border-border bg-muted/40 p-1 pt-1">
               <Button
                 onClick={handleSaveAndClose}
-                className="w-full"
+                className="w-full rounded-xl"
                 disabled={isUploading}
               >
                 {isUploading ? 'Saving...' : 'Save Changes'}
@@ -1518,7 +1518,7 @@ export function PadEditDialog({
                 onClick={() => handleDialogOpenChange(false)}
                 variant="outline"
                 disabled={isUploading}
-                className="w-full"
+                className="w-full rounded-xl"
               >
                 Cancel
               </Button>
@@ -1526,7 +1526,7 @@ export function PadEditDialog({
                 onClick={handleUnloadClick}
                 variant="destructive"
                 disabled={isUploading}
-                className="w-full"
+                className="w-full rounded-xl"
               >
                 Unload
               </Button>

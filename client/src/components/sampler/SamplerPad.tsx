@@ -76,7 +76,7 @@ type PendingTouchTriggerState = {
   timer: ReturnType<typeof setTimeout> | null;
 };
 
-const normalizeHexColor = (value: string | undefined, fallback = '#ef174f'): string => {
+const normalizeHexColor = (value: string | undefined, fallback = '#4f46e5'): string => {
   if (!value) return fallback;
   const trimmed = value.trim();
   const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;

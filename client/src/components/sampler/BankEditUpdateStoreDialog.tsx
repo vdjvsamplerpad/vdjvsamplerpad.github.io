@@ -67,7 +67,7 @@ export function BankEditUpdateStoreDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`sm:max-w-lg backdrop-blur-md ${isDark ? 'bg-gray-800/90' : 'bg-white/90'}`} aria-describedby={undefined}>
+      <DialogContent className={`sm:max-w-lg ${isDark ? 'bg-gray-900' : 'bg-white'}`} aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="w-4 h-4" />

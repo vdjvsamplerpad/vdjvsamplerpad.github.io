@@ -371,15 +371,8 @@ export function SamplerPadAppView({
       )}
 
       <div className={`flex-1 min-h-0 ${getMainContentMargin} ${getMainContentPadding}`}>
-        <div className="max-w-full mx-auto py-2 relative z-10 h-full min-h-0 flex flex-col">
-          <HeaderControls {...headerControlsProps} />
-          {guestTrialSummary.visible && guestTrialSummary.mode === 'guest' && (
-            <div className="mb-2 rounded-xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-              {guestTrialSummary.exhausted
-                ? 'Guest trial finished. Sign in to keep playing Default Bank.'
-                : `Guest trial: ${guestTrialSummary.remainingCount} plays left on Default Bank.`}
-            </div>
-          )}
+        <div className="max-w-full mx-auto py-2 pb-24 relative z-10 h-full min-h-0 flex flex-col">
+          <HeaderControls {...headerControlsProps} guestPlaySummary={guestTrialSummary} />
 
           {isDualMode ? (
             <div className={`relative ${usePortraitDualStack ? 'flex flex-col gap-2' : 'flex gap-1 md:gap-2'} flex-1 min-h-0 min-w-0 ${padInteractionLockClass}`}>

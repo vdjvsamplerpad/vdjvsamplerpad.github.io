@@ -1348,19 +1348,16 @@ export function AboutDialog({
   const masterVolumeUpKeyError = getInlineMappingError('master-volumeUp-key');
   const masterVolumeDownKeyError = getInlineMappingError('master-volumeDown-key');
   const masterMuteKeyError = getInlineMappingError('master-mute-key');
-  const availablePanels = React.useMemo(() => {
-    const panels: Array<{ id: 'general' | 'system' | 'channels' | 'backup'; label: string }> = [
-      { id: 'general', label: 'General' },
-    ];
-    if (isAuthenticated && canUseSystemShortcuts) panels.push({ id: 'system', label: 'System Shortcut' });
-    if (isAuthenticated && canUseChannelShortcuts) panels.push({ id: 'channels', label: 'Channels Shortcut' });
-    if (isAuthenticated && (canUseBackupRepair || canUseMappingImportExport)) panels.push({ id: 'backup', label: 'Backup' });
-    return panels;
-  }, [canUseBackupRepair, canUseChannelShortcuts, canUseMappingImportExport, canUseSystemShortcuts, isAuthenticated]);
+  const availablePanels = React.useMemo((): Array<{ id: 'general' | 'system' | 'channels' | 'backup'; label: string; disabled?: boolean }> => ([
+    { id: 'general', label: 'General' },
+    { id: 'system', label: 'System', disabled: !isAuthenticated || !canUseSystemShortcuts },
+    { id: 'channels', label: 'Channel', disabled: !isAuthenticated || !canUseChannelShortcuts },
+    { id: 'backup', label: 'Backup', disabled: !isAuthenticated },
+  ]), [canUseChannelShortcuts, canUseSystemShortcuts, isAuthenticated]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[96vw] max-h-[92vh] overflow-hidden sm:max-w-4xl backdrop-blur-md bg-white/95 border-gray-300 dark:bg-gray-800/95 dark:border-gray-600">
+      <DialogContent className="w-[96vw] max-h-[92vh] overflow-hidden sm:max-w-4xl bg-white border-gray-300 dark:bg-gray-900 dark:border-gray-700">
         <DialogHeader className="pb-2 border-b border-gray-200 dark:border-gray-700">
           <DialogTitle>Setting</DialogTitle>
           <DialogDescription>
@@ -1369,13 +1366,15 @@ export function AboutDialog({
         </DialogHeader>
         <div className="space-y-3 py-2 max-h-[calc(92vh-96px)] overflow-y-auto pr-1 text-sm">
           {availablePanels.length > 1 && (
-            <div className={`grid gap-2 ${isAuthenticated ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1'}`}>
+            <div className="grid grid-cols-4 gap-1.5 rounded-2xl border border-border bg-muted/40 p-1">
               {availablePanels.map((panel) => (
                 <Button
                   key={panel.id}
                   type="button"
                   variant={activePanel === panel.id ? 'default' : 'outline'}
                   size="sm"
+                  className="min-w-0 px-1 text-[10px] sm:text-xs"
+                  disabled={panel.disabled}
                   onClick={() => setActivePanel(panel.id)}
                 >
                   {panel.label}

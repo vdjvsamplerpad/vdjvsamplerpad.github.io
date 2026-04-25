@@ -115,6 +115,13 @@ interface HeaderControlsProps {
     files: File[],
     options?: { addAsNewWhenNoTarget?: boolean }
   ) => Promise<string>;
+  guestPlaySummary?: {
+    visible: boolean;
+    mode: 'guest' | 'free';
+    remainingCount: number;
+    exhausted: boolean;
+    resetLabel?: string | null;
+  };
   freePlaySummary?: {
     visible: boolean;
     remainingCount: number;
@@ -347,6 +354,7 @@ export function HeaderControls({
   onRestoreAppBackup,
   onRetryMissingMediaInCurrentBank,
   onRecoverMissingMediaFromBanks,
+  guestPlaySummary,
   freePlaySummary,
   defaultBankSourceOptions,
   onPublishDefaultBankRelease,
@@ -618,6 +626,16 @@ export function HeaderControls({
     }
   }, [displayNamePromptValue, pushNotice, updateDisplayName, user?.id]);
 
+  const handleSignOut = React.useCallback(async () => {
+    if (authTransition.status === 'signing_out') return;
+    const { error } = await signOut();
+    if (error) {
+      pushNotice({ variant: 'error', message: error.message || 'Sign out failed.' });
+      return;
+    }
+    pushNotice({ variant: 'info', message: 'Signing out...' });
+  }, [authTransition.status, signOut, pushNotice]);
+
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (files && files.length > 0) {
@@ -640,16 +658,6 @@ export function HeaderControls({
     fileInputRef.current?.click();
   };
 
-  const handleSignOut = React.useCallback(async () => {
-    if (authTransition.status === 'signing_out') return;
-    const { error } = await signOut();
-    if (error) {
-      pushNotice({ variant: 'error', message: error.message || 'Sign out failed.' });
-      return;
-    }
-    pushNotice({ variant: 'info', message: 'Signing out...' });
-  }, [authTransition.status, signOut, pushNotice]);
-
   const isMobileScreen = windowWidth < 1160;
   const effectiveAuthUser = user || getCachedUser();
   const { showStoreNewBadge } = useStorePreviewBadge({
@@ -662,6 +670,17 @@ export function HeaderControls({
   const isPortraitViewport = typeof window !== 'undefined'
     ? window.innerHeight > window.innerWidth
     : windowWidth < 768;
+  const isCompactBottomNav = windowWidth < 768 || isPortraitViewport;
+  const defaultTrialSummary = freePlaySummary?.visible
+    ? {
+      visible: true,
+      mode: 'free' as const,
+      remainingCount: freePlaySummary.remainingCount,
+      exhausted: freePlaySummary.exhausted,
+      resetLabel: freePlaySummary.resetLabel,
+    }
+    : undefined;
+  const playSummary = guestPlaySummary?.visible ? guestPlaySummary : defaultTrialSummary;
   const maxPadSize = isPortraitViewport ? 8 : 16;
   const minPadSize = 2;
 
@@ -745,6 +764,61 @@ export function HeaderControls({
     state === 'good' && 'vdjv-status-good hover:bg-emerald-500/18',
   ), []);
 
+  const handleSearchSlotClick = React.useCallback(() => {
+    if (capabilities.features.search) {
+      onToggleSearch();
+      return;
+    }
+    if (playSummary?.mode === 'guest') {
+      setShowLoginModal(true);
+      pushNotice({
+        variant: 'info',
+        message: playSummary.exhausted
+          ? `Guest trial finished. Sign in or upgrade to keep playing.`
+          : `Guest trial: ${playSummary.remainingCount} plays left on Default Bank.`,
+      });
+      return;
+    }
+    if (playSummary?.mode === 'free') {
+      openUpgradeDialog(
+        playSummary.exhausted
+          ? `Free plays are finished. They reset ${playSummary.resetLabel || 'tomorrow'}. Upgrade to keep playing now.`
+          : 'Upgrade to PRO for unlimited Default Bank plays and Store access.'
+      );
+      return;
+    }
+    openUpgradeDialog('Search is available in PRO and PRO MAX.');
+  }, [capabilities.features.search, onToggleSearch, openUpgradeDialog, playSummary, pushNotice]);
+
+  const navButtonBase = cn(
+    'relative flex h-12 items-center justify-center gap-1.5 rounded-2xl border text-xs font-bold transition-colors',
+    theme === 'dark'
+      ? 'border-slate-700 bg-slate-950 text-slate-200 hover:border-red-400 hover:bg-slate-900'
+      : 'border-slate-200 bg-white text-slate-700 hover:border-red-300 hover:bg-red-50'
+  );
+  const compactNavButtonBase = cn(
+    'relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-2xl text-[10px] font-bold transition-colors',
+    theme === 'dark' ? 'text-slate-300 hover:text-white' : 'text-slate-500 hover:text-slate-900'
+  );
+
+  const renderBankIsland = (label: string, tone: 'primary' | 'secondary' | 'single') => (
+    <div
+      className={cn(
+        'pointer-events-auto max-w-[42vw] truncate rounded-full border px-4 py-1.5 text-xs font-bold shadow-sm',
+        tone === 'secondary'
+          ? theme === 'dark'
+            ? 'border-sky-400/40 bg-sky-950 text-sky-100'
+            : 'border-sky-200 bg-sky-50 text-sky-700'
+          : theme === 'dark'
+            ? 'border-red-400/40 bg-slate-950 text-red-100'
+            : 'border-red-200 bg-white text-red-700'
+      )}
+      title={label}
+    >
+      {label}
+    </div>
+  );
+
   return (
     <>
       {/* Slide-down notifications */}
@@ -760,10 +834,8 @@ export function HeaderControls({
         id="global-audio-upload-input"
       />
 
-      <header
-        className="sticky top-0 z-40 mb-2 rounded-b-2xl border-b border-red-500/15 bg-background/78 px-1.5 pt-1 text-center shadow-[0_12px_32px_-28px_hsl(var(--vdjv-glow)/0.55)] perf-high:backdrop-blur-md"
-      >
-        <div className={`mb-1 text-sm ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}>
+      <header className="sticky top-0 z-40 mb-2 flex min-h-[2.65rem] items-start justify-center px-2 pt-1 text-center pointer-events-none">
+        <div className="absolute left-2 top-1 pointer-events-auto">
           {isAdmin && (
             <React.Suspense fallback={null}>
               <HeaderAdminDebugPanel
@@ -776,26 +848,25 @@ export function HeaderControls({
               />
             </React.Suspense>
           )}
+        </div>
+        <div className={`flex max-w-full items-center justify-center gap-2 text-sm ${isPortraitViewport ? 'flex-col' : 'flex-row'} ${theme === 'dark' ? 'text-slate-200' : 'text-slate-700'}`}>
           {isDualMode ? (
-            <div className="flex items-center justify-center gap-2 min-w-0 px-2 whitespace-nowrap">
-              <span className="font-medium text-red-500 shrink-0">Primary:</span>
-              <span className="min-w-0 max-w-[26vw] sm:max-w-[32vw] truncate" title={primaryBank?.name || 'None'}>
+            <>
+              <span className={`pointer-events-auto min-w-0 max-w-[42vw] truncate rounded-full border px-4 py-1.5 text-xs font-bold shadow-sm ${theme === 'dark' ? 'border-red-400/40 bg-slate-950 text-red-100' : 'border-red-200 bg-white text-red-700'}`} title={primaryBank?.name || 'None'}>
                 {primaryBank?.name || 'None'}
               </span>
-              <span className="text-slate-400">|</span>
-              <span className="font-medium text-sky-500 shrink-0">Secondary (SHIFT):</span>
-              <span className="min-w-0 max-w-[26vw] sm:max-w-[32vw] truncate" title={secondaryBank?.name || 'None'}>
+              <span className={`pointer-events-auto min-w-0 max-w-[42vw] truncate rounded-full border px-4 py-1.5 text-xs font-bold shadow-sm ${theme === 'dark' ? 'border-sky-400/40 bg-sky-950 text-sky-100' : 'border-sky-200 bg-sky-50 text-sky-700'}`} title={secondaryBank?.name || 'None'}>
                 {secondaryBank?.name || 'None'}
               </span>
-            </div>
+            </>
           ) : (
-            <span className="inline-block max-w-[90vw] truncate align-middle" title={getBankDisplayName()}>
-              Bank: {getBankDisplayName()}
+            <span className={`pointer-events-auto inline-block max-w-[90vw] truncate rounded-full border px-4 py-1.5 text-xs font-bold shadow-sm ${theme === 'dark' ? 'border-red-400/40 bg-slate-950 text-red-100' : 'border-red-200 bg-white text-red-700'}`} title={getBankDisplayName()}>
+              {getBankDisplayName()}
             </span>
           )}
         </div>
 
-        <div className="vdjv-glass mx-auto mb-2 flex w-fit max-w-full flex-wrap justify-center gap-2 rounded-2xl p-1.5">
+        <div className="hidden">
           {/* Banks Menu Button */}
           <Button
             onClick={onToggleSideMenu}
@@ -993,7 +1064,7 @@ export function HeaderControls({
           )}
         </div>
 
-        {globalMuted && (
+        {false && globalMuted && (
           <div className={`mx-auto mb-2 inline-flex max-w-[92vw] flex-wrap items-center justify-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${
             theme === 'dark'
               ? 'border-red-400/50 bg-red-500/15 text-red-100'
@@ -1008,7 +1079,7 @@ export function HeaderControls({
           </div>
         )}
 
-        {isAdmin && adminPadColorPaintActive && adminPadColorPaintColor && (
+        {false && isAdmin && adminPadColorPaintActive && adminPadColorPaintColor && (
           <div className={`mx-auto mb-2 inline-flex max-w-[92vw] flex-wrap items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
             theme === 'dark'
               ? 'border-red-400/40 bg-red-500/10 text-red-100'
@@ -1037,6 +1108,226 @@ export function HeaderControls({
           </div>
         )}
       </header>
+
+      <div
+        className={cn(
+          'fixed left-1/2 z-40 -translate-x-1/2 px-2 pointer-events-none',
+          isCompactBottomNav ? 'bottom-[calc(var(--vdjv-safe-bottom)+0.65rem)] w-full max-w-[30rem]' : 'bottom-[calc(var(--vdjv-safe-bottom)+0.85rem)]'
+        )}
+      >
+        <div
+          className={cn(
+            'pointer-events-auto mx-auto flex items-center border shadow-lg',
+            isCompactBottomNav
+              ? theme === 'dark'
+                ? 'h-[4.85rem] rounded-t-[2rem] rounded-b-md border-slate-700 bg-neutral-950 px-3 pb-2 pt-3'
+                : 'h-[4.85rem] rounded-t-[2rem] rounded-b-md border-slate-200 bg-white px-3 pb-2 pt-3'
+              : theme === 'dark'
+                ? 'gap-2 rounded-2xl border-slate-800 bg-slate-950 p-1.5'
+                : 'gap-2 rounded-2xl border-slate-200 bg-white p-1.5'
+          )}
+        >
+          <button
+            type="button"
+            onClick={onToggleSideMenu}
+            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-24', sideMenuOpen && 'border-red-400 text-red-500')}
+          >
+            <Menu className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />
+            <span>Bank</span>
+            {showStoreNewBadge && (
+              <span aria-hidden="true" className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-red-500" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSearchSlotClick}
+            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-28', searchOpen && 'border-red-400 text-red-500')}
+            title={capabilities.features.search ? 'Search pads' : 'Upgrade or sign in for full search'}
+          >
+            <Search className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />
+            <span className="max-w-full truncate">
+              {playSummary?.visible
+                ? `${playSummary.mode === 'guest' ? 'GUEST' : 'FREE'} ${playSummary.remainingCount}`
+                : 'Search'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onStopAll}
+            className={cn(
+              'relative flex items-center justify-center border font-black text-white shadow-lg transition-transform active:scale-95',
+              isCompactBottomNav
+                ? 'mx-1 -mt-12 h-[4.75rem] w-[4.75rem] shrink-0 rounded-full border-red-200 bg-red-600 ring-[0.55rem] ring-slate-300/60'
+                : 'h-12 w-28 rounded-2xl border-red-400 bg-red-600',
+              theme === 'dark' && isCompactBottomNav ? 'ring-slate-700/80' : ''
+            )}
+            title="Stop all pads"
+          >
+            <span className="absolute inset-2 rounded-full bg-white/10" />
+            <Square className={isCompactBottomNav ? 'relative h-6 w-6' : 'relative h-4 w-4'} />
+            {!isCompactBottomNav && <span className="relative ml-2 text-xs">Stop</span>}
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleMute}
+            aria-pressed={globalMuted}
+            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-24', globalMuted && 'border-red-400 text-red-500')}
+            title={globalMuted ? 'Master output is muted. Click to unmute.' : 'Mute all sampler output.'}
+          >
+            {globalMuted ? <VolumeX className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} /> : <Volume2 className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />}
+            <span>{globalMuted ? 'Muted' : 'Mute'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={channelLoadArmed ? onCancelChannelLoad : onToggleMixer}
+            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-24', (mixerOpen || channelLoadArmed) && 'border-emerald-400 text-emerald-500')}
+          >
+            {channelLoadArmed ? <X className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} /> : <Sliders className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />}
+            <span>{channelLoadArmed ? 'Cancel' : 'Mixer'}</span>
+            {!channelLoadArmed && hasActiveDeckPlayback && (
+              <span aria-hidden="true" className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-emerald-500" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      <div className="fixed bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)] left-3 z-40 flex flex-col gap-2">
+        <Button
+          type="button"
+          onClick={onToggleEditMode}
+          variant="outline"
+          size="icon"
+          className={controlClass('h-11 w-11 rounded-full', editMode ? 'warn' : 'default')}
+          title={editMode ? 'Exit Edit Mode' : 'Edit pads'}
+        >
+          <Pencil className="h-4 w-4" />
+        </Button>
+        {!isAdmin && editMode && (
+          <Button
+            type="button"
+            onClick={handlePadColorPaintButton}
+            variant="outline"
+            size="icon"
+            className={controlClass('h-11 w-11 rounded-full')}
+            title={padColorPaintBlockedReason || 'Color Paint Mode'}
+          >
+            <Palette className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+
+      <div className="fixed bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)] right-3 z-40 flex flex-col items-end gap-2">
+        {isDualMode && (
+          <Button
+            type="button"
+            onClick={onExitDualMode}
+            variant="outline"
+            size="sm"
+            className={controlClass('h-10 rounded-full px-3', 'warn')}
+            title="Exit dual mode"
+          >
+            <X className="h-4 w-4" />
+            <span>Exit Dual</span>
+          </Button>
+        )}
+        {!loading && !isAuthenticated && (
+          <Button
+            type="button"
+            onClick={() => {
+              if (isSigningIn) return;
+              setShowLoginModal(true);
+            }}
+            variant="outline"
+            size="sm"
+            disabled={loading || isSigningIn}
+            className={controlClass('h-10 rounded-full px-3', 'active')}
+            title={isSigningIn ? 'Signing in...' : 'Sign in to your account'}
+          >
+            <LogIn className="h-4 w-4" />
+            <span>{isSigningIn ? 'Wait' : 'Login'}</span>
+          </Button>
+        )}
+        {isAdmin && editMode && (
+          <Button
+            type="button"
+            onClick={adminPadColorPaintActive ? handleStopPadColorPaint : handlePadColorPaintButton}
+            variant="outline"
+            size="sm"
+            className={controlClass('h-10 rounded-full px-3', adminPadColorPaintActive ? 'active' : 'default')}
+            title={adminPadColorPaintActive ? 'Stop Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
+          >
+            <Palette className="h-4 w-4" />
+            <span>{adminPadColorPaintActive ? 'Stop Paint' : 'Paint'}</span>
+          </Button>
+        )}
+        {isAdmin && adminPadColorPaintCanUndo && (
+          <Button
+            type="button"
+            onClick={handleUndoPadColorPaint}
+            variant="outline"
+            size="sm"
+            className={controlClass('h-10 rounded-full px-3')}
+            title="Undo last painted pad color"
+          >
+            <Undo2 className="h-4 w-4" />
+            <span>Undo</span>
+          </Button>
+        )}
+        {isAdmin && (
+          <Button
+            type="button"
+            onClick={() => setAdminDialogOpen(true)}
+            variant="outline"
+            size="sm"
+            className={controlClass('h-10 rounded-full px-3', 'warn')}
+            title="Manage bank access"
+          >
+            <Shield className="h-4 w-4" />
+            <span>Admin</span>
+          </Button>
+        )}
+      </div>
+
+      {globalMuted && (
+        <div className={cn(
+          'fixed left-1/2 z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-lg',
+          isCompactBottomNav ? 'top-[calc(var(--vdjv-safe-top)+3.25rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+6rem)]',
+          theme === 'dark'
+            ? 'border-red-400/50 bg-red-950 text-red-100'
+            : 'border-red-300 bg-red-50 text-red-700'
+        )}>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <VolumeX className="h-3.5 w-3.5 shrink-0" />
+            <span>Master output muted</span>
+            <span className={theme === 'dark' ? 'text-red-100/80' : 'text-red-600/80'}>
+              Pad taps still trigger, but no sound will come out until you unmute.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {isAdmin && adminPadColorPaintActive && adminPadColorPaintColor && (
+        <div className={cn(
+          'fixed left-1/2 top-[calc(var(--vdjv-safe-top)+3.25rem)] z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1 text-xs font-semibold shadow-lg',
+          theme === 'dark'
+            ? 'border-red-400/40 bg-red-950 text-red-100'
+            : 'border-red-300 bg-red-50 text-red-700'
+        )}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Palette className="h-3.5 w-3.5" />
+            <span>Color Paint Mode</span>
+            <span className="inline-block h-3.5 w-3.5 rounded-full border border-white/60" style={{ backgroundColor: adminPadColorPaintColor }} />
+            <span>{getPadColorOptionLabel(adminPadColorPaintColor)}</span>
+            <Button type="button" variant="outline" size="sm" onClick={handleStopPadColorPaint} className="h-7 rounded-full px-2 text-[11px]">
+              Stop Paint
+            </Button>
+          </div>
+        </div>
+      )}
 
       <Dialog open={showPadColorPaintDialog} onOpenChange={setShowPadColorPaintDialog}>
         <DialogContent className={theme === 'dark' ? 'border-gray-700 bg-gray-950 text-gray-100' : ''}>

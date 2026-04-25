@@ -804,7 +804,7 @@ export function OnlineBankStoreDialog({
             <Dialog open={open} onOpenChange={handleDialogOpenChange}>
                 <DialogContent
                     overlayClassName="z-[110]"
-                    className={`!left-[50%] !top-[50%] !translate-x-[-50%] !translate-y-[-50%] fixed z-[120] w-[95vw] max-w-5xl max-h-[88vh] md:max-h-[85vh] overflow-hidden flex flex-col p-0 rounded-2xl md:rounded-3xl border shadow-2xl transition-all ${isDark ? 'bg-gray-900/95 backdrop-blur-2xl border-white/10 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.7)]' : 'bg-white/95 backdrop-blur-2xl border-gray-200/80 shadow-[0_30px_60px_-15px_rgba(29,78,216,0.15)]'}`}
+                    className={`!left-[50%] !top-[50%] !translate-x-[-50%] !translate-y-[-50%] fixed z-[120] w-[95vw] max-w-5xl max-h-[88vh] md:max-h-[85vh] overflow-hidden flex flex-col p-0 rounded-2xl md:rounded-3xl border shadow-2xl transition-all ${isDark ? 'bg-gray-950 border-white/10 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.7)]' : 'bg-white border-gray-200/80 shadow-[0_30px_60px_-15px_rgba(29,78,216,0.15)]'}`}
                     aria-describedby={undefined}
                     onOpenAutoFocus={(event) => {
                         event.preventDefault();
