@@ -8,7 +8,7 @@ import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
 const EMPTY_BANKS: SamplerBank[] = [];
 const EMPTY_PADS: PadData[] = [];
 
-const normalizeSearchHitColor = (value: string | undefined, fallback = '#22d3ee'): string => {
+const normalizeSearchHitColor = (value: string | undefined, fallback = '#ef174f'): string => {
   if (!value) return fallback;
   const trimmed = value.trim();
   const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;
@@ -309,13 +309,13 @@ export const PadGrid = React.memo(function PadGrid({
           className="hidden"
         />
         <div
-          className={`flex items-center justify-center h-64 rounded-2xl border-2 border-dashed transition-all duration-300 cursor-pointer relative ${dragOverPadTransfer
-            ? 'border-orange-400 bg-orange-100 scale-105'
+          className={`vdjv-surface flex h-64 cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed transition-all duration-300 relative ${dragOverPadTransfer
+            ? 'border-orange-400 bg-orange-100 scale-105 dark:bg-orange-950/40'
             : isDragOverGrid
-              ? 'border-blue-400 bg-blue-50'
+              ? 'border-red-400 bg-red-50 dark:bg-red-950/30'
               : theme === 'dark'
-                ? 'bg-gray-800 border-gray-600 hover:bg-gray-700'
-                : 'bg-white border-gray-300 hover:bg-gray-50'
+                ? 'border-red-400/24 hover:border-red-300/40'
+                : 'border-red-200 hover:border-red-300'
             }`}
           onDrop={handleDrop}
           onDragOver={handleDragOver}
@@ -346,11 +346,11 @@ export const PadGrid = React.memo(function PadGrid({
   return (
     <div
       className={`grid ${gap} w-full min-w-0 max-w-full overflow-x-hidden transition-all duration-200 ${adminPadColorPaintActive ? 'cursor-crosshair' : ''} ${dragOverPadTransfer
-        ? 'ring-4 ring-orange-400 ring-offset-2 ring-offset-transparent bg-orange-50 dark:bg-orange-900/20 rounded-2xl p-2'
+                ? 'ring-4 ring-orange-400 ring-offset-2 ring-offset-transparent bg-orange-50 dark:bg-orange-900/20 rounded-2xl p-2'
         : channelLoadArmed
           ? 'rounded-2xl shadow-[inset_0_0_0_2px_rgba(16,185,129,0.65)] bg-emerald-50/20 dark:bg-emerald-900/10'
           : editMode
-            ? 'rounded-2xl shadow-[inset_0_0_0_2px_rgba(251,146,60,0.65)] bg-amber-50/20 dark:bg-amber-900/10'
+            ? 'rounded-2xl shadow-[inset_0_0_0_2px_hsl(var(--vdjv-warn)/0.62)] bg-amber-50/20 dark:bg-amber-900/10'
           : ''
         }`}
       style={{
@@ -381,12 +381,12 @@ export const PadGrid = React.memo(function PadGrid({
           data-bank-id={bankId}
           data-pad-id={pad.id}
           className={`relative min-w-0 max-w-full ${aspectRatio} transition-all duration-300 ${
-            editMode && dragOverIndex === index ? 'ring-2 ring-blue-400' : ''
+            editMode && dragOverIndex === index ? 'ring-2 ring-red-400' : ''
             } ${
             highlightedPadId === pad.id
               ? (theme === 'dark'
-                  ? 'sampler-search-hit sampler-search-hit-dark ring-4 ring-cyan-300 ring-offset-2 ring-offset-gray-900 z-10'
-                  : 'sampler-search-hit sampler-search-hit-light ring-4 ring-cyan-400 ring-offset-2 ring-offset-white z-10')
+                  ? 'sampler-search-hit sampler-search-hit-dark ring-4 ring-red-300 ring-offset-2 ring-offset-gray-950 z-10'
+                  : 'sampler-search-hit sampler-search-hit-light ring-4 ring-red-500 ring-offset-2 ring-offset-white z-10')
               : ''
             }`}
           style={{

@@ -76,7 +76,7 @@ type PendingTouchTriggerState = {
   timer: ReturnType<typeof setTimeout> | null;
 };
 
-const normalizeHexColor = (value: string | undefined, fallback = '#4f46e5'): string => {
+const normalizeHexColor = (value: string | undefined, fallback = '#ef174f'): string => {
   if (!value) return fallback;
   const trimmed = value.trim();
   const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;
@@ -950,11 +950,11 @@ export const SamplerPad = React.memo(function SamplerPad({
           return <Play className={`${iconSize} text-green-400`} />;
         }
       case 'hold':
-        return <MousePointer2 className={`${iconSize} text-blue-400`} />;
+        return <MousePointer2 className={`${iconSize} text-sky-400`} />;
       case 'stutter':
         return <Zap className={`${iconSize} text-yellow-400`} />;
       case 'unmute':
-        return <VolumeX className={`${iconSize} text-purple-400`} />;
+        return <VolumeX className={`${iconSize} text-red-300`} />;
       default:
         return null;
     }
@@ -965,11 +965,11 @@ export const SamplerPad = React.memo(function SamplerPad({
       case 'toggle':
         return '#4ade80'; // green-400
       case 'hold':
-        return '#60a5fa'; // blue-400
+        return '#38bdf8'; // sky-400
       case 'stutter':
         return '#facc15'; // yellow-400
       case 'unmute':
-        return '#c084fc'; // purple-400
+        return '#fca5a5'; // red-300
       default:
         return '#9ca3af'; // gray-400
     }
@@ -1135,8 +1135,8 @@ export const SamplerPad = React.memo(function SamplerPad({
           <div
             className={`absolute bottom-1 left-1 z-20 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-wide pointer-events-none flex items-center gap-1 ${
               theme === 'dark'
-                ? 'bg-indigo-500/85 text-indigo-50'
-                : 'bg-indigo-600 text-white'
+                ? 'bg-red-500/85 text-red-50'
+                : 'bg-red-600 text-white'
             }`}
           >
             <Loader2 className="w-2.5 h-2.5 animate-spin" />
@@ -1158,8 +1158,8 @@ export const SamplerPad = React.memo(function SamplerPad({
           <div
             className={`absolute bottom-0 left-0 opacity-75 whitespace-nowrap z-20 ${
               theme === 'dark'
-                ? 'text-cyan-300'
-                : 'text-cyan-700'
+                ? 'text-red-200'
+                : 'text-red-700'
             }`}
             title={padGroupTitle}
             style={{

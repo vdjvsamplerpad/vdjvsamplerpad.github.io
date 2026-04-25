@@ -60,7 +60,7 @@ const WAVEFORM_CLICK_SUPPRESS_MS = 280;
 const TRANSPORT_CLICK_SUPPRESS_TOUCH_MS = 260;
 const HOTCUE_COLORS = [
   { marker: 'bg-red-500', activeDark: 'border-red-500 text-red-200 bg-red-500/20', activeLight: 'border-red-400 text-red-700 bg-red-50' },
-  { marker: 'bg-blue-500', activeDark: 'border-blue-500 text-blue-200 bg-blue-500/20', activeLight: 'border-blue-400 text-blue-700 bg-blue-50' },
+  { marker: 'bg-sky-500', activeDark: 'border-sky-500 text-sky-200 bg-sky-500/20', activeLight: 'border-sky-400 text-sky-700 bg-sky-50' },
   { marker: 'bg-emerald-500', activeDark: 'border-emerald-500 text-emerald-200 bg-emerald-500/20', activeLight: 'border-emerald-400 text-emerald-700 bg-emerald-50' },
   { marker: 'bg-yellow-500', activeDark: 'border-yellow-500 text-yellow-200 bg-yellow-500/20', activeLight: 'border-yellow-400 text-yellow-700 bg-yellow-50' }
 ] as const;
@@ -197,8 +197,8 @@ const resolveTransportBadge = (
     return {
       label: 'PLAYING',
       className: theme === 'dark'
-        ? 'bg-cyan-900/35 text-cyan-200 border border-cyan-500/50'
-        : 'bg-cyan-50 text-cyan-700 border border-cyan-300'
+        ? 'bg-red-500/18 text-red-100 border border-red-400/50'
+        : 'bg-red-50 text-red-700 border border-red-300'
     };
   }
   if (channel.isPaused) {
@@ -212,8 +212,8 @@ const resolveTransportBadge = (
   return {
     label: 'READY',
     className: theme === 'dark'
-      ? 'bg-violet-900/35 text-violet-200 border border-violet-500/50'
-      : 'bg-violet-50 text-violet-700 border border-violet-300'
+      ? 'bg-red-500/12 text-red-100 border border-red-400/40'
+      : 'bg-red-50 text-red-700 border border-red-200'
   };
 };
 
@@ -255,8 +255,8 @@ const WaveformBars = React.memo(function WaveformBars({
           key={`${channelId}-wf-${index}`}
           className={
             isLowestGraphics
-              ? (theme === 'dark' ? 'w-full bg-cyan-300' : 'w-full bg-cyan-700')
-              : (theme === 'dark' ? 'w-full bg-cyan-200/25' : 'w-full bg-cyan-800/20')
+              ? (theme === 'dark' ? 'w-full bg-red-300' : 'w-full bg-red-700')
+              : (theme === 'dark' ? 'w-full bg-red-200/25' : 'w-full bg-red-800/20')
           }
           style={{ height: `${Math.max(8, Math.round(Math.max(0, height) * 100))}%` }}
         />
@@ -1152,12 +1152,12 @@ export function VolumeMixer({
   }, [isElectronWindowControlsAvailable]);
 
   const panelClasses = theme === 'dark'
-    ? 'bg-gray-800/95 border-gray-700 text-white perf-high:backdrop-blur-md'
-    : 'bg-white/95 border-gray-200 text-gray-900 perf-high:backdrop-blur-md';
+    ? 'vdjv-surface text-white'
+    : 'vdjv-surface text-slate-950';
 
   const sectionClasses = theme === 'dark'
-    ? 'bg-gray-900/60 border-gray-700 perf-high:backdrop-blur-sm shadow-sm'
-    : 'bg-gray-50/60 border-gray-200 perf-high:backdrop-blur-sm shadow-sm';
+    ? 'vdjv-glass border-red-500/15 shadow-sm'
+    : 'vdjv-glass border-red-200/70 shadow-sm';
   const masterPercent = clamp(Math.round(masterVolume * 100), 0, 100);
   const masterDbLabel = masterPercent <= 0
     ? '-inf dB'
@@ -1165,7 +1165,7 @@ export function VolumeMixer({
 
   return (
     <div className={`fixed inset-y-0 right-0 z-50 w-[24rem] md:w-[24rem] max-w-[95vw] border-l shadow-2xl transition-transform duration-300 ${panelClasses} ${open ? 'translate-x-0' : 'translate-x-full'}`}>
-      <div className={`flex items-center justify-between px-4 py-3 border-b ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'}`}>
+      <div className="flex items-center justify-between border-b border-red-500/15 px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold">Mixer</h2>
           <p className={`text-[11px] ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
@@ -1421,8 +1421,8 @@ export function VolumeMixer({
                     <div
                       className={`absolute inset-y-0 left-0 ${
                         isLowestGraphics
-                          ? (theme === 'dark' ? 'bg-cyan-500' : 'bg-cyan-500')
-                          : (theme === 'dark' ? 'bg-cyan-300/25' : 'bg-cyan-400/25')
+                          ? (theme === 'dark' ? 'bg-red-500' : 'bg-red-500')
+                          : (theme === 'dark' ? 'bg-red-300/25' : 'bg-red-400/25')
                       }`}
                       style={{
                         width: `${progressPct}%`,
@@ -1431,7 +1431,7 @@ export function VolumeMixer({
                     />
 
                     <div
-                      className={`absolute inset-y-0 w-[2px] ${theme === 'dark' ? 'bg-cyan-300' : 'bg-cyan-600'}`}
+                      className={`absolute inset-y-0 w-[2px] ${theme === 'dark' ? 'bg-red-300' : 'bg-red-600'}`}
                       style={{ left: `${progressPct}%` }}
                     />
 
@@ -1577,8 +1577,8 @@ export function VolumeMixer({
                         type="button"
                         className={`min-w-0 truncate text-left text-xs font-medium underline-offset-2 ${
                           theme === 'dark'
-                            ? 'text-gray-100 hover:text-cyan-200 hover:underline'
-                            : 'text-gray-900 hover:text-cyan-700 hover:underline'
+                            ? 'text-gray-100 hover:text-red-200 hover:underline'
+                            : 'text-gray-900 hover:text-red-700 hover:underline'
                         }`}
                         onClick={() => onNavigateToPad(pad.padId, pad.bankId)}
                         title={`Open "${pad.padName}" in ${bankAndArtistLabel}`}
@@ -1590,7 +1590,7 @@ export function VolumeMixer({
                         {pad.padArtist ? (
                           <>
                             <span className="text-gray-400 dark:text-gray-500"> • </span>
-                            <span className={theme === 'dark' ? 'text-cyan-300' : 'text-cyan-700'}>{pad.padArtist}</span>
+                            <span className={theme === 'dark' ? 'text-red-300' : 'text-red-700'}>{pad.padArtist}</span>
                           </>
                         ) : null}
                       </div>

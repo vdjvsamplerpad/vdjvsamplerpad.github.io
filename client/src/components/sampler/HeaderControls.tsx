@@ -19,6 +19,7 @@ import { EXTRA_PAD_COLORS, PRIMARY_PAD_COLORS, getPadColorOptionLabel } from './
 import { useAppUpdate } from '@/hooks/useAppUpdate';
 import { useStorePreviewBadge } from './hooks/useStorePreviewBadge';
 import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
+import { cn } from '@/lib/utils';
 
 const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then((module) => ({ default: module.LoginModal }))) as unknown as typeof LoginModalType;
 const AboutDialog = React.lazy(() => import('@/components/ui/about-dialog').then((module) => ({ default: module.AboutDialog }))) as unknown as typeof AboutDialogType;
@@ -233,13 +234,13 @@ function NoticeItem({ notice, dismiss, theme }: { notice: Notice; dismiss: (id: 
     return () => clearTimeout(t)
   }, [])
 
-  const base = 'pointer-events-auto mt-3 rounded-lg border px-4 py-2 shadow-lg transition-all duration-300'
+  const base = 'pointer-events-auto mt-3 rounded-xl border px-4 py-2 shadow-lg transition-all duration-300'
   const colors =
     notice.variant === 'success'
-      ? (theme === 'dark' ? 'bg-green-600/90 border-green-500 text-white' : 'bg-green-600 text-white border-green-700')
+      ? 'vdjv-status-good'
       : notice.variant === 'error'
-        ? (theme === 'dark' ? 'bg-red-600/90 border-red-500 text-white' : 'bg-red-600 text-white border-red-700')
-        : (theme === 'dark' ? 'bg-gray-800/90 border-gray-700 text-white' : 'bg-gray-900 text-white border-gray-800')
+        ? 'vdjv-status-danger'
+        : 'vdjv-surface'
 
   return (
     <div
@@ -731,9 +732,18 @@ export function HeaderControls({
   const headerBadgeClass = theme === 'dark'
     ? 'border-red-400/60 bg-red-500/20 text-red-100'
     : 'border-red-300 bg-red-50 text-red-700';
-  const mixerBadgeClass = theme === 'dark'
-    ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-100'
-    : 'border-emerald-300 bg-emerald-50 text-emerald-700';
+  const mixerBadgeClass = 'vdjv-status-good';
+  const controlClass = React.useCallback((
+    widthClass: string,
+    state: 'default' | 'active' | 'danger' | 'warn' | 'good' = 'default',
+  ) => cn(
+    widthClass,
+    'transition-all duration-200',
+    state === 'active' && 'vdjv-control-active',
+    state === 'danger' && 'vdjv-status-danger hover:bg-primary/18',
+    state === 'warn' && 'vdjv-status-warn hover:bg-amber-500/18',
+    state === 'good' && 'vdjv-status-good hover:bg-emerald-500/18',
+  ), []);
 
   return (
     <>
@@ -751,10 +761,9 @@ export function HeaderControls({
       />
 
       <header
-        className={`sticky top-0 z-40 text-center mb-2 backdrop-blur-sm ${theme === 'dark' ? 'bg-gray-900/70' : 'bg-white/70'
-          }`}
+        className="sticky top-0 z-40 mb-2 rounded-b-2xl border-b border-red-500/15 bg-background/78 px-1.5 pt-1 text-center shadow-[0_12px_32px_-28px_hsl(var(--vdjv-glow)/0.55)] perf-high:backdrop-blur-md"
       >
-        <div className={`mb-1 text-sm ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+        <div className={`mb-1 text-sm ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}>
           {isAdmin && (
             <React.Suspense fallback={null}>
               <HeaderAdminDebugPanel
@@ -769,12 +778,12 @@ export function HeaderControls({
           )}
           {isDualMode ? (
             <div className="flex items-center justify-center gap-2 min-w-0 px-2 whitespace-nowrap">
-              <span className="text-blue-600 font-medium shrink-0">Primary:</span>
+              <span className="font-medium text-red-500 shrink-0">Primary:</span>
               <span className="min-w-0 max-w-[26vw] sm:max-w-[32vw] truncate" title={primaryBank?.name || 'None'}>
                 {primaryBank?.name || 'None'}
               </span>
-              <span className="text-gray-400">|</span>
-              <span className="text-purple-600 font-medium shrink-0">Secondary (SHIFT):</span>
+              <span className="text-slate-400">|</span>
+              <span className="font-medium text-sky-500 shrink-0">Secondary (SHIFT):</span>
               <span className="min-w-0 max-w-[26vw] sm:max-w-[32vw] truncate" title={secondaryBank?.name || 'None'}>
                 {secondaryBank?.name || 'None'}
               </span>
@@ -786,20 +795,13 @@ export function HeaderControls({
           )}
         </div>
 
-        <div className="flex flex-wrap justify-center gap-2 mb-2">
+        <div className="vdjv-glass mx-auto mb-2 flex w-fit max-w-full flex-wrap justify-center gap-2 rounded-2xl p-1.5">
           {/* Banks Menu Button */}
           <Button
             onClick={onToggleSideMenu}
             variant="outline"
             size={isMobileScreen ? "sm" : "default"}
-            className={`relative ${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${sideMenuOpen
-              ? theme === 'dark'
-                ? 'bg-indigo-500 border-indigo-400 text-indigo-300'
-                : 'bg-indigo-50 border-indigo-300 text-indigo-600'
-              : theme === 'dark'
-                ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-indigo-500 hover:border-indigo-400 hover:text-indigo-300'
-                : 'bg-white border-gray-300 text-gray-700 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-600'
-              }`}
+            className={cn('relative', controlClass(isMobileScreen ? 'w-10' : 'w-24', sideMenuOpen ? 'active' : 'default'))}
           >
             <Menu className="w-4 h-4" />
             {!isMobileScreen && (isMobileScreen ? '' : 'Banks')}
@@ -822,10 +824,7 @@ export function HeaderControls({
             onClick={handleUploadClick}
             variant="outline"
             size={isMobileScreen ? "sm" : "default"}
-            className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${theme === 'dark'
-              ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-teal-500 hover:border-teal-400 hover:text-teal-300'
-              : 'bg-white border-gray-300 text-gray-700 hover:bg-teal-50 hover:border-teal-300 hover:text-teal-600'
-              }`}
+            className={controlClass(isMobileScreen ? 'w-10' : 'w-24')}
           >
             <Upload className="w-4 h-4" />
             {!isMobileScreen && (isMobileScreen ? '' : 'Upload')}
@@ -836,14 +835,7 @@ export function HeaderControls({
             onClick={onToggleEditMode}
             variant="outline"
             size={isMobileScreen ? "sm" : "default"}
-            className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${editMode
-              ? theme === 'dark'
-                ? 'bg-orange-500 border-orange-400 text-orange-300'
-                : 'bg-orange-50 border-orange-300 text-orange-600'
-              : theme === 'dark'
-                ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-orange-500 hover:border-orange-400 hover:text-orange-300'
-                : 'bg-white border-gray-300 text-gray-700 hover:bg-orange-50 hover:border-orange-300 hover:text-orange-600'
-              }`}
+            className={controlClass(isMobileScreen ? 'w-10' : 'w-24', editMode ? 'warn' : 'default')}
           >
             <Pencil className="w-4 h-4" />
             {!isMobileScreen && (isMobileScreen ? '' : editMode ? 'Exit Edit' : 'Edit')}
@@ -854,15 +846,7 @@ export function HeaderControls({
               onClick={handlePadColorPaintButton}
               variant="outline"
               size={isMobileScreen ? "sm" : "default"}
-              className={`${isMobileScreen ? 'w-10' : 'w-28'} transition-all duration-200 ${
-                adminPadColorPaintActive
-                  ? theme === 'dark'
-                    ? 'bg-fuchsia-500 border-fuchsia-400 text-fuchsia-100'
-                    : 'bg-fuchsia-50 border-fuchsia-300 text-fuchsia-700'
-                  : theme === 'dark'
-                    ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-fuchsia-500 hover:border-fuchsia-400 hover:text-fuchsia-100'
-                    : 'bg-white border-gray-300 text-gray-700 hover:bg-fuchsia-50 hover:border-fuchsia-300 hover:text-fuchsia-700'
-              }`}
+              className={controlClass(isMobileScreen ? 'w-10' : 'w-28', adminPadColorPaintActive ? 'active' : 'default')}
               title={adminPadColorPaintActive ? 'Change paint color' : (padColorPaintBlockedReason || 'Color Paint Mode')}
             >
               <Palette className="w-4 h-4" />
@@ -875,11 +859,7 @@ export function HeaderControls({
               onClick={handleUndoPadColorPaint}
               variant="outline"
               size={isMobileScreen ? "sm" : "default"}
-              className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${
-                theme === 'dark'
-                  ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-slate-500 hover:border-slate-400 hover:text-white'
-                  : 'bg-white border-gray-300 text-gray-700 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700'
-              }`}
+              className={controlClass(isMobileScreen ? 'w-10' : 'w-24')}
               title="Undo last painted pad color"
             >
               <Undo2 className="w-4 h-4" />
@@ -893,15 +873,7 @@ export function HeaderControls({
               onClick={onToggleSearch}
               variant="outline"
               size={isMobileScreen ? "sm" : "default"}
-              className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${
-                searchOpen
-                  ? theme === 'dark'
-                    ? 'bg-cyan-500 border-cyan-400 text-cyan-100'
-                    : 'bg-cyan-50 border-cyan-300 text-cyan-700'
-                  : theme === 'dark'
-                    ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-cyan-500 hover:border-cyan-400 hover:text-cyan-100'
-                    : 'bg-white border-gray-300 text-gray-700 hover:bg-cyan-50 hover:border-cyan-300 hover:text-cyan-700'
-              }`}
+              className={controlClass(isMobileScreen ? 'w-10' : 'w-24', searchOpen ? 'active' : 'default')}
               title={isMobileScreen ? 'Search pads' : 'Search pads (Ctrl/Cmd+K)'}
             >
               <Search className="w-4 h-4" />
@@ -917,15 +889,7 @@ export function HeaderControls({
               )}
               variant="outline"
               size={isMobileScreen ? "sm" : "default"}
-              className={`${isMobileScreen ? 'min-w-[5.25rem]' : 'w-32'} px-2 transition-all duration-200 ${
-                freePlaySummary.exhausted
-                  ? theme === 'dark'
-                    ? 'bg-red-500/20 border-red-400 text-red-100 hover:bg-red-500/30'
-                    : 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100'
-                  : theme === 'dark'
-                    ? 'bg-amber-500/15 border-amber-400 text-amber-100 hover:bg-amber-500/25'
-                    : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
-              }`}
+              className={cn(controlClass(isMobileScreen ? 'min-w-[5.25rem]' : 'w-32', freePlaySummary.exhausted ? 'danger' : 'warn'), 'px-2')}
               title={freePlaySummary.exhausted ? 'Free plays finished. Click for upgrade options.' : 'Free Default Bank plays left'}
             >
               <span className="text-[11px] font-bold">{isMobileScreen ? `FREE ${freePlaySummary.remainingCount}` : `FREE PLAY: ${freePlaySummary.remainingCount}`}</span>
@@ -939,14 +903,7 @@ export function HeaderControls({
             size={isMobileScreen ? "sm" : "default"}
             title={globalMuted ? 'Master output is muted. Click to unmute.' : 'Mute all sampler output.'}
             aria-pressed={globalMuted}
-            className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${globalMuted
-              ? theme === 'dark'
-                ? 'bg-red-500 border-red-400 text-red-300'
-                : 'bg-red-50 border-red-300 text-red-600'
-              : theme === 'dark'
-                ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-purple-500 hover:border-purple-400 hover:text-purple-300'
-                : 'bg-white border-gray-300 text-gray-700 hover:bg-purple-50 hover:border-purple-300 hover:text-purple-600'
-              }`}
+            className={controlClass(isMobileScreen ? 'w-10' : 'w-24', globalMuted ? 'danger' : 'default')}
           >
             {globalMuted ? (
               <VolumeX className="w-4 h-4" />
@@ -961,10 +918,7 @@ export function HeaderControls({
             onClick={onStopAll}
             variant="outline"
             size={isMobileScreen ? "sm" : "default"}
-            className={`${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${theme === 'dark'
-              ? 'bg-red-500 border-red-400 text-red-400 hover:bg-red-600'
-              : 'bg-red-50 border-red-300 text-red-600 hover:bg-red-100'
-              }`}
+            className={controlClass(isMobileScreen ? 'w-10' : 'w-24', 'danger')}
           >
             <Square className="w-4 h-4" />
             {!isMobileScreen && (isMobileScreen ? '' : 'Stop All')}
@@ -975,18 +929,7 @@ export function HeaderControls({
             onClick={channelLoadArmed ? onCancelChannelLoad : onToggleMixer}
             variant="outline"
             size={isMobileScreen ? "sm" : "default"}
-            className={`relative ${isMobileScreen ? 'w-10' : 'w-24'} transition-all duration-200 ${channelLoadArmed
-              ? theme === 'dark'
-                ? 'bg-red-500/20 border-red-400 text-red-300 hover:bg-red-500/40'
-                : 'bg-red-50 border-red-300 text-red-600 hover:bg-red-100'
-              : mixerOpen
-                ? theme === 'dark'
-                  ? 'bg-green-500 border-green-400 text-green-300'
-                  : 'bg-green-50 border-green-300 text-green-600'
-                : theme === 'dark'
-                  ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-green-500 hover:border-green-400 hover:text-green-300'
-                  : 'bg-white border-gray-300 text-gray-700 hover:bg-green-50 hover:border-green-300 hover:text-green-600'
-              }`}
+            className={cn('relative', controlClass(isMobileScreen ? 'w-10' : 'w-24', channelLoadArmed ? 'danger' : mixerOpen ? 'good' : 'default'))}
           >
             {channelLoadArmed ? <X className="w-4 h-4" /> : <Sliders className="w-4 h-4" />}
             {!isMobileScreen && (isMobileScreen ? '' : channelLoadArmed ? 'Cancel' : 'Mixer')}
@@ -1014,10 +957,7 @@ export function HeaderControls({
               variant="outline"
               size={isMobileScreen ? "sm" : "default"}
               disabled={loading || isSigningIn}
-              className={`w-24 transition-all duration-200 ${theme === 'dark'
-                ? 'bg-blue-600/20 border-blue-500 text-blue-300 hover:bg-blue-500 hover:border-blue-400 hover:text-blue-200'
-                : 'bg-blue-50 border-blue-300 text-blue-600 hover:bg-blue-100 hover:border-blue-400 hover:text-blue-700'
-                }`}
+              className={controlClass('w-24', 'active')}
               title={isSigningIn ? 'Signing in...' : 'Sign in to your account'}
             >
               <LogIn className="w-4 h-4" />
@@ -1031,10 +971,7 @@ export function HeaderControls({
               onClick={() => setAdminDialogOpen(true)}
               variant="outline"
               size={isMobileScreen ? "sm" : "default"}
-              className={`${isMobileScreen ? 'w-10' : 'w-40'} transition-all duration-200 ${theme === 'dark'
-                ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-yellow-500 hover:border-yellow-400 hover:text-yellow-200'
-                : 'bg-white border-gray-300 text-gray-700 hover:bg-yellow-50 hover:border-yellow-300 hover:text-yellow-700'
-                }`}
+              className={controlClass(isMobileScreen ? 'w-10' : 'w-40', 'warn')}
               title="Manage bank access"
             >
               <Shield className="w-4 h-4" />
@@ -1047,11 +984,7 @@ export function HeaderControls({
               onClick={onExitDualMode}
               variant="outline"
               size="default"
-              className={`w-36 transition-all duration-200 ${
-                theme === 'dark'
-                  ? 'bg-amber-500/15 border-amber-400 text-amber-200 hover:bg-amber-500/30 hover:border-amber-300'
-                  : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100 hover:border-amber-400'
-              }`}
+              className={controlClass('w-36', 'warn')}
               title="Exit dual mode"
             >
               <X className="w-4 h-4" />
@@ -1078,14 +1011,14 @@ export function HeaderControls({
         {isAdmin && adminPadColorPaintActive && adminPadColorPaintColor && (
           <div className={`mx-auto mb-2 inline-flex max-w-[92vw] flex-wrap items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
             theme === 'dark'
-              ? 'border-fuchsia-400/40 bg-fuchsia-500/10 text-fuchsia-100'
-              : 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700'
+              ? 'border-red-400/40 bg-red-500/10 text-red-100'
+              : 'border-red-300 bg-red-50 text-red-700'
           }`}>
             <Palette className="h-3.5 w-3.5" />
             <span>Color Paint Mode</span>
             <span className="inline-block h-3.5 w-3.5 rounded-full border border-white/60" style={{ backgroundColor: adminPadColorPaintColor }} />
             <span>{getPadColorOptionLabel(adminPadColorPaintColor)}</span>
-            <span className={theme === 'dark' ? 'text-fuchsia-200/80' : 'text-fuchsia-600/80'}>
+            <span className={theme === 'dark' ? 'text-red-200/80' : 'text-red-600/80'}>
               Click pads to recolor. Press Esc or stop paint to return to normal edit mode.
             </span>
             <Button
@@ -1095,8 +1028,8 @@ export function HeaderControls({
               onClick={handleStopPadColorPaint}
               className={`h-7 px-2 text-[11px] ${
                 theme === 'dark'
-                  ? 'border-fuchsia-300/40 bg-fuchsia-500/10 text-fuchsia-100 hover:bg-fuchsia-500/20'
-                  : 'border-fuchsia-300 bg-white text-fuchsia-700 hover:bg-fuchsia-100'
+                  ? 'border-red-300/40 bg-red-500/10 text-red-100 hover:bg-red-500/20'
+                  : 'border-red-300 bg-white text-red-700 hover:bg-red-100'
               }`}
             >
               Stop Paint
@@ -1278,7 +1211,7 @@ export function HeaderControls({
           }
         }}
       >
-        <DialogContent className={theme === 'dark' ? 'bg-gray-800 border-gray-600 sm:max-w-md' : 'bg-white border-gray-300 sm:max-w-md'}>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>
               What should we call you?

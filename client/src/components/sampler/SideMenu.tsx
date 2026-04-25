@@ -24,6 +24,7 @@ import type { ImportBankSource } from './hooks/nativeBankImport.types';
 import type { AdminStoreUploadQueueSummary, ExportAudioMode, LinkExistingStoreBankCandidate, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
 import type { BankPreparedSummary } from './hooks/preparedAudio';
 import { parsePadDragTransferPayload } from './padDragTransfer';
+import { cn } from '@/lib/utils';
 
 type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string; closing?: boolean };
 const MAX_ACTIVE_NOTICES = 2;
@@ -38,7 +39,7 @@ const MAX_PROGRESS_LOG_LINES = 80;
 const STORE_BUTTON_CONFETTI = [
   { key: 'c1', className: '-top-2 left-3 bg-amber-300', delay: '0ms', duration: '2.1s', drift: '-8px', rotate: '-26deg' },
   { key: 'c2', className: '-top-3 right-5 bg-pink-300', delay: '260ms', duration: '2.4s', drift: '10px', rotate: '32deg' },
-  { key: 'c3', className: '-top-1 right-2 bg-cyan-300', delay: '520ms', duration: '2s', drift: '-6px', rotate: '18deg' },
+  { key: 'c3', className: '-top-1 right-2 bg-red-200', delay: '520ms', duration: '2s', drift: '-6px', rotate: '18deg' },
   { key: 'c4', className: '-top-2 left-8 bg-emerald-300', delay: '160ms', duration: '2.3s', drift: '7px', rotate: '-20deg' },
   { key: 'c5', className: '-top-3 right-8 bg-fuchsia-300', delay: '420ms', duration: '2.5s', drift: '-10px', rotate: '28deg' },
 ];
@@ -436,6 +437,12 @@ export function SideMenu({
     : capabilities.effectiveTier.toUpperCase();
   const accountIdentityLabel = effectiveUser ? `${accountTierLabel} - ${displayName}` : 'GUEST';
   const isLowestGraphics = graphicsTier === 'lowest';
+  const panelClass = cn(
+    'vdjv-surface fixed inset-y-0 left-0 z-50 flex h-[100dvh] w-64 flex-col border-r transition-transform duration-200 will-change-transform',
+    open ? 'translate-x-0' : '-translate-x-full',
+    !isLowestGraphics && 'perf-high:shadow-2xl',
+  );
+  const menuButtonClass = 'min-w-0 px-2 sm:px-3 text-[13px] sm:text-sm gap-0 transition-all duration-200';
   const requestStoreLogin = React.useCallback((reason?: string) => {
     requestLoginPrompt(reason || 'Please sign in to download this bank.');
   }, [requestLoginPrompt]);
@@ -1060,21 +1067,19 @@ export function SideMenu({
         `}</style>
       )}
       <div
-        className={`fixed inset-y-0 left-0 z-50 w-64 border-r transition-transform duration-200 will-change-transform ${theme === 'dark'
-          ? 'bg-gray-800/95 border-gray-700 perf-high:backdrop-blur-md'
-          : 'bg-white/95 border-gray-200 perf-high:backdrop-blur-md'
-          } flex h-[100dvh] flex-col ${open ? 'translate-x-0' : '-translate-x-full'} perf-high:shadow-2xl`}
+        className={panelClass}
       >
         <div
-          className={`flex items-center gap-3 p-3 border-b ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'
-            }`}
+          className="flex items-center gap-3 border-b border-red-500/15 p-3"
         >
-          <img src={logoSrc} alt="VDJV Logo" className="w-9 h-9 object-contain shrink-0" />
+          <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-1.5">
+            <img src={logoSrc} alt="VDJV Logo" className="w-8 h-8 object-contain shrink-0" />
+          </div>
           <div className="min-w-0 flex-1">
-            <div className={`text-sm font-semibold truncate ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+            <div className={`text-sm font-semibold truncate ${theme === 'dark' ? 'text-white' : 'text-slate-950'}`}>
               VDJV Sampler Pad
             </div>
-            <div className={`text-[11px] truncate ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+            <div className={`text-[11px] truncate ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
               {accountIdentityLabel}
             </div>
           </div>
@@ -1082,9 +1087,7 @@ export function SideMenu({
             variant="ghost"
             size="sm"
             onClick={requestAboutDialog}
-            className={theme === 'dark'
-              ? 'h-8 w-8 p-0 text-cyan-300 hover:bg-cyan-900/40 hover:text-cyan-200'
-              : 'h-8 w-8 p-0 text-cyan-700 hover:bg-cyan-100 hover:text-cyan-800'}
+            className="h-8 w-8 p-0 text-red-500 hover:bg-red-500/10 hover:text-red-400"
             title="About & Settings"
           >
             <Settings className="w-4 h-4" />
@@ -1092,11 +1095,10 @@ export function SideMenu({
         </div>
 
         <div
-          className={`flex items-center justify-between p-3 border-b ${theme === 'dark' ? 'border-gray-700' : 'border-gray-200'
-            }`}
+          className="flex items-center justify-between border-b border-red-500/15 p-3"
         >
           <h2
-            className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'
+            className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-slate-950'
               }`}
           >
             Banks
@@ -1106,9 +1108,7 @@ export function SideMenu({
             variant="ghost"
             size="sm"
             onClick={() => onOpenChange(false)}
-            className={theme === 'dark'
-              ? 'h-8 w-8 p-0 inline-flex items-center justify-center border border-red-500/50 bg-red-900/40 text-red-300 hover:bg-red-800/60 hover:text-red-100'
-              : 'h-8 w-8 p-0 inline-flex items-center justify-center border border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700'}
+            className="vdjv-status-danger h-8 w-8 p-0 inline-flex items-center justify-center hover:bg-primary/18"
             title="Close Banks"
           >
             <X className="w-4 h-4" />
@@ -1120,10 +1120,7 @@ export function SideMenu({
             <div className="grid grid-cols-2 gap-2 mb-2">
               <Button
                 onClick={() => setShowCreateDialog(true)}
-                className={`min-w-0 px-2 sm:px-3 text-[13px] sm:text-sm gap-0 transition-all duration-200 ${theme === 'dark'
-                  ? 'bg-blue-600 border-blue-500 text-white hover:bg-blue-500'
-                  : 'bg-blue-50 border-blue-300 text-blue-600 hover:bg-blue-100'
-                  }`}
+                className={cn(menuButtonClass, 'vdjv-primary-action')}
               >
                 <Plus className="w-4 h-4 mr-1.5 shrink-0" />
                 <span className="truncate">New Bank</span>
@@ -1138,10 +1135,7 @@ export function SideMenu({
                     style={{ contain: 'paint' }}
                   >
                     <div
-                      className={`pointer-events-none absolute inset-0 -z-10 rounded-xl opacity-65 animate-pulse ${theme === 'dark'
-                        ? 'bg-gradient-to-r from-fuchsia-500/55 via-indigo-400/55 to-cyan-400/55'
-                        : 'bg-gradient-to-r from-fuchsia-300/65 via-indigo-300/65 to-cyan-300/65'
-                        }`}
+                      className="pointer-events-none absolute inset-0 -z-10 rounded-xl bg-gradient-to-r from-red-500/60 via-rose-400/55 to-amber-300/45 opacity-65 animate-pulse"
                     />
                     {STORE_BUTTON_CONFETTI.map((piece) => (
                       <span
@@ -1176,10 +1170,7 @@ export function SideMenu({
                     markStorePreviewSeen();
                     setShowStoreDialog(true);
                   }}
-                  className={`relative min-w-0 w-full overflow-hidden px-2 sm:px-3 text-[13px] sm:text-sm gap-0 transition-colors duration-200 ${showEnhancedStoreButton ? 'shadow-[0_0_14px_rgba(99,102,241,0.26)]' : ''} ${theme === 'dark'
-                    ? 'bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500'
-                    : 'bg-indigo-50 border-indigo-300 text-indigo-700 hover:bg-indigo-100'
-                    }`}
+                  className={cn(menuButtonClass, 'relative w-full overflow-hidden transition-colors', showEnhancedStoreButton ? 'shadow-[0_0_14px_hsl(var(--vdjv-glow)/0.28)]' : '', 'vdjv-primary-action')}
                   style={storeButtonMotionStyle}
                 >
                   {showEnhancedStoreButton && (
@@ -1385,35 +1376,35 @@ export function SideMenu({
                 const activeLabel = isPrimary ? 'PRIMARY' : isSecondary ? 'SECONDARY' : isCurrent ? 'CURRENT' : null;
                 const activeAccentClass = isPrimary
                   ? (theme === 'dark'
-                    ? 'bg-gradient-to-r from-blue-500/18 via-slate-800/94 to-slate-900/96 border-blue-400/80 text-white shadow-[0_10px_24px_-18px_rgba(59,130,246,0.9)] perf-high:backdrop-blur-sm'
-                    : 'bg-gradient-to-r from-blue-50 via-white to-white border-blue-500 text-gray-900 shadow-[0_10px_24px_-18px_rgba(59,130,246,0.45)] perf-high:backdrop-blur-sm')
+                    ? 'bg-gradient-to-r from-red-500/18 via-slate-800/94 to-slate-900/96 border-red-400/80 text-white shadow-[0_10px_24px_-18px_hsl(var(--vdjv-glow)/0.9)] perf-high:backdrop-blur-sm'
+                    : 'bg-gradient-to-r from-red-50 via-white to-white border-red-500 text-slate-950 shadow-[0_10px_24px_-18px_hsl(var(--vdjv-glow)/0.45)] perf-high:backdrop-blur-sm')
                   : isSecondary
                     ? (theme === 'dark'
-                      ? 'bg-gradient-to-r from-purple-500/18 via-slate-800/94 to-slate-900/96 border-purple-400/80 text-white shadow-[0_10px_24px_-18px_rgba(168,85,247,0.9)] perf-high:backdrop-blur-sm'
-                      : 'bg-gradient-to-r from-purple-50 via-white to-white border-purple-500 text-gray-900 shadow-[0_10px_24px_-18px_rgba(168,85,247,0.4)] perf-high:backdrop-blur-sm')
+                      ? 'bg-gradient-to-r from-sky-500/18 via-slate-800/94 to-slate-900/96 border-sky-400/80 text-white shadow-[0_10px_24px_-18px_rgba(14,165,233,0.82)] perf-high:backdrop-blur-sm'
+                      : 'bg-gradient-to-r from-sky-50 via-white to-white border-sky-500 text-slate-950 shadow-[0_10px_24px_-18px_rgba(14,165,233,0.34)] perf-high:backdrop-blur-sm')
                     : (theme === 'dark'
                       ? 'bg-gradient-to-r from-emerald-500/18 via-slate-800/94 to-slate-900/96 border-emerald-400/80 text-white shadow-[0_10px_24px_-18px_rgba(34,197,94,0.9)] perf-high:backdrop-blur-sm'
-                      : 'bg-gradient-to-r from-emerald-50 via-white to-white border-emerald-500 text-gray-900 shadow-[0_10px_24px_-18px_rgba(34,197,94,0.4)] perf-high:backdrop-blur-sm');
+                      : 'bg-gradient-to-r from-emerald-50 via-white to-white border-emerald-500 text-slate-950 shadow-[0_10px_24px_-18px_rgba(34,197,94,0.4)] perf-high:backdrop-blur-sm');
                 const activePillClass = isPrimary
-                  ? (theme === 'dark' ? 'bg-blue-500/18 text-blue-200 border-blue-400/50' : 'bg-blue-100 text-blue-700 border-blue-200')
+                  ? (theme === 'dark' ? 'bg-red-500/18 text-red-100 border-red-400/50' : 'bg-red-100 text-red-700 border-red-200')
                   : isSecondary
-                    ? (theme === 'dark' ? 'bg-purple-500/18 text-purple-200 border-purple-400/50' : 'bg-purple-100 text-purple-700 border-purple-200')
+                    ? (theme === 'dark' ? 'bg-sky-500/18 text-sky-200 border-sky-400/50' : 'bg-sky-100 text-sky-700 border-sky-200')
                     : (theme === 'dark' ? 'bg-emerald-500/18 text-emerald-200 border-emerald-400/50' : 'bg-emerald-100 text-emerald-700 border-emerald-200');
                 const lowestActivePillClass = isPrimary
-                  ? (theme === 'dark' ? 'bg-blue-950/85 text-blue-100 border-blue-400/70' : 'bg-blue-600 text-white border-blue-200')
+                  ? (theme === 'dark' ? 'bg-red-950/85 text-red-100 border-red-400/70' : 'bg-red-600 text-white border-red-200')
                   : isSecondary
-                    ? (theme === 'dark' ? 'bg-purple-950/85 text-purple-100 border-purple-400/70' : 'bg-purple-600 text-white border-purple-200')
+                    ? (theme === 'dark' ? 'bg-sky-950/85 text-sky-100 border-sky-400/70' : 'bg-sky-600 text-white border-sky-200')
                     : (theme === 'dark' ? 'bg-emerald-950/85 text-emerald-100 border-emerald-400/70' : 'bg-emerald-600 text-white border-emerald-200');
                 const activeRailClass = isPrimary
-                  ? 'bg-blue-500'
+                  ? 'bg-red-500'
                   : isSecondary
-                    ? 'bg-purple-500'
+                    ? 'bg-sky-500'
                     : 'bg-emerald-500';
                 const canRecoverAtBankLevel = !isPreview && bank?.restoreKind === 'custom_bank';
                 const lowestAccentBorder = isPrimary
-                  ? '#3b82f6'
+                  ? '#ef174f'
                   : isSecondary
-                    ? '#a855f7'
+                    ? '#0ea5e9'
                     : isCurrent
                       ? '#22c55e'
                       : withAlpha(bankColor, 'E6');
@@ -1449,8 +1440,8 @@ export function SideMenu({
                         : isActive
                         ? activeAccentClass
                         : theme === 'dark'
-                          ? 'bg-gray-800/40 border-gray-700 text-gray-300 hover:bg-gray-700/60 hover:border-gray-500 cursor-pointer perf-high:backdrop-blur-sm'
-                          : 'bg-white/40 border-gray-300 text-gray-700 hover:bg-white/80 hover:border-gray-400 cursor-pointer perf-high:backdrop-blur-sm'
+                          ? 'bg-slate-900/42 border-red-500/16 text-slate-300 hover:bg-slate-800/70 hover:border-red-400/30 cursor-pointer perf-high:backdrop-blur-sm'
+                          : 'bg-white/56 border-red-200/80 text-slate-700 hover:bg-white/90 hover:border-red-300/80 cursor-pointer perf-high:backdrop-blur-sm'
                       }`}
                     style={isLowestGraphics
                       ? {
@@ -1519,8 +1510,8 @@ export function SideMenu({
                             )}
                             {restoreStatus === 'needs_download' && (
                               <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${theme === 'dark'
-                                ? 'bg-indigo-500/15 text-indigo-200'
-                                : 'bg-indigo-100 text-indigo-700'
+                                ? 'bg-red-500/15 text-red-100'
+                                : 'bg-red-100 text-red-700'
                                 }`}>
                                 Download
                               </span>
@@ -1547,7 +1538,7 @@ export function SideMenu({
                           <div className="mt-1 space-y-1">
                             <div className={`h-1.5 overflow-hidden rounded-full ${isHighThumbnailCard ? 'bg-black/45' : theme === 'dark' ? 'bg-black/20' : 'bg-white/40'}`}>
                               <div
-                                className={`h-full rounded-full transition-all duration-300 ${snapshotTransfer.phase === 'error' ? 'bg-red-500' : 'bg-indigo-500'}`}
+                                className={`h-full rounded-full transition-all duration-300 ${snapshotTransfer.phase === 'error' ? 'bg-red-500' : 'bg-red-500'}`}
                                 style={{ width: `${normalizeProgress(snapshotTransfer.progress)}%` }}
                               />
                             </div>

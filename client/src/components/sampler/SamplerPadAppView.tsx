@@ -152,13 +152,13 @@ interface SamplerPadAppViewProps {
 
 const renderEmptyState = (theme: 'light' | 'dark', message: string) => (
   <div
-    className={`flex items-center justify-center h-64 rounded-2xl border-2 border-dashed transition-all duration-300 ${
+    className={`vdjv-surface flex h-64 items-center justify-center rounded-2xl border-2 border-dashed transition-all duration-300 ${
       theme === 'dark'
-        ? 'bg-gray-800 border-gray-600'
-        : 'bg-white border-gray-300'
+        ? 'border-red-400/24'
+        : 'border-red-200'
     }`}
   >
-    <p className={`text-center ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>{message}</p>
+    <p className={`text-center text-sm font-medium ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}>{message}</p>
   </div>
 );
 
@@ -169,11 +169,11 @@ const renderPanelFallback = (
   label: string
 ) => (
   <div
-    className={`fixed inset-y-0 ${side === 'left' ? 'left-0 border-r' : 'right-0 border-l'} z-50 ${widthClass} max-w-[95vw] ${
+    className={`vdjv-surface fixed inset-y-0 ${side === 'left' ? 'left-0 border-r' : 'right-0 border-l'} z-50 ${widthClass} max-w-[95vw] ${
       theme === 'dark'
-        ? 'border-gray-700 bg-gray-900/92 text-gray-200'
-        : 'border-gray-200 bg-white/96 text-gray-700'
-    } shadow-2xl backdrop-blur-sm`}
+        ? 'text-slate-200'
+        : 'text-slate-700'
+    } shadow-2xl`}
   >
     <div className="flex h-full items-start justify-center p-4">
       <div className="rounded-full border px-3 py-1 text-xs font-medium tracking-wide">
@@ -342,17 +342,17 @@ export function SamplerPadAppView({
   };
 
   return (
-    <div className={`${layoutSizeClass} transition-colors duration-150 ease-out ${theme === 'dark' ? 'bg-gray-900' : 'bg-gray-50'} flex`}>
+    <div className={`${layoutSizeClass} vdjv-app-bg transition-colors duration-150 ease-out flex`}>
       <React.Suspense fallback={sideMenuProps.open ? renderPanelFallback(theme, 'left', 'w-64', 'Loading Banks...') : null}>
         <SideMenu {...sideMenuProps} />
       </React.Suspense>
 
       {isIOSClient && audioRecoveryState === 'blocked' && (
         <div
-          className={`fixed left-1/2 top-3 z-40 -translate-x-1/2 rounded-xl border px-3 py-2 shadow-lg backdrop-blur ${
+          className={`vdjv-surface fixed left-1/2 top-3 z-40 -translate-x-1/2 rounded-xl px-3 py-2 shadow-lg ${
             theme === 'dark'
-              ? 'border-yellow-400/40 bg-gray-900/90 text-gray-100'
-              : 'border-yellow-300 bg-white/95 text-gray-900'
+              ? 'text-slate-100'
+              : 'text-slate-900'
           }`}
         >
           <div className="flex items-center gap-3 text-xs sm:text-sm">
