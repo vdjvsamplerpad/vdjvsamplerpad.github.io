@@ -1105,23 +1105,6 @@ export const SamplerPad = React.memo(function SamplerPad({
             style={{ borderColor: editMode ? '#f59e0b' : '#10b981' }}
           />
         )}
-        {(editMode || channelLoadArmed) && (
-          <div
-            className={`absolute bottom-1 right-1 z-20 rounded px-1.5 py-0.5 font-bold tracking-wide pointer-events-none ${
-              isLowestGraphics ? 'text-[8px]' : 'text-[9px]'
-            } ${
-              editMode
-                ? 'bg-amber-500 text-white'
-                : 'bg-emerald-500 text-white'
-            }`}
-            style={{
-              textShadow: isHighGraphics ? highReadabilityTextShadow : '0 1px 2px rgba(0,0,0,0.55)',
-              boxShadow: isHighGraphics ? '0 3px 8px rgba(0,0,0,0.4)' : '0 2px 6px rgba(0,0,0,0.22)',
-            }}
-          >
-            {editMode ? 'EDIT' : 'LOAD'}
-          </div>
-        )}
         {isSnapshotMissingPad && !editMode && !channelLoadArmed && !missingPadBusy && (
           <div
             className={`absolute bottom-1 left-1 z-20 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-wide pointer-events-none ${

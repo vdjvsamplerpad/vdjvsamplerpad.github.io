@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2 } from 'lucide-react';
+import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2, BadgeDollarSign } from 'lucide-react';
 import type { SamplerBank, StopMode } from './types/sampler';
 import { createPortal } from 'react-dom';
 import { getCachedUser, useAuthActions, useAuthState } from '@/hooks/useAuth';
@@ -802,7 +802,7 @@ export function HeaderControls({
   );
 
   const bankIslandClass = (tone: 'primary' | 'secondary') => cn(
-    'pointer-events-auto min-w-0 truncate rounded-full border px-4 py-1.5 text-xs font-black shadow-sm',
+    'pointer-events-auto min-w-0 max-w-full truncate rounded-full border px-4 py-1.5 text-center text-xs font-black shadow-sm',
     tone === 'secondary'
       ? theme === 'dark'
         ? 'border-sky-400/40 bg-sky-950/95 text-sky-100'
@@ -810,6 +810,19 @@ export function HeaderControls({
       : theme === 'dark'
         ? 'border-red-400/40 bg-slate-950/95 text-red-100'
         : 'border-red-200 bg-white/95 text-red-700'
+  );
+
+  const navDotRingClass = theme === 'dark' ? 'ring-slate-950' : 'ring-white';
+  const renderNavIcon = (icon: React.ReactNode, dotClass?: string) => (
+    <span className="relative inline-flex h-6 w-6 items-center justify-center">
+      <span className="inline-flex h-5 w-5 items-center justify-center">{icon}</span>
+      {dotClass ? (
+        <span
+          aria-hidden="true"
+          className={cn('absolute -left-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2', navDotRingClass, dotClass)}
+        />
+      ) : null}
+    </span>
   );
 
   return (
@@ -843,16 +856,18 @@ export function HeaderControls({
           )}
         </div>
         <div className={cn(
-          'grid w-full max-w-[min(42rem,94vw)] items-center gap-2 text-sm',
-          isDualMode ? 'grid-cols-2' : 'grid-cols-1 justify-items-center',
+          'grid w-full items-center gap-2 text-sm',
+          isDualMode
+            ? 'max-w-[min(100vw-1rem,calc(100vw-1rem))] grid-cols-2'
+            : 'max-w-[min(42rem,94vw)] grid-cols-1 justify-items-center',
           theme === 'dark' ? 'text-slate-200' : 'text-slate-700'
         )}>
           {isDualMode ? (
             <>
-              <span className={cn(bankIslandClass('primary'), 'justify-self-start text-left')} title={primaryBank?.name || 'None'}>
+              <span className={cn(bankIslandClass('primary'), 'w-[min(19rem,44vw)] justify-self-center')} title={primaryBank?.name || 'None'}>
                 {primaryBank?.name || 'None'}
               </span>
-              <span className={cn(bankIslandClass('secondary'), 'justify-self-end text-right')} title={secondaryBank?.name || 'None'}>
+              <span className={cn(bankIslandClass('secondary'), 'w-[min(19rem,44vw)] justify-self-center')} title={secondaryBank?.name || 'None'}>
                 {secondaryBank?.name || 'None'}
               </span>
             </>
@@ -1069,10 +1084,6 @@ export function HeaderControls({
           }`}>
             <VolumeX className="h-3.5 w-3.5 shrink-0" />
             <span>Master output muted</span>
-            <span className={theme === 'dark' ? 'text-red-100/80' : 'text-red-600/80'}>
-              Pad taps still trigger, but no sound will come out until you unmute.
-            </span>
-
           </div>
         )}
 
@@ -1108,8 +1119,10 @@ export function HeaderControls({
 
       <div
         className={cn(
-          'fixed left-1/2 z-40 -translate-x-1/2 px-2 pointer-events-none',
-          isCompactBottomNav ? 'bottom-[calc(var(--vdjv-safe-bottom)+0.65rem)] w-full max-w-[30rem]' : 'bottom-[calc(var(--vdjv-safe-bottom)+0.85rem)]'
+          'fixed left-1/2 z-40 -translate-x-1/2 pointer-events-none',
+          isCompactBottomNav
+            ? 'bottom-[calc(var(--vdjv-safe-bottom)+0.65rem)] w-[min(29rem,calc(100vw-1rem))]'
+            : 'bottom-[calc(var(--vdjv-safe-bottom)+0.85rem)]'
         )}
       >
         <div
@@ -1117,8 +1130,8 @@ export function HeaderControls({
             'pointer-events-auto mx-auto flex items-center border shadow-lg',
             isCompactBottomNav
               ? theme === 'dark'
-                ? 'h-[4.85rem] rounded-t-[2rem] rounded-b-md border-slate-700 bg-neutral-950 px-3 pb-2 pt-3'
-                : 'h-[4.85rem] rounded-t-[2rem] rounded-b-md border-slate-200 bg-white px-3 pb-2 pt-3'
+                ? 'h-[4.85rem] rounded-[2rem] border-slate-700 bg-neutral-950/96 px-3 pb-2 pt-3'
+                : 'h-[4.85rem] rounded-[2rem] border-slate-200 bg-white/96 px-3 pb-2 pt-3'
               : theme === 'dark'
                 ? 'gap-2 rounded-2xl border-slate-800 bg-slate-950 p-1.5'
                 : 'gap-2 rounded-2xl border-slate-200 bg-white p-1.5'
@@ -1129,12 +1142,24 @@ export function HeaderControls({
             onClick={onToggleSideMenu}
             className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-24', sideMenuOpen && 'border-red-400 text-red-500')}
           >
-            <Menu className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />
-            <span>Bank</span>
-            {showStoreNewBadge && (
-              <span aria-hidden="true" className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-red-500" />
+            {renderNavIcon(
+              <Menu className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />,
+              showStoreNewBadge ? 'bg-[#B9FF12]' : undefined
             )}
+            <span>Bank</span>
           </button>
+
+          {!isCompactBottomNav && (
+            <button
+              type="button"
+              onClick={handleUploadClick}
+              className={cn(navButtonBase, 'w-24')}
+              title="Upload audio to current bank"
+            >
+              {renderNavIcon(<Upload className="h-4 w-4" />)}
+              <span>Upload</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -1142,11 +1167,15 @@ export function HeaderControls({
             className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-28', searchOpen && 'border-red-400 text-red-500')}
             title={capabilities.features.search ? 'Search pads' : 'Upgrade or sign in for full search'}
           >
-            <Search className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />
+            {capabilities.features.search
+              ? renderNavIcon(<Search className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />)
+              : renderNavIcon(<BadgeDollarSign className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />)}
             <span className="max-w-full truncate">
               {playSummary?.visible
                 ? `${playSummary.mode === 'guest' ? 'GUEST' : 'FREE'} ${playSummary.remainingCount}`
-                : 'Search'}
+                : capabilities.features.search
+                  ? 'Search'
+                  : 'Plan'}
             </span>
           </button>
 
@@ -1156,7 +1185,7 @@ export function HeaderControls({
             className={cn(
               'relative flex items-center justify-center border font-black text-white shadow-lg transition-transform active:scale-95',
               isCompactBottomNav
-                ? 'mx-1 -mt-12 h-[4.75rem] w-[4.75rem] shrink-0 rounded-full border-red-200 bg-red-600 ring-[0.55rem] ring-slate-300/60'
+                ? 'mx-1 -mt-12 h-[4.65rem] w-[4.65rem] shrink-0 rounded-full border-red-200 bg-red-600 ring-[0.5rem] ring-slate-300/60'
                 : 'h-12 w-28 rounded-2xl border-red-400 bg-red-600',
               theme === 'dark' && isCompactBottomNav ? 'ring-slate-700/80' : ''
             )}
@@ -1174,33 +1203,39 @@ export function HeaderControls({
             className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-24', globalMuted && 'border-red-400 text-red-500')}
             title={globalMuted ? 'Master output is muted. Click to unmute.' : 'Mute all sampler output.'}
           >
-            {globalMuted ? <VolumeX className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} /> : <Volume2 className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />}
+            {renderNavIcon(
+              globalMuted ? <VolumeX className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} /> : <Volume2 className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />,
+              globalMuted ? 'bg-red-500' : undefined
+            )}
             <span>{globalMuted ? 'Muted' : 'Mute'}</span>
           </button>
+
+          {!isCompactBottomNav && (
+            <button
+              type="button"
+              onClick={onToggleEditMode}
+              className={cn(navButtonBase, 'w-20', editMode && 'border-amber-400 text-amber-500')}
+              title={editMode ? 'Exit Edit Mode' : 'Edit pads'}
+            >
+              {renderNavIcon(<Pencil className="h-4 w-4" />, editMode ? 'bg-amber-400' : undefined)}
+              <span>Edit</span>
+            </button>
+          )}
 
           <button
             type="button"
             onClick={channelLoadArmed ? onCancelChannelLoad : onToggleMixer}
             className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-24', (mixerOpen || channelLoadArmed) && 'border-emerald-400 text-emerald-500')}
           >
-            {channelLoadArmed ? <X className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} /> : <Sliders className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />}
-            <span>{channelLoadArmed ? 'Cancel' : 'Mixer'}</span>
-            {!channelLoadArmed && hasActiveDeckPlayback && (
-              <span aria-hidden="true" className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-emerald-500" />
+            {renderNavIcon(
+              channelLoadArmed ? <X className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} /> : <Sliders className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />,
+              !channelLoadArmed && hasActiveDeckPlayback ? 'bg-emerald-400' : undefined
             )}
+            <span>{channelLoadArmed ? 'Cancel' : 'Mixer'}</span>
           </button>
 
           {!isCompactBottomNav && (
             <div className="ml-1 flex items-center gap-1 border-l border-border/70 pl-2">
-              <button
-                type="button"
-                onClick={onToggleEditMode}
-                className={cn(navButtonBase, 'w-20', editMode && 'border-amber-400 text-amber-500')}
-                title={editMode ? 'Exit Edit Mode' : 'Edit pads'}
-              >
-                <Pencil className="h-4 w-4" />
-                <span>Edit</span>
-              </button>
               {isAdmin && editMode && (
                 <button
                   type="button"
@@ -1208,7 +1243,7 @@ export function HeaderControls({
                   className={cn(navButtonBase, 'w-20', adminPadColorPaintActive && 'border-red-400 text-red-500')}
                   title={adminPadColorPaintActive ? 'Stop Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
                 >
-                  <Palette className="h-4 w-4" />
+                  {renderNavIcon(<Palette className="h-4 w-4" />, adminPadColorPaintActive ? 'bg-red-500' : undefined)}
                   <span>Paint</span>
                 </button>
               )}
@@ -1219,7 +1254,7 @@ export function HeaderControls({
                   className={cn(navButtonBase, 'w-24 border-amber-400 text-amber-500')}
                   title="Exit dual mode"
                 >
-                  <X className="h-4 w-4" />
+                  {renderNavIcon(<X className="h-4 w-4" />)}
                   <span>Dual</span>
                 </button>
               )}
@@ -1230,7 +1265,7 @@ export function HeaderControls({
                   className={cn(navButtonBase, 'w-24 border-amber-400 text-amber-500')}
                   title="Manage bank access"
                 >
-                  <Shield className="h-4 w-4" />
+                  {renderNavIcon(<Shield className="h-4 w-4" />)}
                   <span>Admin</span>
                 </button>
               )}
@@ -1246,7 +1281,7 @@ export function HeaderControls({
           onClick={onToggleEditMode}
           variant="outline"
           size="icon"
-          className={controlClass('h-11 w-11 rounded-xl', editMode ? 'warn' : 'default')}
+          className={cn('shadow-lg', controlClass('h-11 w-11 rounded-xl', editMode ? 'warn' : 'default'))}
           title={editMode ? 'Exit Edit Mode' : 'Edit pads'}
         >
           <Pencil className="h-4 w-4" />
@@ -1257,22 +1292,10 @@ export function HeaderControls({
             onClick={adminPadColorPaintActive ? handleStopPadColorPaint : handlePadColorPaintButton}
             variant="outline"
             size="icon"
-            className={controlClass('h-11 w-11 rounded-xl', adminPadColorPaintActive ? 'active' : 'default')}
+            className={cn('shadow-lg', controlClass('h-11 w-11 rounded-xl', adminPadColorPaintActive ? 'active' : 'default'))}
             title={adminPadColorPaintActive ? 'Stop Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
           >
             <Palette className="h-4 w-4" />
-          </Button>
-        )}
-        {isDualMode && (
-          <Button
-            type="button"
-            onClick={onExitDualMode}
-            variant="outline"
-            size="icon"
-            className={controlClass('h-11 w-11 rounded-xl', 'warn')}
-            title="Exit dual mode"
-          >
-            <X className="h-4 w-4" />
           </Button>
         )}
         {isAdmin && (
@@ -1281,13 +1304,32 @@ export function HeaderControls({
             onClick={() => setAdminDialogOpen(true)}
             variant="outline"
             size="icon"
-            className={controlClass('h-11 w-11 rounded-xl', 'warn')}
+            className={cn('shadow-lg', controlClass('h-11 w-11 rounded-xl', 'default'))}
             title="Manage bank access"
           >
             <Shield className="h-4 w-4" />
           </Button>
         )}
       </div>
+      )}
+
+      {isCompactBottomNav && isDualMode && (
+        <Button
+          type="button"
+          onClick={onExitDualMode}
+          variant="outline"
+          size="sm"
+          className={cn(
+            'fixed left-1/2 top-[calc(var(--vdjv-safe-top)+3.35rem)] z-50 h-8 -translate-x-1/2 rounded-full px-3 text-[11px] font-black shadow-lg',
+            theme === 'dark'
+              ? 'border-amber-300/45 bg-slate-950/95 text-amber-100'
+              : 'border-amber-200 bg-white/95 text-amber-700'
+          )}
+          title="Exit dual mode"
+        >
+          <X className="h-3.5 w-3.5" />
+          Exit Dual
+        </Button>
       )}
 
       {isCompactBottomNav && (
@@ -1334,9 +1376,36 @@ export function HeaderControls({
           <div className="flex flex-wrap items-center justify-center gap-2">
             <VolumeX className="h-3.5 w-3.5 shrink-0" />
             <span>Master output muted</span>
-            <span className={theme === 'dark' ? 'text-red-100/80' : 'text-red-600/80'}>
-              Pad taps still trigger, but no sound will come out until you unmute.
-            </span>
+          </div>
+        </div>
+      )}
+
+      {editMode && (
+        <div className={cn(
+          'fixed left-1/2 z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-lg',
+          isCompactBottomNav ? 'top-[calc(var(--vdjv-safe-top)+5.75rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+8.25rem)]',
+          theme === 'dark'
+            ? 'border-amber-300/45 bg-amber-950 text-amber-100'
+            : 'border-amber-300 bg-amber-50 text-amber-700'
+        )}>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Pencil className="h-3.5 w-3.5 shrink-0" />
+            <span>Edit mode</span>
+          </div>
+        </div>
+      )}
+
+      {channelLoadArmed && (
+        <div className={cn(
+          'fixed left-1/2 z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-lg',
+          isCompactBottomNav ? 'top-[calc(var(--vdjv-safe-top)+8.25rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+10.5rem)]',
+          theme === 'dark'
+            ? 'border-emerald-300/45 bg-emerald-950 text-emerald-100'
+            : 'border-emerald-300 bg-emerald-50 text-emerald-700'
+        )}>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Sliders className="h-3.5 w-3.5 shrink-0" />
+            <span>Load mode</span>
           </div>
         </div>
       )}

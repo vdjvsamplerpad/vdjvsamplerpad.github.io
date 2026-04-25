@@ -1171,7 +1171,8 @@ export function SideMenu({
                     markStorePreviewSeen();
                     setShowStoreDialog(true);
                   }}
-                  className={cn(menuButtonClass, 'relative w-full overflow-hidden transition-colors', showEnhancedStoreButton ? 'shadow-[0_0_14px_hsl(var(--vdjv-glow)/0.28)]' : '', 'vdjv-primary-action')}
+                  variant="success"
+                  className={cn(menuButtonClass, 'relative w-full overflow-hidden transition-colors', showEnhancedStoreButton ? 'shadow-[0_0_14px_hsl(var(--vdjv-good)/0.3)]' : '')}
                   style={storeButtonMotionStyle}
                 >
                   {showEnhancedStoreButton && (
