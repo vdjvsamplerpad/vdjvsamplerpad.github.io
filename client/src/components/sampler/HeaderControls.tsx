@@ -801,22 +801,15 @@ export function HeaderControls({
     theme === 'dark' ? 'text-slate-300 hover:text-white' : 'text-slate-500 hover:text-slate-900'
   );
 
-  const renderBankIsland = (label: string, tone: 'primary' | 'secondary' | 'single') => (
-    <div
-      className={cn(
-        'pointer-events-auto max-w-[42vw] truncate rounded-full border px-4 py-1.5 text-xs font-bold shadow-sm',
-        tone === 'secondary'
-          ? theme === 'dark'
-            ? 'border-sky-400/40 bg-sky-950 text-sky-100'
-            : 'border-sky-200 bg-sky-50 text-sky-700'
-          : theme === 'dark'
-            ? 'border-red-400/40 bg-slate-950 text-red-100'
-            : 'border-red-200 bg-white text-red-700'
-      )}
-      title={label}
-    >
-      {label}
-    </div>
+  const bankIslandClass = (tone: 'primary' | 'secondary') => cn(
+    'pointer-events-auto min-w-0 truncate rounded-full border px-4 py-1.5 text-xs font-black shadow-sm',
+    tone === 'secondary'
+      ? theme === 'dark'
+        ? 'border-sky-400/40 bg-sky-950/95 text-sky-100'
+        : 'border-sky-200 bg-white/95 text-sky-700'
+      : theme === 'dark'
+        ? 'border-red-400/40 bg-slate-950/95 text-red-100'
+        : 'border-red-200 bg-white/95 text-red-700'
   );
 
   return (
@@ -834,7 +827,7 @@ export function HeaderControls({
         id="global-audio-upload-input"
       />
 
-      <header className="sticky top-0 z-40 mb-2 flex min-h-[2.65rem] items-start justify-center px-2 pt-1 text-center pointer-events-none">
+      <header className="fixed left-0 right-0 top-[calc(var(--vdjv-safe-top)+0.35rem)] z-40 flex min-h-[2.65rem] items-start justify-center px-2 text-center pointer-events-none">
         <div className="absolute left-2 top-1 pointer-events-auto">
           {isAdmin && (
             <React.Suspense fallback={null}>
@@ -849,18 +842,22 @@ export function HeaderControls({
             </React.Suspense>
           )}
         </div>
-        <div className={`flex max-w-full items-center justify-center gap-2 text-sm ${isPortraitViewport ? 'flex-col' : 'flex-row'} ${theme === 'dark' ? 'text-slate-200' : 'text-slate-700'}`}>
+        <div className={cn(
+          'grid w-full max-w-[min(42rem,94vw)] items-center gap-2 text-sm',
+          isDualMode ? 'grid-cols-2' : 'grid-cols-1 justify-items-center',
+          theme === 'dark' ? 'text-slate-200' : 'text-slate-700'
+        )}>
           {isDualMode ? (
             <>
-              <span className={`pointer-events-auto min-w-0 max-w-[42vw] truncate rounded-full border px-4 py-1.5 text-xs font-bold shadow-sm ${theme === 'dark' ? 'border-red-400/40 bg-slate-950 text-red-100' : 'border-red-200 bg-white text-red-700'}`} title={primaryBank?.name || 'None'}>
+              <span className={cn(bankIslandClass('primary'), 'justify-self-start text-left')} title={primaryBank?.name || 'None'}>
                 {primaryBank?.name || 'None'}
               </span>
-              <span className={`pointer-events-auto min-w-0 max-w-[42vw] truncate rounded-full border px-4 py-1.5 text-xs font-bold shadow-sm ${theme === 'dark' ? 'border-sky-400/40 bg-sky-950 text-sky-100' : 'border-sky-200 bg-sky-50 text-sky-700'}`} title={secondaryBank?.name || 'None'}>
+              <span className={cn(bankIslandClass('secondary'), 'justify-self-end text-right')} title={secondaryBank?.name || 'None'}>
                 {secondaryBank?.name || 'None'}
               </span>
             </>
           ) : (
-            <span className={`pointer-events-auto inline-block max-w-[90vw] truncate rounded-full border px-4 py-1.5 text-xs font-bold shadow-sm ${theme === 'dark' ? 'border-red-400/40 bg-slate-950 text-red-100' : 'border-red-200 bg-white text-red-700'}`} title={getBankDisplayName()}>
+            <span className={cn(bankIslandClass('primary'), 'inline-block max-w-[90vw] justify-self-center')} title={getBankDisplayName()}>
               {getBankDisplayName()}
             </span>
           )}
@@ -1192,46 +1189,119 @@ export function HeaderControls({
               <span aria-hidden="true" className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-emerald-500" />
             )}
           </button>
+
+          {!isCompactBottomNav && (
+            <div className="ml-1 flex items-center gap-1 border-l border-border/70 pl-2">
+              <button
+                type="button"
+                onClick={onToggleEditMode}
+                className={cn(navButtonBase, 'w-20', editMode && 'border-amber-400 text-amber-500')}
+                title={editMode ? 'Exit Edit Mode' : 'Edit pads'}
+              >
+                <Pencil className="h-4 w-4" />
+                <span>Edit</span>
+              </button>
+              {isAdmin && editMode && (
+                <button
+                  type="button"
+                  onClick={adminPadColorPaintActive ? handleStopPadColorPaint : handlePadColorPaintButton}
+                  className={cn(navButtonBase, 'w-20', adminPadColorPaintActive && 'border-red-400 text-red-500')}
+                  title={adminPadColorPaintActive ? 'Stop Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
+                >
+                  <Palette className="h-4 w-4" />
+                  <span>Paint</span>
+                </button>
+              )}
+              {isDualMode && (
+                <button
+                  type="button"
+                  onClick={onExitDualMode}
+                  className={cn(navButtonBase, 'w-24 border-amber-400 text-amber-500')}
+                  title="Exit dual mode"
+                >
+                  <X className="h-4 w-4" />
+                  <span>Dual</span>
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setAdminDialogOpen(true)}
+                  className={cn(navButtonBase, 'w-24 border-amber-400 text-amber-500')}
+                  title="Manage bank access"
+                >
+                  <Shield className="h-4 w-4" />
+                  <span>Admin</span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="fixed bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)] left-3 z-40 flex flex-col gap-2">
+      {isCompactBottomNav && (
+      <div className="fixed bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)] right-3 z-40 flex flex-col-reverse gap-2">
         <Button
           type="button"
           onClick={onToggleEditMode}
           variant="outline"
           size="icon"
-          className={controlClass('h-11 w-11 rounded-full', editMode ? 'warn' : 'default')}
+          className={controlClass('h-11 w-11 rounded-xl', editMode ? 'warn' : 'default')}
           title={editMode ? 'Exit Edit Mode' : 'Edit pads'}
         >
           <Pencil className="h-4 w-4" />
         </Button>
-        {!isAdmin && editMode && (
+        {isAdmin && editMode && (
           <Button
             type="button"
-            onClick={handlePadColorPaintButton}
+            onClick={adminPadColorPaintActive ? handleStopPadColorPaint : handlePadColorPaintButton}
             variant="outline"
             size="icon"
-            className={controlClass('h-11 w-11 rounded-full')}
-            title={padColorPaintBlockedReason || 'Color Paint Mode'}
+            className={controlClass('h-11 w-11 rounded-xl', adminPadColorPaintActive ? 'active' : 'default')}
+            title={adminPadColorPaintActive ? 'Stop Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
           >
             <Palette className="h-4 w-4" />
           </Button>
         )}
-      </div>
-
-      <div className="fixed bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)] right-3 z-40 flex flex-col items-end gap-2">
         {isDualMode && (
           <Button
             type="button"
             onClick={onExitDualMode}
             variant="outline"
-            size="sm"
-            className={controlClass('h-10 rounded-full px-3', 'warn')}
+            size="icon"
+            className={controlClass('h-11 w-11 rounded-xl', 'warn')}
             title="Exit dual mode"
           >
             <X className="h-4 w-4" />
-            <span>Exit Dual</span>
+          </Button>
+        )}
+        {isAdmin && (
+          <Button
+            type="button"
+            onClick={() => setAdminDialogOpen(true)}
+            variant="outline"
+            size="icon"
+            className={controlClass('h-11 w-11 rounded-xl', 'warn')}
+            title="Manage bank access"
+          >
+            <Shield className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+      )}
+
+      {isCompactBottomNav && (
+      <div className="fixed bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)] left-3 z-40 flex flex-col-reverse gap-2">
+        {isAdmin && adminPadColorPaintCanUndo && (
+          <Button
+            type="button"
+            onClick={handleUndoPadColorPaint}
+            variant="outline"
+            size="icon"
+            className={controlClass('h-11 w-11 rounded-xl')}
+            title="Undo last painted pad color"
+          >
+            <Undo2 className="h-4 w-4" />
           </Button>
         )}
         {!loading && !isAuthenticated && (
@@ -1242,55 +1312,16 @@ export function HeaderControls({
               setShowLoginModal(true);
             }}
             variant="outline"
-            size="sm"
+            size="icon"
             disabled={loading || isSigningIn}
-            className={controlClass('h-10 rounded-full px-3', 'active')}
+            className={controlClass('h-11 w-11 rounded-xl', 'active')}
             title={isSigningIn ? 'Signing in...' : 'Sign in to your account'}
           >
             <LogIn className="h-4 w-4" />
-            <span>{isSigningIn ? 'Wait' : 'Login'}</span>
-          </Button>
-        )}
-        {isAdmin && editMode && (
-          <Button
-            type="button"
-            onClick={adminPadColorPaintActive ? handleStopPadColorPaint : handlePadColorPaintButton}
-            variant="outline"
-            size="sm"
-            className={controlClass('h-10 rounded-full px-3', adminPadColorPaintActive ? 'active' : 'default')}
-            title={adminPadColorPaintActive ? 'Stop Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
-          >
-            <Palette className="h-4 w-4" />
-            <span>{adminPadColorPaintActive ? 'Stop Paint' : 'Paint'}</span>
-          </Button>
-        )}
-        {isAdmin && adminPadColorPaintCanUndo && (
-          <Button
-            type="button"
-            onClick={handleUndoPadColorPaint}
-            variant="outline"
-            size="sm"
-            className={controlClass('h-10 rounded-full px-3')}
-            title="Undo last painted pad color"
-          >
-            <Undo2 className="h-4 w-4" />
-            <span>Undo</span>
-          </Button>
-        )}
-        {isAdmin && (
-          <Button
-            type="button"
-            onClick={() => setAdminDialogOpen(true)}
-            variant="outline"
-            size="sm"
-            className={controlClass('h-10 rounded-full px-3', 'warn')}
-            title="Manage bank access"
-          >
-            <Shield className="h-4 w-4" />
-            <span>Admin</span>
           </Button>
         )}
       </div>
+      )}
 
       {globalMuted && (
         <div className={cn(
@@ -1369,11 +1400,11 @@ export function HeaderControls({
               <span className="inline-block h-4 w-4 rounded-full border border-white/70" style={{ backgroundColor: pendingPadColor }} />
               <span className="text-sm font-medium">{getPadColorOptionLabel(pendingPadColor)}</span>
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="grid grid-cols-2 gap-1 rounded-2xl border border-border bg-muted/45 p-1">
               <Button type="button" variant="outline" onClick={() => setShowPadColorPaintDialog(false)}>
                 Cancel
               </Button>
-              <Button type="button" onClick={handleConfirmPadColorPaint}>
+              <Button type="button" variant="success" onClick={handleConfirmPadColorPaint}>
                 {adminPadColorPaintActive ? 'Apply Color' : 'Start Paint Mode'}
               </Button>
             </div>
@@ -1526,7 +1557,7 @@ export function HeaderControls({
                 disabled={savingDisplayNamePrompt}
               />
             </div>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-2 gap-1 rounded-2xl border border-border bg-muted/45 p-1">
               <Button
                 type="button"
                 variant="outline"
@@ -1538,6 +1569,7 @@ export function HeaderControls({
               </Button>
               <Button
                 type="button"
+                variant="success"
                 className="flex-1"
                 onClick={() => void handleSaveDisplayNamePrompt()}
                 disabled={savingDisplayNamePrompt}

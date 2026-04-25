@@ -1,11 +1,12 @@
 import * as React from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { ActionGroup } from '@/components/ui/action-group';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { ExternalLink, LogOut } from 'lucide-react';
+import { ExternalLink, LogOut, Trash2 } from 'lucide-react';
 import { MidiInputInfo, MidiMessage } from '@/lib/midi';
 import { MidiDeviceProfile } from '@/lib/midi/device-profiles';
 import { DEFAULT_SYSTEM_MAPPINGS, SystemAction, SystemMappings, SYSTEM_ACTION_LABELS, ChannelMapping } from '@/lib/system-mappings';
@@ -306,7 +307,7 @@ export function AboutDialog({
   onSignOut
 }: AboutDialogProps) {
   const { user, profile, capabilities } = useAuthState();
-  const { refreshAccountCapabilities, requestPasswordReset, updateDisplayName } = useAuthActions();
+  const { deleteAccount, refreshAccountCapabilities, requestPasswordReset, updateDisplayName } = useAuthActions();
   const isAdmin = profile?.role === 'admin';
   const accountTierLabel = capabilities.effectiveTier === 'pro_max'
     ? 'PRO MAX'
@@ -375,6 +376,8 @@ export function AboutDialog({
   const [backupNotice, setBackupNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isSigningOut, setIsSigningOut] = React.useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = React.useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = React.useState(false);
+  const [showDeleteAccountConfirm, setShowDeleteAccountConfirm] = React.useState(false);
   const [showBackupExportConfirm, setShowBackupExportConfirm] = React.useState(false);
   const [showBackupExportRiskConfirm, setShowBackupExportRiskConfirm] = React.useState(false);
   const [pendingBackupRiskMessage, setPendingBackupRiskMessage] = React.useState<string | null>(null);
@@ -458,6 +461,8 @@ export function AboutDialog({
       setDisplayNameNotice(null);
       setActivePanel('general');
       setShowSignOutConfirm(false);
+      setShowDeleteAccountConfirm(false);
+      setIsDeletingAccount(false);
       setShowBackupExportConfirm(false);
       setShowBackupExportRiskConfirm(false);
       setPendingBackupRiskMessage(null);
@@ -523,8 +528,8 @@ export function AboutDialog({
   React.useEffect(() => {
     if (activePanel === 'system' && !canUseSystemShortcuts) setActivePanel('general');
     if (activePanel === 'channels' && !canUseChannelShortcuts) setActivePanel('general');
-    if (activePanel === 'backup' && !canUseBackupRepair && !canUseMappingImportExport) setActivePanel('general');
-  }, [activePanel, canUseBackupRepair, canUseChannelShortcuts, canUseMappingImportExport, canUseSystemShortcuts]);
+    if (activePanel === 'backup' && !isAuthenticated) setActivePanel('general');
+  }, [activePanel, canUseChannelShortcuts, canUseSystemShortcuts, isAuthenticated]);
 
   React.useEffect(() => {
     if (canUseAdvancedStopModes || stopMode === 'instant') return;
@@ -1233,6 +1238,24 @@ export function AboutDialog({
     }
   }, [onSignOut, isSigningOut, onOpenChange]);
 
+  const confirmDeleteAccount = React.useCallback(async () => {
+    if (isDeletingAccount) return;
+    setIsDeletingAccount(true);
+    setBackupNotice(null);
+    try {
+      const { error } = await deleteAccount();
+      if (error) throw new Error(error.message || 'Account deletion failed.');
+      setShowDeleteAccountConfirm(false);
+      onOpenChange(false);
+    } catch (error) {
+      setBackupNotice({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Account deletion failed.',
+      });
+      setIsDeletingAccount(false);
+    }
+  }, [deleteAccount, isDeletingAccount, onOpenChange]);
+
   const mapVoucherRedeemError = React.useCallback((value: unknown): string => {
     const code = String(value || '').trim();
     switch (code) {
@@ -1348,12 +1371,33 @@ export function AboutDialog({
   const masterVolumeUpKeyError = getInlineMappingError('master-volumeUp-key');
   const masterVolumeDownKeyError = getInlineMappingError('master-volumeDown-key');
   const masterMuteKeyError = getInlineMappingError('master-mute-key');
-  const availablePanels = React.useMemo((): Array<{ id: 'general' | 'system' | 'channels' | 'backup'; label: string; disabled?: boolean }> => ([
-    { id: 'general', label: 'General' },
-    { id: 'system', label: 'System', disabled: !isAuthenticated || !canUseSystemShortcuts },
-    { id: 'channels', label: 'Channel', disabled: !isAuthenticated || !canUseChannelShortcuts },
-    { id: 'backup', label: 'Backup', disabled: !isAuthenticated },
-  ]), [canUseChannelShortcuts, canUseSystemShortcuts, isAuthenticated]);
+  const availablePanels = React.useMemo((): Array<{ id: 'general' | 'system' | 'channels' | 'backup'; label: string; disabled?: boolean }> => {
+    if (!isAuthenticated) {
+      return [{ id: 'general', label: 'General' }];
+    }
+    if (capabilities.effectiveTier === 'free') {
+      return [
+        { id: 'general', label: 'General' },
+        { id: 'backup', label: 'Backup' },
+      ];
+    }
+    return [
+      { id: 'general', label: 'General' },
+      { id: 'system', label: 'System', disabled: !canUseSystemShortcuts },
+      { id: 'channels', label: 'Channel', disabled: !canUseChannelShortcuts },
+      { id: 'backup', label: 'Backup' },
+    ];
+  }, [canUseChannelShortcuts, canUseSystemShortcuts, capabilities.effectiveTier, isAuthenticated]);
+  const activePanelIndex = Math.max(0, availablePanels.findIndex((panel) => panel.id === activePanel));
+  const activePanelStyle = {
+    ['--lp-version-count' as string]: availablePanels.length,
+    ['--lp-version-index' as string]: activePanelIndex,
+  } as React.CSSProperties;
+
+  React.useEffect(() => {
+    if (availablePanels.some((panel) => panel.id === activePanel && !panel.disabled)) return;
+    setActivePanel(availablePanels[0]?.id || 'general');
+  }, [activePanel, availablePanels]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1366,19 +1410,18 @@ export function AboutDialog({
         </DialogHeader>
         <div className="space-y-3 py-2 max-h-[calc(92vh-96px)] overflow-y-auto pr-1 text-sm">
           {availablePanels.length > 1 && (
-            <div className="grid grid-cols-4 gap-1.5 rounded-2xl border border-border bg-muted/40 p-1">
+            <div className="lp-version-options" style={activePanelStyle}>
+              <span className="lp-version-liquid" aria-hidden="true" />
               {availablePanels.map((panel) => (
-                <Button
+                <button
                   key={panel.id}
                   type="button"
-                  variant={activePanel === panel.id ? 'default' : 'outline'}
-                  size="sm"
-                  className="min-w-0 px-1 text-[10px] sm:text-xs"
+                  className={`lp-version-option min-w-0 px-1 text-[10px] sm:text-xs ${activePanel === panel.id ? 'is-active' : ''}`}
                   disabled={panel.disabled}
                   onClick={() => setActivePanel(panel.id)}
                 >
                   {panel.label}
-                </Button>
+                </button>
               ))}
             </div>
           )}
@@ -2287,7 +2330,7 @@ export function AboutDialog({
               </div>
             </div>
           )}
-          {isAuthenticated && (canUseBackupRepair || canUseMappingImportExport) && activePanel === 'backup' && (
+          {isAuthenticated && activePanel === 'backup' && (
             <div className="space-y-3">
               <div className="rounded-lg border p-3 space-y-1 bg-gray-50/60 dark:bg-gray-900/30">
                 <div className="text-xs uppercase tracking-wide text-gray-500">🎧🔥 About Us - VDJV Sampler Pad 🔥🎧</div>
@@ -2361,7 +2404,7 @@ export function AboutDialog({
                     {backupNotice.message}
                   </div>
                 )}
-                <div className="flex flex-wrap items-center gap-2">
+                <ActionGroup className="grid-cols-2 sm:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))]">
                   <Button type="button" variant="outline" size="sm" onClick={handleImportSharedBankClick} disabled={backupBusy}>
                     Import Shared Bank
                   </Button>
@@ -2377,7 +2420,7 @@ export function AboutDialog({
                   <Button type="button" variant="outline" size="sm" onClick={handleRecoverClick} disabled={backupBusy}>
                     Repair from .bank Files
                   </Button>
-                </div>
+                </ActionGroup>
                 <input
                   ref={backupRestoreInputRef}
                   type="file"
@@ -2403,6 +2446,30 @@ export function AboutDialog({
                 />
               </div>
               )}
+              <div className="rounded-lg border border-red-300 bg-red-50/60 p-3 space-y-2 dark:border-red-900/70 dark:bg-red-950/20">
+                <SectionLabel
+                  label="Account Deletion"
+                  help="Permanently deletes your VDJV login account and active profile data. Export an account backup first if you want to keep local banks and settings."
+                />
+                <p className="text-xs text-red-700 dark:text-red-300">
+                  Delete your account only after exporting anything you need. This signs you out and removes your account access.
+                </p>
+                {backupNotice && !canUseBackupRepair && (
+                  <div className={`text-xs ${backupNotice.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-300'}`}>
+                    {backupNotice.message}
+                  </div>
+                )}
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setShowDeleteAccountConfirm(true)}
+                  disabled={backupBusy || isDeletingAccount}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  {isDeletingAccount ? 'Deleting Account...' : 'Delete Account'}
+                </Button>
+              </div>
             </div>
           )}
         </div>
@@ -2495,6 +2562,16 @@ export function AboutDialog({
         confirmText={isSigningOut ? 'Signing out...' : 'Sign out'}
         variant="destructive"
         onConfirm={confirmSignOut}
+        theme={theme}
+      />
+      <ConfirmationDialog
+        open={showDeleteAccountConfirm}
+        onOpenChange={setShowDeleteAccountConfirm}
+        title="Delete Account"
+        description="Permanently delete your VDJV account? This removes your login account and active profile data. Export an account backup first if you need to keep banks, media, settings, or mappings."
+        confirmText={isDeletingAccount ? 'Deleting...' : 'Delete Account'}
+        variant="destructive"
+        onConfirm={confirmDeleteAccount}
         theme={theme}
       />
     </Dialog>

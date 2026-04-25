@@ -984,6 +984,7 @@ export const SamplerPad = React.memo(function SamplerPad({
   return (
     <>
       <Button
+        variant="pad"
         onClick={handlePadClick}
         onPointerDown={!editMode ? handlePointerDown : undefined}
         onPointerMove={!editMode ? handlePointerMove : undefined}
@@ -1021,6 +1022,7 @@ export const SamplerPad = React.memo(function SamplerPad({
         `}
         style={{
           // Use slightly higher opacity (E6 = ~90%) for better contrast on non-playing pads.
+          backgroundImage: 'none',
           backgroundColor: isPlaying ? playFillColor : inactiveBackgroundColor,
           color: isPlaying ? playTextColor : undefined
         }}

@@ -38,7 +38,7 @@
     --vdjv-panel-muted: 220 18% 94%;
     --vdjv-panel-border: 220 18% 84%;
     --vdjv-glow: 352 86% 54%;
-    --vdjv-good: 158 76% 42%;
+    --vdjv-good: 77 100% 54%;
     --vdjv-warn: 38 95% 55%;
     --vdjv-info: 196 100% 46%;
     --vdjv-safe-top: env(safe-area-inset-top, 0px);
@@ -85,7 +85,7 @@
     --vdjv-panel-muted: 222 28% 14%;
     --vdjv-panel-border: 222 24% 20%;
     --vdjv-glow: 352 92% 58%;
-    --vdjv-good: 158 76% 48%;
+    --vdjv-good: 77 100% 54%;
     --vdjv-warn: 38 95% 58%;
     --vdjv-info: 196 100% 50%;
     --vdjv-scrollbar-track: rgba(51, 65, 85, 0.45);
@@ -172,12 +172,12 @@
   .vdjv-surface {
     border: 1px solid hsl(var(--vdjv-panel-border) / 0.82);
     background: hsl(var(--vdjv-panel));
-    box-shadow: 0 8px 20px hsl(222 42% 4% / 0.08);
+    box-shadow: 0 4px 12px hsl(222 42% 4% / 0.06);
   }
 
   .dark .vdjv-surface {
-    background: hsl(var(--vdjv-panel-strong));
-    box-shadow: 0 8px 20px hsl(222 42% 3% / 0.24);
+    background: hsl(var(--vdjv-panel-strong) / 0.98);
+    box-shadow: 0 4px 12px hsl(222 42% 3% / 0.2);
   }
 
   .vdjv-glass {
@@ -213,11 +213,31 @@
     background: hsl(var(--vdjv-panel) / 0.78);
   }
 
+  .perf-medium .vdjv-glass,
+  .perf-medium .vdjv-surface {
+    background: hsl(var(--vdjv-panel) / 0.96);
+    box-shadow: 0 3px 10px hsl(222 42% 4% / 0.06);
+  }
+
+  .dark.perf-medium .vdjv-glass,
+  .dark.perf-medium .vdjv-surface {
+    background: hsl(var(--vdjv-panel-strong) / 0.96);
+    box-shadow: 0 3px 10px hsl(222 42% 3% / 0.16);
+  }
+
   .perf-low .vdjv-glass,
   .perf-lowest .vdjv-glass,
   .perf-low .vdjv-surface,
   .perf-lowest .vdjv-surface {
+    background: hsl(var(--vdjv-panel));
     box-shadow: none;
+  }
+
+  .dark.perf-low .vdjv-glass,
+  .dark.perf-lowest .vdjv-glass,
+  .dark.perf-low .vdjv-surface,
+  .dark.perf-lowest .vdjv-surface {
+    background: hsl(var(--vdjv-panel-strong));
   }
 
   .perf-medium [class*="backdrop-blur"],
@@ -266,7 +286,11 @@
 
   .vdjv-status-good {
     border-color: hsl(var(--vdjv-good) / 0.55);
-    background: hsl(var(--vdjv-good) / 0.13);
+    background: hsl(var(--vdjv-good) / 0.16);
+    color: hsl(80 100% 42%);
+  }
+
+  .dark .vdjv-status-good {
     color: hsl(var(--vdjv-good));
   }
 
@@ -1093,7 +1117,7 @@ html.motion-off .sampler-search-hit-dark {
 .lp-version-options {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--lp-version-count, 3), minmax(0, 1fr));
   padding: 0.25rem;
   border-radius: 999px;
   background: rgb(244 244 245 / 70%);
@@ -1105,7 +1129,7 @@ html.motion-off .sampler-search-hit-dark {
   position: absolute;
   top: 0.25rem;
   left: 0.25rem;
-  width: calc((100% - 0.5rem) / 3);
+  width: calc((100% - 0.5rem) / var(--lp-version-count, 3));
   height: calc(100% - 0.5rem);
   border-radius: 999px;
   background: #ef4444;

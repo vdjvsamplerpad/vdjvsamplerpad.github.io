@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { ActionGroup } from '@/components/ui/action-group';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import type { PadData } from './types/sampler';
 import type { RemoteSnapshotPromptState } from './hooks/useSamplerStore.snapshotMetadata';
@@ -117,8 +118,8 @@ export function SamplerPadAppDialogs({
               <div className="mt-1">Paid banks to re-download: <span className="font-semibold">{remoteSnapshotPrompt?.summary.paidBanks || 0}</span></div>
               <div className="mt-1">Custom pads that may need manual relink: <span className="font-semibold">{remoteSnapshotPrompt?.summary.missingCustomPads || 0}</span></div>
             </div>
-            <div className="grid grid-cols-1 gap-2">
-              <Button onClick={onApplyRemoteSnapshot} variant="default" disabled={Boolean(remoteSnapshotRestoreProgress)}>
+            <ActionGroup className="grid-cols-1">
+              <Button onClick={onApplyRemoteSnapshot} variant="success" disabled={Boolean(remoteSnapshotRestoreProgress)}>
                 {remoteSnapshotRestoreProgress ? 'Restoring...' : 'Restore Bank List Only'}
               </Button>
               <Button
@@ -135,7 +136,7 @@ export function SamplerPadAppDialogs({
               >
                 Skip for Now
               </Button>
-            </div>
+            </ActionGroup>
             {remoteSnapshotRestoreProgress && (
               <div className={`rounded-md border p-3 ${theme === 'dark' ? 'border-indigo-500/40 bg-indigo-950/40' : 'border-indigo-200 bg-indigo-50'}`}>
                 <div className="flex items-center justify-between gap-3 text-xs font-medium">
@@ -172,11 +173,11 @@ export function SamplerPadAppDialogs({
                 Affected banks: {missingMediaSummary.affectedBanks.join(', ')}
               </p>
             ) : null}
-            <div className="grid grid-cols-1 gap-2">
-              <Button onClick={onRestoreBackupPrompt} variant="default">Restore Account Backup</Button>
+            <ActionGroup className="grid-cols-1">
+              <Button onClick={onRestoreBackupPrompt} variant="success">Restore Account Backup</Button>
               <Button onClick={onRecoverBankPrompt} variant="outline">Repair from .bank Files</Button>
               <Button onClick={() => onMissingMediaSummaryChange(null)} variant="ghost">Continue</Button>
-            </div>
+            </ActionGroup>
           </div>
         </DialogContent>
       </Dialog>
@@ -190,11 +191,11 @@ export function SamplerPadAppDialogs({
             <p className={theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}>
               Choose how `.bank` recovery should handle files that do not match an existing target bank.
             </p>
-            <div className="grid grid-cols-1 gap-2">
-              <Button onClick={() => onChooseRecoverBankMode(false)} variant="default">Merge Only</Button>
+            <ActionGroup className="grid-cols-1">
+              <Button onClick={() => onChooseRecoverBankMode(false)} variant="success">Merge Only</Button>
               <Button onClick={() => onChooseRecoverBankMode(true)} variant="outline">Allow New Banks</Button>
               <Button onClick={() => onShowRecoverBankModeDialogChange(false)} variant="ghost">Cancel</Button>
-            </div>
+            </ActionGroup>
             <div className={`rounded-md border p-3 text-xs ${theme === 'dark' ? 'border-gray-700 text-gray-400' : 'border-gray-200 text-gray-500'}`}>
               <div><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Merge Only:</span> restore into matching banks only.</div>
               <div className="mt-1"><span className={theme === 'dark' ? 'font-medium text-gray-200' : 'font-medium text-gray-700'}>Allow New Banks:</span> create a new bank if no target match exists.</div>

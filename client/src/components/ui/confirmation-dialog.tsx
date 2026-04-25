@@ -41,7 +41,7 @@ export function ConfirmationDialog({
     <Dialog open={open} onOpenChange={onOpenChange} useHistory={false}>
       <DialogContent
         overlayClassName="z-[129]"
-        className={`z-[130] sm:max-w-md backdrop-blur-md ${theme === 'dark' ? 'bg-gray-800/95 border-gray-600' : 'bg-white/95 border-gray-300'
+        className={`z-[130] sm:max-w-md ${theme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'
         }`}>
         <DialogHeader>
           <div className="flex items-center gap-3">
@@ -83,14 +83,9 @@ export function ConfirmationDialog({
             {cancelText}
           </Button>
           <Button
-            variant={variant}
+            variant={variant === 'destructive' ? 'destructive' : 'success'}
             onClick={handleConfirm}
-            className={`flex-1 ${variant === 'destructive'
-              ? 'bg-red-600 hover:bg-red-700 text-white'
-              : theme === 'dark'
-                ? 'bg-indigo-500 hover:bg-indigo-400 text-white'
-                : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-              }`}
+            className="flex-1"
           >
             {variant === 'destructive' && <Trash2 className="w-4 h-4 mr-2" />}
             {confirmText}

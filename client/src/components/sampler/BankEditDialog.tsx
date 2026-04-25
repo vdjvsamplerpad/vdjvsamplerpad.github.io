@@ -1,6 +1,7 @@
 ﻿import * as React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { ActionGroup } from '@/components/ui/action-group';
 import { Input } from '@/components/ui/input';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { ProgressDialog } from '@/components/ui/progress-dialog';
@@ -1132,8 +1133,9 @@ export function BankEditDialog({
           <div className="text-sm text-gray-600 dark:text-gray-300">
             You have unsaved changes for this bank. Save them or discard the changes.
           </div>
-          <div className="flex gap-2 pt-2">
+          <ActionGroup columns={2} className="pt-2">
             <Button
+              variant="success"
               onClick={() => {
                 setShowDiscardConfirm(false);
                 handleSave();
@@ -1152,7 +1154,7 @@ export function BankEditDialog({
             >
               Discard
             </Button>
-          </div>
+          </ActionGroup>
         </DialogContent>
       </Dialog>
 

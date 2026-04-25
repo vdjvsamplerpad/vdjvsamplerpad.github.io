@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Copy, Crown, Download, Link2, Loader2, Trash2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ActionGroup } from '@/components/ui/action-group';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -417,8 +418,8 @@ export function BankEditCoreForm({
         </div>
       </div>
 
-      <div className="flex gap-2 pt-4">
-        <Button onClick={onSave} className="flex-1">
+      <ActionGroup className="grid-cols-[minmax(0,1fr)_repeat(auto-fit,minmax(2.5rem,auto))] pt-4">
+        <Button onClick={onSave} variant="success" className="flex-1">
           Save Changes
         </Button>
         {onDuplicate && (
@@ -472,7 +473,7 @@ export function BankEditCoreForm({
             <Trash2 className="w-4 h-4" />
           </Button>
         )}
-      </div>
+      </ActionGroup>
       {storeLinkNotice ? (
         <p className="text-xs text-emerald-600 dark:text-emerald-400">{storeLinkNotice}</p>
       ) : null}

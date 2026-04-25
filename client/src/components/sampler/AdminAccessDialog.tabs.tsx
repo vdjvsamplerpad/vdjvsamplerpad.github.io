@@ -770,7 +770,7 @@ export function LandingDownloadTab({
       actions={(
         <>
           <AdminRefreshButton loading={loading} disabled={saving} onClick={onRefresh} />
-          <Button size="sm" className="rounded-[14px]" onClick={onSave} disabled={loading || saving}>
+          <Button size="sm" variant="success" className="rounded-[14px]" onClick={onSave} disabled={loading || saving}>
             {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
             Save Changes
           </Button>
@@ -1138,7 +1138,7 @@ export function LegalPagesTab({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => onSaveDraft(documentKey)} disabled={disabled}>
+            <Button size="sm" variant="success" onClick={() => onSaveDraft(documentKey)} disabled={disabled}>
               {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
               Save Draft
             </Button>
@@ -1307,7 +1307,7 @@ export function SamplerDefaultsTab({
             <RotateCcw className="w-3.5 h-3.5 mr-2" />
             Reset
           </Button>
-          <Button size="sm" className="rounded-[14px]" onClick={onSave} disabled={loading || saving}>
+          <Button size="sm" variant="success" className="rounded-[14px]" onClick={onSave} disabled={loading || saving}>
             {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
             Save Defaults
           </Button>
@@ -2071,7 +2071,7 @@ export function AccountRequestsTab({
                             <Button variant="destructive" onClick={() => { onReject(req.id); setSelectedRequest(null); }}>
                               <X className="w-4 h-4 mr-2" /> Reject
                             </Button>
-                            <Button onClick={() => { onApprove(req.id); setSelectedRequest(null); }} className="bg-green-600 hover:bg-green-700 text-white">
+                            <Button variant="success" onClick={() => { onApprove(req.id); setSelectedRequest(null); }}>
                               <Check className="w-4 h-4 mr-2" /> Approve
                             </Button>
                           </>
@@ -4635,7 +4635,7 @@ function StorePromotionsSurface({
               <RotateCcw className="w-3.5 h-3.5 mr-1" />
               Reset Form
             </Button>
-            <Button type="button" onClick={() => void onSave()} disabled={loading} className={isDark ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}>
+            <Button type="button" variant="success" onClick={() => void onSave()} disabled={loading}>
               {loading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1" />}
               {editingPromotionId ? 'Save Promotion' : 'Create Promotion'}
             </Button>
@@ -4760,7 +4760,7 @@ export function StoreBannersTab({
                     <Label>Sort Order</Label>
                     <div className="flex items-center gap-2">
                       <Input type="number" min={0} step={1} value={newBannerSortOrder} onChange={(event) => onNewBannerSortOrderChange(event.target.value)} placeholder="0" className={`h-9 text-xs w-[120px] ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
-                      <Button size="sm" onClick={onCreateBanner} disabled={bannerLoading} className="h-9 px-4 text-xs">
+                      <Button size="sm" variant="success" onClick={onCreateBanner} disabled={bannerLoading} className="h-9 px-4 text-xs">
                         {bannerLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
                         Create Banner
                       </Button>
@@ -4905,7 +4905,7 @@ export function StoreBannersTab({
                                 <input type="checkbox" checked={banner.is_active} onChange={(event) => onUpdateBanner(banner.id, { is_active: event.target.checked })} />
                                 Active
                               </label>
-                              <Button size="sm" onClick={() => onSaveBanner(banner)} disabled={bannerLoading || uploading || !isDirty} className="h-9 px-4 text-xs">
+                              <Button size="sm" variant="success" onClick={() => onSaveBanner(banner)} disabled={bannerLoading || uploading || !isDirty} className="h-9 px-4 text-xs">
                                 {uploading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1" />}
                                 Save
                               </Button>
@@ -5196,7 +5196,7 @@ export function StoreConfigTab({
       panelClass={`${panelClass} overflow-visible lg:h-full lg:min-h-0 lg:overflow-auto`}
       title="Payment and Store Controls"
       description="Configure checkout instructions, payment channels, QR support, automation, and decision emails from one place."
-      actions={<Button onClick={onSave} disabled={loading} className="w-full rounded-[14px] sm:w-auto sm:min-w-[220px]">Save Pay Config</Button>}
+      actions={<Button onClick={onSave} variant="success" disabled={loading} className="w-full rounded-[14px] sm:w-auto sm:min-w-[220px]">Save Pay Config</Button>}
       stats={(
         <AdminStatsStrip
           items={[

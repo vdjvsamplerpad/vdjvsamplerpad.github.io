@@ -1,6 +1,7 @@
 ﻿import * as React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { ActionGroup } from '@/components/ui/action-group';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -1506,9 +1507,10 @@ export function PadEditDialog({
               </p>
             )}
 
-            <div className="grid grid-cols-3 gap-1 rounded-2xl border border-border bg-muted/40 p-1 pt-1">
+            <ActionGroup columns={3}>
               <Button
                 onClick={handleSaveAndClose}
+                variant="success"
                 className="w-full rounded-xl"
                 disabled={isUploading}
               >
@@ -1530,7 +1532,7 @@ export function PadEditDialog({
               >
                 Unload
               </Button>
-            </div>
+            </ActionGroup>
           </div>
         </DialogContent>
       </Dialog>
@@ -1565,8 +1567,9 @@ export function PadEditDialog({
           <div className="text-sm text-gray-600 dark:text-gray-300">
             You have unsaved changes for this pad. Save them or discard the changes.
           </div>
-          <div className="flex gap-2 pt-2">
+          <ActionGroup columns={2} className="pt-2">
             <Button
+              variant="success"
               onClick={() => {
                 setShowUnsavedConfirm(false);
                 handleSaveAndClose();
@@ -1586,7 +1589,7 @@ export function PadEditDialog({
             >
               Discard
             </Button>
-          </div>
+          </ActionGroup>
         </DialogContent>
       </Dialog>
     </>

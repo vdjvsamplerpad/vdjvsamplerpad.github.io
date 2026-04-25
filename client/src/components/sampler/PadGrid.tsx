@@ -351,7 +351,16 @@ export const PadGrid = React.memo(function PadGrid({
   }
 
   return (
-    <div
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={AUDIO_FILE_INPUT_ACCEPT}
+        multiple
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+      <div
       className={`grid ${gap} w-full min-w-0 max-w-full overflow-x-hidden transition-all duration-200 ${adminPadColorPaintActive ? 'cursor-crosshair' : ''} ${dragOverPadTransfer
                 ? 'ring-4 ring-orange-400 ring-offset-2 ring-offset-transparent bg-orange-50 dark:bg-orange-900/20 rounded-2xl p-2'
         : channelLoadArmed
@@ -483,7 +492,8 @@ export const PadGrid = React.memo(function PadGrid({
           </span>
         </button>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 );
