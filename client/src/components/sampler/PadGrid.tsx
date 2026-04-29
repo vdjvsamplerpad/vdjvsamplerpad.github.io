@@ -485,13 +485,20 @@ export const PadGrid = React.memo(function PadGrid({
             }`}>
               <Upload className="h-5 w-5" />
             </span>
-            <span className="text-xs font-bold uppercase tracking-wide">Add Pad</span>
+            <span className="hidden text-xs font-bold uppercase tracking-wide min-[520px]:inline">Add Pad</span>
             {!isMobile && supportsDesktopDragDrop ? (
-              <span className="text-[10px] opacity-70">Drop audio here</span>
+              <span className="hidden text-[10px] opacity-70 min-[680px]:inline">Drop audio here</span>
             ) : null}
           </span>
         </button>
       )}
+      {Array.from({ length: Math.max(1, padSize) }).map((_, index) => (
+        <div
+          key={`bottom-spacer-${index}`}
+          aria-hidden="true"
+          className={`pointer-events-none min-w-0 max-w-full ${aspectRatio}`}
+        />
+      ))}
       </div>
     </>
   );

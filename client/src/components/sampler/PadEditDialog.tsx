@@ -959,7 +959,7 @@ export function PadEditDialog({
     <>
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
-          className="grid h-[100dvh] max-h-[100dvh] w-[calc(100vw-1rem)] grid-rows-[auto_1fr] overflow-hidden border-gray-300 bg-white/95 backdrop-blur-md dark:border-gray-600 dark:bg-gray-800/95 sm:h-auto sm:max-h-[80vh] sm:w-full sm:max-w-lg"
+          className="grid max-h-[88dvh] w-[calc(100vw-1rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-gray-300 bg-white/95 backdrop-blur-md dark:border-gray-600 dark:bg-gray-800/95 sm:max-h-[80vh] sm:w-full sm:max-w-lg"
           aria-describedby={undefined}
           onKeyDown={handleContentKeyDown}
         >
@@ -967,7 +967,7 @@ export function PadEditDialog({
             <DialogTitle>Edit Pad Settings</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4 overflow-y-auto overflow-x-hidden overscroll-contain pr-1 pb-[max(6rem,env(safe-area-inset-bottom))] sm:pb-0">
+          <div className="space-y-4 overflow-y-auto overflow-x-hidden overscroll-contain pr-1 pb-3">
             {uploadError && (
               <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
                 {uploadError}

@@ -289,7 +289,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       : 'border-slate-200 bg-[#f6f7f2] text-slate-950',
   ].join(' ')
   const authShellClass = [
-    'relative flex min-h-[100dvh] flex-col overflow-y-auto px-7 pb-8 pt-7 sm:block sm:min-h-0 sm:px-10 sm:pb-10 sm:pt-8',
+    'relative flex min-h-[100dvh] flex-col overflow-y-auto px-7 pb-8 pt-7 sm:block sm:max-h-[85vh] sm:min-h-0 sm:overflow-y-auto sm:px-10 sm:pb-10 sm:pt-8',
     isDark
       ? 'bg-[radial-gradient(circle_at_50%_-18%,rgba(239,68,68,0.28),transparent_36%),radial-gradient(circle_at_12%_18%,rgba(185,28,28,0.22),transparent_34%),linear-gradient(180deg,#171010_0%,#101113_58%,#090909_100%)]'
       : 'bg-[radial-gradient(circle_at_50%_-18%,rgba(239,68,68,0.20),transparent_38%),radial-gradient(circle_at_12%_18%,rgba(220,38,38,0.16),transparent_34%),linear-gradient(180deg,#fff7f5_0%,#f7f1ee_100%)]',

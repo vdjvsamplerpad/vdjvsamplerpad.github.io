@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2, BadgeDollarSign } from 'lucide-react';
+import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2, ArrowUpCircle } from 'lucide-react';
 import type { SamplerBank, StopMode } from './types/sampler';
 import { createPortal } from 'react-dom';
 import { getCachedUser, useAuthActions, useAuthState } from '@/hooks/useAuth';
@@ -25,6 +25,21 @@ const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then(
 const AboutDialog = React.lazy(() => import('@/components/ui/about-dialog').then((module) => ({ default: module.AboutDialog }))) as unknown as typeof AboutDialogType;
 const HeaderAdminDebugPanel = React.lazy(() => import('./HeaderAdminDebugPanel').then((module) => ({ default: module.HeaderAdminDebugPanel }))) as unknown as typeof HeaderAdminDebugPanelType;
 const AccountUpgradeDialog = React.lazy(() => import('./AccountUpgradeDialog').then((module) => ({ default: module.AccountUpgradeDialog }))) as unknown as typeof AccountUpgradeDialogType;
+
+const normalizeHexColor = (value?: string | null): string | null => {
+  if (!value) return null;
+  const body = value.trim().replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}$/.test(body)) return null;
+  return `#${body.toLowerCase()}`;
+};
+
+const hexToRgba = (hex: string, alpha: number): string => {
+  const normalized = hex.replace(/^#/, '');
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
 
 
 interface HeaderControlsProps {
@@ -244,10 +259,16 @@ function NoticeItem({ notice, dismiss, theme }: { notice: Notice; dismiss: (id: 
   const base = 'pointer-events-auto mt-3 rounded-xl border px-4 py-2 shadow-lg transition-all duration-300'
   const colors =
     notice.variant === 'success'
-      ? 'vdjv-status-good'
+      ? theme === 'dark'
+        ? 'border-[#B9FF12]/45 bg-[#18240b] text-[#dcff8a]'
+        : 'border-[#B9FF12] bg-[#f4ffd8] text-slate-950'
       : notice.variant === 'error'
-        ? 'vdjv-status-danger'
-        : 'vdjv-surface'
+        ? theme === 'dark'
+          ? 'border-red-400/55 bg-red-950 text-red-100'
+          : 'border-red-300 bg-red-50 text-red-800'
+        : theme === 'dark'
+          ? 'border-slate-600 bg-slate-950 text-slate-100'
+          : 'border-slate-200 bg-white text-slate-950'
 
   return (
     <div
@@ -812,6 +833,23 @@ export function HeaderControls({
         : 'border-red-200 bg-white/95 text-red-700'
   );
 
+  const getBankAccentColor = React.useCallback((bank: SamplerBank | null | undefined) => (
+    normalizeHexColor(bank?.bankMetadata?.color) ||
+    normalizeHexColor(bank?.defaultColor) ||
+    null
+  ), []);
+
+  const bankIslandStyle = React.useCallback((bank: SamplerBank | null | undefined): React.CSSProperties | undefined => {
+    const color = getBankAccentColor(bank);
+    if (!color) return undefined;
+    return {
+      borderColor: hexToRgba(color, theme === 'dark' ? 0.62 : 0.42),
+      backgroundColor: hexToRgba(color, theme === 'dark' ? 0.22 : 0.12),
+      color,
+      boxShadow: `0 0 0 1px ${hexToRgba(color, 0.08)}`,
+    };
+  }, [getBankAccentColor, theme]);
+
   const navDotRingClass = theme === 'dark' ? 'ring-slate-950' : 'ring-white';
   const renderNavIcon = (icon: React.ReactNode, dotClass?: string) => (
     <span className="relative inline-flex h-6 w-6 items-center justify-center">
@@ -819,7 +857,7 @@ export function HeaderControls({
       {dotClass ? (
         <span
           aria-hidden="true"
-          className={cn('absolute -left-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2', navDotRingClass, dotClass)}
+          className={cn('absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2', navDotRingClass, dotClass)}
         />
       ) : null}
     </span>
@@ -864,15 +902,15 @@ export function HeaderControls({
         )}>
           {isDualMode ? (
             <>
-              <span className={cn(bankIslandClass('primary'), 'w-[min(19rem,44vw)] justify-self-center')} title={primaryBank?.name || 'None'}>
+              <span className={cn(bankIslandClass('primary'), 'w-[min(19rem,44vw)] justify-self-center')} style={bankIslandStyle(primaryBank)} title={primaryBank?.name || 'None'}>
                 {primaryBank?.name || 'None'}
               </span>
-              <span className={cn(bankIslandClass('secondary'), 'w-[min(19rem,44vw)] justify-self-center')} title={secondaryBank?.name || 'None'}>
+              <span className={cn(bankIslandClass('secondary'), 'w-[min(19rem,44vw)] justify-self-center')} style={bankIslandStyle(secondaryBank)} title={secondaryBank?.name || 'None'}>
                 {secondaryBank?.name || 'None'}
               </span>
             </>
           ) : (
-            <span className={cn(bankIslandClass('primary'), 'inline-block max-w-[90vw] justify-self-center')} title={getBankDisplayName()}>
+            <span className={cn(bankIslandClass('primary'), 'inline-block max-w-[90vw] justify-self-center')} style={bankIslandStyle(currentBank)} title={getBankDisplayName()}>
               {getBankDisplayName()}
             </span>
           )}
@@ -963,22 +1001,6 @@ export function HeaderControls({
               {!isMobileScreen && 'Search'}
             </Button>
           )}
-          {!capabilities.features.search && capabilities.effectiveTier === 'free' && freePlaySummary?.visible && (
-            <Button
-              onClick={() => openUpgradeDialog(
-                freePlaySummary.exhausted
-                  ? `Free plays are finished. They reset ${freePlaySummary.resetLabel || 'tomorrow'}. Upgrade to keep playing now.`
-                  : 'Upgrade to PRO for unlimited Default Bank plays and Store access.'
-              )}
-              variant="outline"
-              size={isMobileScreen ? "sm" : "default"}
-              className={cn(controlClass(isMobileScreen ? 'min-w-[5.25rem]' : 'w-32', freePlaySummary.exhausted ? 'danger' : 'warn'), 'px-2')}
-              title={freePlaySummary.exhausted ? 'Free plays finished. Click for upgrade options.' : 'Free Default Bank plays left'}
-            >
-              <span className="text-[11px] font-bold">{isMobileScreen ? `FREE ${freePlaySummary.remainingCount}` : `FREE PLAY: ${freePlaySummary.remainingCount}`}</span>
-            </Button>
-          )}
-
           {/* Mute/Unmute Button */}
           <Button
             onClick={onToggleMute}
@@ -1029,24 +1051,6 @@ export function HeaderControls({
               )
             )}
           </Button>
-
-          {/* Login Button (only shown when not logged in) */}
-          {!loading && !isAuthenticated && (
-            <Button
-              onClick={() => {
-                if (isSigningIn) return;
-                setShowLoginModal(true);
-              }}
-              variant="outline"
-              size={isMobileScreen ? "sm" : "default"}
-              disabled={loading || isSigningIn}
-              className={controlClass('w-24', 'active')}
-              title={isSigningIn ? 'Signing in...' : 'Sign in to your account'}
-            >
-              <LogIn className="w-4 h-4" />
-              <span className="ml-1">{isSigningIn ? 'Wait' : 'Login'}</span>
-            </Button>
-          )}
 
           {/* Admin Access (admin-only) */}
           {isAdmin && (
@@ -1169,13 +1173,15 @@ export function HeaderControls({
           >
             {capabilities.features.search
               ? renderNavIcon(<Search className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />)
-              : renderNavIcon(<BadgeDollarSign className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />)}
+              : playSummary?.mode === 'guest' || !isAuthenticated
+                ? renderNavIcon(<LogIn className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />)
+                : renderNavIcon(<ArrowUpCircle className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />)}
             <span className="max-w-full truncate">
-              {playSummary?.visible
-                ? `${playSummary.mode === 'guest' ? 'GUEST' : 'FREE'} ${playSummary.remainingCount}`
-                : capabilities.features.search
+              {capabilities.features.search
                   ? 'Search'
-                  : 'Plan'}
+                  : playSummary?.mode === 'guest' || !isAuthenticated
+                    ? 'Login'
+                    : 'Upgrade'}
             </span>
           </button>
 
@@ -1193,6 +1199,19 @@ export function HeaderControls({
           >
             <span className="absolute inset-2 rounded-full bg-white/10" />
             <Square className={isCompactBottomNav ? 'relative h-6 w-6' : 'relative h-4 w-4'} />
+            {playSummary?.visible && (
+              <span
+                aria-label={`${playSummary.remainingCount} plays left`}
+                className={cn(
+                  'absolute -right-1 -top-1 z-10 min-w-6 rounded-full border px-1.5 py-0.5 text-[10px] font-black leading-none shadow',
+                  playSummary.exhausted
+                    ? 'border-red-200 bg-red-600 text-white'
+                    : 'border-white/70 bg-[#B9FF12] text-slate-950'
+                )}
+              >
+                {playSummary.remainingCount}
+              </span>
+            )}
             {!isCompactBottomNav && <span className="relative ml-2 text-xs">Stop</span>}
           </button>
 
@@ -1247,17 +1266,6 @@ export function HeaderControls({
                   <span>Paint</span>
                 </button>
               )}
-              {isDualMode && (
-                <button
-                  type="button"
-                  onClick={onExitDualMode}
-                  className={cn(navButtonBase, 'w-24 border-amber-400 text-amber-500')}
-                  title="Exit dual mode"
-                >
-                  {renderNavIcon(<X className="h-4 w-4" />)}
-                  <span>Dual</span>
-                </button>
-              )}
               {isAdmin && (
                 <button
                   type="button"
@@ -1281,7 +1289,15 @@ export function HeaderControls({
           onClick={onToggleEditMode}
           variant="outline"
           size="icon"
-          className={cn('shadow-lg', controlClass('h-11 w-11 rounded-xl', editMode ? 'warn' : 'default'))}
+            className={cn(
+              'shadow-lg',
+              editMode
+                ? 'border-amber-300 bg-amber-500 text-amber-950 hover:bg-amber-400'
+                : theme === 'dark'
+                  ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-900'
+                  : 'border-slate-200 bg-white text-slate-800 hover:bg-slate-50',
+              'h-11 w-11 rounded-xl'
+            )}
           title={editMode ? 'Exit Edit Mode' : 'Edit pads'}
         >
           <Pencil className="h-4 w-4" />
@@ -1292,7 +1308,14 @@ export function HeaderControls({
             onClick={adminPadColorPaintActive ? handleStopPadColorPaint : handlePadColorPaintButton}
             variant="outline"
             size="icon"
-            className={cn('shadow-lg', controlClass('h-11 w-11 rounded-xl', adminPadColorPaintActive ? 'active' : 'default'))}
+            className={cn(
+              'h-11 w-11 rounded-xl shadow-lg',
+              adminPadColorPaintActive
+                ? 'border-red-300 bg-red-600 text-white hover:bg-red-500'
+                : theme === 'dark'
+                  ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-900'
+                  : 'border-slate-200 bg-white text-slate-800 hover:bg-slate-50'
+            )}
             title={adminPadColorPaintActive ? 'Stop Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
           >
             <Palette className="h-4 w-4" />
@@ -1313,14 +1336,15 @@ export function HeaderControls({
       </div>
       )}
 
-      {isCompactBottomNav && isDualMode && (
+      {isDualMode && (
         <Button
           type="button"
           onClick={onExitDualMode}
           variant="outline"
           size="sm"
           className={cn(
-            'fixed left-1/2 top-[calc(var(--vdjv-safe-top)+3.35rem)] z-50 h-8 -translate-x-1/2 rounded-full px-3 text-[11px] font-black shadow-lg',
+            'fixed left-1/2 z-50 h-8 -translate-x-1/2 rounded-full px-3 text-[11px] font-black shadow-lg',
+            isCompactBottomNav ? 'bottom-[calc(var(--vdjv-safe-bottom)+5.95rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+4.65rem)]',
             theme === 'dark'
               ? 'border-amber-300/45 bg-slate-950/95 text-amber-100'
               : 'border-amber-200 bg-white/95 text-amber-700'
@@ -1346,22 +1370,6 @@ export function HeaderControls({
             <Undo2 className="h-4 w-4" />
           </Button>
         )}
-        {!loading && !isAuthenticated && (
-          <Button
-            type="button"
-            onClick={() => {
-              if (isSigningIn) return;
-              setShowLoginModal(true);
-            }}
-            variant="outline"
-            size="icon"
-            disabled={loading || isSigningIn}
-            className={controlClass('h-11 w-11 rounded-xl', 'active')}
-            title={isSigningIn ? 'Signing in...' : 'Sign in to your account'}
-          >
-            <LogIn className="h-4 w-4" />
-          </Button>
-        )}
       </div>
       )}
 
@@ -1380,32 +1388,22 @@ export function HeaderControls({
         </div>
       )}
 
-      {editMode && (
+      {(editMode || channelLoadArmed) && (
         <div className={cn(
-          'fixed left-1/2 z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-lg',
+          'fixed left-1/2 z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-lg animate-pulse',
           isCompactBottomNav ? 'top-[calc(var(--vdjv-safe-top)+5.75rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+8.25rem)]',
-          theme === 'dark'
-            ? 'border-amber-300/45 bg-amber-950 text-amber-100'
-            : 'border-amber-300 bg-amber-50 text-amber-700'
+          channelLoadArmed && !editMode
+            ? theme === 'dark'
+              ? 'border-emerald-300/45 bg-emerald-950 text-emerald-100'
+              : 'border-emerald-300 bg-emerald-50 text-emerald-700'
+            : theme === 'dark'
+              ? 'border-amber-300/45 bg-amber-950 text-amber-100'
+              : 'border-amber-300 bg-amber-50 text-amber-700'
         )}>
           <div className="flex flex-wrap items-center justify-center gap-2">
-            <Pencil className="h-3.5 w-3.5 shrink-0" />
-            <span>Edit mode</span>
-          </div>
-        </div>
-      )}
-
-      {channelLoadArmed && (
-        <div className={cn(
-          'fixed left-1/2 z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-lg',
-          isCompactBottomNav ? 'top-[calc(var(--vdjv-safe-top)+8.25rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+10.5rem)]',
-          theme === 'dark'
-            ? 'border-emerald-300/45 bg-emerald-950 text-emerald-100'
-            : 'border-emerald-300 bg-emerald-50 text-emerald-700'
-        )}>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <Sliders className="h-3.5 w-3.5 shrink-0" />
-            <span>Load mode</span>
+            {editMode ? <Pencil className="h-3.5 w-3.5 shrink-0" /> : null}
+            {channelLoadArmed ? <Sliders className="h-3.5 w-3.5 shrink-0" /> : null}
+            <span>{editMode && channelLoadArmed ? 'Edit + Load mode' : editMode ? 'Edit mode' : 'Load mode'}</span>
           </div>
         </div>
       )}

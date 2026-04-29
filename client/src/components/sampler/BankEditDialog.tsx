@@ -996,12 +996,12 @@ export function BankEditDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className={`grid h-[100dvh] max-h-[100dvh] w-[calc(100vw-1rem)] grid-rows-[auto_1fr] overflow-hidden sm:h-auto sm:max-h-[80vh] sm:w-full sm:max-w-md ${theme === 'dark' ? 'bg-gray-900' : 'bg-white'
+        <DialogContent className={`grid max-h-[88dvh] w-[calc(100vw-1rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-h-[80vh] sm:w-full sm:max-w-md ${theme === 'dark' ? 'bg-gray-900' : 'bg-white'
           }`} aria-describedby={undefined} onOpenAutoFocus={(event) => event.preventDefault()}>
           <DialogHeader>
             <DialogTitle>Edit Bank</DialogTitle>
           </DialogHeader>
-          <div className="overflow-y-auto overscroll-contain pr-1 pb-[max(6rem,env(safe-area-inset-bottom))] sm:pb-0">
+          <div className="overflow-y-auto overscroll-contain pr-1 pb-3">
             {shouldShowPreparedPlaybackUi && preparedSummary && (
               <div className={`mb-3 flex items-center justify-between rounded-lg border px-3 py-2 text-xs ${
                 theme === 'dark' ? 'border-gray-700 bg-gray-900/50 text-gray-200' : 'border-gray-200 bg-gray-50 text-gray-700'
