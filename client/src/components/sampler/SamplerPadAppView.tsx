@@ -371,7 +371,7 @@ export function SamplerPadAppView({
       )}
 
       <div className={`flex-1 min-h-0 ${getMainContentMargin} ${getMainContentPadding}`}>
-        <div className="max-w-full mx-auto py-2 pb-24 relative z-10 h-full min-h-0 flex flex-col">
+        <div className="max-w-full mx-auto pt-2 pb-0 relative z-10 h-full min-h-0 flex flex-col">
           <HeaderControls {...headerControlsProps} guestPlaySummary={guestTrialSummary} />
 
           {isDualMode ? (
@@ -385,7 +385,7 @@ export function SamplerPadAppView({
                     primaryFallbackScrollRef.current = container.scrollTop;
                     saveBankScroll(primaryBankId, container.scrollTop);
                   }}
-                  className={`h-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden overscroll-contain ${usePortraitDualStack ? '' : 'pr-1'}`}
+                  className={`h-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden overscroll-contain scroll-pb-28 ${usePortraitDualStack ? '' : 'pr-1'}`}
                 >
                   <PadGrid
                     pads={displayPrimary?.pads || []}
@@ -443,7 +443,7 @@ export function SamplerPadAppView({
                       secondaryFallbackScrollRef.current = container.scrollTop;
                       saveBankScroll(secondaryBankId, container.scrollTop);
                     }}
-                    className={`h-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden overscroll-contain ${usePortraitDualStack ? '' : 'pl-1'}`}
+                    className={`h-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden overscroll-contain scroll-pb-28 ${usePortraitDualStack ? '' : 'pl-1'}`}
                   >
                     <PadGrid
                       pads={displaySecondary.pads || []}
@@ -506,7 +506,7 @@ export function SamplerPadAppView({
                     singleFallbackScrollRef.current = container.scrollTop;
                     saveBankScroll(currentBankId, container.scrollTop);
                   }}
-                  className="h-full min-w-0 min-h-0 overflow-y-auto overscroll-contain"
+                  className="h-full min-w-0 min-h-0 overflow-y-auto overscroll-contain scroll-pb-28"
                 >
                   <PadGrid
                     pads={singleBank.pads || []}
