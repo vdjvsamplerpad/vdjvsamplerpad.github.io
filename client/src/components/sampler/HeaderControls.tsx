@@ -1121,7 +1121,7 @@ export function HeaderControls({
         className={cn(
           'fixed left-1/2 z-40 -translate-x-1/2 pointer-events-none',
           isCompactBottomNav
-            ? 'bottom-[calc(var(--vdjv-safe-bottom)+0.65rem)] w-[min(29rem,calc(100vw-1rem))]'
+            ? 'bottom-[calc(var(--vdjv-safe-bottom)+0.65rem)] w-auto max-w-[calc(100vw-0.75rem)]'
             : 'bottom-[calc(var(--vdjv-safe-bottom)+0.85rem)]'
         )}
       >
@@ -1130,8 +1130,8 @@ export function HeaderControls({
             'pointer-events-auto mx-auto flex items-center border shadow-lg',
             isCompactBottomNav
               ? theme === 'dark'
-                ? 'h-[4.85rem] rounded-[2rem] border-slate-700 bg-neutral-950/96 px-3 pb-2 pt-3'
-                : 'h-[4.85rem] rounded-[2rem] border-slate-200 bg-white/96 px-3 pb-2 pt-3'
+                ? 'inline-flex h-[4.7rem] rounded-t-[2rem] rounded-b-[1.05rem] border-slate-700 bg-neutral-950/96 px-2.5 pb-2 pt-3'
+                : 'inline-flex h-[4.7rem] rounded-t-[2rem] rounded-b-[1.05rem] border-slate-200 bg-white/96 px-2.5 pb-2 pt-3'
               : theme === 'dark'
                 ? 'gap-2 rounded-2xl border-slate-800 bg-slate-950 p-1.5'
                 : 'gap-2 rounded-2xl border-slate-200 bg-white p-1.5'
