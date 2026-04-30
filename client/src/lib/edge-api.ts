@@ -33,13 +33,18 @@ export const edgeFunctionUrl = (functionName: string, route = '') => {
   return `${edgeFunctionsBaseUrl}/${functionName}${suffix}`;
 };
 
+export const getClientCompatibilityHeaders = (): Record<string, string> => ({
+  'X-VDJV-Tier-Client': '1',
+  'X-VDJV-App-Version': String((import.meta as any).env?.VITE_APP_VERSION || 'unknown').trim() || 'unknown',
+});
+
 export const getAuthToken = async (): Promise<string | null> => {
   const { data } = await supabase.auth.getSession();
   return data.session?.access_token || null;
 };
 
 export const getAuthHeaders = async (requireAuth = false): Promise<Record<string, string>> => {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...getClientCompatibilityHeaders() };
   const token = await getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (requireAuth && !token) {

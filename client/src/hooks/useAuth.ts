@@ -1,7 +1,7 @@
 ﻿import * as React from 'react'
 import { supabase } from '@/lib/supabase'
 import type { User, AuthError, Session } from '@supabase/supabase-js'
-import { edgeFunctionUrl } from '@/lib/edge-api'
+import { edgeFunctionUrl, getClientCompatibilityHeaders } from '@/lib/edge-api'
 import { clearUserBankCache, refreshAccessibleBanksCache } from '@/lib/bank-utils'
 import {
   type AccountCapabilitySnapshot,
@@ -346,7 +346,7 @@ async function loadAccountCapabilities(userId: string, profile: Profile | null):
       method: 'GET',
       cache: 'no-store',
       credentials: 'omit',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { ...getClientCompatibilityHeaders(), Authorization: `Bearer ${token}` },
     })
     if (!response.ok) return cached || fallbackCapabilitiesForProfile(profile)
     const payload = await response.json().catch(() => ({}))

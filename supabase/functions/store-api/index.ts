@@ -325,6 +325,7 @@ const CLIENT_CRASH_REPORT_RATE_LIMIT = readPositiveInt(Deno.env.get("CLIENT_CRAS
 const CLIENT_CRASH_REPORT_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("CLIENT_CRASH_REPORT_RATE_WINDOW_SECONDS"), 86400);
 const CLIENT_CRASH_REPORT_MAX_BYTES = readPositiveInt(Deno.env.get("CLIENT_CRASH_REPORT_MAX_BYTES"), 256 * 1024);
 const ACCOUNT_REG_PASSWORD_KEY_VERSION = readPositiveInt(Deno.env.get("ACCOUNT_REG_PASSWORD_KEY_VERSION"), 1);
+const TIER_AWARE_CLIENT_VERSION = readPositiveInt(Deno.env.get("TIER_AWARE_CLIENT_VERSION"), 1);
 const ACCOUNT_REG_MIN_PASSWORD_LENGTH = 8;
 const OCR_SPACE_API_URL = String(Deno.env.get("OCR_SPACE_API_URL") || "https://api.ocr.space/parse/image");
 const OCR_SPACE_PROVIDER = "ocr.space";
@@ -2941,6 +2942,31 @@ const getStorePaymentConfig = async (req: Request) => {
   });
 };
 
+const getTierAwareClientVersion = (req: Request): number => {
+  const raw =
+    req.headers.get("x-vdjv-tier-client")
+    || req.headers.get("x-vdjv-client-capabilities")
+    || "";
+  const marker = raw.trim().toLowerCase();
+  if (!marker) return 0;
+  if (marker === "true" || marker === "yes" || marker === "account_tiers_v1") return 1;
+  const parsed = Number(marker.replace(/^v/i, ""));
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+};
+
+const validateAccountClientCompatibility = (req: Request, capabilities: AccountCapabilitySnapshot): Response | null => {
+  if (capabilities.effectiveTier !== "free") return null;
+  const clientVersion = getTierAwareClientVersion(req);
+  if (clientVersion >= TIER_AWARE_CLIENT_VERSION) return null;
+  return fail(426, "UPDATE_REQUIRED", {
+    reason: "free_account_requires_tier_aware_client",
+    effective_tier: capabilities.effectiveTier,
+    required_client_capability: TIER_AWARE_CLIENT_VERSION,
+    received_client_capability: clientVersion,
+    app_version: asString(req.headers.get("x-vdjv-app-version"), 80) || null,
+  });
+};
+
 const getAccountMe = async (req: Request) => {
   const admin = createServiceClient();
   const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
@@ -2950,6 +2976,8 @@ const getAccountMe = async (req: Request) => {
   }
   const profile = await ensureProfileForAccountUser(admin, user);
   const capabilities = await loadAccountCapabilitySnapshot(admin, user.id);
+  const compatibilityResponse = validateAccountClientCompatibility(req, capabilities);
+  if (compatibilityResponse) return compatibilityResponse;
   if (
     profile?.account_tier === "free" &&
     profile?.tier_source === "signup" &&
@@ -5787,6 +5815,9 @@ const executeAccountApproval = async (input: {
         id: authUserId,
         role: "user",
         display_name: input.requestRow.display_name || input.requestRow.email,
+        account_tier: "pro",
+        tier_source: "migration_legacy",
+        tier_updated_at: input.reviewedAtIso,
         owned_bank_quota: quotaDefaults.ownedBankQuota,
         owned_bank_pad_cap: quotaDefaults.ownedBankPadCap,
         device_total_bank_cap: quotaDefaults.deviceTotalBankCap,
