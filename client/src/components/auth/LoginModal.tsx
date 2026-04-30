@@ -23,7 +23,7 @@ interface LoginModalProps {
   pushNotice?: (opts: { variant: 'success' | 'error' | 'info'; message: string }) => void
 }
 
-type Mode = 'signin' | 'buy' | 'forgot' | 'reset'
+type Mode = 'signin' | 'buy' | 'verify-signup' | 'forgot' | 'reset'
 type PaymentChannel = 'image_proof' | 'gcash_manual' | 'maya_manual'
 
 type PaymentConfig = {
@@ -266,6 +266,9 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [buyReceipt, setBuyReceipt] = React.useState<BuyReceiptState | null>(null)
   const [signInPendingState, setSignInPendingState] = React.useState<SignInPendingState | null>(null)
   const [expandedQrUrl, setExpandedQrUrl] = React.useState<string | null>(null)
+  const [signupVerificationEmail, setSignupVerificationEmail] = React.useState('')
+  const [signupOtp, setSignupOtp] = React.useState('')
+  const [signupResendCooldown, setSignupResendCooldown] = React.useState(0)
   const [resetCode, setResetCode] = React.useState('')
   const [resetCodeFailures, setResetCodeFailures] = React.useState(0)
   const [resetCodeBlockedSeconds, setResetCodeBlockedSeconds] = React.useState(0)
@@ -416,6 +419,9 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setBuyReceipt(null)
       setSignInPendingState(null)
       setExpandedQrUrl(null)
+      setSignupVerificationEmail('')
+      setSignupOtp('')
+      setSignupResendCooldown(0)
       setResetCodeFailures(0)
       setResetCodeBlockedSeconds(0)
       setResetCodeVerified(false)
@@ -463,6 +469,15 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       return () => window.clearTimeout(timer)
     }
   }, [resetCooldown])
+
+  React.useEffect(() => {
+    if (signupResendCooldown > 0) {
+      const timer = window.setTimeout(() => {
+        setSignupResendCooldown((prev) => Math.max(0, prev - 1))
+      }, 60000)
+      return () => window.clearTimeout(timer)
+    }
+  }, [signupResendCooldown])
 
   React.useEffect(() => {
     const normalizedEmail = email.trim().toLowerCase()
@@ -630,13 +645,17 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         setEmail('')
         setPassword('')
         setConfirmPassword('')
+        setSignupOtp('')
         if (data.session) {
           pushNotice?.({ variant: 'success', message: 'Free account created.' })
           onOpenChange(false)
           return
         }
-        pushNotice?.({ variant: 'success', message: 'Free account created. Check your email to confirm, then sign in.' })
-        setMode('signin')
+        setEmail(normalizedEmail)
+        setSignupVerificationEmail(normalizedEmail)
+        setSignupResendCooldown(1)
+        pushNotice?.({ variant: 'success', message: 'Verification code sent. Enter the OTP from your email to activate your account.' })
+        setMode('verify-signup')
       } catch {
         pushNotice?.({ variant: 'error', message: 'We could not create your account. Please try again.' })
       } finally {
@@ -645,6 +664,78 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     },
     [appReturnUrl, confirmPassword, email, onOpenChange, password, pushNotice],
   )
+
+  const handleVerifySignupOtp = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const normalizedEmail = (signupVerificationEmail || email).trim().toLowerCase()
+    const normalizedOtp = signupOtp.trim()
+    if (!isValidEmail(normalizedEmail)) {
+      pushNotice?.({ variant: 'error', message: 'Enter a valid email address.' })
+      return
+    }
+    if (!normalizedOtp) {
+      pushNotice?.({ variant: 'error', message: 'Enter the OTP code from your email.' })
+      return
+    }
+    setLoading(true)
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: normalizedEmail,
+        token: normalizedOtp,
+        type: 'signup',
+      })
+      if (error) {
+        pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(error.message) })
+        return
+      }
+      setSignupOtp('')
+      setSignupVerificationEmail('')
+      setEmail('')
+      pushNotice?.({ variant: 'success', message: data.session ? 'Email verified. Your account is ready.' : 'Email verified. You can sign in now.' })
+      if (data.session) {
+        onOpenChange(false)
+        return
+      }
+      setMode('signin')
+    } catch {
+      pushNotice?.({ variant: 'error', message: 'We could not verify that code. Please try again.' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleResendSignupOtp = React.useCallback(async () => {
+    const normalizedEmail = (signupVerificationEmail || email).trim().toLowerCase()
+    if (!isValidEmail(normalizedEmail)) {
+      pushNotice?.({ variant: 'error', message: 'Enter a valid email address.' })
+      return
+    }
+    if (signupResendCooldown > 0) {
+      pushNotice?.({ variant: 'error', message: `Please wait ${signupResendCooldown} minute${signupResendCooldown > 1 ? 's' : ''} before requesting another code.` })
+      return
+    }
+    setLoading(true)
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: normalizedEmail,
+        options: {
+          emailRedirectTo: resolveEmailAuthRedirectUrl(appReturnUrl),
+        },
+      })
+      if (error) {
+        pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(error.message) })
+        return
+      }
+      setSignupVerificationEmail(normalizedEmail)
+      setSignupResendCooldown(1)
+      pushNotice?.({ variant: 'success', message: 'A new verification code was sent.' })
+    } catch {
+      pushNotice?.({ variant: 'error', message: 'We could not resend the verification code. Please try again.' })
+    } finally {
+      setLoading(false)
+    }
+  }, [appReturnUrl, email, pushNotice, signupResendCooldown, signupVerificationEmail])
 
   React.useEffect(() => {
     if (!open || (mode !== 'buy' && mode !== 'signin')) return
@@ -1074,6 +1165,8 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     switch (mode) {
       case 'buy':
         return <>Create an account</>
+      case 'verify-signup':
+        return <>Verify your email</>
       case 'forgot':
         return <>Forgot Password</>
       case 'reset':
@@ -1087,6 +1180,8 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     ? 'Sign in and keep your sampler ready for events'
     : mode === 'buy'
       ? 'Create a free account and upgrade when ready'
+      : mode === 'verify-signup'
+        ? 'Enter the OTP code sent to your email'
       : mode === 'forgot'
         ? 'Request a secure reset code by email'
         : 'Enter your code and choose a new password'
@@ -1105,8 +1200,8 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     </p>
   )
 
-  const showBackButton = mode === 'buy' || mode === 'forgot' || mode === 'reset'
-  const centerAuthContentOnMobile = mode === 'signin' || (mode === 'buy' && buyStep === 'account' && !buyReceipt)
+  const showBackButton = mode === 'buy' || mode === 'verify-signup' || mode === 'forgot' || mode === 'reset'
+  const centerAuthContentOnMobile = mode === 'signin' || mode === 'verify-signup' || (mode === 'buy' && buyStep === 'account' && !buyReceipt)
 
   const handleAuthBack = () => {
     if (mode === 'buy') {
@@ -1115,6 +1210,10 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         return
       }
       setMode('signin')
+      return
+    }
+    if (mode === 'verify-signup') {
+      setMode('buy')
       return
     }
     if (mode === 'reset' && resetCodeVerified) {
@@ -1224,11 +1323,93 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         <DialogDescription className="sr-only">
           {mode === 'signin' && 'Sign in to your account.'}
           {mode === 'buy' && 'Create a free account.'}
+          {mode === 'verify-signup' && 'Verify your email using the OTP code sent by email.'}
           {mode === 'forgot' && 'Request a password reset code via email.'}
           {mode === 'reset' && 'Enter your reset code and choose a new password for your account.'}
         </DialogDescription>
 
         <RecoveryLandingHelper />
+
+        {mode === 'verify-signup' && (
+          <form onSubmit={handleVerifySignupOtp} className="mx-auto mt-8 max-w-sm space-y-4 sm:mt-9 max-sm:mb-auto">
+            <div className={`rounded-[18px] border px-4 py-3 text-sm font-semibold ${
+              isDark ? 'border-red-300/20 bg-red-500/10 text-red-50' : 'border-red-200 bg-red-50 text-red-900'
+            }`}>
+              We sent a verification code to your email. Enter it here to activate your FREE account.
+            </div>
+
+            <div>
+              <Label htmlFor="signupVerifyEmail" className="sr-only">
+                Email
+              </Label>
+              <Input
+                id="signupVerifyEmail"
+                type="email"
+                value={signupVerificationEmail || email}
+                onChange={(event) => {
+                  const nextEmail = event.target.value
+                  setEmail(nextEmail)
+                  setSignupVerificationEmail(nextEmail)
+                }}
+                placeholder="Email"
+                required
+                disabled={loading}
+                autoComplete="email"
+                className={authInputClass}
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="signupOtp" className="sr-only">
+                Verification code
+              </Label>
+              <Input
+                id="signupOtp"
+                type="text"
+                value={signupOtp}
+                onChange={(event) => setSignupOtp(event.target.value.replace(/\s+/g, ''))}
+                placeholder="6-digit OTP code"
+                required
+                disabled={loading}
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                className={`${authInputClass} text-center text-xl tracking-[0.28em]`}
+              />
+            </div>
+
+            <Button
+              type="submit"
+              className={`w-full ${authPrimaryButtonClass}`}
+              disabled={loading || !(signupVerificationEmail || email).trim() || !signupOtp.trim()}
+            >
+              {loading ? 'Verifying...' : 'Verify and Continue'}
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              className={`w-full ${authGhostButtonClass}`}
+              onClick={() => {
+                void handleResendSignupOtp()
+              }}
+              disabled={loading || !(signupVerificationEmail || email).trim() || signupResendCooldown > 0}
+            >
+              {signupResendCooldown > 0 ? `Resend in ${signupResendCooldown} minute${signupResendCooldown > 1 ? 's' : ''}` : 'Resend verification code'}
+            </Button>
+
+            <div className={`text-center text-sm font-semibold ${authMutedTextClass}`}>
+              Already verified?{' '}
+              <button
+                type="button"
+                className={authLinkClass}
+                onClick={() => setMode('signin')}
+                disabled={loading}
+              >
+                Log in
+              </button>
+            </div>
+          </form>
+        )}
 
         {mode === 'reset' && (
           <form onSubmit={handleResetPassword} className="space-y-4">
