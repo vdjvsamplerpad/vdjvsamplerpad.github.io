@@ -467,7 +467,7 @@ export const PadGrid = React.memo(function PadGrid({
       {onFileUpload && (
         <button
           type="button"
-          className={`relative min-w-0 max-w-full ${aspectRatio} rounded-xl border-2 border-dashed transition-colors ${
+          className={`relative min-w-0 max-w-full overflow-hidden ${aspectRatio} rounded-xl border-2 border-dashed transition-colors ${
             theme === 'dark'
               ? 'border-slate-600 bg-slate-900 text-slate-200 hover:border-red-400 hover:bg-slate-800'
               : 'border-slate-300 bg-white text-slate-700 hover:border-red-400 hover:bg-red-50'
@@ -479,19 +479,19 @@ export const PadGrid = React.memo(function PadGrid({
           disabled={channelLoadArmed}
           aria-label={`Upload audio to ${bankName || 'current bank'}`}
         >
-          <span className="flex h-full w-full flex-col items-center justify-center gap-2 p-2 text-center">
-            <span className={`flex h-10 w-10 items-center justify-center rounded-full border ${
+          <span className="flex h-full w-full min-w-0 flex-col items-center justify-center gap-1.5 overflow-hidden p-1.5 text-center">
+            <span className={`flex h-10 max-h-[48%] w-10 max-w-[48%] shrink-0 items-center justify-center rounded-full border ${
               theme === 'dark'
                 ? 'border-red-400/50 bg-red-500/12 text-red-100'
                 : 'border-red-200 bg-red-50 text-red-600'
             }`}>
-              <Upload className="h-5 w-5" />
+              <Upload className="h-5 max-h-[70%] w-5 max-w-[70%]" />
             </span>
             {showAddPadText ? (
-              <span className="text-xs font-bold uppercase tracking-wide">Add Pad</span>
+              <span className="max-w-full truncate text-xs font-bold uppercase leading-none tracking-wide">Add Pad</span>
             ) : null}
             {showAddPadDropHint ? (
-              <span className="text-[10px] opacity-70">Drop audio here</span>
+              <span className="max-w-full truncate text-[10px] leading-none opacity-70">Drop audio here</span>
             ) : null}
           </span>
         </button>
