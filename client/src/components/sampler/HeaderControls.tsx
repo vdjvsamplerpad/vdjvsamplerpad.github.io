@@ -41,6 +41,15 @@ const hexToRgba = (hex: string, alpha: number): string => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
+const getReadableTextColor = (hex: string): string => {
+  const normalized = hex.replace(/^#/, '');
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luminance > 0.58 ? '#0f172a' : '#ffffff';
+};
+
 
 interface HeaderControlsProps {
   primaryBank: SamplerBank | null;
@@ -843,10 +852,10 @@ export function HeaderControls({
     const color = getBankAccentColor(bank);
     if (!color) return undefined;
     return {
-      borderColor: hexToRgba(color, theme === 'dark' ? 0.62 : 0.42),
-      backgroundColor: hexToRgba(color, theme === 'dark' ? 0.22 : 0.12),
-      color,
-      boxShadow: `0 0 0 1px ${hexToRgba(color, 0.08)}`,
+      borderColor: hexToRgba(color, theme === 'dark' ? 0.85 : 0.72),
+      backgroundColor: color,
+      color: getReadableTextColor(color),
+      boxShadow: `0 10px 28px ${hexToRgba(color, 0.24)}`,
     };
   }, [getBankAccentColor, theme]);
 
@@ -1183,6 +1192,19 @@ export function HeaderControls({
                     ? 'Login'
                     : 'Upgrade'}
             </span>
+            {playSummary?.visible && !capabilities.features.search && (
+              <span
+                aria-label={`${playSummary.remainingCount} plays left`}
+                className={cn(
+                  'absolute -right-1 -top-1 z-10 min-w-6 rounded-full border px-1.5 py-0.5 text-[10px] font-black leading-none shadow',
+                  playSummary.exhausted
+                    ? 'border-red-200 bg-red-600 text-white'
+                    : 'border-white/70 bg-[#B9FF12] text-slate-950'
+                )}
+              >
+                {playSummary.remainingCount}
+              </span>
+            )}
           </button>
 
           <button
@@ -1199,19 +1221,6 @@ export function HeaderControls({
           >
             <span className="absolute inset-2 rounded-full bg-white/10" />
             <Square className={isCompactBottomNav ? 'relative h-6 w-6' : 'relative h-4 w-4'} />
-            {playSummary?.visible && (
-              <span
-                aria-label={`${playSummary.remainingCount} plays left`}
-                className={cn(
-                  'absolute -right-1 -top-1 z-10 min-w-6 rounded-full border px-1.5 py-0.5 text-[10px] font-black leading-none shadow',
-                  playSummary.exhausted
-                    ? 'border-red-200 bg-red-600 text-white'
-                    : 'border-white/70 bg-[#B9FF12] text-slate-950'
-                )}
-              >
-                {playSummary.remainingCount}
-              </span>
-            )}
             {!isCompactBottomNav && <span className="relative ml-2 text-xs">Stop</span>}
           </button>
 
@@ -1253,32 +1262,6 @@ export function HeaderControls({
             <span>{channelLoadArmed ? 'Cancel' : 'Mixer'}</span>
           </button>
 
-          {!isCompactBottomNav && (
-            <div className="ml-1 flex items-center gap-1 border-l border-border/70 pl-2">
-              {isAdmin && editMode && (
-                <button
-                  type="button"
-                  onClick={adminPadColorPaintActive ? handleStopPadColorPaint : handlePadColorPaintButton}
-                  className={cn(navButtonBase, 'w-20', adminPadColorPaintActive && 'border-red-400 text-red-500')}
-                  title={adminPadColorPaintActive ? 'Stop Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
-                >
-                  {renderNavIcon(<Palette className="h-4 w-4" />, adminPadColorPaintActive ? 'bg-red-500' : undefined)}
-                  <span>Paint</span>
-                </button>
-              )}
-              {isAdmin && (
-                <button
-                  type="button"
-                  onClick={() => setAdminDialogOpen(true)}
-                  className={cn(navButtonBase, 'w-24 border-amber-400 text-amber-500')}
-                  title="Manage bank access"
-                >
-                  {renderNavIcon(<Shield className="h-4 w-4" />)}
-                  <span>Admin</span>
-                </button>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
@@ -1292,48 +1275,76 @@ export function HeaderControls({
             className={cn(
               'shadow-lg',
               editMode
-                ? 'border-amber-300 bg-amber-500 text-amber-950 hover:bg-amber-400'
+                ? 'border-amber-300 bg-amber-500 text-amber-950 hover:bg-amber-500'
                 : theme === 'dark'
-                  ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-900'
-                  : 'border-slate-200 bg-white text-slate-800 hover:bg-slate-50',
-              'h-11 w-11 rounded-xl'
+                  ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-950'
+                  : 'border-slate-200 bg-white text-slate-800 hover:bg-white',
+              'h-12 w-12 rounded-2xl'
             )}
           title={editMode ? 'Exit Edit Mode' : 'Edit pads'}
         >
           <Pencil className="h-4 w-4" />
         </Button>
-        {isAdmin && editMode && (
+      </div>
+      )}
+
+      {isAdmin && (
+        <div
+          className={cn(
+            'fixed left-3 z-40 flex flex-col-reverse gap-2',
+            isCompactBottomNav ? 'bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+4.85rem)]'
+          )}
+        >
+          <Button
+            type="button"
+            onClick={() => setAdminDialogOpen(true)}
+            variant="outline"
+            size="icon"
+            className={cn('h-12 w-12 rounded-2xl shadow-lg', theme === 'dark' ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-950' : 'border-slate-200 bg-white text-slate-800 hover:bg-white')}
+            title="Manage bank access"
+          >
+            <Shield className="h-4 w-4" />
+          </Button>
+          {isCompactBottomNav && adminPadColorPaintCanUndo && (
+            <Button
+              type="button"
+              onClick={handleUndoPadColorPaint}
+              variant="outline"
+              size="icon"
+              className={cn('h-12 w-12 rounded-2xl shadow-lg', theme === 'dark' ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-950' : 'border-slate-200 bg-white text-slate-800 hover:bg-white')}
+              title="Undo last painted pad color"
+            >
+              <Undo2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      )}
+
+      {isAdmin && editMode && (
+        <div
+          className={cn(
+            'fixed right-3 z-40',
+            isCompactBottomNav ? 'bottom-[calc(var(--vdjv-safe-bottom)+9.65rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+4.85rem)]'
+          )}
+        >
           <Button
             type="button"
             onClick={adminPadColorPaintActive ? handleStopPadColorPaint : handlePadColorPaintButton}
             variant="outline"
             size="icon"
             className={cn(
-              'h-11 w-11 rounded-xl shadow-lg',
+              'h-12 w-12 rounded-2xl shadow-lg',
               adminPadColorPaintActive
-                ? 'border-red-300 bg-red-600 text-white hover:bg-red-500'
+                ? 'border-red-300 bg-red-600 text-white hover:bg-red-600'
                 : theme === 'dark'
-                  ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-900'
-                  : 'border-slate-200 bg-white text-slate-800 hover:bg-slate-50'
+                  ? 'border-slate-700 bg-slate-950 text-slate-100 hover:bg-slate-950'
+                  : 'border-slate-200 bg-white text-slate-800 hover:bg-white'
             )}
             title={adminPadColorPaintActive ? 'Stop Color Paint Mode' : (padColorPaintBlockedReason || 'Color Paint Mode')}
           >
             <Palette className="h-4 w-4" />
           </Button>
-        )}
-        {isAdmin && (
-          <Button
-            type="button"
-            onClick={() => setAdminDialogOpen(true)}
-            variant="outline"
-            size="icon"
-            className={cn('shadow-lg', controlClass('h-11 w-11 rounded-xl', 'default'))}
-            title="Manage bank access"
-          >
-            <Shield className="h-4 w-4" />
-          </Button>
-        )}
-      </div>
+        </div>
       )}
 
       {isDualMode && (
@@ -1344,7 +1355,8 @@ export function HeaderControls({
           size="sm"
           className={cn(
             'fixed left-1/2 z-50 h-8 -translate-x-1/2 rounded-full px-3 text-[11px] font-black shadow-lg',
-            isCompactBottomNav ? 'bottom-[calc(var(--vdjv-safe-bottom)+5.95rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+4.65rem)]',
+            isCompactBottomNav ? 'bottom-[calc(var(--vdjv-safe-bottom)+5.95rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+4.85rem)]',
+            'h-10 px-4',
             theme === 'dark'
               ? 'border-amber-300/45 bg-slate-950/95 text-amber-100'
               : 'border-amber-200 bg-white/95 text-amber-700'
@@ -1354,23 +1366,6 @@ export function HeaderControls({
           <X className="h-3.5 w-3.5" />
           Exit Dual
         </Button>
-      )}
-
-      {isCompactBottomNav && (
-      <div className="fixed bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)] left-3 z-40 flex flex-col-reverse gap-2">
-        {isAdmin && adminPadColorPaintCanUndo && (
-          <Button
-            type="button"
-            onClick={handleUndoPadColorPaint}
-            variant="outline"
-            size="icon"
-            className={controlClass('h-11 w-11 rounded-xl')}
-            title="Undo last painted pad color"
-          >
-            <Undo2 className="h-4 w-4" />
-          </Button>
-        )}
-      </div>
       )}
 
       {globalMuted && (

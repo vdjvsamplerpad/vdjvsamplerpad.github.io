@@ -246,6 +246,8 @@ export const PadGrid = React.memo(function PadGrid({
   const supportsDesktopDragDrop = !isMobile && !isNativeCapacitor;
   const gap = isMobile ? 'gap-0' : 'gap-1';
   const aspectRatio = 'aspect-square';
+  const showAddPadText = isMobile ? padSize <= 8 : padSize <= 6;
+  const showAddPadDropHint = supportsDesktopDragDrop && padSize <= 6;
 
   const handlePadDragStart = (e: React.DragEvent, index: number) => {
     if (!editMode || adminPadColorPaintActive) return;
@@ -485,9 +487,11 @@ export const PadGrid = React.memo(function PadGrid({
             }`}>
               <Upload className="h-5 w-5" />
             </span>
-            <span className="hidden text-xs font-bold uppercase tracking-wide min-[520px]:inline">Add Pad</span>
-            {!isMobile && supportsDesktopDragDrop ? (
-              <span className="hidden text-[10px] opacity-70 min-[680px]:inline">Drop audio here</span>
+            {showAddPadText ? (
+              <span className="text-xs font-bold uppercase tracking-wide">Add Pad</span>
+            ) : null}
+            {showAddPadDropHint ? (
+              <span className="text-[10px] opacity-70">Drop audio here</span>
             ) : null}
           </span>
         </button>

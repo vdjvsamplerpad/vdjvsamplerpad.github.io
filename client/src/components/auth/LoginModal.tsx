@@ -1250,6 +1250,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 required
                 disabled={loading || resetCodeVerified}
                 autoComplete="email"
+                className={authInputClass}
               />
             </div>
             <div className="space-y-2">
@@ -1266,6 +1267,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 disabled={loading || resetCodeVerified}
                 autoComplete="one-time-code"
                 inputMode="text"
+                className={authInputClass}
               />
             </div>
             <div className="space-y-2">
@@ -1283,7 +1285,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                   disabled={loading}
                   minLength={8}
                   autoComplete="new-password"
-                  className="pr-10"
+                  className={`${authInputClass} pr-10`}
                 />
                 <button
                   type="button"
@@ -1310,7 +1312,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                   disabled={loading}
                   minLength={8}
                   autoComplete="new-password"
-                  className="pr-10"
+                  className={`${authInputClass} pr-10`}
                 />
                 <button
                   type="button"
@@ -1323,13 +1325,13 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               </div>
             </div>
             <div className="space-y-2">
-              <Button type="submit" className="w-full" disabled={loading || !password || !confirmPassword || !email || !resetCode || resetCodeBlockedSeconds > 0}>
+              <Button type="submit" className={`w-full ${authPrimaryButtonClass}`} disabled={loading || !password || !confirmPassword || !email || !resetCode || resetCodeBlockedSeconds > 0}>
                 {loading ? 'Updating...' : 'Update Password'}
               </Button>
               <Button
                 type="button"
                 variant="outline"
-                className="w-full"
+                className={`w-full ${authGhostButtonClass}`}
                 onClick={() => {
                   void handleResendResetCode()
                 }}
@@ -1340,7 +1342,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               <Button
                 type="button"
                 variant="outline"
-                className="w-full"
+                className={`w-full ${authGhostButtonClass}`}
                 onClick={() => {
                   void discardRecoverySession()
                   setMode('signin')
@@ -1368,6 +1370,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 required
                 disabled={isSignInBusy}
                 autoComplete="email"
+                className={authInputClass}
               />
             </div>
 
@@ -1378,13 +1381,13 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
             )}
 
             <div className="space-y-2">
-              <Button type="submit" className="w-full" disabled={loading || !email || resetCooldown > 0}>
+              <Button type="submit" className={`w-full ${authPrimaryButtonClass}`} disabled={loading || !email || resetCooldown > 0}>
                 {loading ? 'Sending...' : 'Send reset code'}
               </Button>
               <Button
                 type="button"
                 variant="outline"
-                className="w-full"
+                className={`w-full ${authGhostButtonClass}`}
                 onClick={() => {
                   setMode('signin')
                 }}
@@ -1550,12 +1553,16 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               <AuthLegalFootnote />
 
               {isLoginSubmitting && (
-                <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-gray-950/72' : 'bg-white/72'}`}>
-                  <div className={`mx-4 w-full max-w-sm rounded-2xl border px-6 py-7 text-center shadow-2xl ${isDark ? 'border-white/10 bg-gray-900/95 text-white' : 'border-gray-200 bg-white/95 text-gray-900'}`}>
-                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-indigo-500/10">
-                      <LoadingSpinner size="lg" className="h-10 w-10 border-4 border-indigo-200/40 border-t-indigo-500" />
+                <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-[#100909]/82' : 'bg-white/82'}`}>
+                  <div className={`mx-4 w-full max-w-sm rounded-[24px] border px-6 py-7 text-center shadow-[0_26px_80px_rgba(239,68,68,0.24)] ${
+                    isDark
+                      ? 'border-red-300/20 bg-[linear-gradient(180deg,#1b1010_0%,#0f1115_100%)] text-white'
+                      : 'border-red-200 bg-[linear-gradient(180deg,#fff7f5_0%,#ffffff_100%)] text-slate-950'
+                  }`}>
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[18px] border border-red-300/25 bg-red-500/12 shadow-[0_0_42px_rgba(239,68,68,0.25)]">
+                      <LoadingSpinner size="lg" className="h-10 w-10 border-4 border-red-200/40 border-t-red-500" />
                     </div>
-                    <div className="mt-4 text-base font-semibold">Signing you in...</div>
+                    <div className="mt-4 text-base font-black">Signing you in...</div>
                     <div className={`mt-2 text-sm leading-relaxed ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
                       Please wait while we check your account and sync your access.
                     </div>
@@ -1604,21 +1611,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 <form onSubmit={handleBuyNext} className="relative space-y-3">
                   {buyStep === 'account' && (
                     <>
-                      {paymentConfig?.messenger_url && (
-                        <div className={`mb-4 rounded-[18px] border px-4 py-3 text-center text-sm font-semibold shadow-[0_18px_55px_rgba(6,182,212,0.10)] ${
-                          isDark ? 'border-cyan-300/20 bg-cyan-300/10 text-cyan-50' : 'border-cyan-500/20 bg-cyan-50/80 text-cyan-950'
-                        }`}>
-                          <button
-                            type="button"
-                            onClick={() => window.open(paymentConfig.messenger_url, '_blank', 'noopener,noreferrer')}
-                            className={`font-black underline underline-offset-4 ${isDark ? 'text-white hover:text-red-300' : 'text-cyan-950 hover:text-cyan-700'}`}
-                          >
-                            Message us on Facebook
-                          </button>
-                          {' '}if you need account or payment help.
-                        </div>
-                      )}
-
                       <div>
                         <Label htmlFor="buyEmail" className="sr-only">Email</Label>
                         <Input
@@ -1708,6 +1700,17 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                       </div>
 
                       <AuthLegalFootnote />
+                      {paymentConfig?.messenger_url && (
+                        <button
+                          type="button"
+                          onClick={() => window.open(paymentConfig.messenger_url, '_blank', 'noopener,noreferrer')}
+                          className={`mx-auto flex items-center justify-center gap-1.5 text-xs font-black underline-offset-4 hover:underline ${
+                            isDark ? 'text-red-200 hover:text-white' : 'text-red-700 hover:text-red-900'
+                          }`}
+                        >
+                          Message us on Facebook <ExternalLink className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </>
                   )}
 
