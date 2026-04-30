@@ -201,6 +201,16 @@ function formatPhp(value: number): string {
 function resolveGoogleOAuthRedirectUrl(appReturnUrl?: string): string | undefined {
   const configured = String((import.meta as any).env?.VITE_GOOGLE_OAUTH_REDIRECT_URL || '').trim()
   if (configured) return configured
+  return resolveAuthAppRedirectUrl(appReturnUrl)
+}
+
+function resolveEmailAuthRedirectUrl(appReturnUrl?: string): string | undefined {
+  const configured = String((import.meta as any).env?.VITE_EMAIL_AUTH_REDIRECT_URL || '').trim()
+  if (configured) return configured
+  return resolveAuthAppRedirectUrl(appReturnUrl)
+}
+
+function resolveAuthAppRedirectUrl(appReturnUrl?: string): string | undefined {
   if (appReturnUrl) return appReturnUrl
   if (typeof window === 'undefined') return undefined
   try {
@@ -610,7 +620,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               display_name: normalizedEmail.split('@')[0] || 'User',
               email: normalizedEmail,
             },
-            emailRedirectTo: resolveGoogleOAuthRedirectUrl(appReturnUrl),
+            emailRedirectTo: resolveEmailAuthRedirectUrl(appReturnUrl),
           },
         })
         if (error) {
@@ -1925,12 +1935,16 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                   </div>
                   )}
                   {isBuySubmitting && (
-                    <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-gray-950/72' : 'bg-white/72'}`}>
-                      <div className={`mx-4 w-full max-w-sm rounded-2xl border px-6 py-7 text-center shadow-2xl ${isDark ? 'border-white/10 bg-gray-900/95 text-white' : 'border-gray-200 bg-white/95 text-gray-900'}`}>
-                        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-indigo-500/10">
-                          <LoadingSpinner size="lg" className="h-10 w-10 border-4 border-indigo-200/40 border-t-indigo-500" />
+                    <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-[#100909]/82' : 'bg-white/82'}`}>
+                      <div className={`mx-4 w-full max-w-sm rounded-[24px] border px-6 py-7 text-center shadow-[0_26px_80px_rgba(239,68,68,0.24)] ${
+                        isDark
+                          ? 'border-red-300/20 bg-[linear-gradient(180deg,#1b1010_0%,#0f1115_100%)] text-white'
+                          : 'border-red-200 bg-[linear-gradient(180deg,#fff7f5_0%,#ffffff_100%)] text-slate-950'
+                      }`}>
+                        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[18px] border border-red-300/25 bg-red-500/12 shadow-[0_0_42px_rgba(239,68,68,0.25)]">
+                          <LoadingSpinner size="lg" className="h-10 w-10 border-4 border-red-200/40 border-t-red-500" />
                         </div>
-                        <div className="mt-4 text-base font-semibold">Creating your free account...</div>
+                        <div className="mt-4 text-base font-black">Creating your free account...</div>
                         <div className={`mt-2 text-sm leading-relaxed ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
                           Please wait while we create your account and prepare your profile.
                         </div>
