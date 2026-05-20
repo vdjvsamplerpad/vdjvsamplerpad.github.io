@@ -8,7 +8,7 @@ import { LoadingSpinner } from '@/components/ui/loading'
 import { PaymentReceiptCard } from '@/components/ui/payment-receipt-card'
 import { isPasswordRecoveryMode, setPasswordRecoveryMode, useAuthActions, useAuthState } from '@/hooks/useAuth'
 import { ensureActivityRuntime, logActivityEvent } from '@/lib/activityLogger'
-import { edgeFunctionUrl } from '@/lib/edge-api'
+import { edgeFunctionUrl, markAuthClientCompatibility } from '@/lib/edge-api'
 import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links'
 import { optimizeReceiptProofFile, runReceiptOcr } from '@/lib/receipt-ocr'
 import { getPrivacyPagePath, getTermsPagePath } from '@/lib/runtime-routes'
@@ -679,6 +679,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     }
     setLoading(true)
     try {
+      await markAuthClientCompatibility(normalizedEmail)
       const { data, error } = await supabase.auth.verifyOtp({
         email: normalizedEmail,
         token: normalizedOtp,

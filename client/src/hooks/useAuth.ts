@@ -1,7 +1,7 @@
 ﻿import * as React from 'react'
 import { supabase } from '@/lib/supabase'
 import type { User, AuthError, Session } from '@supabase/supabase-js'
-import { edgeFunctionUrl, getClientCompatibilityHeaders } from '@/lib/edge-api'
+import { edgeFunctionUrl, getClientCompatibilityHeaders, markAuthClientCompatibility } from '@/lib/edge-api'
 import { clearUserBankCache, refreshAccessibleBanksCache } from '@/lib/bank-utils'
 import {
   type AccountCapabilitySnapshot,
@@ -1008,6 +1008,17 @@ function useAuthValue(): AuthProviderValue {
     setPasswordRecoveryMode(false)
     sessionConflictLockedRef.current = false
     setAuthTransition('signing_in', email)
+    try {
+      await markAuthClientCompatibility(email)
+    } catch (error) {
+      setAuthTransition('idle')
+      return {
+        error: {
+          message: error instanceof Error ? error.message : 'Please update the app before signing in.',
+        } as AuthError,
+        data: { user: null },
+      }
+    }
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (!error && data?.user) {
       setHideProtectedBanksLock(false)
@@ -1197,6 +1208,15 @@ function useAuthValue(): AuthProviderValue {
   }, [state.profile, state.user])
 
   const verifyPasswordResetCode = React.useCallback(async (email: string, code: string) => {
+    try {
+      await markAuthClientCompatibility(email)
+    } catch (error) {
+      return {
+        error: {
+          message: error instanceof Error ? error.message : 'Please update the app before signing in.',
+        } as AuthError,
+      }
+    }
     const { error } = await supabase.auth.verifyOtp({
       email,
       token: code,

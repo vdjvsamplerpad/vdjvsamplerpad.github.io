@@ -2967,6 +2967,32 @@ const validateAccountClientCompatibility = (req: Request, capabilities: AccountC
   });
 };
 
+const createAuthCompatibilityAttempt = async (req: Request, body: any) => {
+  const email = normalizeEmail(body?.email);
+  if (!email) return badRequest("Valid email is required");
+  const clientVersion = getTierAwareClientVersion(req);
+  if (clientVersion < TIER_AWARE_CLIENT_VERSION) {
+    return fail(426, "UPDATE_REQUIRED", {
+      reason: "tier_aware_client_required",
+      required_client_capability: TIER_AWARE_CLIENT_VERSION,
+      received_client_capability: clientVersion,
+    });
+  }
+  const admin = createServiceClient();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
+  const { error } = await admin
+    .from("auth_client_compatibility_attempts")
+    .insert({
+      email_normalized: email,
+      client_version: clientVersion,
+      app_version: asString(req.headers.get("x-vdjv-app-version"), 80) || null,
+      expires_at: expiresAt,
+    });
+  if (error) return fail(500, "AUTH_COMPATIBILITY_MARK_FAILED", { message: error.message });
+  return ok({ expiresAt });
+};
+
 const getAccountMe = async (req: Request) => {
   const admin = createServiceClient();
   const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
@@ -9618,6 +9644,10 @@ Deno.serve(async (req) => {
     }
     if (req.method === "GET" && scoped[0] === "account" && scoped[1] === "me" && scoped.length === 2) {
       return await getAccountMe(req);
+    }
+    if (req.method === "POST" && scoped[0] === "account" && scoped[1] === "auth-compatibility" && scoped[2] === "start" && scoped.length === 3) {
+      const body = await req.json().catch(() => ({}));
+      return await createAuthCompatibilityAttempt(req, body);
     }
     if (req.method === "POST" && scoped[0] === "account" && scoped[1] === "delete" && scoped.length === 2) {
       const body = await req.json().catch(() => ({}));

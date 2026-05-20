@@ -21,6 +21,7 @@ export const supabaseUrl = readEnv('VITE_SUPABASE_URL')
 export const supabaseAnonKey = readEnv('VITE_SUPABASE_ANON_KEY')
 const allowRemoteSupabaseInDev = isTruthy(readEnv('VITE_ALLOW_REMOTE_SUPABASE_IN_DEV'))
 const isDev = Boolean((import.meta as any).env?.DEV)
+const appVersion = readEnv('VITE_APP_VERSION') || 'unknown'
 
 if (!supabaseUrl) {
   throw new Error('Missing VITE_SUPABASE_URL in frontend environment.')
@@ -33,4 +34,11 @@ if (isDev && !isLocalSupabaseUrl(supabaseUrl) && !allowRemoteSupabaseInDev) {
     'Blocked remote Supabase in local development. Point VITE_SUPABASE_URL to local Supabase or set VITE_ALLOW_REMOTE_SUPABASE_IN_DEV=true for explicit cloud testing.'
   )
 }
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  global: {
+    headers: {
+      'X-VDJV-Tier-Client': '1',
+      'X-VDJV-App-Version': appVersion,
+    },
+  },
+})

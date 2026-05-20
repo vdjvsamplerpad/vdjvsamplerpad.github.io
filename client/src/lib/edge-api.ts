@@ -38,6 +38,25 @@ export const getClientCompatibilityHeaders = (): Record<string, string> => ({
   'X-VDJV-App-Version': String((import.meta as any).env?.VITE_APP_VERSION || 'unknown').trim() || 'unknown',
 });
 
+export const markAuthClientCompatibility = async (email: string): Promise<void> => {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) throw new Error('Email is required.');
+  const response = await fetch(edgeFunctionUrl('store-api', 'account/auth-compatibility/start'), {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'omit',
+    headers: {
+      ...getClientCompatibilityHeaders(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email: normalizedEmail }),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(String(payload?.error || payload?.message || 'Please update the app before signing in.'));
+  }
+};
+
 export const getAuthToken = async (): Promise<string | null> => {
   const { data } = await supabase.auth.getSession();
   return data.session?.access_token || null;
