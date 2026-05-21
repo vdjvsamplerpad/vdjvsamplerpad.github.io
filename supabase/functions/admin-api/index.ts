@@ -144,6 +144,9 @@ const ok = (data: Record<string, unknown>, status = 200) =>
 const fail = (status: number, error: string, extra?: Record<string, unknown>) =>
   json(status, { ok: false, error, ...(extra || {}) });
 
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
 const swallowDiscordError = async (task: () => Promise<void>) => {
   try {
     await task();
@@ -795,7 +798,7 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
     for (const row of sessionRows || []) {
       const rowUserId = asUuid((row as any)?.user_id);
       if (!rowUserId || latestSessionByUser.has(rowUserId)) continue;
-      const meta = asObject((row as any)?.meta);
+      const meta = asRecord((row as any)?.meta);
       latestSessionByUser.set(rowUserId, {
         device_name: asString((row as any)?.device_name, 200) || null,
         platform: asString((row as any)?.platform, 120) || null,
@@ -818,7 +821,7 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
     for (const row of loginRows || []) {
       const rowUserId = asUuid((row as any)?.user_id);
       if (!rowUserId || latestLoginVersionByUser.has(rowUserId)) continue;
-      const meta = asObject((row as any)?.meta);
+      const meta = asRecord((row as any)?.meta);
       latestLoginVersionByUser.set(rowUserId, asString(meta.appVersion, 80) || null);
     }
   }
