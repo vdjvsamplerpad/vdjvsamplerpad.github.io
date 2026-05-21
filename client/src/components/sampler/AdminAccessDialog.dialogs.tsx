@@ -301,6 +301,9 @@ export function AdminAccessDialogModals({
               <div><Label>Last Sign-In Platform</Label><div>{details.user?.last_sign_in_platform || '-'}</div></div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div><Label>Last Version Login</Label><div>{details.user?.last_sign_in_app_version || '-'}</div></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <div className={`rounded border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50/70'}`}>
                 <div className="flex items-center justify-between gap-2">
                   <Label className="text-xs uppercase tracking-wide opacity-80">Owned Banks</Label>

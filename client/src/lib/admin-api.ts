@@ -20,6 +20,7 @@ export interface AdminUser {
   last_sign_in_at: string | null;
   last_sign_in_device_name: string | null;
   last_sign_in_platform: string | null;
+  last_sign_in_app_version: string | null;
   banned_until: string | null;
   is_banned: boolean;
 }
@@ -660,7 +661,7 @@ export const adminApi = {
     q?: string;
     page?: number;
     perPage?: number;
-    sortBy?: 'display_name' | 'email' | 'created_at' | 'last_sign_in_at' | 'ban_status';
+    sortBy?: 'display_name' | 'email' | 'created_at' | 'last_sign_in_at' | 'last_sign_in_device_name' | 'last_sign_in_platform' | 'last_sign_in_app_version' | 'ban_status';
     sortDir?: SortDirection;
     includeAdmins?: boolean;
   }) {

@@ -67,7 +67,15 @@ export type TabKey =
   | 'legal_pages'
   | 'store_config'
   | 'installer';
-export type UserSortBy = 'display_name' | 'email' | 'created_at' | 'last_sign_in_at' | 'ban_status';
+export type UserSortBy =
+  | 'display_name'
+  | 'email'
+  | 'created_at'
+  | 'last_sign_in_at'
+  | 'last_sign_in_device_name'
+  | 'last_sign_in_platform'
+  | 'last_sign_in_app_version'
+  | 'ban_status';
 export type BankSortBy = 'title' | 'created_at' | 'access_count';
 export type AssignmentUserSortBy = 'display_name' | 'email' | 'created_at';
 export type AssignmentBankSortBy = 'title' | 'status' | 'access_count';

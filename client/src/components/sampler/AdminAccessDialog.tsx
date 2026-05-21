@@ -1513,7 +1513,7 @@ export function AdminAccessDialog({
     if (usersSortBy === next) setUsersSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else {
       setUsersSortBy(next);
-      setUsersSortDir(next === 'created_at' || next === 'last_sign_in_at' ? 'desc' : 'asc');
+      setUsersSortDir(next === 'created_at' || next === 'last_sign_in_at' || next === 'last_sign_in_app_version' ? 'desc' : 'asc');
     }
   };
 

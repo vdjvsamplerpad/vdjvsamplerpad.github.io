@@ -932,7 +932,7 @@ function UsersTab({
         <AdminRefreshButton loading={usersLoading} onClick={onRefreshUsers} />
       </div>
       <div className={TABLE_SHELL_CLASS}>
-        <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
+        <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[1120px] block md:table">
           <TableHeader className="hidden md:table-header-group">
             <TableRow>
               <TableHead><SortHeader title="Display Name" active={usersSortBy === 'display_name'} direction={usersSortDir} onClick={() => onToggleUserSort('display_name')} /></TableHead>
@@ -940,8 +940,9 @@ function UsersTab({
               <TableHead>Tier</TableHead>
               <TableHead><SortHeader title="Created" active={usersSortBy === 'created_at'} direction={usersSortDir} onClick={() => onToggleUserSort('created_at')} /></TableHead>
               <TableHead><SortHeader title="Last Sign-In" active={usersSortBy === 'last_sign_in_at'} direction={usersSortDir} onClick={() => onToggleUserSort('last_sign_in_at')} /></TableHead>
-              <TableHead>Last Device</TableHead>
-              <TableHead>Platform</TableHead>
+              <TableHead><SortHeader title="Last Device" active={usersSortBy === 'last_sign_in_device_name'} direction={usersSortDir} onClick={() => onToggleUserSort('last_sign_in_device_name')} /></TableHead>
+              <TableHead><SortHeader title="Platform" active={usersSortBy === 'last_sign_in_platform'} direction={usersSortDir} onClick={() => onToggleUserSort('last_sign_in_platform')} /></TableHead>
+              <TableHead><SortHeader title="Last Version" active={usersSortBy === 'last_sign_in_app_version'} direction={usersSortDir} onClick={() => onToggleUserSort('last_sign_in_app_version')} /></TableHead>
               <TableHead><SortHeader title="Ban Status" active={usersSortBy === 'ban_status'} direction={usersSortDir} onClick={() => onToggleUserSort('ban_status')} /></TableHead>
               <TableHead className={`text-right min-w-[92px] sticky right-0 z-10 ${theme === 'dark' ? 'bg-gray-900' : 'bg-white'}`}>Actions</TableHead>
             </TableRow>
@@ -976,11 +977,15 @@ function UsersTab({
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : '-'}</TableCell>
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_device_name || '-'}</TableCell>
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_platform || '-'}</TableCell>
+                <TableCell className="hidden md:table-cell">{user.last_sign_in_app_version || '-'}</TableCell>
                 <TableCell className="block md:hidden py-1 text-xs opacity-70 border-none">
                   <span className="font-semibold">Last Device: </span>{user.last_sign_in_device_name || '-'}
                 </TableCell>
                 <TableCell className="block md:hidden py-1 text-xs opacity-70 border-none">
                   <span className="font-semibold">Platform: </span>{user.last_sign_in_platform || '-'}
+                </TableCell>
+                <TableCell className="block md:hidden py-1 text-xs opacity-70 border-none">
+                  <span className="font-semibold">Last Version: </span>{user.last_sign_in_app_version || '-'}
                 </TableCell>
                 <TableCell className="block md:table-cell py-1 md:py-4 border-none md:border-b">
                   <span className="md:hidden font-semibold text-xs mr-2">Status:</span>
@@ -991,7 +996,7 @@ function UsersTab({
                 </TableCell>
               </TableRow>
             ))}
-            {!usersLoading && users.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={9} className="block md:table-cell text-center py-3 opacity-70">No users</TableCell></TableRow>}
+            {!usersLoading && users.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={10} className="block md:table-cell text-center py-3 opacity-70">No users</TableCell></TableRow>}
           </TableBody>
         </Table>
       </div>
