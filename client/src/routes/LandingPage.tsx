@@ -12,7 +12,7 @@ import {
 import { VersionSelector } from '@/components/landing/VersionSelector';
 import { usePerformanceTier } from '@/hooks/usePerformanceTier';
 import { edgeFunctionUrl } from '@/lib/edge-api';
-import { getBuyPagePath, getInstallerRedirectPath, getLandingPagePath, getPrivacyPagePath, getTermsPagePath } from '@/lib/runtime-routes';
+import { getInstallerRedirectPath, getLandingPagePath, getPricingPagePath, getPrivacyPagePath, getTermsPagePath } from '@/lib/runtime-routes';
 import { Download, Facebook, Instagram, Monitor, Smartphone, Youtube } from 'lucide-react';
 
 const FRAME_COUNT = 97;
@@ -119,7 +119,7 @@ export default function LandingPage() {
   const allowVersionTransitions = !prefersReducedMotion && tier !== 'lowest';
   const revealVisible = revealOverride || progress >= REVEAL_THRESHOLD;
   const landingPagePath = React.useMemo(() => getLandingPagePath(), []);
-  const buyPagePath = React.useMemo(() => getBuyPagePath(), []);
+  const pricingPagePath = React.useMemo(() => getPricingPagePath(), []);
   const privacyPagePath = React.useMemo(() => getPrivacyPagePath(), []);
   const termsPagePath = React.useMemo(() => getTermsPagePath(), []);
   const activeLinks = landingConfig.downloadLinks[version];
@@ -253,7 +253,7 @@ export default function LandingPage() {
           <span className="lp-brand-copy">VDJV Sampler Pad App</span>
         </Link>
         <Link
-          to={buyPagePath}
+          to={pricingPagePath}
           className="inline-flex items-center rounded-full border border-amber-300 bg-amber-400 px-4 py-2 text-xs font-semibold tracking-[0.2em] text-slate-950 shadow-[0_16px_36px_rgba(251,191,36,0.22)] transition hover:bg-amber-300"
         >
           PRICING
@@ -325,7 +325,7 @@ export default function LandingPage() {
               </div>
               <div className="mt-5">
                 <Link
-                  to={`${buyPagePath}?version=${version}`}
+                  to={`${pricingPagePath}?version=${version}`}
                   className="inline-flex w-full items-center justify-center rounded-full bg-amber-400 px-5 py-3 text-sm font-black tracking-[0.18em] text-slate-950 shadow-[0_18px_40px_rgba(251,191,36,0.28)] transition hover:translate-y-[-1px] hover:bg-amber-300"
                 >
                   VIEW PRICING

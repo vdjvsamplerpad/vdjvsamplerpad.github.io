@@ -26,7 +26,7 @@ import {
 } from '@/lib/account-tier-content';
 import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links';
 import { captureProductEvent } from '@/lib/productAnalytics';
-import { getBuyPagePath, getInstallerRedirectPath, getLandingPagePath, getPrivacyPagePath, getTermsPagePath } from '@/lib/runtime-routes';
+import { getInstallerRedirectPath, getLandingPagePath, getPricingPagePath, getPrivacyPagePath, getTermsPagePath } from '@/lib/runtime-routes';
 import { supabase } from '@/lib/supabase';
 
 type PaymentChannel = 'image_proof' | 'gcash_manual' | 'maya_manual';
@@ -240,14 +240,14 @@ function ensureInstallerProDynamicInclusions(inclusions: AccountTierUiContent['i
   return [...inclusions, { title: 'Selected updates', badge: 'OPTIONAL', enabled: false }];
 }
 
-export default function BuyPage() {
+export default function PricingPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const landingPagePath = React.useMemo(() => getLandingPagePath(), []);
   const privacyPagePath = React.useMemo(() => getPrivacyPagePath(), []);
   const termsPagePath = React.useMemo(() => getTermsPagePath(), []);
-  const pricingPath = React.useMemo(() => getBuyPagePath(), []);
-  const checkoutPath = React.useMemo(() => `${getBuyPagePath()}/checkout`, []);
+  const pricingPath = React.useMemo(() => getPricingPagePath(), []);
+  const checkoutPath = React.useMemo(() => `${getPricingPagePath()}/checkout`, []);
   const isCheckoutPage = location.pathname.replace(/\/$/, '') === checkoutPath;
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = React.useState(true);

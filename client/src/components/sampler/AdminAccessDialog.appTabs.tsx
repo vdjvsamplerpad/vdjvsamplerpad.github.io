@@ -216,7 +216,7 @@ interface ActivityTabProps {
   onRefreshOtherActivity: () => void;
 }
 
-interface AdminAccessNonStoreTabsProps {
+interface AdminAccessAppTabsProps {
   tab: TabKey;
   home: HomeTabProps;
   assignments: AssignmentsTabProps;
@@ -1703,7 +1703,7 @@ function ActivityTab({
   );
 }
 
-export function AdminAccessNonStoreTabs(props: AdminAccessNonStoreTabsProps) {
+export function AdminAccessAppTabs(props: AdminAccessAppTabsProps) {
   if (props.tab === 'home') return <HomeTab {...props.home} />;
   if (props.tab === 'assignments') return <AssignmentsTab {...props.assignments} />;
   if (props.tab === 'banks') return <BanksTab {...props.banks} />;

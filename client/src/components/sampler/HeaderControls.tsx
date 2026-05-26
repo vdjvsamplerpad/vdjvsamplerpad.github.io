@@ -18,7 +18,7 @@ import type { MidiDeviceProfile } from '@/lib/midi/device-profiles';
 import type { GraphicsProfile } from '@/lib/performance-monitor';
 import type { DefaultBankSourceOption } from './AdminAccessDialog.shared';
 import type { LoginModal as LoginModalType } from '@/components/auth/LoginModal';
-import type { AboutDialog as AboutDialogType } from '@/components/ui/about-dialog';
+import type { AppSettingsDialog as AppSettingsDialogType } from '@/components/ui/AppSettingsDialog';
 import type { HeaderAdminDebugPanel as HeaderAdminDebugPanelType } from './HeaderAdminDebugPanel';
 import type { AccountUpgradeDialog as AccountUpgradeDialogType } from './AccountUpgradeDialog';
 import { EXTRA_PAD_COLORS, PRIMARY_PAD_COLORS, getPadColorOptionLabel } from './padColorPalette';
@@ -28,7 +28,7 @@ import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
 import { cn } from '@/lib/utils';
 
 const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then((module) => ({ default: module.LoginModal }))) as unknown as typeof LoginModalType;
-const AboutDialog = React.lazy(() => import('@/components/ui/about-dialog').then((module) => ({ default: module.AboutDialog }))) as unknown as typeof AboutDialogType;
+const AppSettingsDialog = React.lazy(() => import('@/components/ui/AppSettingsDialog').then((module) => ({ default: module.AppSettingsDialog }))) as unknown as typeof AppSettingsDialogType;
 const HeaderAdminDebugPanel = React.lazy(() => import('./HeaderAdminDebugPanel').then((module) => ({ default: module.HeaderAdminDebugPanel }))) as unknown as typeof HeaderAdminDebugPanelType;
 const AccountUpgradeDialog = React.lazy(() => import('./AccountUpgradeDialog').then((module) => ({ default: module.AccountUpgradeDialog }))) as unknown as typeof AccountUpgradeDialogType;
 
@@ -502,7 +502,7 @@ export function HeaderControls({
   const [adminDialogOpen, setAdminDialogOpen] = React.useState(false);
   const [AdminAccessDialog, setAdminAccessDialog] = React.useState<React.ComponentType<any> | null>(null);
   const [showLoginModal, setShowLoginModal] = React.useState(false);
-  const [aboutOpen, setAboutOpen] = React.useState(false);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [upgradeOpen, setUpgradeOpen] = React.useState(false);
   const [showPadColorPaintDialog, setShowPadColorPaintDialog] = React.useState(false);
   const [showAllPadColors, setShowAllPadColors] = React.useState(false);
@@ -761,7 +761,7 @@ export function HeaderControls({
   }, [capabilities.effectiveTier, openUpgradeDialog, pushNotice, user]);
 
   React.useEffect(() => {
-    const handleOpenAbout = () => setAboutOpen(true);
+    const handleOpenAbout = () => setSettingsOpen(true);
     window.addEventListener('vdjv-open-about', handleOpenAbout as EventListener);
     return () => window.removeEventListener('vdjv-open-about', handleOpenAbout as EventListener);
   }, []);
@@ -777,7 +777,7 @@ export function HeaderControls({
 
   React.useEffect(() => {
     const handleOpenSharedBankImport = () => {
-      setAboutOpen(true);
+      setSettingsOpen(true);
       window.requestAnimationFrame(() => {
         window.requestAnimationFrame(() => {
           window.dispatchEvent(new Event('vdjv-open-shared-bank-import'));
@@ -1869,11 +1869,11 @@ export function HeaderControls({
         />
       )}
 
-      {(aboutOpen || showLoginModal) && (
+      {(settingsOpen || showLoginModal) && (
         <React.Suspense fallback={null}>
-          <AboutDialog
-            open={aboutOpen}
-            onOpenChange={setAboutOpen}
+          <AppSettingsDialog
+            open={settingsOpen}
+            onOpenChange={setSettingsOpen}
             displayName={displayName}
             version={appVersion}
             appUpdatePlatform={appUpdateState.platform}

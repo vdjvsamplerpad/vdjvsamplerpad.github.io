@@ -8,7 +8,7 @@ import {
   type VersionKey,
 } from '@/components/landing/download-config';
 import { edgeFunctionUrl } from '@/lib/edge-api';
-import { getBuyPagePath, getLandingPagePath } from '@/lib/runtime-routes';
+import { getLandingPagePath, getPricingPagePath } from '@/lib/runtime-routes';
 
 const PLATFORM_KEYS: PlatformKey[] = ['android', 'ios', 'windows', 'macos'];
 const VERSION_KEYS: VersionKey[] = ['V1', 'V2', 'V3'];
@@ -59,7 +59,7 @@ export default function InstallerDownloadRedirectPage() {
     };
   }, [platform, version]);
 
-  const buyPath = version && version !== 'V1' ? `${getBuyPagePath()}?version=${version}` : getBuyPagePath();
+  const pricingPath = version && version !== 'V1' ? `${getPricingPagePath()}?version=${version}` : getPricingPagePath();
 
   return (
     <div className="min-h-screen bg-slate-950 px-6 py-10 text-slate-50">
@@ -71,7 +71,7 @@ export default function InstallerDownloadRedirectPage() {
         </p>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row">
           <Link
-            to={buyPath}
+            to={pricingPath}
             className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-400"
           >
             Go to Pricing

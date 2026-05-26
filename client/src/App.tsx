@@ -8,8 +8,8 @@ import {
   WEB_PRIVACY_PATH,
   WEB_SAMPLER_APP_PATH,
   WEB_TERMS_PATH,
-  getBuyPagePath,
   getLandingPagePath,
+  getPricingPagePath,
   getPrivacyPagePath,
   getSamplerAppPath,
   getTermsPagePath,
@@ -18,7 +18,7 @@ import {
 
 const SamplerRouteApp = React.lazy(() => import('@/routes/SamplerRouteApp'));
 const LandingPage = __VDJV_INCLUDE_LANDING__ ? React.lazy(() => import('@/routes/LandingPage')) : null;
-const BuyPage = __VDJV_INCLUDE_LANDING__ ? React.lazy(() => import('@/routes/BuyPage')) : null;
+const PricingPage = __VDJV_INCLUDE_LANDING__ ? React.lazy(() => import('@/routes/PricingPage')) : null;
 const InstallerDownloadRedirectPage = __VDJV_INCLUDE_LANDING__ ? React.lazy(() => import('@/routes/InstallerDownloadRedirectPage')) : null;
 const PrivacyPage = React.lazy(() => import('@/routes/PrivacyPage'));
 const TermsPage = React.lazy(() => import('@/routes/TermsPage'));
@@ -44,9 +44,9 @@ function AnalyticsRouteTracker() {
           ? 'sampler'
           : location.pathname === getLandingPagePath()
             ? 'landing'
-            : location.pathname === getBuyPagePath()
+            : location.pathname === getPricingPagePath()
               ? 'pricing'
-              : location.pathname === `${getBuyPagePath()}/checkout`
+              : location.pathname === `${getPricingPagePath()}/checkout`
                 ? 'pricing_checkout'
               : location.pathname === WEB_INSTALLER_REDIRECT_PATH
                 ? 'installer_redirect'
@@ -66,7 +66,7 @@ function RouteContainer() {
   const packagedRuntime = isPackagedAppRuntime();
   const includeLanding = __VDJV_INCLUDE_LANDING__ && Boolean(LandingPage);
   const landingPath = getLandingPagePath();
-  const buyPath = getBuyPagePath();
+  const pricingPath = getPricingPagePath();
   const privacyPath = getPrivacyPagePath();
   const samplerPath = getSamplerAppPath();
   const termsPath = getTermsPagePath();
@@ -80,9 +80,9 @@ function RouteContainer() {
           <>
             <Route path={samplerPath} element={<SamplerRouteApp />} />
             {includeLanding && LandingPage ? <Route path={landingPath} element={<LandingPage />} /> : null}
-            {includeLanding && BuyPage ? <Route path={buyPath} element={<BuyPage />} /> : null}
-            {includeLanding && BuyPage ? <Route path={`${buyPath}/checkout`} element={<BuyPage />} /> : null}
-            {includeLanding && BuyPage ? <Route path={WEB_LEGACY_BUY_PATH} element={<Navigate to={buyPath} replace />} /> : null}
+            {includeLanding && PricingPage ? <Route path={pricingPath} element={<PricingPage />} /> : null}
+            {includeLanding && PricingPage ? <Route path={`${pricingPath}/checkout`} element={<PricingPage />} /> : null}
+            {includeLanding && PricingPage ? <Route path={WEB_LEGACY_BUY_PATH} element={<Navigate to={pricingPath} replace />} /> : null}
             <Route path={privacyPath} element={<PrivacyPage />} />
             <Route path={termsPath} element={<TermsPage />} />
             {includeLanding && InstallerDownloadRedirectPage ? <Route path={WEB_INSTALLER_REDIRECT_PATH} element={<InstallerDownloadRedirectPage />} /> : null}
@@ -96,14 +96,14 @@ function RouteContainer() {
             ) : (
               <Route path={landingPath} element={<Navigate to={samplerPath} replace />} />
             )}
-            {includeLanding && BuyPage ? (
-              <Route path={buyPath} element={<BuyPage />} />
+            {includeLanding && PricingPage ? (
+              <Route path={pricingPath} element={<PricingPage />} />
             ) : null}
-            {includeLanding && BuyPage ? (
-              <Route path={`${buyPath}/checkout`} element={<BuyPage />} />
+            {includeLanding && PricingPage ? (
+              <Route path={`${pricingPath}/checkout`} element={<PricingPage />} />
             ) : null}
-            {includeLanding && BuyPage ? (
-              <Route path={WEB_LEGACY_BUY_PATH} element={<Navigate to={buyPath} replace />} />
+            {includeLanding && PricingPage ? (
+              <Route path={WEB_LEGACY_BUY_PATH} element={<Navigate to={pricingPath} replace />} />
             ) : null}
             <Route path={WEB_PRIVACY_PATH} element={<PrivacyPage />} />
             <Route path={WEB_TERMS_PATH} element={<TermsPage />} />

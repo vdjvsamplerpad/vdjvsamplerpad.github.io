@@ -391,7 +391,7 @@ export function SideMenu({
     window.dispatchEvent(new Event('vdjv-login-request'));
     window.dispatchEvent(new CustomEvent('vdjv-require-login', { detail: { reason } }));
   }, []);
-  const requestAboutDialog = React.useCallback(() => {
+  const requestSettingsDialog = React.useCallback(() => {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new Event('vdjv-open-about'));
   }, []);
@@ -1119,7 +1119,7 @@ export function SideMenu({
           <Button
             variant="ghost"
             size="sm"
-            onClick={requestAboutDialog}
+            onClick={requestSettingsDialog}
             className="h-8 w-8 p-0 text-red-500 hover:bg-red-500/10 hover:text-red-400"
             title="About & Settings"
           >

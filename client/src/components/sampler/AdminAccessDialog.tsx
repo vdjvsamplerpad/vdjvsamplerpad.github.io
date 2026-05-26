@@ -71,8 +71,8 @@ import {
   StoreRequestsTab,
 } from './AdminAccessDialog.tabs';
 import { AdminAccessInstallerTab } from './AdminAccessInstallerTab';
-import { AdminAccountUpgradesTab } from './AdminAccountUpgradesTab';
-import { AdminAccessNonStoreTabs } from './AdminAccessDialog.nonStoreTabs';
+import { AdminTierConfigTab } from './AdminTierConfigTab';
+import { AdminAccessAppTabs } from './AdminAccessDialog.appTabs';
 import { AdminAccessDialogModals } from './AdminAccessDialog.dialogs';
 import { useAdminAccessStoreManager } from './AdminAccessDialog.store';
 import { AdminNavIcon, AdminPageScaffold, AdminRefreshButton, AdminSectionTabs } from './AdminAccessDialog.layout';
@@ -2081,7 +2081,7 @@ export function AdminAccessDialog({
                   <span className="opacity-70"> | {activeTab.hint}</span>
                 </div>
               </div>
-              <AdminAccessNonStoreTabs
+              <AdminAccessAppTabs
                 tab={tab}
                 home={{
                   theme,
@@ -2451,7 +2451,7 @@ export function AdminAccessDialog({
                   controls={tierConfigVersionTabs}
                 >
                   {tierConfigVersion === 'V1' ? (
-                    <AdminAccountUpgradesTab
+                    <AdminTierConfigTab
                       mode="tiers"
                       embedded
                       panelClass={tabPanelToneClass('tier_config')}
@@ -2479,7 +2479,7 @@ export function AdminAccessDialog({
               )}
 
               {tab === 'account_upgrades' && (
-                <AdminAccountUpgradesTab
+                <AdminTierConfigTab
                   mode="vouchers"
                   panelClass={tabPanelToneClass('account_upgrades')}
                   cardClass={tabCardToneClass('account_upgrades')}

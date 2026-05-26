@@ -44,7 +44,7 @@ interface TierDraft {
   isActive: boolean;
 }
 
-interface AdminAccountUpgradesTabProps {
+interface AdminTierConfigTabProps {
   panelClass: string;
   cardClass: string;
   theme?: AdminDialogTheme;
@@ -258,7 +258,7 @@ const createFallbackTierConfig = (tier: EditableAccountTier): AdminAccountTierCo
   is_active: true,
 });
 
-export function AdminAccountUpgradesTab({
+export function AdminTierConfigTab({
   panelClass,
   cardClass,
   theme = 'light',
@@ -269,7 +269,7 @@ export function AdminAccountUpgradesTab({
   externalRefreshSignal = 0,
   onTierConfigStateChange,
   pushNotice,
-}: AdminAccountUpgradesTabProps) {
+}: AdminTierConfigTabProps) {
   const [loading, setLoading] = React.useState(false);
   const [savingTier, setSavingTier] = React.useState<string | null>(null);
   const [savingAllTiers, setSavingAllTiers] = React.useState(false);

@@ -204,7 +204,7 @@ const SettingsSectionTabs = ({
 };
 
 
-interface AboutDialogProps {
+interface AppSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   displayName: string;
@@ -301,7 +301,7 @@ type BackupProgressOptions = {
   stageDrivenProgress?: boolean;
 };
 
-export function AboutDialog({
+export function AppSettingsDialog({
   open,
   onOpenChange,
   displayName,
@@ -382,7 +382,7 @@ export function AboutDialog({
   isAuthenticated = false,
   authTransitionStatus = 'idle',
   onSignOut
-}: AboutDialogProps) {
+}: AppSettingsDialogProps) {
   const { user, profile, capabilities } = useAuthState();
   const { deleteAccount, refreshAccountCapabilities, requestPasswordReset, updateDisplayName } = useAuthActions();
   const isAdmin = profile?.role === 'admin';
