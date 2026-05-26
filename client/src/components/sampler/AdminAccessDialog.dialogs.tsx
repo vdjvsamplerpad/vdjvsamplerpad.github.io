@@ -190,15 +190,18 @@ export function AdminAccessDialogModals({
       </Dialog>
 
       <Dialog open={details.open} onOpenChange={details.onOpenChange} useHistory={false}>
-        <DialogContent overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
+        <DialogContent overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120] max-w-5xl`}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Users className="w-4 h-4" />
               User Details
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-2">
-            <div><Label>Display Name</Label><Input value={details.displayName} onChange={(event) => details.onDisplayNameChange(event.target.value)} /></div>
+          <div className="max-h-[72vh] space-y-3 overflow-y-auto pr-1">
+            <div className="grid gap-3 xl:grid-cols-2">
+              <div><Label>Display Name</Label><Input value={details.displayName} onChange={(event) => details.onDisplayNameChange(event.target.value)} /></div>
+              <div><Label>Email</Label><div className="rounded-md border px-3 py-2 text-sm">{details.user?.email || '-'}</div></div>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <div>
                 <Label>Account Tier</Label>
@@ -290,7 +293,6 @@ export function AdminAccessDialogModals({
                 />
               </div>
             </div>
-            <div><Label>Email</Label><div>{details.user?.email || '-'}</div></div>
             <div><Label>User ID</Label><div className="font-mono text-xs break-all">{details.user?.id || '-'}</div></div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <div><Label>Created</Label><div>{details.user?.created_at ? new Date(details.user.created_at).toLocaleString() : '-'}</div></div>
@@ -358,12 +360,12 @@ export function AdminAccessDialogModals({
                 </div>
               </div>
             </div>
-            <div className="flex gap-2">
-              <Button className="flex-1" disabled={details.saving} onClick={details.onSaveProfile}>{details.saving ? 'Saving...' : 'Save Profile'}</Button>
+            <div className={`sticky bottom-0 z-10 flex gap-2 border-t pt-3 backdrop-blur ${theme === 'dark' ? 'border-gray-800 bg-gray-900/92' : 'border-gray-200 bg-white/92'}`}>
+              <Button variant="success" className="flex-1" disabled={details.saving} onClick={details.onSaveProfile}>{details.saving ? 'Saving...' : 'Save Profile'}</Button>
               <Button variant="outline" className="flex-1" onClick={details.onOpenResetPassword}>Send Password Reset</Button>
             </div>
             <div className="flex gap-2">
-              {isUserBanned(details.user) ? <Button variant="outline" className="flex-1" onClick={details.onOpenUnban}>Unban User</Button> : <Button variant="outline" className="flex-1" onClick={details.onOpenBan}>Ban User</Button>}
+              {isUserBanned(details.user) ? <Button variant="outline" className="flex-1" onClick={details.onOpenUnban}>Unban User</Button> : <Button variant="destructive" className="flex-1" onClick={details.onOpenBan}>Ban User</Button>}
               <Button variant="destructive" className="flex-1" onClick={details.onOpenDeleteUser}>Delete User</Button>
             </div>
           </div>
@@ -524,7 +526,7 @@ export function AdminAccessDialogModals({
             </div>
 
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Button className="sm:flex-1" disabled={bankEdit.saving} onClick={bankEdit.onSave}>
+              <Button variant="success" className="sm:flex-1" disabled={bankEdit.saving} onClick={bankEdit.onSave}>
                 {bankEdit.saving ? 'Saving...' : 'Save'}
               </Button>
               <Button variant="outline" onClick={() => bankEdit.onOpenChange(false)} className="sm:flex-1">

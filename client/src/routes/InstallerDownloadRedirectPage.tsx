@@ -74,7 +74,7 @@ export default function InstallerDownloadRedirectPage() {
             to={buyPath}
             className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-400"
           >
-            Go to Buy Page
+            Go to Pricing
           </Link>
           <Link
             to={getLandingPagePath()}

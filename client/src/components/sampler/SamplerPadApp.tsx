@@ -29,6 +29,7 @@ import { getSamplerRuntimeTuningProfile } from '@/lib/sampler-runtime-profile';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { getAudioTelemetry } from '@/lib/audio-telemetry';
+import { normalizeStopTimingOverrides } from '@/lib/audio-engine';
 import {
   consumeGuestDefaultBankTrialPlay,
   loadGuestDefaultBankTrialState,
@@ -501,7 +502,7 @@ export function SamplerPadApp() {
         delete parsedSettings.mixerEqCollapsed;
         const mergedMappings = mergeSystemMappings(parsed.systemMappings || {});
         const parsedChannelCount = typeof parsed.channelCount === 'number'
-          ? Math.max(2, Math.min(8, Math.floor(parsed.channelCount)))
+          ? Math.max(1, Math.min(8, Math.floor(parsed.channelCount)))
           : defaultSettings.channelCount;
         const legacyPadSize = normalizePadSize(
           parsed.padSize,
@@ -528,6 +529,7 @@ export function SamplerPadApp() {
         const parsedGraphicsProfile = isGraphicsProfile(parsed.graphicsProfile)
           ? parsed.graphicsProfile
           : defaultSettings.graphicsProfile;
+        const parsedStopTimingOverrides = normalizeStopTimingOverrides(parsed.stopTimingOverrides);
         return {
           ...defaultSettings,
           ...parsedSettings,
@@ -544,7 +546,8 @@ export function SamplerPadApp() {
             channelCount: parsedChannelCount
           },
           defaultTriggerMode: parsedDefaultTriggerMode,
-          graphicsProfile: parsedGraphicsProfile
+          graphicsProfile: parsedGraphicsProfile,
+          stopTimingOverrides: parsedStopTimingOverrides
         };
       }
     } catch {
@@ -784,6 +787,10 @@ export function SamplerPadApp() {
   }, [effectiveGraphicsTier]);
 
   React.useEffect(() => {
+    playbackManager.setStopTimingOverrides(settings.stopTimingOverrides);
+  }, [playbackManager, settings.stopTimingOverrides]);
+
+  React.useEffect(() => {
     settingsLatestRef.current = settings;
   }, [settings]);
 
@@ -817,7 +824,7 @@ export function SamplerPadApp() {
 
   React.useEffect(() => {
     const mapped = typeof settings.systemMappings.channelCount === 'number'
-      ? Math.max(2, Math.min(8, Math.floor(settings.systemMappings.channelCount)))
+      ? Math.max(1, Math.min(8, Math.floor(settings.systemMappings.channelCount)))
       : null;
     if (mapped === null || mapped === settings.channelCount) return;
     setSettings((prev) => ({
@@ -833,7 +840,7 @@ export function SamplerPadApp() {
   React.useEffect(() => {
     const configuredLimit = Number(capabilities.limits.deckCount);
     if (!Number.isFinite(configuredLimit) || configuredLimit <= 0) return;
-    const allowedCount = Math.max(2, Math.min(8, Math.floor(configuredLimit)));
+    const allowedCount = Math.max(1, Math.min(8, Math.floor(configuredLimit)));
     if (settings.channelCount <= allowedCount) return;
     setSettings((prev) => ({
       ...prev,
@@ -1919,7 +1926,7 @@ export function SamplerPadApp() {
 
   React.useEffect(() => {
     if (armedLoadChannelId === null) return;
-    const safeChannelCount = Math.max(2, Math.min(8, settings.channelCount || 4));
+    const safeChannelCount = Math.max(1, Math.min(8, settings.channelCount || 4));
     if (armedLoadChannelId > safeChannelCount) {
       setArmedLoadChannelId(null);
     }
@@ -3426,7 +3433,7 @@ export function SamplerPadApp() {
       }
 
       const channelMappings = capabilities.features.channelShortcuts ? (settings.systemMappings.channelMappings || []) : [];
-      const activeChannelLimit = Math.max(2, Math.min(8, settings.channelCount || 4));
+      const activeChannelLimit = Math.max(1, Math.min(8, settings.channelCount || 4));
       for (let i = 0; i < Math.min(channelMappings.length, activeChannelLimit); i += 1) {
         const mapping = channelMappings[i];
         if (!mapping) continue;
@@ -3788,7 +3795,7 @@ export function SamplerPadApp() {
 
       if (message.type === 'noteon') {
         const channelMappings = capabilities.features.channelShortcuts ? (settings.systemMappings.channelMappings || []) : [];
-        const activeChannelLimit = Math.max(2, Math.min(8, settings.channelCount || 4));
+        const activeChannelLimit = Math.max(1, Math.min(8, settings.channelCount || 4));
         let handledChannelMidi = false;
 
         for (let i = 0; i < Math.min(channelMappings.length, activeChannelLimit); i += 1) {
@@ -3942,7 +3949,7 @@ export function SamplerPadApp() {
       }
     } else if (message.type === 'cc') {
       const channelMappings = capabilities.features.channelShortcuts ? (settings.systemMappings.channelMappings || []) : [];
-      const activeChannelLimit = Math.max(2, Math.min(8, settings.channelCount || 4));
+      const activeChannelLimit = Math.max(1, Math.min(8, settings.channelCount || 4));
       const channelIndex = channelMappings.findIndex((mapping, index) => index < activeChannelLimit && mapping?.midiCC === message.cc);
       if (channelIndex >= 0) {
         const next = normalizeMidiValue(message.value);
@@ -4400,6 +4407,7 @@ export function SamplerPadApp() {
     isDualMode,
     padSize: displayPadSize,
     stopMode: settings.stopMode,
+    stopTimingOverrides: settings.stopTimingOverrides,
     editMode: settings.editMode,
     globalMuted,
     sideMenuOpen: settings.sideMenuOpen,
@@ -4432,6 +4440,7 @@ export function SamplerPadApp() {
     onExitDualMode: () => setPrimaryBank(null),
     onPadSizeChange: handlePadSizeChange,
     onStopModeChange: (mode: typeof settings.stopMode) => updateSetting('stopMode', mode),
+    onStopTimingOverridesChange: (overrides: typeof settings.stopTimingOverrides) => updateSetting('stopTimingOverrides', normalizeStopTimingOverrides(overrides)),
     defaultTriggerMode: settings.defaultTriggerMode,
     onDefaultTriggerModeChange: (mode: typeof settings.defaultTriggerMode) => updateSetting('defaultTriggerMode', mode),
     graphicsProfile: settings.graphicsProfile,

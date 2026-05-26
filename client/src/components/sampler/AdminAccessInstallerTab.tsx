@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Loader2, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Loader2, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -23,22 +23,38 @@ import {
   type AdminInstallerLicense,
   type InstallerBuyProduct,
   type InstallerPackage,
+  type InstallerPricingTier,
+  type InstallerTierConfig,
   type InstallerVersionKey,
 } from '@/lib/admin-api';
+import {
+  type AccountTierUiContent,
+  DEFAULT_TIER_VIDEO_SRC,
+  normalizeInstallerTierUiContent,
+} from '@/lib/account-tier-content';
 import {
   AdminPageScaffold,
   AdminRefreshButton,
   AdminSectionTabs,
   AdminStatsStrip,
+  AdminTierConfigLoadingSkeleton,
+  AdminToolbar,
 } from './AdminAccessDialog.layout';
 
 type Props = {
   theme: 'light' | 'dark';
   panelClass: string;
+  mode?: 'full' | 'tier-config';
+  tierConfigVersion?: InstallerVersionKey;
+  versionTabs?: React.ReactNode;
+  embedded?: boolean;
+  externalSaveSignal?: number;
+  externalRefreshSignal?: number;
+  onTierConfigStateChange?: (state: { dirty: boolean; saving: boolean; loading: boolean }) => void;
   pushNotice: (notice: { variant: 'success' | 'error' | 'info'; message: string }) => void;
 };
 
-type ViewKey = 'packages' | 'licenses' | 'catalog' | 'requests' | 'events';
+type ViewKey = 'packages' | 'licenses' | 'catalog' | 'tierUi' | 'requests' | 'events';
 
 type PackageDialogState = {
   open: boolean;
@@ -140,6 +156,53 @@ const blankCatalogProduct = (version: InstallerVersionKey): InstallerBuyProduct 
   grantedEntitlements: [],
 });
 
+const INSTALLER_TIER_ORDER: InstallerPricingTier[] = ['standard', 'pro', 'pro_max'];
+
+const defaultInstallerTierConfig = (version: InstallerVersionKey, tier: InstallerPricingTier): InstallerTierConfig => ({
+  version,
+  tier,
+  displayName: tier === 'pro_max' ? 'PRO MAX' : tier.toUpperCase(),
+  description: tier === 'standard'
+    ? `Core ${version} installer package.`
+    : tier === 'pro'
+      ? `Standard plus selected ${version} updates, or Update Only for existing Standard users.`
+      : `Maximum ${version} installer package.`,
+  uiContent: {
+    ...normalizeInstallerTierUiContent(null, tier),
+    versionBadge: { enabled: true, label: version },
+    video: { src: `/assets/${version.toLowerCase()}-preview.mp4`, storageProvider: 'local' },
+  },
+  isActive: true,
+});
+
+const normalizeInstallerTierUiContentForVersion = (
+  value: unknown,
+  tier: InstallerPricingTier,
+  version: InstallerVersionKey,
+): AccountTierUiContent => {
+  const content = normalizeInstallerTierUiContent(value, tier);
+  const configuredSrc = content.video.src || '';
+  if (!configuredSrc || configuredSrc === DEFAULT_TIER_VIDEO_SRC) {
+    return {
+      ...content,
+      video: {
+        ...content.video,
+        src: `/assets/${version.toLowerCase()}-preview.mp4`,
+        storageProvider: content.video.storageProvider || 'local',
+      },
+    };
+  }
+  return content;
+};
+
+const moveArrayItem = <T,>(rows: T[], index: number, delta: -1 | 1): T[] => {
+  const target = index + delta;
+  if (target < 0 || target >= rows.length) return rows;
+  const next = [...rows];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+};
+
 const cardShell = (theme: 'light' | 'dark') =>
   theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white';
 
@@ -239,12 +302,27 @@ const useDebouncedValue = <T,>(value: T, delayMs: number) => {
   return debounced;
 };
 
-export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props) {
-  const [view, setView] = React.useState<ViewKey>('licenses');
+export function AdminAccessInstallerTab({
+  theme,
+  panelClass,
+  mode = 'full',
+  tierConfigVersion,
+  versionTabs,
+  embedded = false,
+  externalSaveSignal = 0,
+  externalRefreshSignal = 0,
+  onTierConfigStateChange,
+  pushNotice,
+}: Props) {
+  const isTierConfigMode = mode === 'tier-config';
+  const [view, setView] = React.useState<ViewKey>(isTierConfigMode ? 'tierUi' : 'licenses');
 
   const [packagesByVersion, setPackagesByVersion] = React.useState<Record<InstallerVersionKey, InstallerPackage[]>>({ V2: [], V3: [] });
   const [packagesLoading, setPackagesLoading] = React.useState(false);
   const [packageActionKey, setPackageActionKey] = React.useState('');
+  const [packageQuery, setPackageQuery] = React.useState('');
+  const [packageKindFilter, setPackageKindFilter] = React.useState<'all' | 'standard' | 'update'>('all');
+  const [packageStatusFilter, setPackageStatusFilter] = React.useState<'all' | 'enabled' | 'disabled'>('all');
   const [packageDialog, setPackageDialog] = React.useState<PackageDialogState>({
     open: false,
     mode: 'create',
@@ -271,12 +349,19 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
   const [catalogByVersion, setCatalogByVersion] = React.useState<Record<InstallerVersionKey, InstallerBuyProduct[]>>({ V2: [], V3: [] });
   const [catalogLoading, setCatalogLoading] = React.useState(false);
   const [catalogActionKey, setCatalogActionKey] = React.useState('');
+  const [catalogQuery, setCatalogQuery] = React.useState('');
+  const [catalogTypeFilter, setCatalogTypeFilter] = React.useState<'all' | InstallerBuyProduct['productType']>('all');
+  const [catalogStatusFilter, setCatalogStatusFilter] = React.useState<'all' | 'enabled' | 'disabled'>('all');
   const [catalogDialog, setCatalogDialog] = React.useState<CatalogDialogState>({
     open: false,
     mode: 'create',
     originalSkuCode: null,
     draft: blankCatalogProduct('V2'),
   });
+  const [tierUiByVersion, setTierUiByVersion] = React.useState<Record<InstallerVersionKey, InstallerTierConfig[]>>({ V2: [], V3: [] });
+  const [tierUiLoading, setTierUiLoading] = React.useState(false);
+  const [tierUiSaving, setTierUiSaving] = React.useState(false);
+  const [hasUnsavedTierUiChanges, setHasUnsavedTierUiChanges] = React.useState(false);
 
   const [requestQuery, setRequestQuery] = React.useState('');
   const [requestStatus, setRequestStatus] = React.useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
@@ -391,6 +476,38 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     }
   }, [showMessage]);
 
+  const loadTierUi = React.useCallback(async () => {
+    setTierUiLoading(true);
+    try {
+      const [v2, v3] = await Promise.all([
+        adminApi.listInstallerTierConfigs('V2'),
+        adminApi.listInstallerTierConfigs('V3'),
+      ]);
+      const normalizeItems = (version: InstallerVersionKey, items: InstallerTierConfig[]) => (
+        INSTALLER_TIER_ORDER.map((tier) => {
+          const item = items.find((entry) => entry.tier === tier) || defaultInstallerTierConfig(version, tier);
+          return {
+            ...item,
+            version,
+            tier,
+            displayName: item.displayName || (tier === 'pro_max' ? 'PRO MAX' : tier.toUpperCase()),
+            uiContent: normalizeInstallerTierUiContentForVersion(item.uiContent, tier, version),
+            isActive: item.isActive !== false,
+          };
+        })
+      );
+      setTierUiByVersion({
+        V2: normalizeItems('V2', v2.items || []),
+        V3: normalizeItems('V3', v3.items || []),
+      });
+      setHasUnsavedTierUiChanges(false);
+    } catch (error) {
+      showMessage('error', error instanceof Error ? error.message : 'Failed to load installer tier config.');
+    } finally {
+      setTierUiLoading(false);
+    }
+  }, [showMessage]);
+
   const loadRequests = React.useCallback(async () => {
     setRequestsLoading(true);
     try {
@@ -440,6 +557,12 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
       void loadCatalog();
     }
   }, [loadCatalog, view]);
+
+  React.useEffect(() => {
+    if (view === 'tierUi') {
+      void loadTierUi();
+    }
+  }, [loadTierUi, view]);
 
   React.useEffect(() => {
     if (view === 'requests') {
@@ -706,6 +829,104 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     }
   };
 
+  const updateTierUiDraft = React.useCallback((
+    version: InstallerVersionKey,
+    tier: InstallerPricingTier,
+    updater: (current: InstallerTierConfig) => InstallerTierConfig,
+  ) => {
+    setHasUnsavedTierUiChanges(true);
+    setTierUiByVersion((current) => {
+      const existing = current[version]?.length ? current[version] : INSTALLER_TIER_ORDER.map((entry) => defaultInstallerTierConfig(version, entry));
+      const nextItems = existing.map((item) => item.tier === tier ? updater(item) : item);
+      return { ...current, [version]: nextItems };
+    });
+  }, []);
+
+  const updateTierUiContent = React.useCallback((
+    version: InstallerVersionKey,
+    tier: InstallerPricingTier,
+    patch: Partial<AccountTierUiContent>,
+  ) => {
+    updateTierUiDraft(version, tier, (current) => {
+      const currentContent = normalizeInstallerTierUiContentForVersion(current.uiContent, tier, version);
+      return {
+        ...current,
+        uiContent: { ...currentContent, ...patch },
+      };
+    });
+  }, [updateTierUiDraft]);
+
+  const updateTierUiRow = React.useCallback(<T extends string | { title?: string }>(
+    version: InstallerVersionKey,
+    tier: InstallerPricingTier,
+    key: 'shortDescriptions' | 'otherDescriptions' | 'checklist' | 'inclusions',
+    rows: T[],
+  ) => {
+    updateTierUiContent(version, tier, { [key]: rows } as Partial<AccountTierUiContent>);
+  }, [updateTierUiContent]);
+
+  const moveTierUiRow = React.useCallback((
+    version: InstallerVersionKey,
+    tier: InstallerPricingTier,
+    key: 'checklist' | 'inclusions',
+    index: number,
+    delta: -1 | 1,
+  ) => {
+    const current = tierUiByVersion[version]?.find((item) => item.tier === tier) || defaultInstallerTierConfig(version, tier);
+    const content = normalizeInstallerTierUiContentForVersion(current.uiContent, tier, version);
+    if (key === 'checklist') {
+      updateTierUiRow(version, tier, 'checklist', moveArrayItem(content.checklist, index, delta));
+      return;
+    }
+    updateTierUiRow(version, tier, 'inclusions', moveArrayItem(content.inclusions, index, delta));
+  }, [tierUiByVersion, updateTierUiRow]);
+
+  const saveTierUiConfigs = async (onlyVersion?: InstallerVersionKey) => {
+    setTierUiSaving(true);
+    try {
+      const items = onlyVersion ? [...(tierUiByVersion[onlyVersion] || [])] : [...tierUiByVersion.V2, ...tierUiByVersion.V3];
+      for (const item of items) {
+        await adminApi.saveInstallerTierConfig({
+          ...item,
+          displayName: item.displayName.trim() || (item.tier === 'pro_max' ? 'PRO MAX' : item.tier.toUpperCase()),
+          uiContent: normalizeInstallerTierUiContent(item.uiContent, item.tier),
+        });
+      }
+      showMessage('success', `Saved ${items.length} ${onlyVersion ? `${onlyVersion} ` : ''}installer tier config${items.length === 1 ? '' : 's'}.`);
+      setHasUnsavedTierUiChanges(false);
+      await loadTierUi();
+    } catch (error) {
+      showMessage('error', error instanceof Error ? error.message : 'Failed to save installer tier config.');
+    } finally {
+      setTierUiSaving(false);
+    }
+  };
+  const lastExternalSaveSignal = React.useRef(externalSaveSignal);
+  const lastExternalRefreshSignal = React.useRef(externalRefreshSignal);
+
+  React.useEffect(() => {
+    if (!isTierConfigMode) return;
+    onTierConfigStateChange?.({
+      dirty: hasUnsavedTierUiChanges,
+      saving: tierUiSaving,
+      loading: tierUiLoading,
+    });
+  }, [hasUnsavedTierUiChanges, isTierConfigMode, onTierConfigStateChange, tierUiLoading, tierUiSaving]);
+
+  React.useEffect(() => {
+    if (!isTierConfigMode) return;
+    if (lastExternalSaveSignal.current === externalSaveSignal) return;
+    lastExternalSaveSignal.current = externalSaveSignal;
+    void saveTierUiConfigs(tierConfigVersion);
+  }, [externalSaveSignal, isTierConfigMode, tierConfigVersion]);
+
+  React.useEffect(() => {
+    if (!isTierConfigMode) return;
+    if (lastExternalRefreshSignal.current === externalRefreshSignal) return;
+    lastExternalRefreshSignal.current = externalRefreshSignal;
+    void loadTierUi();
+  }, [externalRefreshSignal, isTierConfigMode, loadTierUi]);
+
   const handleInstallerRequestAction = async (
     item: AdminInstallerPurchaseRequest,
     action: 'approve' | 'reject',
@@ -733,7 +954,15 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
   };
 
   const renderPackagesTable = (version: InstallerVersionKey) => {
-    const items = packagesByVersion[version] || [];
+    const query = packageQuery.trim().toLowerCase();
+    const items = (packagesByVersion[version] || []).filter((item) => {
+      if (packageKindFilter !== 'all' && item.packageKind !== packageKindFilter) return false;
+      if (packageStatusFilter === 'enabled' && !item.enabled) return false;
+      if (packageStatusFilter === 'disabled' && item.enabled) return false;
+      if (!query) return true;
+      return [item.productCode, item.displayName, item.archiveName, item.downloadUrl]
+        .some((value) => String(value || '').toLowerCase().includes(query));
+    });
     return (
       <section className={`rounded-2xl border p-4 space-y-4 ${cardShell(theme)}`}>
         <div className="flex items-center justify-between gap-3">
@@ -894,7 +1123,15 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
   };
 
   const renderCatalogTable = (version: InstallerVersionKey) => {
-    const items = catalogByVersion[version] || [];
+    const query = catalogQuery.trim().toLowerCase();
+    const items = (catalogByVersion[version] || []).filter((item) => {
+      if (catalogTypeFilter !== 'all' && item.productType !== catalogTypeFilter) return false;
+      if (catalogStatusFilter === 'enabled' && !item.enabled) return false;
+      if (catalogStatusFilter === 'disabled' && item.enabled) return false;
+      if (!query) return true;
+      return [item.skuCode, item.displayName, item.description, item.productType]
+        .some((value) => String(value || '').toLowerCase().includes(query));
+    });
     return (
       <section className={`rounded-2xl border p-4 space-y-4 ${cardShell(theme)}`}>
         <div className="flex items-center justify-between gap-3">
@@ -962,6 +1199,289 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
             ))}
           </TableBody>
         </Table>
+      </section>
+    );
+  };
+
+  const renderTierUiEditor = (version: InstallerVersionKey) => {
+    const items = tierUiByVersion[version]?.length
+      ? tierUiByVersion[version]
+      : INSTALLER_TIER_ORDER.map((tier) => defaultInstallerTierConfig(version, tier));
+    return (
+      <section className={`rounded-2xl border p-4 space-y-4 ${cardShell(theme)}`}>
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <div className="text-base font-semibold">{version} Tier UI Config</div>
+            <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Edits here control the {version} pricing cards: color, header, badge, descriptions, checklist, and included tools.</div>
+          </div>
+        </div>
+        {(() => {
+          const standardItem = items.find((entry) => entry.tier === 'standard') || defaultInstallerTierConfig(version, 'standard');
+          const standardContent = normalizeInstallerTierUiContentForVersion(standardItem.uiContent, 'standard', version);
+          return (
+            <div className={`rounded-xl border p-3 ${cardShell(theme)}`}>
+              <div className="mb-2">
+                <div className="text-sm font-semibold">{version} Portrait Video</div>
+                <div className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Used by the {version} mobile pricing preview. Store a local asset path or a public/signed video URL.</div>
+              </div>
+              <Input
+                className={`${inputClass(theme)} h-8 text-xs`}
+                value={standardContent.video.src || ''}
+                onChange={(event) => updateTierUiContent(version, 'standard', {
+                  video: {
+                    src: event.target.value,
+                    storageProvider: 'local',
+                    storageBucket: null,
+                    storageKey: null,
+                    assetName: null,
+                  },
+                })}
+                placeholder={`/assets/${version.toLowerCase()}-preview.mp4`}
+              />
+            </div>
+          );
+        })()}
+        <div className="grid gap-3 xl:grid-cols-3">
+          {items.map((item) => {
+            const content = normalizeInstallerTierUiContentForVersion(item.uiContent, item.tier, version);
+            const shortDescription = content.shortDescriptions[0] || '';
+            const otherDescription = content.otherDescriptions[0] || { title: '', body: '' };
+            const hasSelectedUpdatesRow = content.inclusions.some((row) => /selected updates/i.test(row.title));
+            return (
+              <div key={`${version}:${item.tier}`} className={`space-y-3 rounded-xl border p-3 ${cardShell(theme)}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold uppercase">{item.tier.replace('_', ' ')}</div>
+                  <label className="flex items-center gap-2 text-xs">
+                    <Checkbox
+                      checked={item.isActive !== false}
+                      onCheckedChange={(checked) => updateTierUiDraft(version, item.tier, (current) => ({ ...current, isActive: checked === true }))}
+                    />
+                    Active
+                  </label>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Tier Name</Label>
+                  <Input className={inputClass(theme)} value={item.displayName} onChange={(event) => updateTierUiDraft(version, item.tier, (current) => ({ ...current, displayName: event.target.value }))} />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Subtitle Fallback</Label>
+                  <Input className={inputClass(theme)} value={item.description} onChange={(event) => updateTierUiDraft(version, item.tier, (current) => ({ ...current, description: event.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[auto_1fr] items-center gap-2 rounded-md border px-3 py-2 text-xs">
+                  <input
+                    type="color"
+                    value={content.color}
+                    onChange={(event) => updateTierUiContent(version, item.tier, { color: event.target.value })}
+                    className="h-8 w-10 rounded border bg-transparent p-0"
+                    aria-label={`${version} ${item.displayName} card color`}
+                  />
+                  <Input className={`${inputClass(theme)} h-8 text-xs`} value={content.color} onChange={(event) => updateTierUiContent(version, item.tier, { color: event.target.value })} />
+                </div>
+                <div className="grid grid-cols-[1fr_5rem] items-center gap-2 rounded-md border px-3 py-2 text-xs">
+                  <label>
+                    <span className="mb-1 block font-semibold">Tier line bar</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={content.meterPercent}
+                      onChange={(event) => updateTierUiContent(version, item.tier, { meterPercent: Number(event.target.value) })}
+                      className="w-full"
+                    />
+                  </label>
+                  <Input className={`${inputClass(theme)} h-8 text-xs`} value={String(content.meterPercent)} onChange={(event) => updateTierUiContent(version, item.tier, { meterPercent: Number(event.target.value) })} />
+                </div>
+                <div className="rounded-md border p-2">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Card Header</div>
+                    <label className="flex items-center gap-2 text-xs">
+                      <Checkbox
+                        checked={content.cardHeader.enabled}
+                        onCheckedChange={(checked) => updateTierUiContent(version, item.tier, { cardHeader: { ...content.cardHeader, enabled: checked === true } })}
+                      />
+                      Enabled
+                    </label>
+                  </div>
+                  <Input className={`${inputClass(theme)} h-8 text-xs`} value={content.cardHeader.label} onChange={(event) => updateTierUiContent(version, item.tier, { cardHeader: { ...content.cardHeader, label: event.target.value } })} placeholder="Most Popular" />
+                </div>
+                <div className="rounded-md border p-2">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Title Badge</div>
+                    <label className="flex items-center gap-2 text-xs">
+                      <Checkbox
+                        checked={content.versionBadge.enabled}
+                        onCheckedChange={(checked) => updateTierUiContent(version, item.tier, { versionBadge: { ...content.versionBadge, enabled: checked === true } })}
+                      />
+                      Enabled
+                    </label>
+                  </div>
+                  <Input className={`${inputClass(theme)} h-8 text-xs`} value={content.versionBadge.label} onChange={(event) => updateTierUiContent(version, item.tier, { versionBadge: { ...content.versionBadge, label: event.target.value } })} placeholder={version} />
+                </div>
+                <div className="rounded-md border p-2">
+                  <div className="mb-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Short Description</div>
+                  </div>
+                  <Input
+                    className={`${inputClass(theme)} h-8 text-xs`}
+                    value={shortDescription}
+                    onChange={(event) => updateTierUiRow(version, item.tier, 'shortDescriptions', [event.target.value])}
+                  />
+                </div>
+                <div className="rounded-md border p-2">
+                  <div className="mb-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Other Description</div>
+                  </div>
+                  <div className="space-y-1 rounded border p-2">
+                    <Input
+                      className={`${inputClass(theme)} h-8 text-xs`}
+                      value={otherDescription.title}
+                      onChange={(event) => updateTierUiRow(version, item.tier, 'otherDescriptions', [{
+                        ...otherDescription,
+                        title: event.target.value,
+                      }])}
+                      placeholder="Title"
+                    />
+                    <textarea
+                      value={otherDescription.body || ''}
+                      onChange={(event) => updateTierUiRow(version, item.tier, 'otherDescriptions', [{
+                        ...otherDescription,
+                        body: event.target.value,
+                      }])}
+                      className={`min-h-14 w-full rounded-md border px-2 py-1 text-xs ${inputClass(theme)}`}
+                      placeholder="Description"
+                    />
+                  </div>
+                </div>
+                <div className="rounded-md border p-2">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Checklist Rows</div>
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => updateTierUiRow(version, item.tier, 'checklist', [...content.checklist, 'New checklist item'])}>Add</Button>
+                  </div>
+                  <div className="space-y-2">
+                    {content.checklist.map((row, index) => (
+                      <div key={`${item.tier}:check:${index}`} className="grid grid-cols-[auto_1fr_auto] gap-2">
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 w-8 p-0"
+                            disabled={index === 0}
+                            aria-label="Move checklist row up"
+                            onClick={() => moveTierUiRow(version, item.tier, 'checklist', index, -1)}
+                          >
+                            <ChevronUp className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 w-8 p-0"
+                            disabled={index >= content.checklist.length - 1}
+                            aria-label="Move checklist row down"
+                            onClick={() => moveTierUiRow(version, item.tier, 'checklist', index, 1)}
+                          >
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                        <Input
+                          className={`${inputClass(theme)} h-8 text-xs`}
+                          value={row}
+                          onChange={(event) => {
+                            const rows = [...content.checklist];
+                            rows[index] = event.target.value;
+                            updateTierUiRow(version, item.tier, 'checklist', rows);
+                          }}
+                        />
+                        <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={() => updateTierUiRow(version, item.tier, 'checklist', content.checklist.filter((_, rowIndex) => rowIndex !== index))}>Delete</Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-md border p-2">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Bottom Inclusions</div>
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => updateTierUiRow(version, item.tier, 'inclusions', [...content.inclusions, { title: 'New included tool', badge: 'ENABLED', enabled: true }])}>Add</Button>
+                  </div>
+                  {item.tier === 'pro' && !hasSelectedUpdatesRow ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="mb-2 h-7 px-2 text-[11px]"
+                      onClick={() => updateTierUiRow(version, item.tier, 'inclusions', [...content.inclusions, { title: 'Selected updates', badge: 'OPTIONAL', enabled: false }])}
+                    >
+                      Restore Selected Updates row
+                    </Button>
+                  ) : null}
+                  <Input className={`${inputClass(theme)} mb-2 h-8 text-xs`} value={content.inclusionTitle} onChange={(event) => updateTierUiContent(version, item.tier, { inclusionTitle: event.target.value })} placeholder="Included Tools" />
+                  <div className="space-y-2">
+                    {content.inclusions.map((row, index) => (
+                      <div key={`${item.tier}:inclusion:${index}`} className="space-y-1 rounded border p-2">
+                        <div className="grid grid-cols-[auto_1fr_7rem] gap-2">
+                          <div className="flex gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 w-8 p-0"
+                              disabled={index === 0}
+                              aria-label="Move inclusion row up"
+                              onClick={() => moveTierUiRow(version, item.tier, 'inclusions', index, -1)}
+                            >
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 w-8 p-0"
+                              disabled={index >= content.inclusions.length - 1}
+                              aria-label="Move inclusion row down"
+                              onClick={() => moveTierUiRow(version, item.tier, 'inclusions', index, 1)}
+                            >
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                          <Input
+                            className={`${inputClass(theme)} h-8 text-xs`}
+                            value={row.title}
+                            onChange={(event) => {
+                              const rows = [...content.inclusions];
+                              rows[index] = { ...row, title: event.target.value };
+                              updateTierUiRow(version, item.tier, 'inclusions', rows);
+                            }}
+                            placeholder="Included tool"
+                          />
+                          <Input
+                            className={`${inputClass(theme)} h-8 text-xs`}
+                            value={row.badge}
+                            onChange={(event) => {
+                              const rows = [...content.inclusions];
+                              rows[index] = { ...row, badge: event.target.value };
+                              updateTierUiRow(version, item.tier, 'inclusions', rows);
+                            }}
+                            placeholder="ENABLED"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="flex items-center gap-2 text-xs">
+                            <Checkbox
+                              checked={row.enabled}
+                              onCheckedChange={(checked) => {
+                                const rows = [...content.inclusions];
+                                rows[index] = { ...row, enabled: checked === true };
+                                updateTierUiRow(version, item.tier, 'inclusions', rows);
+                              }}
+                            />
+                            Enabled badge style
+                          </label>
+                          <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => updateTierUiRow(version, item.tier, 'inclusions', content.inclusions.filter((_, rowIndex) => rowIndex !== index))}>Delete</Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </section>
     );
   };
@@ -1082,6 +1602,7 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
     (view === 'packages' && packagesLoading) ||
     (view === 'licenses' && licensesLoading) ||
     (view === 'catalog' && catalogLoading) ||
+    (view === 'tierUi' && tierUiLoading) ||
     (view === 'requests' && requestsLoading) ||
     (view === 'events' && eventsLoading);
 
@@ -1095,9 +1616,47 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
       { label: 'Packages', value: packageCount, detail: `${activePackageCount} enabled`, toneClass: 'text-fuchsia-500' },
       { label: 'Licenses', value: licenseCount, detail: 'V2 + V3 inventory', toneClass: 'text-blue-500' },
       { label: 'Pending Requests', value: pendingRequests, detail: 'Buyer approvals waiting', toneClass: 'text-amber-500' },
+      { label: 'Tier UI', value: hasUnsavedTierUiChanges ? 'Unsaved' : 'Saved', detail: 'V2/V3 pricing cards', toneClass: 'text-pink-500' },
       { label: 'Events', value: eventCount, detail: 'Recent Worker activity', toneClass: 'text-emerald-500' },
     ];
-  }, [allPackages, eventTotals, licenseTotals, requestsByVersion]);
+  }, [allPackages, eventTotals, hasUnsavedTierUiChanges, licenseTotals, requestsByVersion]);
+
+  if (isTierConfigMode) {
+    const version = tierConfigVersion || 'V2';
+    const tierSaveDisabled = tierUiSaving || !hasUnsavedTierUiChanges;
+    return (
+      <AdminPageScaffold
+        embedded={embedded}
+        panelClass={panelClass}
+        title={`${version} Tier Config`}
+        description={`Configure the ${version} public pricing cards, portrait video, headers, badges, descriptions, checklist rows, and included tools.`}
+        actions={(
+          <>
+            {!embedded ? <Button type="button" size="sm" variant="success" onClick={() => void saveTierUiConfigs(version)} disabled={tierSaveDisabled} className="rounded-[14px]">
+              {tierUiSaving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}
+              {tierUiSaving ? 'Saving...' : 'Save Changes'}
+            </Button> : null}
+            {!embedded ? <AdminRefreshButton
+              loading={tierUiLoading}
+              onClick={() => void loadTierUi()}
+            /> : null}
+          </>
+        )}
+        stickySave={!embedded ? {
+          dirty: hasUnsavedTierUiChanges,
+          saving: tierUiSaving,
+          disabled: tierSaveDisabled,
+          label: 'Save Changes',
+          savingLabel: 'Saving...',
+          message: `Unsaved ${version} pricing-card edits are local until saved.`,
+          onSave: () => void saveTierUiConfigs(version),
+        } : undefined}
+        controls={!embedded ? versionTabs : undefined}
+      >
+        {tierUiLoading ? <AdminTierConfigLoadingSkeleton theme={theme} /> : renderTierUiEditor(version)}
+      </AdminPageScaffold>
+    );
+  }
 
   return (
     <AdminPageScaffold
@@ -1105,18 +1664,36 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
       title="Installer Manager"
       description="Manage V2 and V3 packages, licenses, buy catalog, buyer requests, and event history from one aligned admin workspace."
       actions={(
-        <AdminRefreshButton
-          loading={currentViewLoading}
-          onClick={() => {
-            if (view === 'packages') void reloadPackages();
-            if (view === 'licenses') void loadLicenses();
-            if (view === 'catalog') void loadCatalog();
-            if (view === 'requests') void loadRequests();
-            if (view === 'events') void loadEvents();
-          }}
-        />
+        <>
+          {view === 'tierUi' ? (
+            <Button type="button" size="sm" variant="success" onClick={() => void saveTierUiConfigs()} disabled={tierUiSaving || !hasUnsavedTierUiChanges} className="rounded-[14px]">
+              {tierUiSaving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}
+              {tierUiSaving ? 'Saving...' : 'Save Changes'}
+            </Button>
+          ) : null}
+          <AdminRefreshButton
+            loading={currentViewLoading}
+            onClick={() => {
+              if (view === 'packages') void reloadPackages();
+              if (view === 'licenses') void loadLicenses();
+              if (view === 'catalog') void loadCatalog();
+              if (view === 'tierUi') void loadTierUi();
+              if (view === 'requests') void loadRequests();
+              if (view === 'events') void loadEvents();
+            }}
+          />
+        </>
       )}
       stats={<AdminStatsStrip items={installerStats} />}
+      stickySave={view === 'tierUi' ? {
+        dirty: hasUnsavedTierUiChanges,
+        saving: tierUiSaving,
+        disabled: tierUiSaving || !hasUnsavedTierUiChanges,
+        label: 'Save Changes',
+        savingLabel: 'Saving...',
+        message: 'Unsaved V2/V3 pricing-card edits are local until saved.',
+        onSave: () => void saveTierUiConfigs(),
+      } : undefined}
       controls={(
         <AdminSectionTabs
           sections={[
@@ -1134,6 +1711,34 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
 
       {view === 'packages' && (
         <>
+          <AdminToolbar
+            search={{
+              value: packageQuery,
+              onChange: setPackageQuery,
+              placeholder: 'Search package code, name, archive, or URL...',
+            }}
+            resultLabel={`${(packagesByVersion.V2.length + packagesByVersion.V3.length).toLocaleString()} packages`}
+            activeFilterCount={Number(Boolean(packageQuery.trim())) + Number(packageKindFilter !== 'all') + Number(packageStatusFilter !== 'all')}
+            onClearFilters={() => {
+              setPackageQuery('');
+              setPackageKindFilter('all');
+              setPackageStatusFilter('all');
+            }}
+            primaryFilters={(
+              <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                <select className={selectClass(theme)} value={packageKindFilter} onChange={(event) => setPackageKindFilter(event.target.value as typeof packageKindFilter)}>
+                  <option value="all">All package kinds</option>
+                  <option value="standard">Standard</option>
+                  <option value="update">Update</option>
+                </select>
+                <select className={selectClass(theme)} value={packageStatusFilter} onChange={(event) => setPackageStatusFilter(event.target.value as typeof packageStatusFilter)}>
+                  <option value="all">All package statuses</option>
+                  <option value="enabled">Enabled</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </div>
+            )}
+          />
           {renderPackagesTable('V2')}
           {renderPackagesTable('V3')}
         </>
@@ -1141,7 +1746,30 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
 
       {view === 'licenses' && (
         <>
-          <section className={`rounded-2xl border p-4 space-y-3 ${cardShell(theme)}`}>
+          <AdminToolbar
+            search={{
+              value: licenseQuery,
+              onChange: (value) => { setLicenseQuery(value); setLicensePages({ V2: 1, V3: 1 }); },
+              placeholder: 'Search by customer or code hint...',
+            }}
+            resultLabel={`${Number(licenseTotals.V2 || 0) + Number(licenseTotals.V3 || 0)} licenses`}
+            activeFilterCount={Number(Boolean(licenseQuery.trim())) + Number(licenseStatus !== 'all')}
+            onClearFilters={() => {
+              setLicenseQuery('');
+              setLicenseStatus('all');
+              setLicensePages({ V2: 1, V3: 1 });
+            }}
+            primaryFilters={(
+              <select className={selectClass(theme)} value={licenseStatus} onChange={(event) => { setLicenseStatus(event.target.value as typeof licenseStatus); setLicensePages({ V2: 1, V3: 1 }); }}>
+                <option value="all">All statuses</option>
+                <option value="available">Available</option>
+                <option value="claimed">Claimed</option>
+                <option value="used">Used</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            )}
+          />
+          <section className={`hidden rounded-2xl border p-4 space-y-3 ${cardShell(theme)}`}>
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div>
                 <div className="text-base font-semibold">License Filters</div>
@@ -1166,14 +1794,78 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
 
       {view === 'catalog' && (
         <>
+          <AdminToolbar
+            search={{
+              value: catalogQuery,
+              onChange: setCatalogQuery,
+              placeholder: 'Search SKU, name, description, or type...',
+            }}
+            resultLabel={`${(catalogByVersion.V2.length + catalogByVersion.V3.length).toLocaleString()} SKUs`}
+            activeFilterCount={Number(Boolean(catalogQuery.trim())) + Number(catalogTypeFilter !== 'all') + Number(catalogStatusFilter !== 'all')}
+            onClearFilters={() => {
+              setCatalogQuery('');
+              setCatalogTypeFilter('all');
+              setCatalogStatusFilter('all');
+            }}
+            primaryFilters={(
+              <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                <select className={selectClass(theme)} value={catalogTypeFilter} onChange={(event) => setCatalogTypeFilter(event.target.value as typeof catalogTypeFilter)}>
+                  <option value="all">All SKU types</option>
+                  <option value="standard">Standard</option>
+                  <option value="update">Update</option>
+                  <option value="promax">PRO MAX</option>
+                </select>
+                <select className={selectClass(theme)} value={catalogStatusFilter} onChange={(event) => setCatalogStatusFilter(event.target.value as typeof catalogStatusFilter)}>
+                  <option value="all">All SKU statuses</option>
+                  <option value="enabled">Enabled</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </div>
+            )}
+          />
           {renderCatalogTable('V2')}
           {renderCatalogTable('V3')}
         </>
       )}
 
+      {view === 'tierUi' && (
+        <>
+          {tierUiLoading ? (
+            <AdminTierConfigLoadingSkeleton theme={theme} />
+          ) : (
+            <>
+              {renderTierUiEditor('V2')}
+              {renderTierUiEditor('V3')}
+            </>
+          )}
+        </>
+      )}
+
       {view === 'requests' && (
         <>
-          <section className={`rounded-2xl border p-4 space-y-3 ${cardShell(theme)}`}>
+          <AdminToolbar
+            search={{
+              value: requestQuery,
+              onChange: (value) => { setRequestQuery(value); setRequestPages({ V2: 1, V3: 1 }); },
+              placeholder: 'Search email, SKU, receipt, or license...',
+            }}
+            resultLabel={`${Number(requestTotals.V2 || 0) + Number(requestTotals.V3 || 0)} requests`}
+            activeFilterCount={Number(Boolean(requestQuery.trim())) + Number(requestStatus !== 'all')}
+            onClearFilters={() => {
+              setRequestQuery('');
+              setRequestStatus('all');
+              setRequestPages({ V2: 1, V3: 1 });
+            }}
+            primaryFilters={(
+              <select className={selectClass(theme)} value={requestStatus} onChange={(event) => { setRequestStatus(event.target.value as typeof requestStatus); setRequestPages({ V2: 1, V3: 1 }); }}>
+                <option value="all">All statuses</option>
+                <option value="pending">Pending</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            )}
+          />
+          <section className={`hidden rounded-2xl border p-4 space-y-3 ${cardShell(theme)}`}>
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div>
                 <div className="text-base font-semibold">Request Filters</div>
@@ -1197,7 +1889,29 @@ export function AdminAccessInstallerTab({ theme, panelClass, pushNotice }: Props
 
       {view === 'events' && (
         <>
-          <section className={`rounded-2xl border p-4 space-y-3 ${cardShell(theme)}`}>
+          <AdminToolbar
+            search={{
+              value: eventQuery,
+              onChange: (value) => { setEventQuery(value); setEventPages({ V2: 1, V3: 1 }); },
+              placeholder: 'Search by customer or code hint...',
+            }}
+            resultLabel={`${Number(eventTotals.V2 || 0) + Number(eventTotals.V3 || 0)} events`}
+            activeFilterCount={Number(Boolean(eventQuery.trim())) + Number(eventType !== 'all')}
+            onClearFilters={() => {
+              setEventQuery('');
+              setEventType('all');
+              setEventPages({ V2: 1, V3: 1 });
+            }}
+            primaryFilters={(
+              <select className={selectClass(theme)} value={eventType} onChange={(event) => { setEventType(event.target.value as typeof eventType); setEventPages({ V2: 1, V3: 1 }); }}>
+                <option value="all">All events</option>
+                <option value="claim">Claim</option>
+                <option value="complete">Complete</option>
+                <option value="release">Release</option>
+              </select>
+            )}
+          />
+          <section className={`hidden rounded-2xl border p-4 space-y-3 ${cardShell(theme)}`}>
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div>
                 <div className="text-base font-semibold">Event Filters</div>

@@ -56,6 +56,7 @@ export type TabKey =
   | 'active'
   | 'activity'
   | 'account_requests'
+  | 'tier_config'
   | 'account_upgrades'
   | 'crash_reports'
   | 'store_requests'
@@ -149,7 +150,8 @@ export const TABS: Array<{
   { key: 'activity', label: 'Activity', emoji: '📋', hint: 'Review export/import audit logs', tone: 'amber' },
   { key: 'sampler_defaults', label: 'Sampler Defaults', emoji: 'SD', hint: 'Control first-run sampler defaults and limits', tone: 'violet' },
   { key: 'account_requests', label: 'Account Requests', emoji: '✅', hint: 'Approve registrations and PRO upgrade requests', tone: 'rose' },
-  { key: 'account_upgrades', label: 'Tier & Vouchers', emoji: 'PRO', hint: 'Configure account tiers and issue vouchers', tone: 'rose' },
+  { key: 'tier_config', label: 'Tier Config', emoji: 'TC', hint: 'Configure V1, V2, and V3 pricing tiers', tone: 'rose' },
+  { key: 'account_upgrades', label: 'Vouchers', emoji: 'PRO', hint: 'Issue one-time tier upgrade vouchers', tone: 'rose' },
   { key: 'crash_reports', label: 'Crash Reports', emoji: 'CR', hint: 'Review client-submitted crash diagnostics', tone: 'amber' },
   { key: 'store_requests', label: 'Store Requests', emoji: '🛒', hint: 'Handle purchase requests', tone: 'orange' },
   { key: 'installer_requests', label: 'Installer Requests', emoji: 'IR', hint: 'Review bundled installer purchase requests', tone: 'orange' },
@@ -178,7 +180,8 @@ export const ADMIN_TAB_SPECS: Array<{
   { key: 'activity', label: 'Activity', icon: Activity, hint: 'Review export/import audit logs', tone: 'amber' },
   { key: 'sampler_defaults', label: 'Sampler Defaults', icon: SlidersHorizontal, hint: 'Control first-run sampler defaults and limits', tone: 'violet' },
   { key: 'account_requests', label: 'Account Requests', icon: ReceiptText, hint: 'Approve registrations and PRO upgrade requests', tone: 'rose' },
-  { key: 'account_upgrades', label: 'Tier & Vouchers', icon: BadgeDollarSign, hint: 'Configure account tiers and issue vouchers', tone: 'rose' },
+  { key: 'tier_config', label: 'Tier Config', icon: SlidersHorizontal, hint: 'Configure V1, V2, and V3 pricing tiers', tone: 'rose' },
+  { key: 'account_upgrades', label: 'Vouchers', icon: BadgeDollarSign, hint: 'Issue one-time tier upgrade vouchers', tone: 'rose' },
   { key: 'crash_reports', label: 'Crash Reports', icon: Siren, hint: 'Review client-submitted crash diagnostics', tone: 'amber' },
   { key: 'store_requests', label: 'Store Requests', icon: ShoppingBag, hint: 'Handle purchase requests', tone: 'orange' },
   { key: 'installer_requests', label: 'Installer Requests', icon: TicketPercent, hint: 'Review bundled installer purchase requests', tone: 'orange' },
@@ -505,7 +508,6 @@ export interface StoreConfigDraft {
   maya_number: string;
   messenger_url: string;
   qr_image_path: string;
-  account_price_php: string;
   banner_rotation_ms: string;
   store_maintenance_enabled: boolean;
   store_maintenance_message: string;

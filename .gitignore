@@ -31,3 +31,6 @@ reports/
 testsprite_tests/
 testsprite-preview*.log
 docs/
+!docs/
+docs/*
+!docs/DOMAIN_FALLBACK.md

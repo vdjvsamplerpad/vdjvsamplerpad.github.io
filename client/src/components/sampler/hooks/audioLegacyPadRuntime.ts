@@ -1,11 +1,11 @@
 import {
   executeStop,
+  type StopTimingProfile,
   type StopTarget,
 } from '../../../lib/audio-engine';
 import type { StopMode } from './audioDeckRuntime';
 import type {
   AudioInstance,
-  StopTimingProfile,
   AndroidMuteGateMode,
 } from './useGlobalPlaybackManager';
 
@@ -680,7 +680,7 @@ export class AudioLegacyPadRuntime {
       }
     };
 
-    instance.stopCancel = executeStop(target, mode, this.host.getAudioContext() ?? undefined);
+    instance.stopCancel = executeStop(target, mode, this.host.getAudioContext() ?? undefined, this.host.getStopTimingProfile());
   }
 
   private stopPadInstant(instance: AudioInstance, keepChannel?: boolean): void {

@@ -30,6 +30,9 @@ export type {
     HotcueTuple,
     AudioRejectedReason,
     StopTimingProfile,
+    StopTimingOverridesMs,
+    StopTimingRange,
+    ConfigurableStopTimingMode,
     AudioLimits,
     EngineConfig,
     EqSettings,
@@ -39,7 +42,13 @@ export type {
 } from './types';
 export {
     DEFAULT_ENGINE_CONFIG,
+    CONFIGURABLE_STOP_TIMING_MODES,
+    STOP_TIMING_MODES,
+    STOP_TIMING_RANGES,
     IS_IOS,
     IS_ANDROID,
+    applyStopTimingOverrides,
     getStopTimingProfile,
+    getStopModeDurationMs,
+    normalizeStopTimingOverrides,
 } from './types';

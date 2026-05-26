@@ -180,6 +180,7 @@ export function OnlineBankStoreDialog({
     const isGuest = !effectiveUser;
     const isAdmin = profile?.role === 'admin';
     const isFreeAccount = !isGuest && capabilities.effectiveTier === 'free';
+    const canBrowseBankStore = isAdmin || capabilities.features.bankStoreBrowse;
 
     const [loading, setLoading] = React.useState(false);
     const [items, setItems] = React.useState<StoreItem[]>([]);
@@ -423,8 +424,10 @@ export function OnlineBankStoreDialog({
     });
 
     React.useEffect(() => {
-        if (open) {
+        if (open && canBrowseBankStore) {
             loadData();
+        } else if (open && !canBrowseBankStore) {
+            requestUpgrade('Bank Store browsing is locked on your current account tier.');
         } else {
             proofOcrSeqRef.current += 1;
             lastCountQueryRef.current = '';
@@ -446,7 +449,7 @@ export function OnlineBankStoreDialog({
             setDownloadConfirmState(null);
             confirmedLargeDownloadIdsRef.current.clear();
         }
-    }, [open, isOnline, loadData]);
+    }, [canBrowseBankStore, isOnline, loadData, open, requestUpgrade]);
 
     React.useEffect(() => {
         if (banners.length <= 0) {

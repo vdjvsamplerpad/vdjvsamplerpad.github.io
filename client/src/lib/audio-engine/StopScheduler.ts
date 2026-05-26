@@ -9,7 +9,7 @@
  *  - stopDeckChannelInternal
  */
 
-import { StopMode, getStopTimingProfile } from './types';
+import { StopMode, getStopTimingProfile, type StopTimingProfile } from './types';
 import { clampGain } from './GainPipeline';
 
 // ─── Stop Target Interface ───────────────────────────────────────────────────
@@ -47,8 +47,9 @@ export function executeStop(
     target: StopTarget,
     mode: StopMode,
     ctx?: AudioContext,
+    timingProfile?: StopTimingProfile,
 ): () => void {
-    const timing = getStopTimingProfile();
+    const timing = timingProfile || getStopTimingProfile();
     let cancelled = false;
     let rafId: number | null = null;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;

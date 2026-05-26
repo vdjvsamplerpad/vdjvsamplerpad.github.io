@@ -1,6 +1,7 @@
 import { edgeFunctionUrl, getAuthHeaders } from '@/lib/edge-api';
 import type { SamplerAppConfig } from '@/components/sampler/samplerAppConfig';
 import type { AdminLegalDocumentState, LegalDocument, LegalDocumentKey } from '@/lib/legal-content';
+import type { AccountTierUiContent } from '@/lib/account-tier-content';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -32,8 +33,22 @@ export interface AdminAccountTierConfig {
   price_php: number;
   limits: Record<string, unknown>;
   features: Record<string, boolean>;
+  ui_content?: AccountTierUiContent | Record<string, unknown> | null;
   is_active: boolean;
   updated_at?: string | null;
+}
+
+export interface AdminTierVideoUploadSession {
+  mode: 'r2_direct';
+  sessionId: string;
+  assetName: string;
+  fileSize: number;
+  uploadUrl: string;
+  uploadMethod: 'PUT';
+  uploadHeaders: Record<string, string>;
+  bucket: string;
+  objectKey: string;
+  urlExpiresAt: string;
 }
 
 export interface AdminAccountUpgradeRequest {
@@ -433,6 +448,7 @@ export interface LandingDownloadConfig {
 export type InstallerVersionKey = 'V2' | 'V3';
 export type InstallerPackageKind = 'standard' | 'update';
 export type InstallerBuyProductType = 'standard' | 'update' | 'promax';
+export type InstallerPricingTier = 'standard' | 'pro' | 'pro_max';
 
 export interface InstallerPackagePart {
   partIndex: number;
@@ -505,6 +521,18 @@ export interface InstallerBuyProduct {
   heroImageUrl: string;
   downloadLinkOverride: string;
   grantedEntitlements: string[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface InstallerTierConfig {
+  id?: string;
+  version: InstallerVersionKey;
+  tier: InstallerPricingTier;
+  displayName: string;
+  description: string;
+  uiContent: AccountTierUiContent;
+  isActive: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -597,9 +625,9 @@ export interface BuyConfig {
     maya_number?: string;
     messenger_url?: string;
     qr_image_path?: string;
-    account_price_php?: number | null;
   };
   v2v3Products: InstallerBuyProduct[];
+  installerTierConfigs?: InstallerTierConfig[];
 }
 
 const toQueryString = (params: Record<string, string | number | boolean | null | undefined>) => {
@@ -712,9 +740,39 @@ export const adminApi = {
     pricePhp?: number;
     limits?: Record<string, unknown>;
     features?: Record<string, boolean>;
+    uiContent?: AccountTierUiContent | Record<string, unknown>;
     isActive?: boolean;
   }) {
     return callAdmin<{ tier: AdminAccountTierConfig }>('POST', 'account-tiers/save', input);
+  },
+
+  async startTierVideoUpload(input: {
+    tier: 'free' | 'pro' | 'pro_max';
+    fileName: string;
+    contentType?: string;
+    sizeBytes: number;
+  }) {
+    return callAdmin<AdminTierVideoUploadSession>('POST', 'account-tiers/video-upload-url', input);
+  },
+
+  async completeTierVideoUpload(input: {
+    tier: 'free' | 'pro' | 'pro_max';
+    sessionId: string;
+    status: 'success' | 'failed';
+    failureReason?: string;
+    etag?: string;
+  }) {
+    return callAdmin<{
+      sessionId: string;
+      status: 'success' | 'failed';
+      video: {
+        storageProvider: 'r2';
+        storageBucket: string;
+        storageKey: string;
+        assetName: string | null;
+        fileSizeBytes: number;
+      };
+    }>('POST', 'account-tiers/video-upload-complete', input);
   },
 
   async listAccountUpgradeRequests(input: { q?: string; status?: 'all' | 'pending' | 'approved' | 'rejected' | 'cancelled'; page?: number; perPage?: number }) {
@@ -1252,6 +1310,19 @@ export const adminApi = {
     return callStoreApi<{
       items: InstallerBuyProduct[];
     }>('GET', `admin/store/installer-buy/products${query}`);
+  },
+
+  async listInstallerTierConfigs(version?: InstallerVersionKey) {
+    const query = toQueryString({ version });
+    return callStoreApi<{
+      items: InstallerTierConfig[];
+    }>('GET', `admin/store/installer-buy/tier-configs${query}`);
+  },
+
+  async saveInstallerTierConfig(input: InstallerTierConfig) {
+    return callStoreApi<{
+      item: InstallerTierConfig | null;
+    }>('POST', 'admin/store/installer-buy/tier-configs/save', input);
   },
 
   async saveInstallerBuyProduct(input: InstallerBuyProduct) {

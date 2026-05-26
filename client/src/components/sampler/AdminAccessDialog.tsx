@@ -75,7 +75,7 @@ import { AdminAccountUpgradesTab } from './AdminAccountUpgradesTab';
 import { AdminAccessNonStoreTabs } from './AdminAccessDialog.nonStoreTabs';
 import { AdminAccessDialogModals } from './AdminAccessDialog.dialogs';
 import { useAdminAccessStoreManager } from './AdminAccessDialog.store';
-import { AdminNavIcon } from './AdminAccessDialog.layout';
+import { AdminNavIcon, AdminPageScaffold, AdminRefreshButton, AdminSectionTabs } from './AdminAccessDialog.layout';
 
 const ADMIN_HOME_AUTO_REFRESH_MS = 5 * 60 * 1000;
 const ADMIN_HOME_FETCH_COOLDOWN_MS = 60 * 1000;
@@ -89,27 +89,13 @@ const manilaDateDaysAgo = (daysAgo: number, value = new Date()): string => {
   shifted.setUTCDate(shifted.getUTCDate() - Math.max(0, daysAgo));
   return toIsoDateOnly(shifted);
 };
-const ADMIN_NAV_ORDER: TabKey[] = [
-  'home',
-  'account_requests',
-  'account_upgrades',
-  'store_requests',
-  'installer_requests',
-  'assignments',
-  'banks',
-  'store_catalog',
-  'users',
-  'active',
-  'activity',
-  'sampler_defaults',
-  'default_bank',
-  'store_banners',
-  'store_promotions',
-  'landing_download',
-  'legal_pages',
-  'store_config',
-  'installer',
-  'crash_reports',
+const ADMIN_NAV_GROUPS: Array<{ label: string; tabs: TabKey[] }> = [
+  { label: 'Overview', tabs: ['home'] },
+  { label: 'Requests', tabs: ['account_requests', 'store_requests', 'installer_requests'] },
+  { label: 'Accounts', tabs: ['users', 'assignments', 'tier_config', 'account_upgrades'] },
+  { label: 'Store', tabs: ['banks', 'store_catalog', 'store_banners', 'store_promotions', 'store_config'] },
+  { label: 'App Setup', tabs: ['sampler_defaults', 'default_bank', 'landing_download', 'legal_pages', 'installer'] },
+  { label: 'Monitoring', tabs: ['active', 'activity', 'crash_reports'] },
 ];
 
 
@@ -143,6 +129,15 @@ export function AdminAccessDialog({
   const initialActiveSort = React.useMemo(() => readStoredActiveSort(), [readStoredActiveSort]);
   const [tab, setTab] = React.useState<TabKey>('home');
   const [isNavOpen, setIsNavOpen] = React.useState(false);
+  const [tierConfigVersion, setTierConfigVersion] = React.useState<'V1' | 'V2' | 'V3'>('V1');
+  const [pendingTierConfigVersion, setPendingTierConfigVersion] = React.useState<'V1' | 'V2' | 'V3' | null>(null);
+  const [tierConfigSaveSignal, setTierConfigSaveSignal] = React.useState(0);
+  const [tierConfigRefreshSignal, setTierConfigRefreshSignal] = React.useState(0);
+  const [tierConfigControllerState, setTierConfigControllerState] = React.useState<Record<'V1' | 'V2' | 'V3', { dirty: boolean; saving: boolean; loading: boolean }>>({
+    V1: { dirty: false, saving: false, loading: false },
+    V2: { dirty: false, saving: false, loading: false },
+    V3: { dirty: false, saving: false, loading: false },
+  });
   const [error, setError] = React.useState('');
   const [info, setInfo] = React.useState('');
   const { notices, pushNotice, dismiss } = useNotices();
@@ -262,6 +257,8 @@ export function AdminAccessDialog({
   const [usersTotal, setUsersTotal] = React.useState(0);
   const [usersPage, setUsersPage] = React.useState(1);
   const [usersQuery, setUsersQuery] = React.useState('');
+  const [usersTierFilter, setUsersTierFilter] = React.useState<'all' | 'free' | 'pro' | 'pro_max' | 'admin'>('all');
+  const [usersStatusFilter, setUsersStatusFilter] = React.useState<'all' | 'active' | 'banned' | 'never_signed_in'>('all');
   const [usersSortBy, setUsersSortBy] = React.useState<UserSortBy>('created_at');
   const [usersSortDir, setUsersSortDir] = React.useState<SortDirection>('desc');
   const [assignmentUsersSource, setAssignmentUsersSource] = React.useState<AdminUser[]>([]);
@@ -275,10 +272,13 @@ export function AdminAccessDialog({
   const [banksTotal, setBanksTotal] = React.useState(0);
   const [banksPage, setBanksPage] = React.useState(1);
   const [banksQuery, setBanksQuery] = React.useState('');
+  const [banksCatalogFilter, setBanksCatalogFilter] = React.useState<'all' | 'published' | 'draft' | 'coming_soon' | 'no_catalog'>('all');
+  const [banksAccessFilter, setBanksAccessFilter] = React.useState<'all' | 'has_access' | 'no_access'>('all');
   const [banksSortBy, setBanksSortBy] = React.useState<BankSortBy>('created_at');
   const [banksSortDir, setBanksSortDir] = React.useState<SortDirection>('desc');
   const [assignmentBanksSource, setAssignmentBanksSource] = React.useState<AdminBank[]>([]);
   const [assignmentBanksLoading, setAssignmentBanksLoading] = React.useState(false);
+  const [assignmentBanksQuery, setAssignmentBanksQuery] = React.useState('');
   const [assignmentBanksPage, setAssignmentBanksPage] = React.useState(1);
   const [assignmentBankSortBy, setAssignmentBankSortBy] = React.useState<AssignmentBankSortBy>('title');
   const [assignmentBankSortDir, setAssignmentBankSortDir] = React.useState<SortDirection>('asc');
@@ -313,6 +313,7 @@ export function AdminAccessDialog({
   >('all');
   const [activityUploadResultFilter, setActivityUploadResultFilter] = React.useState<'all' | 'duplicate_no_change'>('all');
   const [expandedActivityId, setExpandedActivityId] = React.useState<number | null>(null);
+  const [activitySummary, setActivitySummary] = React.useState({ successBankExport: 0, successBankImport: 0 });
   const [otherActivityLoading, setOtherActivityLoading] = React.useState(false);
   const [otherActivityRows, setOtherActivityRows] = React.useState<AdminActivityRow[]>([]);
   const [otherActivityPage, setOtherActivityPage] = React.useState(1);
@@ -454,8 +455,19 @@ export function AdminAccessDialog({
     return ordered.slice((assignmentUsersPage - 1) * PAGE_SIZE, assignmentUsersPage * PAGE_SIZE);
   }, [assignmentUsersSource, assignmentUserSortBy, assignmentUserSortDir, assignmentUsersPage]);
 
+  const filteredAssignmentBanks = React.useMemo(() => {
+    const query = assignmentBanksQuery.trim().toLowerCase();
+    if (!query) return assignmentBanksSource;
+    return assignmentBanksSource.filter((bank) => {
+      const haystack = [bank.title, bank.description, bank.id]
+        .map((value) => String(value || '').toLowerCase())
+        .join(' ');
+      return haystack.includes(query);
+    });
+  }, [assignmentBanksQuery, assignmentBanksSource]);
+
   const assignmentBanks = React.useMemo(() => {
-    const sorted = [...assignmentBanksSource].sort((a, b) => {
+    const sorted = [...filteredAssignmentBanks].sort((a, b) => {
       if (assignmentBankSortBy === 'title') {
         return String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' });
       }
@@ -468,7 +480,7 @@ export function AdminAccessDialog({
     });
     const ordered = assignmentBankSortDir === 'asc' ? sorted : sorted.reverse();
     return ordered.slice((assignmentBanksPage - 1) * PAGE_SIZE, assignmentBanksPage * PAGE_SIZE);
-  }, [assignmentBanksSource, assignmentBankSortBy, assignmentBankSortDir, grantedBankIds, assignmentBanksPage]);
+  }, [filteredAssignmentBanks, assignmentBankSortBy, assignmentBankSortDir, grantedBankIds, assignmentBanksPage]);
 
   const activeUsersRows = React.useMemo(() => {
     const map = new Map<string, ActiveSessionRow>();
@@ -494,13 +506,35 @@ export function AdminAccessDialog({
     });
     return activeSortDir === 'asc' ? rows : rows.reverse();
   }, [activeSessions, activeSortBy, activeSortDir]);
+  const filteredUsers = React.useMemo(() => (
+    users.filter((user) => {
+      const effectiveTier = user.role === 'admin' ? 'admin' : (user.effective_account_tier || user.account_tier || 'free');
+      if (usersTierFilter !== 'all' && effectiveTier !== usersTierFilter) return false;
+      if (usersStatusFilter === 'banned' && !isUserBanned(user)) return false;
+      if (usersStatusFilter === 'active' && isUserBanned(user)) return false;
+      if (usersStatusFilter === 'never_signed_in' && user.last_sign_in_at) return false;
+      return true;
+    })
+  ), [users, usersStatusFilter, usersTierFilter]);
+  const filteredBanks = React.useMemo(() => (
+    banks.filter((bank) => {
+      const catalog = bank.store_catalog;
+      if (banksCatalogFilter === 'published' && !catalog?.is_published) return false;
+      if (banksCatalogFilter === 'draft' && (!catalog || catalog.is_published || catalog.coming_soon)) return false;
+      if (banksCatalogFilter === 'coming_soon' && !catalog?.coming_soon) return false;
+      if (banksCatalogFilter === 'no_catalog' && catalog) return false;
+      if (banksAccessFilter === 'has_access' && Number(bank.access_count || 0) <= 0) return false;
+      if (banksAccessFilter === 'no_access' && Number(bank.access_count || 0) > 0) return false;
+      return true;
+    })
+  ), [banks, banksAccessFilter, banksCatalogFilter]);
   const pagedUsers = React.useMemo(
-    () => users.slice((usersPage - 1) * PAGE_SIZE, usersPage * PAGE_SIZE),
-    [users, usersPage],
+    () => filteredUsers.slice((usersPage - 1) * PAGE_SIZE, usersPage * PAGE_SIZE),
+    [filteredUsers, usersPage],
   );
   const pagedBanks = React.useMemo(
-    () => banks.slice((banksPage - 1) * PAGE_SIZE, banksPage * PAGE_SIZE),
-    [banks, banksPage],
+    () => filteredBanks.slice((banksPage - 1) * PAGE_SIZE, banksPage * PAGE_SIZE),
+    [banksPage, filteredBanks],
   );
   const pagedStorePromotions = React.useMemo(
     () => storePromotions.slice((storePromotionsPage - 1) * PAGE_SIZE, storePromotionsPage * PAGE_SIZE),
@@ -900,7 +934,8 @@ export function AdminAccessDialog({
   const refreshActivity = React.useCallback(async () => {
     setActivityLoading(true);
     try {
-      const data = await adminApi.listActivity({
+      const [data, exportSummary, importSummary] = await Promise.all([
+        adminApi.listActivity({
         scope: 'export',
         eventType: 'bank.export',
         status: activityStatusFilter === 'all' ? undefined : activityStatusFilter,
@@ -912,14 +947,38 @@ export function AdminAccessDialog({
         perPage: PAGE_SIZE,
         sortBy: activitySortBy,
         sortDir: activitySortDir,
-      });
+        }),
+        adminApi.listActivity({
+          scope: 'all',
+          eventType: 'bank.export',
+          status: 'success',
+          page: 1,
+          perPage: 1,
+          sortBy: 'created_at',
+          sortDir: 'desc',
+        }),
+        adminApi.listActivity({
+          scope: 'all',
+          eventType: 'bank.import',
+          status: 'success',
+          page: 1,
+          perPage: 1,
+          sortBy: 'created_at',
+          sortDir: 'desc',
+        }),
+      ]);
       setActivityRows(Array.isArray(data.activity) ? data.activity : []);
       setActivityTotal(Number(data.total || 0));
+      setActivitySummary({
+        successBankExport: Number(exportSummary.total || 0),
+        successBankImport: Number(importSummary.total || 0),
+      });
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Could not load activity logs.');
       setActivityRows([]);
       setActivityTotal(0);
+      setActivitySummary({ successBankExport: 0, successBankImport: 0 });
     } finally {
       setActivityLoading(false);
     }
@@ -1020,7 +1079,8 @@ export function AdminAccessDialog({
     setHomeWindowDays(days);
     setHomeFromDate(from);
     setHomeToDate(end);
-  }, []);
+    void refreshHomeDashboard({ fromDate: from, toDate: end }, { force: true });
+  }, [refreshHomeDashboard]);
 
   React.useEffect(() => {
     homeFromDateRef.current = homeFromDate;
@@ -1277,10 +1337,10 @@ export function AdminAccessDialog({
     }
   };
 
-  const usersTotalPages = Math.max(1, Math.ceil(users.length / PAGE_SIZE));
+  const usersTotalPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE));
   const assignmentUsersTotalPages = Math.max(1, Math.ceil(assignmentUsersSource.length / PAGE_SIZE));
-  const banksTotalPages = Math.max(1, Math.ceil(banks.length / PAGE_SIZE));
-  const assignmentBanksTotalPages = Math.max(1, Math.ceil(assignmentBanksSource.length / PAGE_SIZE));
+  const banksTotalPages = Math.max(1, Math.ceil(filteredBanks.length / PAGE_SIZE));
+  const assignmentBanksTotalPages = Math.max(1, Math.ceil(filteredAssignmentBanks.length / PAGE_SIZE));
   const activeTotalPages = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
   const activeTodayTotalPages = Math.max(1, Math.ceil(activeTodayTotal / PAGE_SIZE));
   const storePromotionsTotalPages = Math.max(1, Math.ceil(storePromotions.length / PAGE_SIZE));
@@ -1893,8 +1953,11 @@ export function AdminAccessDialog({
   };
 
   const tabMap = React.useMemo(() => new Map(ADMIN_TAB_SPECS.map((item) => [item.key, item])), []);
-  const navTabs = React.useMemo(
-    () => ADMIN_NAV_ORDER.map((key) => tabMap.get(key)).filter(Boolean) as typeof ADMIN_TAB_SPECS,
+  const navGroups = React.useMemo(
+    () => ADMIN_NAV_GROUPS.map((group) => ({
+      ...group,
+      tabs: group.tabs.map((key) => tabMap.get(key)).filter(Boolean) as typeof ADMIN_TAB_SPECS,
+    })).filter((group) => group.tabs.length > 0),
     [tabMap],
   );
 
@@ -1922,6 +1985,43 @@ export function AdminAccessDialog({
     const tone = TAB_CONTENT_TONE_CLASSES[tabToneForKey(tabKey)];
     return theme === 'dark' ? tone.textDark : tone.textLight;
   };
+  const currentTierConfigState = tierConfigControllerState[tierConfigVersion];
+  const updateTierConfigControllerState = React.useCallback((
+    version: 'V1' | 'V2' | 'V3',
+    nextState: { dirty: boolean; saving: boolean; loading: boolean },
+  ) => {
+    setTierConfigControllerState((current) => {
+      const previous = current[version];
+      if (
+        previous.dirty === nextState.dirty
+        && previous.saving === nextState.saving
+        && previous.loading === nextState.loading
+      ) {
+        return current;
+      }
+      return { ...current, [version]: nextState };
+    });
+  }, []);
+  const handleTierConfigVersionChange = (next: 'V1' | 'V2' | 'V3') => {
+    if (next === tierConfigVersion) return;
+    if (currentTierConfigState.dirty) {
+      setPendingTierConfigVersion(next);
+      return;
+    }
+    setTierConfigVersion(next);
+  };
+  const tierConfigVersionTabs = (
+    <AdminSectionTabs
+      sections={[
+        { key: 'V1', label: 'V1' },
+        { key: 'V2', label: 'V2' },
+        { key: 'V3', label: 'V3' },
+      ]}
+      active={tierConfigVersion}
+      onChange={(next) => handleTierConfigVersionChange(next as 'V1' | 'V2' | 'V3')}
+      className="w-full"
+    />
+  );
 
   return (
     <>
@@ -1945,18 +2045,25 @@ export function AdminAccessDialog({
                 </span>
                 <div className="opacity-75 mt-0.5 truncate whitespace-nowrap" title={activeTab.hint}>{activeTab.hint}</div>
               </div>
-              <div className="space-y-2">
-                {navTabs.map((t) => (
-                  <Button
-                    key={t.key}
-                    size="sm"
-                    variant="outline"
-                    className={tabButtonClass(t.key)}
-                    onClick={() => setTab(t.key)}
-                  >
-                    <AdminNavIcon icon={t.icon} />
-                    <span className="truncate">{t.label}</span>
-                  </Button>
+              <div className="space-y-4">
+                {navGroups.map((group) => (
+                  <div key={group.label} className="space-y-1.5">
+                    <div className="px-1 text-[10px] font-black uppercase tracking-[0.18em] opacity-55">{group.label}</div>
+                    <div className="space-y-1.5">
+                      {group.tabs.map((t) => (
+                        <Button
+                          key={t.key}
+                          size="sm"
+                          variant="outline"
+                          className={tabButtonClass(t.key)}
+                          onClick={() => setTab(t.key)}
+                        >
+                          <AdminNavIcon icon={t.icon} />
+                          <span className="truncate">{t.label}</span>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             </aside>
@@ -2023,6 +2130,7 @@ export function AdminAccessDialog({
                   allGrantIds,
                   allRevokeIds,
                   assignmentBanks,
+                  assignmentBanksQuery,
                   assignmentBanksPage,
                   assignmentBanksTotalPages,
                   assignmentBankSortBy,
@@ -2040,6 +2148,10 @@ export function AdminAccessDialog({
                   onSelectUser: setSelectedUserId,
                   onGrant: (ids) => void doGrant(ids),
                   onRevoke: (ids) => void doRevoke(ids),
+                  onAssignmentBanksQueryChange: (value) => {
+                    setAssignmentBanksQuery(value);
+                    setAssignmentBanksPage(1);
+                  },
                   onAssignmentBanksPageChange: setAssignmentBanksPage,
                   onToggleAssignmentBankSort: toggleAssignmentBankSort,
                   onToggleBankSelection: toggleSelectBank,
@@ -2050,12 +2162,23 @@ export function AdminAccessDialog({
                   banksLoading,
                   banksQuery,
                   banks: pagedBanks,
+                  allBanks: banks,
+                  bankCatalogFilter: banksCatalogFilter,
+                  bankAccessFilter: banksAccessFilter,
                   banksPage,
                   banksTotalPages,
                   banksSortBy,
                   banksSortDir,
                   onBanksQueryChange: (value) => {
                     setBanksQuery(value);
+                    setBanksPage(1);
+                  },
+                  onBankCatalogFilterChange: (value) => {
+                    setBanksCatalogFilter(value);
+                    setBanksPage(1);
+                  },
+                  onBankAccessFilterChange: (value) => {
+                    setBanksAccessFilter(value);
                     setBanksPage(1);
                   },
                   onRefreshBanks: () => void refreshBanks(),
@@ -2080,12 +2203,23 @@ export function AdminAccessDialog({
                   usersLoading,
                   usersQuery,
                   users: pagedUsers,
+                  allUsers: users,
+                  userTierFilter: usersTierFilter,
+                  userStatusFilter: usersStatusFilter,
                   usersPage,
                   usersTotalPages,
                   usersSortBy,
                   usersSortDir,
                   onUsersQueryChange: (value) => {
                     setUsersQuery(value);
+                    setUsersPage(1);
+                  },
+                  onUserTierFilterChange: (value) => {
+                    setUsersTierFilter(value);
+                    setUsersPage(1);
+                  },
+                  onUserStatusFilterChange: (value) => {
+                    setUsersStatusFilter(value);
                     setUsersPage(1);
                   },
                   onRefreshUsers: () => void refreshUsers(),
@@ -2098,7 +2232,6 @@ export function AdminAccessDialog({
                   theme,
                   panelClass: tabPanelToneClass('active'),
                   cardClass: tabCardToneClass('active'),
-                  titleClass: tabTitleToneClass('active'),
                     activeLoading,
                       activeCounts,
                       activeUsersRows: activeSessions,
@@ -2122,6 +2255,7 @@ export function AdminAccessDialog({
                   activityRows,
                   activityPage,
                   activityTotalPages,
+                  activitySummary,
                   activitySearch,
                   activitySortBy,
                   activitySortDir,
@@ -2281,13 +2415,96 @@ export function AdminAccessDialog({
                 />
               )}
 
+              {tab === 'tier_config' && (
+                <AdminPageScaffold
+                  panelClass={tabPanelToneClass('tier_config')}
+                  title="Tier Config"
+                  description="Configure account pricing cards, installer pricing cards, capability limits, feature gates, mobile video, checklist rows, and included tools by version."
+                  actions={(
+                    <>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="success"
+                        className="rounded-[14px]"
+                        disabled={currentTierConfigState.saving || currentTierConfigState.loading || !currentTierConfigState.dirty}
+                        onClick={() => setTierConfigSaveSignal((value) => value + 1)}
+                      >
+                        {currentTierConfigState.saving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}
+                        {currentTierConfigState.saving ? 'Saving...' : 'Save Changes'}
+                      </Button>
+                      <AdminRefreshButton
+                        loading={currentTierConfigState.loading}
+                        disabled={currentTierConfigState.saving}
+                        onClick={() => setTierConfigRefreshSignal((value) => value + 1)}
+                      />
+                    </>
+                  )}
+                  stickySave={{
+                    dirty: currentTierConfigState.dirty,
+                    saving: currentTierConfigState.saving,
+                    disabled: currentTierConfigState.saving || currentTierConfigState.loading,
+                    label: 'Save Changes',
+                    savingLabel: 'Saving...',
+                    onSave: () => setTierConfigSaveSignal((value) => value + 1),
+                  }}
+                  controls={tierConfigVersionTabs}
+                >
+                  {tierConfigVersion === 'V1' ? (
+                    <AdminAccountUpgradesTab
+                      mode="tiers"
+                      embedded
+                      panelClass={tabPanelToneClass('tier_config')}
+                      cardClass={tabCardToneClass('tier_config')}
+                      theme={theme}
+                      externalSaveSignal={tierConfigSaveSignal}
+                      externalRefreshSignal={tierConfigRefreshSignal}
+                      onTierConfigStateChange={(state) => updateTierConfigControllerState('V1', state)}
+                      pushNotice={(kind, message) => pushNotice({ variant: kind, message })}
+                    />
+                  ) : (
+                    <AdminAccessInstallerTab
+                      mode="tier-config"
+                      tierConfigVersion={tierConfigVersion}
+                      embedded
+                      theme={theme}
+                      panelClass={tabPanelToneClass('tier_config')}
+                      externalSaveSignal={tierConfigSaveSignal}
+                      externalRefreshSignal={tierConfigRefreshSignal}
+                      onTierConfigStateChange={(state) => updateTierConfigControllerState(tierConfigVersion, state)}
+                      pushNotice={pushNotice}
+                    />
+                  )}
+                </AdminPageScaffold>
+              )}
+
               {tab === 'account_upgrades' && (
                 <AdminAccountUpgradesTab
+                  mode="vouchers"
                   panelClass={tabPanelToneClass('account_upgrades')}
                   cardClass={tabCardToneClass('account_upgrades')}
+                  theme={theme}
                   pushNotice={(kind, message) => pushNotice({ variant: kind, message })}
                 />
               )}
+
+              <ConfirmationDialog
+                open={pendingTierConfigVersion !== null}
+                onOpenChange={(nextOpen) => {
+                  if (!nextOpen) setPendingTierConfigVersion(null);
+                }}
+                title="Switch version without saving?"
+                description="The current tier edits are not saved yet. Switching versions can discard unsaved local edits."
+                confirmText="Switch Version"
+                cancelText="Stay Here"
+                theme={theme}
+                onConfirm={() => {
+                  if (pendingTierConfigVersion) {
+                    setTierConfigVersion(pendingTierConfigVersion);
+                  }
+                  setPendingTierConfigVersion(null);
+                }}
+              />
 
               {tab === 'crash_reports' && (
                 <CrashReportsTab
@@ -2486,6 +2703,7 @@ export function AdminAccessDialog({
                   onReset={resetStorePromotionForm}
                   onSave={persistStorePromotion}
                   onDelete={(promotionId) => void deleteStorePromotion(promotionId)}
+                  onReload={loadStorePromotions}
                 />
               )}
 
@@ -2519,6 +2737,7 @@ export function AdminAccessDialog({
                   onResetBanner={resetBannerDraft}
                   onSaveBanner={(banner) => void handleSaveStoreBanner(banner)}
                   onDeleteBanner={(banner) => void handleDeleteStoreBanner(banner)}
+                  onReload={loadStoreCatalog}
                 />
               )}
 
@@ -2579,22 +2798,29 @@ export function AdminAccessDialog({
                   </span>
                   <div className="opacity-75 mt-0.5">{activeTab.hint}</div>
                 </div>
-                <div className="space-y-2 overflow-auto max-h-[calc(100vh-120px)] pr-1">
-                  {navTabs.map((t) => (
-                    <Button
-                      key={`mobile-${t.key}`}
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className={tabButtonClass(t.key)}
-                      onClick={() => {
-                        setTab(t.key);
-                        setIsNavOpen(false);
-                      }}
-                    >
-                      <AdminNavIcon icon={t.icon} />
-                      <span className="truncate">{t.label}</span>
-                    </Button>
+                <div className="space-y-4 overflow-auto max-h-[calc(100vh-120px)] pr-1">
+                  {navGroups.map((group) => (
+                    <div key={`mobile-group-${group.label}`} className="space-y-1.5">
+                      <div className="px-1 text-[10px] font-black uppercase tracking-[0.18em] opacity-55">{group.label}</div>
+                      <div className="space-y-1.5">
+                        {group.tabs.map((t) => (
+                          <Button
+                            key={`mobile-${t.key}`}
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className={tabButtonClass(t.key)}
+                            onClick={() => {
+                              setTab(t.key);
+                              setIsNavOpen(false);
+                            }}
+                          >
+                            <AdminNavIcon icon={t.icon} />
+                            <span className="truncate">{t.label}</span>
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>

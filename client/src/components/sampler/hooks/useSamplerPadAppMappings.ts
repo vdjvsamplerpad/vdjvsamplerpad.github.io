@@ -145,7 +145,7 @@ export function useSamplerPadAppMappings({
   }, [setSettings]);
 
   const applyChannelCountChange = React.useCallback((nextCount: number) => {
-    const safeCount = Math.max(2, Math.min(8, Math.floor(nextCount || 4)));
+    const safeCount = Math.max(1, Math.min(8, Math.floor(nextCount || 4)));
     setSettings((prev) => ({
       ...prev,
       channelCount: safeCount,
@@ -158,8 +158,8 @@ export function useSamplerPadAppMappings({
   }, [playbackManager, setSettings]);
 
   const handleChannelCountChange = React.useCallback((nextCount: number) => {
-    const safeCount = Math.max(2, Math.min(8, Math.floor(nextCount || 4)));
-    const previousCount = Math.max(2, Math.min(8, Math.floor(settings.channelCount || 4)));
+    const safeCount = Math.max(1, Math.min(8, Math.floor(nextCount || 4)));
+    const previousCount = Math.max(1, Math.min(8, Math.floor(settings.channelCount || 4)));
     if (safeCount === previousCount) return;
     if (safeCount < previousCount) {
       const removedHasPlayingDeck = playbackManager

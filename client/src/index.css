@@ -99,6 +99,12 @@
     @apply border-border;
   }
 
+  html,
+  body,
+  #root {
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  }
+
   body {
     @apply bg-background text-foreground;
     overscroll-behavior-x: none;
@@ -108,6 +114,13 @@
       radial-gradient(circle at 12% 0%, hsl(var(--vdjv-brand) / 0.12), transparent 28rem),
       radial-gradient(circle at 88% 8%, hsl(var(--vdjv-info) / 0.08), transparent 26rem),
       hsl(var(--background));
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
   }
 
   /* Prevent long-press text selection across the app */
@@ -544,6 +557,45 @@
       0 0 0 30px rgb(var(--sampler-search-spotlight-rgb, 239 23 79) / 0),
       0 0 0 0 rgb(255 255 255 / 0);
   }
+}
+
+@keyframes vdjv-stop-ring-deprogress {
+  from {
+    stroke-dashoffset: 0;
+  }
+
+  to {
+    stroke-dashoffset: 1;
+  }
+}
+
+@keyframes vdjv-stop-bar-deprogress {
+  from {
+    transform: scaleX(1);
+  }
+
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.vdjv-stop-ring-deprogress {
+  animation-name: vdjv-stop-ring-deprogress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+  filter:
+    drop-shadow(0 0 5px rgba(185, 255, 18, 0.95))
+    drop-shadow(0 0 14px rgba(185, 255, 18, 0.55));
+}
+
+.vdjv-stop-bar-deprogress {
+  animation-name: vdjv-stop-bar-deprogress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+  transform-origin: left center;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24),
+    0 0 16px rgba(185, 255, 18, 0.45);
 }
 
 .pad-shake {

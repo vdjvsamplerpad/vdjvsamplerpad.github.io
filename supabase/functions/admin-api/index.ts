@@ -479,6 +479,15 @@ const buildDefaultBankUploadTarget = (version: number, assetName: string): R2Upl
   };
 };
 
+const buildAccountTierVideoUploadTarget = (tier: StoredAccountTier, assetName: string): R2UploadTarget => {
+  const safeAssetName = String(assetName || "").replace(/^\/+/, "").replace(/[^a-zA-Z0-9._-]+/g, "_").trim();
+  return {
+    bucket: R2_BUCKET || "",
+    objectKey: `account-tiers/${tier}/${Date.now()}-${crypto.randomUUID()}-${safeAssetName}`,
+    assetName: safeAssetName,
+  };
+};
+
 const DEFAULT_BANK_RELEASE_UPLOAD_SCOPE = "admin_catalog" as const;
 
 const isDefaultBankReleaseUploadScope = (scope: string | null | undefined): boolean =>
@@ -3645,14 +3654,85 @@ const listAccountTierConfigs = async (admin: ReturnType<typeof createServiceClie
   return ok({ tiers: data || [] });
 };
 
+const TIER_LIMIT_KEY_ALIASES: Record<string, string> = {
+  defaultBankDailyPlays: "default_bank_daily_plays",
+  ownedBankQuota: "owned_bank_quota",
+  ownedBankPadCap: "owned_bank_pad_cap",
+  deviceTotalBankCap: "device_total_bank_cap",
+  deckCount: "deck_count",
+};
+
+const TIER_FEATURE_KEY_ALIASES: Record<string, string> = {
+  bankStoreBrowse: "bank_store_browse",
+  bankStoreCheckout: "bank_store_checkout",
+  bankStoreDownload: "bank_store_download",
+  bankStoreFreeClaim: "bank_store_free_claim",
+  bankStoreAllAccess: "bank_store_all_access",
+  inputMapping: "input_mapping",
+  systemShortcuts: "system_shortcuts",
+  channelShortcuts: "channel_shortcuts",
+  mappingImportExport: "mapping_import_export",
+  backupRepair: "backup_repair",
+  advancedStopModes: "advanced_stop_modes",
+  mixerHotcue: "mixer_hotcue",
+  padEditGroup: "pad_edit_group",
+  padEditTempo: "pad_edit_tempo",
+  padEditKeyboardMidi: "pad_edit_keyboard_midi",
+  padEditHotcue: "pad_edit_hotcue",
+  padEditFades: "pad_edit_fades",
+  bankEditPosition: "bank_edit_position",
+  bankEditKeyboardMidi: "bank_edit_keyboard_midi",
+  storeDemoBanks: "store_demo_banks",
+  ownBankUnlimitedPlay: "own_bank_unlimited_play",
+};
+
+const readConfigValue = (input: Record<string, unknown>, camelKey: string, snakeKey: string): unknown =>
+  input[camelKey] ?? input[snakeKey];
+
+const normalizeTierConfigLimits = (value: unknown): Record<string, unknown> => {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const next: Record<string, unknown> = {};
+  for (const [camelKey, snakeKey] of Object.entries(TIER_LIMIT_KEY_ALIASES)) {
+    const raw = readConfigValue(input, camelKey, snakeKey);
+    if (raw === undefined) continue;
+    if (raw === null && snakeKey === "default_bank_daily_plays") {
+      next[snakeKey] = null;
+      continue;
+    }
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) next[snakeKey] = Math.floor(parsed);
+  }
+  const promoRaw = input.pricePromoDiscountPercent ?? input.price_promo_discount_percent;
+  const promoParsed = Number(promoRaw);
+  if (Number.isFinite(promoParsed)) {
+    next.price_promo_discount_percent = Math.min(90, Math.max(0, Math.round(promoParsed)));
+  }
+  return next;
+};
+
+const normalizeTierConfigFeatures = (value: unknown): Record<string, boolean> => {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const next: Record<string, boolean> = {};
+  for (const [camelKey, snakeKey] of Object.entries(TIER_FEATURE_KEY_ALIASES)) {
+    next[snakeKey] = readConfigValue(input, camelKey, snakeKey) === true;
+  }
+  next.search = input.search === true;
+  return next;
+};
+
 const saveAccountTierConfig = async (body: any, admin: ReturnType<typeof createServiceClient>, adminUserId: string) => {
   const tier = normalizeProfileTier(body?.tier);
   if (!tier) return badRequest("tier is required");
   const displayName = asString(body?.displayName ?? body?.display_name, 80) || tier.toUpperCase();
   const description = asString(body?.description, 500);
   const pricePhp = normalizeTierPrice(body?.pricePhp ?? body?.price_php);
-  const limits = body?.limits && typeof body.limits === "object" && !Array.isArray(body.limits) ? body.limits : {};
-  const features = body?.features && typeof body.features === "object" && !Array.isArray(body.features) ? body.features : {};
+  const limits = normalizeTierConfigLimits(body?.limits);
+  const features = normalizeTierConfigFeatures(body?.features);
+  const uiContent = body?.uiContent && typeof body.uiContent === "object" && !Array.isArray(body.uiContent)
+    ? body.uiContent
+    : body?.ui_content && typeof body.ui_content === "object" && !Array.isArray(body.ui_content)
+      ? body.ui_content
+      : {};
   const { data, error } = await admin
     .from("account_tier_configs")
     .upsert({
@@ -3662,6 +3742,7 @@ const saveAccountTierConfig = async (body: any, admin: ReturnType<typeof createS
       price_php: pricePhp,
       limits,
       features,
+      ui_content: uiContent,
       is_active: body?.isActive ?? body?.is_active ?? true,
       updated_by: adminUserId,
       updated_at: new Date().toISOString(),
@@ -3670,6 +3751,138 @@ const saveAccountTierConfig = async (body: any, admin: ReturnType<typeof createS
     .single();
   if (error || !data) return fail(500, error?.message || "Tier config could not be saved");
   return ok({ tier: data });
+};
+
+const ACCOUNT_TIER_VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "m4v"]);
+const ACCOUNT_TIER_VIDEO_MIME_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime", "video/x-m4v"]);
+const ACCOUNT_TIER_VIDEO_MAX_BYTES = 512 * 1024 * 1024;
+
+const getExtensionFromFileName = (fileName: string | null | undefined): string => {
+  const match = String(fileName || "").toLowerCase().match(/\.([a-z0-9]+)$/);
+  return match?.[1] || "";
+};
+
+const createAccountTierVideoUploadUrl = async (
+  body: any,
+  _admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const tier = normalizeProfileTier(body?.tier);
+  if (!tier) return badRequest("tier is required");
+  const fileName = asString(body?.fileName ?? body?.file_name, 240);
+  const contentType = asString(body?.contentType ?? body?.content_type, 160)?.toLowerCase() || "application/octet-stream";
+  const fileSize = Math.floor(Number(body?.sizeBytes ?? body?.size_bytes ?? 0));
+  if (!fileName) return badRequest("fileName is required");
+  const ext = getExtensionFromFileName(fileName);
+  if (!ACCOUNT_TIER_VIDEO_EXTENSIONS.has(ext)) return badRequest("Unsupported tier video extension");
+  if (contentType !== "application/octet-stream" && !ACCOUNT_TIER_VIDEO_MIME_TYPES.has(contentType)) {
+    return badRequest("Unsupported tier video mime type");
+  }
+  if (!Number.isFinite(fileSize) || fileSize <= 0) return badRequest("sizeBytes is required");
+  if (fileSize > ACCOUNT_TIER_VIDEO_MAX_BYTES) return fail(413, "TIER_VIDEO_TOO_LARGE", { max_bytes: ACCOUNT_TIER_VIDEO_MAX_BYTES });
+  const r2Error = ensureR2UploadReady();
+  if (r2Error) return fail(500, r2Error);
+
+  const target = buildAccountTierVideoUploadTarget(tier, fileName);
+  const sessionExpiresMs = Date.now() + R2_DIRECT_UPLOAD_SESSION_TTL_SECONDS * 1000;
+  const uploadTtlSeconds = Math.max(
+    60,
+    Math.min(R2_UPLOAD_URL_TTL_SECONDS, Math.floor((sessionExpiresMs - Date.now()) / 1000)),
+  );
+  const session = await createR2DirectUploadSession({
+    scope: "admin_catalog",
+    actorUserId: adminUserId,
+    storageBucket: target.bucket,
+    storageKey: target.objectKey,
+    expectedFileSizeBytes: fileSize,
+    expiresAtIso: new Date(sessionExpiresMs).toISOString(),
+    meta: {
+      source: "account-tier-video",
+      tier,
+      contentType,
+    },
+  });
+  const upload = await createPresignedPutUrl(target.bucket, target.objectKey, uploadTtlSeconds, contentType);
+  return ok({
+    mode: "r2_direct",
+    sessionId: session.id,
+    assetName: target.assetName,
+    fileSize,
+    uploadUrl: upload.url,
+    uploadMethod: "PUT",
+    uploadHeaders: upload.headers,
+    bucket: target.bucket,
+    objectKey: target.objectKey,
+    urlExpiresAt: upload.expiresAt,
+  });
+};
+
+const completeAccountTierVideoUpload = async (
+  body: any,
+  _admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const tier = normalizeProfileTier(body?.tier);
+  if (!tier) return badRequest("tier is required");
+  const sessionId = asUuid(body?.sessionId || body?.session_id);
+  const status = asString(body?.status, 40);
+  const failureReason = asString(body?.failureReason || body?.failure_reason, 2000);
+  if (!sessionId) return badRequest("Missing or invalid sessionId");
+  if (status !== "success" && status !== "failed") return badRequest("Missing or invalid status");
+  const session = await readR2DirectUploadSession(sessionId);
+  if (!session || session.actorUserId !== adminUserId || session.scope !== "admin_catalog") {
+    return fail(404, "SESSION_NOT_FOUND");
+  }
+  const source = asString((session.meta as Record<string, unknown>)?.source, 80);
+  const metaTier = normalizeProfileTier((session.meta as Record<string, unknown>)?.tier);
+  if (source !== "account-tier-video" || metaTier !== tier) return badRequest("SESSION_TARGET_MISMATCH");
+  const mapFinalizeError = (code: string) => {
+    if (code === "SESSION_EXPIRED") return fail(410, code);
+    if (code === "SESSION_ALREADY_USED") return fail(409, code);
+    if (code === "SESSION_SCOPE_MISMATCH") return fail(400, code);
+    return fail(404, code);
+  };
+  if (status === "failed") {
+    const finalized = await finalizeR2DirectUploadSession({
+      sessionId: session.id,
+      actorUserId: adminUserId,
+      scope: "admin_catalog",
+      nextStatus: "failed",
+      failureReason: failureReason || "upload_failed",
+    });
+    if (!finalized.ok) return mapFinalizeError(finalized.code);
+    return ok({ sessionId: session.id, status: "failed" });
+  }
+  let objectInfo: Awaited<ReturnType<typeof headObject>>;
+  try {
+    objectInfo = await headObject(session.storageBucket, session.storageKey);
+  } catch (error) {
+    return fail(502, error instanceof Error ? error.message : "R2_VERIFY_FAILED");
+  }
+  if (!objectInfo) return fail(404, "ASSET_NOT_FOUND");
+  const actualSize = Number(objectInfo.sizeBytes || 0);
+  if (actualSize <= 0 || actualSize !== Number(session.expectedFileSizeBytes || 0)) {
+    return fail(409, "ASSET_SIZE_MISMATCH", { expected: session.expectedFileSizeBytes, actual: actualSize });
+  }
+  const finalized = await finalizeR2DirectUploadSession({
+    sessionId: session.id,
+    actorUserId: adminUserId,
+    scope: "admin_catalog",
+    nextStatus: "completed",
+  });
+  if (!finalized.ok) return mapFinalizeError(finalized.code);
+  return ok({
+    sessionId: session.id,
+    status: "success",
+    video: {
+      storageProvider: "r2",
+      storageBucket: session.storageBucket,
+      storageKey: session.storageKey,
+      assetName: getAssetNameFromStorageKey(session.storageKey),
+      fileSizeBytes: actualSize,
+      etag: objectInfo.etag,
+    },
+  });
 };
 
 const listAccountUpgradeRequests = async (req: Request, admin: ReturnType<typeof createServiceClient>) => {
@@ -4039,6 +4252,14 @@ Deno.serve(async (req) => {
 
     if (route.section === "account-tiers" && route.id === "save") {
       return await saveAccountTierConfig(body, admin, adminCheck.userId);
+    }
+
+    if (route.section === "account-tiers" && route.id === "video-upload-url") {
+      return await createAccountTierVideoUploadUrl(body, admin, adminCheck.userId);
+    }
+
+    if (route.section === "account-tiers" && route.id === "video-upload-complete") {
+      return await completeAccountTierVideoUpload(body, admin, adminCheck.userId);
     }
 
     if (route.section === "account-upgrades" && route.id && route.action === "decision") {

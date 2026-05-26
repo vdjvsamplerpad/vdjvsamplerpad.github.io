@@ -19,8 +19,20 @@ export type SamplerSystemAction =
 
 export type SamplerGraphicsProfile = "auto" | "lowest" | "low" | "medium" | "high";
 export type SamplerStopMode = "instant" | "fadeout" | "brake" | "backspin" | "filter";
+export type SamplerStopTimingOverridesMs = Partial<Record<SamplerStopMode, number>>;
+type ConfigurableSamplerStopTimingMode = Exclude<SamplerStopMode, "instant">;
 export type SamplerTriggerMode = "toggle" | "hold" | "stutter" | "unmute";
 export type SamplerPlaybackMode = "once" | "loop" | "stopper";
+
+const STOP_TIMING_RANGES: Record<SamplerStopMode, { minMs: number; maxMs: number }> = {
+  instant: { minMs: 10, maxMs: 40 },
+  fadeout: { minMs: 250, maxMs: 3000 },
+  brake: { minMs: 450, maxMs: 3000 },
+  backspin: { minMs: 350, maxMs: 2200 },
+  filter: { minMs: 400, maxMs: 3000 },
+};
+
+const CONFIGURABLE_STOP_TIMING_MODES: ConfigurableSamplerStopTimingMode[] = ["fadeout", "brake", "backspin", "filter"];
 
 const DEFAULT_SHORTCUTS: Record<SamplerSystemAction, string> = {
   stopAll: "Space",
@@ -48,6 +60,7 @@ export const DEFAULT_SAMPLER_APP_CONFIG = {
     defaultChannelCountDesktop: 4,
     defaultMasterVolume: 1,
     defaultStopMode: "instant" as SamplerStopMode,
+    defaultStopTimingOverrides: {} as SamplerStopTimingOverridesMs,
     defaultSidePanelMode: "overlay" as "overlay" | "reflow",
     defaultKeyboardMappingEnabled: false,
     defaultHideShortcutLabels: true,
@@ -105,6 +118,18 @@ const normalizeGraphicsProfile = (value: unknown): SamplerGraphicsProfile => {
 const normalizeStopMode = (value: unknown): SamplerStopMode => {
   if (value === "fadeout" || value === "brake" || value === "backspin" || value === "filter") return value;
   return "instant";
+};
+
+const normalizeStopTimingOverrides = (value: unknown): SamplerStopTimingOverridesMs => {
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const next: SamplerStopTimingOverridesMs = {};
+  CONFIGURABLE_STOP_TIMING_MODES.forEach((mode) => {
+    const numeric = Number(raw[mode]);
+    if (!Number.isFinite(numeric)) return;
+    const range = STOP_TIMING_RANGES[mode];
+    next[mode] = Math.max(range.minMs, Math.min(range.maxMs, Math.round(numeric)));
+  });
+  return next;
 };
 
 const normalizeTriggerMode = (value: unknown): SamplerTriggerMode => {
@@ -176,6 +201,9 @@ export const normalizeSamplerAppConfig = (value: unknown) => {
         1,
       ),
       defaultStopMode: normalizeStopMode(uiRaw.defaultStopMode),
+      defaultStopTimingOverrides: normalizeStopTimingOverrides(
+        uiRaw.defaultStopTimingOverrides || uiRaw.default_stop_timing_overrides,
+      ),
       defaultSidePanelMode: uiRaw.defaultSidePanelMode === "reflow" ? "reflow" : "overlay",
       defaultKeyboardMappingEnabled: normalizeBoolean(
         uiRaw.defaultKeyboardMappingEnabled,

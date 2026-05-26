@@ -334,6 +334,7 @@ export function SideMenu({
   const { user, profile, capabilities } = useAuthState();
   const isAdmin = profile?.role === 'admin';
   const isFreeTier = capabilities.effectiveTier === 'free';
+  const canBrowseBankStore = isAdmin || capabilities.features.bankStoreBrowse;
   const pendingAdminUploadCount = adminExportUploadQueueSummary?.pendingCount || 0;
   const nextAdminUploadRetryLabel = React.useMemo(() => {
     const nextRetryAt = adminExportUploadQueueSummary?.nextRetryAt || null;
@@ -399,6 +400,16 @@ export function SideMenu({
     window.dispatchEvent(new CustomEvent('vdjv-open-upgrade', { detail: { reason } }));
   }, []);
   const effectiveUser = user || getCachedUser();
+  const isProAccount = capabilities.effectiveTier === 'pro';
+  const showProMaxUpgradeCta = Boolean(effectiveUser && !isAdmin && isProAccount);
+  const ownedBankQuotaLimit = Number(capabilities.limits.ownedBankQuota);
+  const showProMaxBankLimitCta = showProMaxUpgradeCta
+    && Number.isFinite(ownedBankQuotaLimit)
+    && ownedBankQuotaLimit > 0
+    && banks.length >= Math.max(1, ownedBankQuotaLimit - 1);
+  const openProMaxUpgrade = React.useCallback((reason: string) => {
+    requestUpgradePrompt(reason);
+  }, [requestUpgradePrompt]);
   const hiddenPreviewStorageKey = React.useMemo(
     () => `${HIDDEN_STORE_PREVIEW_BANKS_KEY_PREFIX}${profile?.id || effectiveUser?.id || 'guest'}`,
     [effectiveUser?.id, profile?.id]
@@ -429,7 +440,7 @@ export function SideMenu({
   const { storePreviewItems, showStoreNewBadge, markStorePreviewSeen } = useStorePreviewBadge({
     effectiveUser: user,
     profileId: profile?.id,
-    showSignedInPreviewBanks: isFreeTier && capabilities.features.storeDemoBanks,
+    showSignedInPreviewBanks: canBrowseBankStore && isFreeTier && capabilities.features.storeDemoBanks,
   });
   const displayName = profile?.display_name?.trim() || effectiveUser?.email?.split('@')[0] || 'Guest';
   const accountTierLabel = capabilities.effectiveTier === 'pro_max'
@@ -440,7 +451,7 @@ export function SideMenu({
   const panelClass = cn(
     'fixed inset-y-0 left-0 z-50 flex h-[100dvh] w-64 flex-col border-r transition-transform duration-200 will-change-transform',
     theme === 'dark' ? 'border-slate-800 bg-slate-950 text-slate-100' : 'border-slate-200 bg-white text-slate-900',
-    open ? 'translate-x-0' : '-translate-x-full',
+    open ? 'translate-x-0 pointer-events-auto' : '-translate-x-full pointer-events-none',
     !isLowestGraphics && 'perf-high:shadow-2xl',
   );
   const menuButtonClass = 'min-w-0 px-2 sm:px-3 text-[13px] sm:text-sm gap-0 transition-all duration-200';
@@ -452,6 +463,12 @@ export function SideMenu({
     if (!showStoreDialog) return;
     markStorePreviewSeen();
   }, [markStorePreviewSeen, showStoreDialog]);
+
+  React.useEffect(() => {
+    if (!canBrowseBankStore && showStoreDialog) {
+      setShowStoreDialog(false);
+    }
+  }, [canBrowseBankStore, showStoreDialog]);
 
   const mergeOfficialPadAssets = React.useCallback((targetPad: PadData, sourcePad: PadData): PadData => ({
     ...targetPad,
@@ -1083,6 +1100,21 @@ export function SideMenu({
             <div className={`text-[11px] truncate ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
               {accountIdentityLabel}
             </div>
+            {showProMaxUpgradeCta && (
+              <button
+                type="button"
+                onClick={() => openProMaxUpgrade('Upgrade to PRO MAX for higher owned-bank limits and expanded Store access.')}
+                className={cn(
+                  'mt-1 inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide transition',
+                  theme === 'dark'
+                    ? 'border-amber-300/30 bg-amber-300/10 text-amber-100 hover:bg-amber-300/15'
+                    : 'border-amber-300 bg-amber-50 text-amber-950 hover:bg-amber-100',
+                )}
+              >
+                <Crown className="h-3 w-3 shrink-0" />
+                <span className="truncate">Upgrade to PRO MAX</span>
+              </button>
+            )}
           </div>
           <Button
             variant="ghost"
@@ -1118,7 +1150,35 @@ export function SideMenu({
 
         {renderContent && (
           <div className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto p-2 pb-6">
-            <div className="grid grid-cols-2 gap-2 mb-2">
+            {showProMaxBankLimitCta && (
+              <button
+                type="button"
+                onClick={() => openProMaxUpgrade('You are near your PRO owned-bank quota. Upgrade to PRO MAX for more room.')}
+                className={cn(
+                  'mb-2 flex w-full items-center gap-2 rounded-lg border p-2 text-left transition',
+                  theme === 'dark'
+                    ? 'border-amber-300/25 bg-amber-300/10 text-amber-50 hover:bg-amber-300/15'
+                    : 'border-amber-200 bg-amber-50 text-amber-950 hover:bg-amber-100',
+                )}
+              >
+                <span className={cn(
+                  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
+                  theme === 'dark' ? 'bg-amber-300/15 text-amber-200' : 'bg-amber-200/70 text-amber-900',
+                )}>
+                  <Crown className="h-4 w-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-black uppercase tracking-wide">Need more bank room?</span>
+                  <span className={cn(
+                    'block truncate text-[11px]',
+                    theme === 'dark' ? 'text-amber-100/80' : 'text-amber-900/70',
+                  )}>
+                    PRO MAX raises your owned-bank limit.
+                  </span>
+                </span>
+              </button>
+            )}
+            <div className={`grid gap-2 mb-2 ${canBrowseBankStore ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <Button
                 onClick={() => setShowCreateDialog(true)}
                 className={cn(menuButtonClass, 'vdjv-primary-action')}
@@ -1126,10 +1186,11 @@ export function SideMenu({
                 <Plus className="w-4 h-4 mr-1.5 shrink-0" />
                 <span className="truncate">New Bank</span>
               </Button>
-              <div
-                className={`relative min-w-0 overflow-visible ${showEnhancedStoreButton ? 'isolate rounded-xl' : ''}`}
-              >
-                {showEnhancedStoreButton && (
+              {canBrowseBankStore && (
+                <div
+                  className={`relative min-w-0 overflow-visible ${showEnhancedStoreButton ? 'isolate rounded-xl' : ''}`}
+                >
+                  {showEnhancedStoreButton && (
                   <div
                     aria-hidden="true"
                     className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl"
@@ -1153,29 +1214,29 @@ export function SideMenu({
                       />
                     ))}
                   </div>
-                )}
-                {showStoreNewBadge && (
-                  <span
-                    className={`pointer-events-none absolute -top-2 -right-2 z-[3] inline-flex h-5 min-w-[2.1rem] items-center justify-center rounded-full border px-1.5 text-[10px] font-bold uppercase tracking-[0.14em] shadow-sm ${
-                      theme === 'dark'
-                        ? 'border-rose-300/70 bg-rose-500 text-white'
-                        : 'border-rose-200 bg-rose-500 text-white'
-                    }`}
-                    title="There are newly published banks in the store."
+                  )}
+                  {showStoreNewBadge && (
+                    <span
+                      className={`pointer-events-none absolute -top-2 -right-2 z-[3] inline-flex h-5 min-w-[2.1rem] items-center justify-center rounded-full border px-1.5 text-[10px] font-bold uppercase tracking-[0.14em] shadow-sm ${
+                        theme === 'dark'
+                          ? 'border-rose-300/70 bg-rose-500 text-white'
+                          : 'border-rose-200 bg-rose-500 text-white'
+                      }`}
+                      title="There are newly published banks in the store."
+                    >
+                      New
+                    </span>
+                  )}
+                  <Button
+                    onClick={() => {
+                      markStorePreviewSeen();
+                      setShowStoreDialog(true);
+                    }}
+                    variant="success"
+                    className={cn(menuButtonClass, 'relative w-full overflow-hidden transition-colors', showEnhancedStoreButton ? 'shadow-[0_0_14px_hsl(var(--vdjv-good)/0.3)]' : '')}
+                    style={storeButtonMotionStyle}
                   >
-                    New
-                  </span>
-                )}
-                <Button
-                  onClick={() => {
-                    markStorePreviewSeen();
-                    setShowStoreDialog(true);
-                  }}
-                  variant="success"
-                  className={cn(menuButtonClass, 'relative w-full overflow-hidden transition-colors', showEnhancedStoreButton ? 'shadow-[0_0_14px_hsl(var(--vdjv-good)/0.3)]' : '')}
-                  style={storeButtonMotionStyle}
-                >
-                  {showEnhancedStoreButton && (
+                    {showEnhancedStoreButton && (
                     <>
                       <span
                         aria-hidden="true"
@@ -1193,11 +1254,12 @@ export function SideMenu({
                         style={{ animation: 'vdjv-store-shimmer 2.2s ease-in-out infinite' }}
                       />
                     </>
-                  )}
-                  <ShoppingCart className="relative z-[1] w-4 h-4 mr-1.5 shrink-0" style={storeIconMotionStyle} />
-                  <span className="relative z-[1] truncate">Bank Store</span>
-                </Button>
-              </div>
+                    )}
+                    <ShoppingCart className="relative z-[1] w-4 h-4 mr-1.5 shrink-0" style={storeIconMotionStyle} />
+                    <span className="relative z-[1] truncate">Bank Store</span>
+                  </Button>
+                </div>
+              )}
             </div>
 
             {editMode && (

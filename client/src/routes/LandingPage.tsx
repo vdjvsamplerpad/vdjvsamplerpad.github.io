@@ -6,17 +6,24 @@ import {
   normalizeLandingDownloadConfig,
   type LandingDownloadConfig,
   type PlatformKey,
+  type LandingSocialKey,
   type VersionKey,
 } from '@/components/landing/download-config';
 import { VersionSelector } from '@/components/landing/VersionSelector';
 import { usePerformanceTier } from '@/hooks/usePerformanceTier';
 import { edgeFunctionUrl } from '@/lib/edge-api';
-import { getBuyPagePath, getLandingPagePath } from '@/lib/runtime-routes';
-import { Download, Monitor, Smartphone } from 'lucide-react';
+import { getBuyPagePath, getInstallerRedirectPath, getLandingPagePath, getPrivacyPagePath, getTermsPagePath } from '@/lib/runtime-routes';
+import { Download, Facebook, Instagram, Monitor, Smartphone, Youtube } from 'lucide-react';
 
 const FRAME_COUNT = 97;
 const REVEAL_THRESHOLD = 0.92;
 const LANDING_CONFIG_CACHE_KEY = 'vdjv-landing-config-v1';
+const LANDING_FOOTER_PLACEHOLDERS = ['About', 'Features', 'Blog'] as const;
+const LANDING_SOCIAL_ORDER: Array<{ key: LandingSocialKey; accent: string; Icon: React.ElementType }> = [
+  { key: 'facebook', Icon: Facebook, accent: 'hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700' },
+  { key: 'instagram', Icon: Instagram, accent: 'hover:border-fuchsia-200 hover:bg-fuchsia-50 hover:text-fuchsia-700' },
+  { key: 'youtube', Icon: Youtube, accent: 'hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700' },
+];
 
 const platformGroups: Array<{
   sideClass: string;
@@ -113,9 +120,18 @@ export default function LandingPage() {
   const revealVisible = revealOverride || progress >= REVEAL_THRESHOLD;
   const landingPagePath = React.useMemo(() => getLandingPagePath(), []);
   const buyPagePath = React.useMemo(() => getBuyPagePath(), []);
+  const privacyPagePath = React.useMemo(() => getPrivacyPagePath(), []);
+  const termsPagePath = React.useMemo(() => getTermsPagePath(), []);
   const activeLinks = landingConfig.downloadLinks[version];
   const activePlatformDescriptions = landingConfig.platformDescriptions[version];
   const activeVersionDescription = landingConfig.versionDescriptions[version];
+  const footerSocialLinks = React.useMemo(
+    () => LANDING_SOCIAL_ORDER.map((entry) => ({
+      ...entry,
+      ...landingConfig.socialLinks[entry.key],
+    })),
+    [landingConfig.socialLinks],
+  );
   const redirectRequest = React.useMemo(() => {
     if (typeof window === 'undefined') return null;
     const params = new URLSearchParams(window.location.search);
@@ -240,7 +256,7 @@ export default function LandingPage() {
           to={buyPagePath}
           className="inline-flex items-center rounded-full border border-amber-300 bg-amber-400 px-4 py-2 text-xs font-semibold tracking-[0.2em] text-slate-950 shadow-[0_16px_36px_rgba(251,191,36,0.22)] transition hover:bg-amber-300"
         >
-          BUY VDJV
+          PRICING
         </Link>
       </header>
 
@@ -292,9 +308,7 @@ export default function LandingPage() {
                         <a
                           key={item.key}
                           className="lp-platform-link"
-                          href={activeLinks[item.key] || '#'}
-                          target="_blank"
-                          rel="noreferrer"
+                          href={getInstallerRedirectPath(version, item.key)}
                           title={activePlatformDescriptions[item.key]}
                           aria-label={`${item.label} ${version}`}
                         >
@@ -314,7 +328,7 @@ export default function LandingPage() {
                   to={`${buyPagePath}?version=${version}`}
                   className="inline-flex w-full items-center justify-center rounded-full bg-amber-400 px-5 py-3 text-sm font-black tracking-[0.18em] text-slate-950 shadow-[0_18px_40px_rgba(251,191,36,0.28)] transition hover:translate-y-[-1px] hover:bg-amber-300"
                 >
-                  {version === 'V1' ? 'CREATE V1 ACCOUNT' : 'BUY VDJV LICENSE'}
+                  VIEW PRICING
                 </Link>
               </div>
             </div>
@@ -328,6 +342,44 @@ export default function LandingPage() {
           <p>{activeVersionDescription.desc}</p>
         </div>
       </section>
+
+      <footer className="mx-auto max-w-6xl px-5 pb-10 pt-6">
+        <div className="overflow-hidden rounded-[24px] border border-slate-200 bg-white/95 px-6 py-5 shadow-[0_24px_60px_rgba(15,23,42,0.08)] sm:px-8">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="inline-flex items-center gap-3">
+              <img src="/assets/logo.png" alt="VDJV Sampler Pad logo" className="h-11 w-11 rounded-2xl shadow-[0_16px_26px_-18px_rgb(15_23_42_/_65%)]" />
+              <div className="text-sm font-black uppercase tracking-[0.18em] text-slate-950">VDJV Sampler Pad</div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm font-medium text-slate-500">
+              {LANDING_FOOTER_PLACEHOLDERS.map((item) => (
+                <span key={item}>{item}</span>
+              ))}
+              <Link className="transition hover:text-slate-950" to={privacyPagePath}>Privacy</Link>
+              <Link className="transition hover:text-slate-950" to={termsPagePath}>Terms</Link>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {footerSocialLinks.map((entry) => {
+                const Icon = entry.Icon;
+                return (
+                  <a
+                    key={entry.key}
+                    href={entry.url || '#'}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label={entry.label}
+                    title={entry.label}
+                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 transition ${entry.accent}`}
+                  >
+                    <Icon className="h-[18px] w-[18px]" />
+                  </a>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </footer>
     </main>
   );
 }

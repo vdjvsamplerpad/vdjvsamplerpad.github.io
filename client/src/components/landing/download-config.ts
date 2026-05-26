@@ -13,15 +13,24 @@ export interface LandingBuySection {
   defaultInstallerDownloadLink: string;
 }
 
+export type LandingSocialKey = 'facebook' | 'instagram' | 'youtube';
+
+export interface LandingSocialLink {
+  label: string;
+  url: string;
+}
+
 export interface LandingDownloadConfig {
   downloadLinks: Record<VersionKey, Record<PlatformKey, string>>;
   platformDescriptions: Record<VersionKey, Record<PlatformKey, string>>;
   versionDescriptions: Record<VersionKey, LandingVersionDescription>;
   buySections: Record<VersionKey, LandingBuySection>;
+  socialLinks: Record<LandingSocialKey, LandingSocialLink>;
 }
 
 export const VERSION_OPTIONS: VersionKey[] = ['V1', 'V2', 'V3'];
 export const PLATFORM_OPTIONS: PlatformKey[] = ['android', 'ios', 'windows', 'macos'];
+export const SOCIAL_OPTIONS: LandingSocialKey[] = ['facebook', 'instagram', 'youtube'];
 
 export const DEFAULT_DOWNLOAD_LINKS: Record<VersionKey, Record<PlatformKey, string>> = {
   V1: {
@@ -101,11 +110,27 @@ export const DEFAULT_BUY_SECTIONS: Record<VersionKey, LandingBuySection> = {
   },
 };
 
+export const DEFAULT_SOCIAL_LINKS: Record<LandingSocialKey, LandingSocialLink> = {
+  facebook: {
+    label: 'Facebook',
+    url: 'https://facebook.com/vdjvsampler',
+  },
+  instagram: {
+    label: 'Instagram',
+    url: 'https://instagram.com/vdjvsampler',
+  },
+  youtube: {
+    label: 'YouTube',
+    url: 'https://youtube.com/@vdjvsampler',
+  },
+};
+
 export const DEFAULT_LANDING_DOWNLOAD_CONFIG: LandingDownloadConfig = {
   downloadLinks: DEFAULT_DOWNLOAD_LINKS,
   platformDescriptions: DEFAULT_PLATFORM_DESCRIPTIONS,
   versionDescriptions: DEFAULT_VERSION_DESCRIPTIONS,
   buySections: DEFAULT_BUY_SECTIONS,
+  socialLinks: DEFAULT_SOCIAL_LINKS,
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -138,11 +163,20 @@ const canonicalizeInstallGuideLink = (value: string): string => {
   }
 };
 
+const canonicalizeExternalLink = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(trimmed)) return `https://${trimmed}`;
+  return trimmed;
+};
+
 const cloneDefaultConfig = (): LandingDownloadConfig => ({
   downloadLinks: JSON.parse(JSON.stringify(DEFAULT_DOWNLOAD_LINKS)) as Record<VersionKey, Record<PlatformKey, string>>,
   platformDescriptions: JSON.parse(JSON.stringify(DEFAULT_PLATFORM_DESCRIPTIONS)) as Record<VersionKey, Record<PlatformKey, string>>,
   versionDescriptions: JSON.parse(JSON.stringify(DEFAULT_VERSION_DESCRIPTIONS)) as Record<VersionKey, LandingVersionDescription>,
   buySections: JSON.parse(JSON.stringify(DEFAULT_BUY_SECTIONS)) as Record<VersionKey, LandingBuySection>,
+  socialLinks: JSON.parse(JSON.stringify(DEFAULT_SOCIAL_LINKS)) as Record<LandingSocialKey, LandingSocialLink>,
 });
 
 export const normalizeLandingDownloadConfig = (input: unknown): LandingDownloadConfig => {
@@ -153,6 +187,9 @@ export const normalizeLandingDownloadConfig = (input: unknown): LandingDownloadC
   const platformDescriptions = isRecord(input.platformDescriptions) ? input.platformDescriptions : null;
   const versionDescriptions = isRecord(input.versionDescriptions) ? input.versionDescriptions : null;
   const buySections = isRecord(input.buySections) ? input.buySections : null;
+  const socialLinks = isRecord(input.socialLinks)
+    ? input.socialLinks
+    : (isRecord((input as Record<string, unknown>).social_links) ? (input as Record<string, unknown>).social_links as Record<string, unknown> : null);
 
   VERSION_OPTIONS.forEach((version) => {
     const versionLinks = downloadLinks && isRecord(downloadLinks[version]) ? downloadLinks[version] : null;
@@ -187,6 +224,16 @@ export const normalizeLandingDownloadConfig = (input: unknown): LandingDownloadC
     }
     if (buySection && typeof buySection.defaultInstallerDownloadLink === 'string') {
       next.buySections[version].defaultInstallerDownloadLink = canonicalizeInstallGuideLink(buySection.defaultInstallerDownloadLink);
+    }
+  });
+
+  SOCIAL_OPTIONS.forEach((platform) => {
+    const socialEntry = socialLinks && isRecord(socialLinks[platform]) ? socialLinks[platform] : null;
+    if (socialEntry && typeof socialEntry.label === 'string') {
+      next.socialLinks[platform].label = socialEntry.label.trim() || next.socialLinks[platform].label;
+    }
+    if (socialEntry && typeof socialEntry.url === 'string') {
+      next.socialLinks[platform].url = canonicalizeExternalLink(socialEntry.url);
     }
   });
 

@@ -1,4 +1,5 @@
 import { type GraphicsProfile } from '@/lib/performance-monitor';
+import { normalizeStopTimingOverrides, type StopTimingOverridesMs } from '@/lib/audio-engine';
 import { DEFAULT_SYSTEM_MAPPINGS, type SystemAction, type SystemMappings } from '@/lib/system-mappings';
 import { type PersistedDeckLayoutEntry } from './utils/deck-layout-persistence';
 import { type PadData, type StopMode } from './types/sampler';
@@ -9,6 +10,7 @@ export const SETTINGS_STORAGE_KEY = 'vdjv-sampler-settings';
 export interface AppSettings {
   masterVolume: number;
   stopMode: StopMode;
+  stopTimingOverrides: StopTimingOverridesMs;
   sideMenuOpen: boolean;
   mixerOpen: boolean;
   channelCount: number;
@@ -149,6 +151,7 @@ export const createDefaultSettings = (
   return {
   masterVolume: config.uiDefaults.defaultMasterVolume,
   stopMode: config.uiDefaults.defaultStopMode,
+  stopTimingOverrides: normalizeStopTimingOverrides(config.uiDefaults.defaultStopTimingOverrides),
   sideMenuOpen: false,
   mixerOpen: false,
   channelCount: initialChannelCount,
@@ -184,7 +187,7 @@ export const mergeSystemMappings = (incoming?: Partial<SystemMappings> | null): 
   if (typeof merged.channelCount !== 'number' || !Number.isFinite(merged.channelCount)) {
     merged.channelCount = DEFAULT_SYSTEM_MAPPINGS.channelCount;
   } else {
-    merged.channelCount = Math.max(2, Math.min(8, Math.floor(merged.channelCount)));
+    merged.channelCount = Math.max(1, Math.min(8, Math.floor(merged.channelCount)));
   }
 
   return merged as SystemMappings;

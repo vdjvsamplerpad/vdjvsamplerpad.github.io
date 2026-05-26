@@ -1,4 +1,5 @@
 import type { GraphicsProfile } from '@/lib/performance-monitor';
+import { normalizeStopTimingOverrides, type StopTimingOverridesMs } from '@/lib/audio-engine';
 import type { SystemAction } from '@/lib/system-mappings';
 import type { StopMode } from './types/sampler';
 import { normalizePadPlaybackModeValue, normalizePadTriggerModeValue, normalizeTempoPercentValue } from './hooks/audioPadNormalization';
@@ -13,6 +14,7 @@ export interface SamplerAppConfig {
     defaultChannelCountDesktop: number;
     defaultMasterVolume: number;
     defaultStopMode: StopMode;
+    defaultStopTimingOverrides: StopTimingOverridesMs;
     defaultSidePanelMode: 'overlay' | 'reflow';
     defaultKeyboardMappingEnabled: boolean;
     defaultHideShortcutLabels: boolean;
@@ -72,6 +74,7 @@ export const DEFAULT_SAMPLER_APP_CONFIG: SamplerAppConfig = {
     defaultChannelCountDesktop: 4,
     defaultMasterVolume: 1,
     defaultStopMode: 'instant',
+    defaultStopTimingOverrides: {},
     defaultSidePanelMode: 'overlay',
     defaultKeyboardMappingEnabled: false,
     defaultHideShortcutLabels: true,
@@ -167,6 +170,7 @@ export const normalizeSamplerAppConfig = (value: unknown): SamplerAppConfig => {
       defaultChannelCountDesktop: clampInt(uiRaw.defaultChannelCountDesktop, DEFAULT_SAMPLER_APP_CONFIG.uiDefaults.defaultChannelCountDesktop, 2, 8),
       defaultMasterVolume: clampFloat(uiRaw.defaultMasterVolume, DEFAULT_SAMPLER_APP_CONFIG.uiDefaults.defaultMasterVolume, 0, 1),
       defaultStopMode: normalizeStopMode(uiRaw.defaultStopMode),
+      defaultStopTimingOverrides: normalizeStopTimingOverrides(uiRaw.defaultStopTimingOverrides || uiRaw.default_stop_timing_overrides),
       defaultSidePanelMode: uiRaw.defaultSidePanelMode === 'reflow' ? 'reflow' : 'overlay',
       defaultKeyboardMappingEnabled: normalizeBoolean(uiRaw.defaultKeyboardMappingEnabled, DEFAULT_SAMPLER_APP_CONFIG.uiDefaults.defaultKeyboardMappingEnabled),
       defaultHideShortcutLabels: normalizeBoolean(uiRaw.defaultHideShortcutLabels, DEFAULT_SAMPLER_APP_CONFIG.uiDefaults.defaultHideShortcutLabels),

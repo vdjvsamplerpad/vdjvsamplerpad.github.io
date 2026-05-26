@@ -5,17 +5,24 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { CopyableValue } from '@/components/ui/copyable-value';
-import { edgeFunctionUrl } from '@/lib/edge-api';
+import { edgeFunctionUrl, getClientCompatibilityHeaders } from '@/lib/edge-api';
 import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links';
 import { supabase } from '@/lib/supabase';
 import { useAuthActions, useAuthState } from '@/hooks/useAuth';
+import {
+  type AccountTierUiContent,
+  DEFAULT_TIER_UI_CONTENT,
+  normalizeTierUiContent,
+  resolveTierVideoSrc,
+} from '@/lib/account-tier-content';
 
 type TargetTier = 'pro' | 'pro_max';
+type UpgradePlanTier = 'free' | TargetTier;
 type PaymentChannel = 'image_proof' | 'gcash_manual' | 'maya_manual';
 type DialogStep = 'plans' | 'request';
 type MobileSlideDirection = 'next' | 'prev';
 type PlanView = {
-  id: 'free' | TargetTier;
+  id: UpgradePlanTier;
   kind: 'free' | 'tier';
   tier?: UpgradeTierOption;
 };
@@ -26,6 +33,7 @@ type UpgradeTierOption = {
   description: string;
   pricePhp: number;
   promoDiscountPercent?: number;
+  uiContent?: AccountTierUiContent | null;
   isActive: boolean;
   available: boolean;
   pendingRequest?: {
@@ -51,8 +59,17 @@ type PaymentConfig = {
 };
 
 type CachedUpgradeOptions = {
-  version: 1;
+  version: 3;
   userId: string;
+  freeTier?: {
+    tier: 'free';
+    displayName: string;
+    description: string;
+    pricePhp: number;
+    promoDiscountPercent?: number;
+    uiContent?: AccountTierUiContent | null;
+    isActive: boolean;
+  } | null;
   tiers: UpgradeTierOption[];
   paymentConfig: PaymentConfig | null;
   fetchedAt: number;
@@ -65,11 +82,26 @@ interface AccountUpgradeDialogProps {
   pushNotice?: (notice: { variant: 'success' | 'error' | 'info'; message: string }) => void;
 }
 
-const UPGRADE_OPTIONS_CACHE_VERSION = 1;
-const UPGRADE_OPTIONS_CACHE_PREFIX = 'vdjv-account-upgrade-options-v1';
-const UPGRADE_OPTIONS_REVALIDATE_MS = 5 * 60 * 1000;
+const UPGRADE_OPTIONS_CACHE_VERSION = 3;
+const UPGRADE_OPTIONS_CACHE_PREFIX = 'vdjv-account-upgrade-options-v3';
 
 const getUpgradeOptionsCacheKey = (userId: string): string => `${UPGRADE_OPTIONS_CACHE_PREFIX}:${userId}`;
+
+const waitForSessionTick = (delayMs: number): Promise<void> =>
+  new Promise((resolve) => window.setTimeout(resolve, delayMs));
+
+const resolveCurrentAccessToken = async (): Promise<string | null> => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.access_token) return data.session.access_token;
+    if (attempt === 1) {
+      const refreshed = await supabase.auth.refreshSession().catch(() => null);
+      if (refreshed?.data.session?.access_token) return refreshed.data.session.access_token;
+    }
+    await waitForSessionTick(250 + attempt * 150);
+  }
+  return null;
+};
 
 const readCachedUpgradeOptions = (userId: string | null | undefined): CachedUpgradeOptions | null => {
   if (!userId || typeof window === 'undefined') return null;
@@ -82,6 +114,7 @@ const readCachedUpgradeOptions = (userId: string | null | undefined): CachedUpgr
     return {
       version: UPGRADE_OPTIONS_CACHE_VERSION,
       userId,
+      freeTier: (parsed.freeTier || null) as CachedUpgradeOptions['freeTier'],
       tiers: parsed.tiers as UpgradeTierOption[],
       paymentConfig: (parsed.paymentConfig || null) as PaymentConfig | null,
       fetchedAt: Number(parsed.fetchedAt),
@@ -91,13 +124,19 @@ const readCachedUpgradeOptions = (userId: string | null | undefined): CachedUpgr
   }
 };
 
-const writeCachedUpgradeOptions = (userId: string | null | undefined, tiers: UpgradeTierOption[], paymentConfig: PaymentConfig | null): number => {
+const writeCachedUpgradeOptions = (
+  userId: string | null | undefined,
+  freeTier: CachedUpgradeOptions['freeTier'],
+  tiers: UpgradeTierOption[],
+  paymentConfig: PaymentConfig | null,
+): number => {
   const fetchedAt = Date.now();
   if (!userId || typeof window === 'undefined') return fetchedAt;
   try {
     const payload: CachedUpgradeOptions = {
       version: UPGRADE_OPTIONS_CACHE_VERSION,
       userId,
+      freeTier,
       tiers,
       paymentConfig,
       fetchedAt,
@@ -108,9 +147,6 @@ const writeCachedUpgradeOptions = (userId: string | null | undefined, tiers: Upg
   }
   return fetchedAt;
 };
-
-const isUpgradeOptionsCacheFresh = (cached: CachedUpgradeOptions | null): boolean =>
-  Boolean(cached && Date.now() - cached.fetchedAt < UPGRADE_OPTIONS_REVALIDATE_MS);
 
 const formatPhp = (value: number): string =>
   new Intl.NumberFormat('en-PH', {
@@ -172,14 +208,32 @@ const getBeforePromoPrice = (price: number, discountPercent: number): number => 
   return Math.max(price, Math.round(price / (1 - discountPercent / 100)));
 };
 
+const hexToRgb = (hex: string): { r: number; g: number; b: number } | null => {
+  const match = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+  if (!match) return null;
+  const value = match[1];
+  return {
+    r: Number.parseInt(value.slice(0, 2), 16),
+    g: Number.parseInt(value.slice(2, 4), 16),
+    b: Number.parseInt(value.slice(4, 6), 16),
+  };
+};
+
+const accentRgb = (hex: string, alpha: number, fallback = 'rgba(242,25,132,0.35)'): string => {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return fallback;
+  return `rgba(${rgb.r},${rgb.g},${rgb.b},${Math.max(0, Math.min(1, alpha))})`;
+};
+
 export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: AccountUpgradeDialogProps) {
-  const { user, profile, capabilities } = useAuthState();
+  const { user, profile, capabilities, loading: authLoading } = useAuthState();
   const { refreshAccountCapabilities } = useAuthActions();
   const [loading, setLoading] = React.useState(false);
   const [optionsLoadMessage, setOptionsLoadMessage] = React.useState<string | null>(null);
   const [online, setOnline] = React.useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   const [submitting, setSubmitting] = React.useState(false);
   const [step, setStep] = React.useState<DialogStep>('plans');
+  const [freeTier, setFreeTier] = React.useState<CachedUpgradeOptions['freeTier']>(null);
   const [tiers, setTiers] = React.useState<UpgradeTierOption[]>([]);
   const [paymentConfig, setPaymentConfig] = React.useState<PaymentConfig | null>(null);
   const [selectedTier, setSelectedTier] = React.useState<TargetTier>('pro');
@@ -192,14 +246,29 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   const [proofFile, setProofFile] = React.useState<File | null>(null);
   const [proofPreviewUrl, setProofPreviewUrl] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
+  const [optionsReloadKey, setOptionsReloadKey] = React.useState(0);
+  const dialogBodyRef = React.useRef<HTMLDivElement | null>(null);
+  const planRailShellRef = React.useRef<HTMLDivElement | null>(null);
   const planRailRef = React.useRef<HTMLDivElement | null>(null);
   const planRailScrollSyncRef = React.useRef<number | null>(null);
+  const planRailAnimationRef = React.useRef<number | null>(null);
+  const planRailProgrammaticScrollUntilRef = React.useRef(0);
+  const skipNextPlanIndexAutoScrollRef = React.useRef(false);
   const selectedTierRef = React.useRef<TargetTier>(selectedTier);
   const isDark = theme === 'dark';
 
   React.useEffect(() => {
     selectedTierRef.current = selectedTier;
   }, [selectedTier]);
+
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    setMobileSlideDirection('next');
+    setMobilePlanIndex(0);
+    skipNextPlanIndexAutoScrollRef.current = false;
+    dialogBodyRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    planRailRef.current?.scrollTo({ left: 0, behavior: 'auto' });
+  }, [open]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -209,6 +278,17 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     return () => {
       window.removeEventListener('online', updateOnline);
       window.removeEventListener('offline', updateOnline);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (planRailAnimationRef.current !== null) {
+        window.cancelAnimationFrame(planRailAnimationRef.current);
+      }
+      if (planRailScrollSyncRef.current !== null) {
+        window.clearTimeout(planRailScrollSyncRef.current);
+      }
     };
   }, []);
 
@@ -229,16 +309,25 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   }, []);
 
   React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleTierConfigUpdate = () => setOptionsReloadKey((value) => value + 1);
+    window.addEventListener('vdjv-account-tier-config-updated', handleTierConfigUpdate);
+    return () => window.removeEventListener('vdjv-account-tier-config-updated', handleTierConfigUpdate);
+  }, []);
+
+  React.useEffect(() => {
     if (!open) return;
     let cancelled = false;
     const userId = user?.id || profile?.id || null;
     const cached = readCachedUpgradeOptions(userId);
     const hasCachedOptions = Boolean(cached?.tiers?.length);
     const applyOptions = (
+      nextFreeTier: CachedUpgradeOptions['freeTier'],
       nextTiers: UpgradeTierOption[],
       nextPaymentConfig: PaymentConfig | null,
     ) => {
       if (cancelled) return;
+      setFreeTier(nextFreeTier);
       setTiers(nextTiers);
       setPaymentConfig(nextPaymentConfig);
       const firstAvailable = nextTiers.find((tier) => tier.available)?.tier || 'pro';
@@ -246,7 +335,6 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
       const nextSelected = nextTiers.some((tier) => tier.tier === currentSelection) ? currentSelection : firstAvailable;
       selectedTierRef.current = nextSelected;
       setSelectedTier(nextSelected);
-      setMobilePlanIndex(Math.max(0, nextTiers.findIndex((tier) => tier.tier === nextSelected) + 1));
     };
 
     setLoading(!hasCachedOptions);
@@ -255,13 +343,14 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     setSuccessMessage(null);
 
     if (cached?.tiers?.length) {
-      applyOptions(cached.tiers, cached.paymentConfig);
-      if (isUpgradeOptionsCacheFresh(cached)) {
-        setLoading(false);
-        return () => {
-          cancelled = true;
-        };
-      }
+      applyOptions(cached.freeTier || null, cached.tiers, cached.paymentConfig);
+    }
+
+    if (authLoading) {
+      setLoading(true);
+      return () => {
+        cancelled = true;
+      };
     }
 
     if (!online) {
@@ -274,15 +363,14 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
 
     void (async () => {
       try {
-        const { data } = await supabase.auth.getSession();
-        const token = data.session?.access_token;
-        if (!token) throw new Error('Sign in before requesting an upgrade.');
+        const token = await resolveCurrentAccessToken();
+        const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
         const [optionsRes, paymentRes] = await Promise.all([
           fetch(edgeFunctionUrl('store-api', 'account/upgrade-options'), {
             method: 'GET',
             cache: 'no-store',
             credentials: 'omit',
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { ...getClientCompatibilityHeaders(), ...authHeaders },
           }),
           fetch(edgeFunctionUrl('store-api', 'payment-config'), { cache: 'no-store' }),
         ]);
@@ -292,10 +380,11 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
         const paymentPayload = await paymentRes.json().catch(() => ({}));
         const paymentData = paymentPayload?.data && typeof paymentPayload.data === 'object' ? paymentPayload.data : paymentPayload;
         const nextTiers = Array.isArray(optionsData?.tiers) ? optionsData.tiers as UpgradeTierOption[] : [];
+        const nextFreeTier = (optionsData?.freeTier || null) as CachedUpgradeOptions['freeTier'];
         if (cancelled) return;
         const nextPaymentConfig = (paymentData?.config || null) as PaymentConfig | null;
-        writeCachedUpgradeOptions(userId, nextTiers, nextPaymentConfig);
-        applyOptions(nextTiers, nextPaymentConfig);
+        writeCachedUpgradeOptions(userId, nextFreeTier, nextTiers, nextPaymentConfig);
+        applyOptions(nextFreeTier, nextTiers, nextPaymentConfig);
         setOptionsLoadMessage(null);
       } catch (error) {
         if (!cancelled) {
@@ -314,7 +403,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     return () => {
       cancelled = true;
     };
-  }, [online, open, profile?.id, pushNotice, user?.id]);
+  }, [authLoading, online, open, optionsReloadKey, profile?.id, pushNotice, user?.id]);
 
   const selected = tiers.find((tier) => tier.tier === selectedTier) || tiers[0] || null;
   const selectedIsProMax = selected?.tier === 'pro_max';
@@ -322,6 +411,11 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     { id: 'free', kind: 'free' },
     ...tiers.map((tier) => ({ id: tier.tier, kind: 'tier' as const, tier })),
   ], [tiers]);
+  const freeUiContent = React.useMemo(
+    () => normalizeTierUiContent(freeTier?.uiContent, 'free'),
+    [freeTier?.uiContent],
+  );
+  const selectedMobilePlan = planViews[Math.max(0, Math.min(mobilePlanIndex, planViews.length - 1))] || planViews[0];
   const quotePrice = selected?.quote?.quotePrice ?? selected?.pricePhp ?? 0;
   const heroPromoPercent = tiers.length
     ? Math.max(...tiers.map((tier) => getPromoDiscountPercent(tier)))
@@ -369,9 +463,8 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
 
     setSubmitting(true);
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) throw new Error('Sign in before requesting an upgrade.');
+      const token = await resolveCurrentAccessToken();
+      if (!token) throw new Error('Please sign in again before submitting an upgrade request.');
       let proofPath: string | null = null;
       if (quotePrice > 0 && proofFile) {
         const uploadReq = await fetch(edgeFunctionUrl('store-api', 'account/upgrade-proof-upload-url'), {
@@ -445,6 +538,40 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     setStep('request');
   }, []);
 
+  const scrollMobilePlanRailTo = React.useCallback((index: number, behavior: ScrollBehavior) => {
+    const rail = planRailRef.current;
+    const target = rail?.children.item(index) as HTMLElement | null;
+    if (!rail || !target) return;
+    if (planRailAnimationRef.current !== null) {
+      window.cancelAnimationFrame(planRailAnimationRef.current);
+      planRailAnimationRef.current = null;
+    }
+    const railRect = rail.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const centeredLeft = rail.scrollLeft
+      + targetRect.left
+      - railRect.left
+      - Math.max(0, (railRect.width - targetRect.width) / 2);
+    const maxLeft = Math.max(0, rail.scrollWidth - rail.clientWidth);
+    const nextLeft = Math.max(0, Math.min(maxLeft, centeredLeft));
+    planRailProgrammaticScrollUntilRef.current = Date.now() + (behavior === 'smooth' ? 360 : 120);
+    if (behavior !== 'smooth') {
+      rail.scrollLeft = nextLeft;
+      return;
+    }
+    rail.scrollTo({ left: nextLeft, behavior: 'smooth' });
+  }, []);
+
+  const scrollDialogBodyToPlanRail = React.useCallback((behavior: ScrollBehavior) => {
+    const body = dialogBodyRef.current;
+    const shell = planRailShellRef.current;
+    if (!body || !shell) return;
+    const bodyRect = body.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    const top = body.scrollTop + shellRect.top - bodyRect.top - 8;
+    body.scrollTo({ top: Math.max(0, top), left: 0, behavior });
+  }, []);
+
   React.useEffect(() => {
     if (mobilePlanIndex < planViews.length) return;
     setMobilePlanIndex(Math.max(0, planViews.length - 1));
@@ -452,30 +579,37 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
 
   React.useEffect(() => {
     if (step !== 'plans' || loading || !planViews.length) return;
+    if (skipNextPlanIndexAutoScrollRef.current) {
+      skipNextPlanIndexAutoScrollRef.current = false;
+      return;
+    }
     const frame = window.requestAnimationFrame(() => {
-      const rail = planRailRef.current;
-      const target = rail?.children.item(mobilePlanIndex) as HTMLElement | null;
-      target?.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'center' });
+      scrollMobilePlanRailTo(mobilePlanIndex, 'auto');
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [loading, mobilePlanIndex, planViews.length, step]);
+  }, [loading, mobilePlanIndex, planViews.length, scrollMobilePlanRailTo, step]);
 
   const showMobilePlan = React.useCallback((nextIndex: number) => {
     if (!planViews.length) return;
     const normalized = (nextIndex + planViews.length) % planViews.length;
-    const forwardDistance = (normalized - mobilePlanIndex + planViews.length) % planViews.length;
-    const backwardDistance = (mobilePlanIndex - normalized + planViews.length) % planViews.length;
-    setMobileSlideDirection(forwardDistance <= backwardDistance ? 'next' : 'prev');
+    const direction = nextIndex >= planViews.length
+      ? 'next'
+      : nextIndex < 0
+        ? 'prev'
+        : normalized > mobilePlanIndex ? 'next' : 'prev';
+    setMobileSlideDirection(direction);
+    skipNextPlanIndexAutoScrollRef.current = true;
+    setMobilePlanIndex(normalized);
     window.requestAnimationFrame(() => {
-      const rail = planRailRef.current;
-      const target = rail?.children.item(normalized) as HTMLElement | null;
-      target?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      scrollDialogBodyToPlanRail('smooth');
+      scrollMobilePlanRailTo(normalized, 'smooth');
     });
-  }, [mobilePlanIndex, planViews.length]);
+  }, [mobilePlanIndex, planViews.length, scrollDialogBodyToPlanRail, scrollMobilePlanRailTo]);
 
   const syncMobilePlanFromScroll = React.useCallback(() => {
     const rail = planRailRef.current;
     if (!rail || !planViews.length) return;
+    if (Date.now() < planRailProgrammaticScrollUntilRef.current) return;
     if (planRailScrollSyncRef.current !== null) {
       window.clearTimeout(planRailScrollSyncRef.current);
     }
@@ -521,9 +655,6 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   const planRailShellClass = isDark
     ? 'border-white/10 bg-white/[0.025]'
     : 'border-slate-950/10 bg-white/72 shadow-[0_24px_80px_rgba(15,23,42,0.12)]';
-  const planFootnoteClass = isDark
-    ? 'border-white/10 bg-white/[0.04] text-white/62'
-    : 'border-slate-950/10 bg-white/82 text-slate-600 shadow-[0_18px_54px_rgba(15,23,42,0.08)]';
   const requestPanelClass = isDark
     ? 'border-white/10 bg-[#111116] text-white shadow-[0_24px_80px_rgba(0,0,0,0.3)]'
     : 'border-slate-950/10 bg-white text-slate-950 shadow-[0_24px_80px_rgba(15,23,42,0.12)]';
@@ -628,118 +759,142 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     const tier = plan.tier;
     const isFree = plan.kind === 'free';
     const isProMax = tier?.tier === 'pro_max';
-    const list = isFree
-      ? [
-        `${freeDailyPlaysLabel} Default Bank plays/day`,
-        `${ownedBankQuotaLabel} own sampler banks`,
-        'Store browsing only',
-        'Locked checkout and free promotions',
-      ]
-      : isProMax ? proMaxChecklist : proChecklist;
-    const active = tier ? selectedTier === tier.tier : capabilities.effectiveTier === 'free';
+    const uiContent = isFree
+      ? freeUiContent
+      : normalizeTierUiContent(tier?.uiContent, tier?.tier || 'pro');
+    const list = uiContent.checklist.length
+      ? uiContent.checklist
+      : isFree
+        ? DEFAULT_TIER_UI_CONTENT.free.checklist
+        : isProMax ? proMaxChecklist : proChecklist;
+    const isCurrentFree = isFree && capabilities.effectiveTier === 'free';
+    const isCurrentPaidTier = Boolean(tier && capabilities.effectiveTier === tier.tier);
+    const active = tier ? selectedTier === tier.tier : isCurrentFree;
     const pending = Boolean(tier?.pendingRequest);
-    const disabled = isFree || !tier?.available || pending;
-    const badge = isFree ? 'Current access' : pending ? 'Pending review' : isProMax ? 'Best value' : 'Most popular';
+    const disabled = isFree || isCurrentPaidTier || !tier?.available || pending;
+    const headerLabel = uiContent.cardHeader.label || (isFree ? 'Base access' : isProMax ? 'Best value' : 'Most popular');
+    const badge = isFree ? (isCurrentFree ? 'Current access' : 'Base access') : pending ? 'Pending review' : headerLabel;
     const promoPercent = tier ? getPromoDiscountPercent(tier) : 0;
-    const title = isFree ? 'FREE' : tierLabel(tier!.tier);
-    const subtitle = isFree ? 'For trying VDJV before upgrading' : tier!.description;
+    const title = isFree ? (freeTier?.displayName || 'FREE') : (tier!.displayName || tierLabel(tier!.tier));
+    const subtitleRows = uiContent.shortDescriptions.length ? uiContent.shortDescriptions : [isFree ? 'For trying VDJV before upgrading' : tier!.description];
+    const otherRows = uiContent.otherDescriptions.length ? uiContent.otherDescriptions : DEFAULT_TIER_UI_CONTENT[isFree ? 'free' : tier!.tier].otherDescriptions;
+    const primaryOtherRow = otherRows[0] || { title: isFree ? 'Daily trial access' : isProMax ? 'All current Store banks' : 'Full sampler tools', body: '' };
+    const inclusions = uiContent.inclusions.length ? uiContent.inclusions : DEFAULT_TIER_UI_CONTENT[isFree ? 'free' : tier!.tier].inclusions;
     const displayPrice = !isFree ? tier!.quote.quotePrice : 0;
     const price = isFree ? 'Free' : formatPhp(displayPrice);
     const previousPrice = !isFree && displayPrice > 0 && promoPercent > 0
       ? formatPhp(getBeforePromoPrice(displayPrice, promoPercent))
       : null;
-    const cta = isFree ? 'Current Plan' : pending ? 'Pending Review' : `Get ${title}`;
+    const cta = isFree ? (isCurrentFree ? 'Current Plan' : 'Base Access') : isCurrentPaidTier ? 'Current Plan' : pending ? 'Pending Review' : `Get ${title}`;
+    const accentColor = uiContent.color;
+    const paidCardStyle: React.CSSProperties = isFree ? {} : {
+      borderColor: accentRgb(accentColor, isDark ? 0.28 : 0.22),
+      background: isDark
+        ? `radial-gradient(115% 82% at 92% 0%, ${accentRgb(accentColor, 0.18)}, transparent 58%), linear-gradient(180deg, rgba(17,17,22,0.98), rgba(14,16,20,0.98))`
+        : `radial-gradient(115% 82% at 92% 0%, ${accentRgb(accentColor, 0.16)}, transparent 58%), linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.94))`,
+      boxShadow: `inset 0 1px 0 rgba(255,255,255,${isDark ? 0.08 : 0.85}), inset 0 0 48px ${accentRgb(accentColor, isDark ? 0.2 : 0.13)}`,
+    };
+    const paidHeroStyle: React.CSSProperties = isFree ? {} : {
+      background: isDark
+        ? `radial-gradient(120% 95% at 88% 0%, ${accentRgb(accentColor, 0.58)}, transparent 55%), radial-gradient(100% 90% at 12% 0%, rgba(255,255,255,0.18), transparent 42%), linear-gradient(180deg, ${accentRgb(accentColor, 0.32)}, rgba(23,22,30,0.98))`
+        : `radial-gradient(120% 95% at 88% 0%, ${accentRgb(accentColor, 0.22)}, transparent 55%), radial-gradient(100% 90% at 12% 0%, rgba(255,255,255,0.95), transparent 42%), linear-gradient(180deg, ${accentRgb(accentColor, 0.12)}, rgba(255,255,255,0.92))`,
+    };
+    const paidButtonStyle: React.CSSProperties = !isFree && !disabled ? {
+      backgroundColor: accentColor,
+      boxShadow: `0 14px 36px ${accentRgb(accentColor, 0.38)}`,
+    } : {};
     const ctaClass = isFree
       ? isDark ? 'bg-white text-slate-950' : 'bg-slate-950 text-white shadow-[0_12px_30px_rgba(15,23,42,0.18)]'
-      : isProMax
-        ? 'bg-[#1d4df5] text-white shadow-[0_14px_36px_rgba(29,78,245,0.38)] group-hover:bg-[#2860ff]'
-        : 'bg-[#ed0d7c] text-white shadow-[0_14px_36px_rgba(237,13,124,0.42)] group-hover:bg-[#ff168c]';
+      : 'text-white';
     const shellClass = isFree
       ? isDark
         ? 'border-white/10 bg-[#15171a] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_38px_rgba(255,255,255,0.035)]'
-        : 'border-slate-950/10 bg-white text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),inset_0_0_38px_rgba(15,23,42,0.04)]'
-      : isProMax
-        ? isDark
-          ? 'border-white/10 bg-[#10151f] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_48px_rgba(31,85,255,0.2)]'
-          : 'border-slate-950/10 bg-[#eef4ff] text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),inset_0_0_48px_rgba(31,85,255,0.14)]'
-        : isDark
-          ? 'border-white/10 bg-[#171318] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_48px_rgba(244,24,133,0.2)]'
-          : 'border-slate-950/10 bg-[#fff1f7] text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),inset_0_0_48px_rgba(244,24,133,0.14)]';
+        : 'border-slate-950/10 bg-[#eef0f3] text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),inset_0_0_42px_rgba(15,23,42,0.08),0_18px_48px_rgba(15,23,42,0.10)]'
+      : isDark
+        ? 'border-white/10 bg-[#171318]'
+        : 'border-slate-950/10 bg-white text-slate-950';
     const heroPanelClass = isFree
       ? isDark
         ? 'bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.035))]'
-        : 'bg-[linear-gradient(180deg,rgba(15,23,42,0.06),rgba(15,23,42,0.02))]'
-      : isProMax
-        ? isDark
-          ? 'bg-[radial-gradient(110%_90%_at_95%_0%,rgba(49,104,255,0.52),transparent_54%),radial-gradient(100%_86%_at_18%_4%,rgba(255,255,255,0.17),transparent_44%),linear-gradient(180deg,rgba(24,54,150,0.9),rgba(18,21,34,0.96))]'
-          : 'bg-[radial-gradient(110%_90%_at_95%_0%,rgba(49,104,255,0.22),transparent_54%),radial-gradient(100%_86%_at_18%_4%,rgba(255,255,255,0.9),transparent_44%),linear-gradient(180deg,rgba(219,232,255,0.98),rgba(255,255,255,0.92))]'
-        : isDark
-          ? 'bg-[radial-gradient(120%_95%_at_88%_0%,rgba(255,20,132,0.62),transparent_55%),radial-gradient(100%_90%_at_12%_0%,rgba(255,255,255,0.18),transparent_42%),linear-gradient(180deg,rgba(112,19,78,0.96),rgba(27,20,30,0.98))]'
-          : 'bg-[radial-gradient(120%_95%_at_88%_0%,rgba(255,20,132,0.22),transparent_55%),radial-gradient(100%_90%_at_12%_0%,rgba(255,255,255,0.95),transparent_42%),linear-gradient(180deg,rgba(255,219,237,0.98),rgba(255,255,255,0.92))]';
+        : 'bg-[radial-gradient(115%_90%_at_90%_0%,rgba(242,25,132,0.10),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.64),rgba(226,232,240,0.42))]'
+      : '';
     const cardTextClass = isDark ? 'text-white' : 'text-slate-950';
     const subtitleClass = isDark ? 'text-white/58' : 'text-slate-600';
     const innerPanelClass = isDark ? 'bg-white/[0.075] text-white' : 'bg-white/72 text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]';
-    const mutedTextClass = isDark ? 'text-white/58' : 'text-slate-600';
     const secondaryTextClass = isDark ? 'text-white/65' : 'text-slate-600';
     const noteTextClass = isDark ? 'text-white/46' : 'text-slate-500';
     const featureTextClass = isDark ? 'text-white/92' : 'text-slate-800';
     const detailBoxClass = isDark ? 'border-white/7 bg-white/[0.04] text-white' : 'border-slate-950/8 bg-white/72 text-slate-950';
     const detailMutedClass = isDark ? 'text-white/66' : 'text-slate-600';
     const lockBadgeClass = isDark ? 'bg-white/10 text-white/55' : 'bg-slate-950/8 text-slate-500';
-    const neutralBadgeClass = isDark ? 'bg-white/10 text-white' : 'bg-slate-950/8 text-slate-700';
+    const neutralBadgeClass = isDark ? 'border border-white/14 bg-white/10 text-white' : 'border border-slate-300 bg-slate-100 text-slate-700 shadow-sm';
+    const currentPlanBadgeClass = isDark
+      ? 'bg-[#b9ff12] text-slate-950 shadow-[0_0_18px_rgba(185,255,18,0.24)]'
+      : 'bg-slate-950 text-white shadow-[0_0_18px_rgba(15,23,42,0.22)]';
     const disabledCtaClass = isDark ? 'bg-white/10 text-white/55' : 'bg-slate-950/8 text-slate-500';
 
     return (
       <div
         key={plan.id}
+        style={{ ['--tier-accent' as string]: accentColor, ...paidCardStyle }}
         className={`group relative flex min-h-[640px] flex-col overflow-hidden rounded-[15px] border text-left transition duration-300 md:min-h-[680px] ${cardTextClass} ${shellClass} ${
           active ? 'brightness-105' : ''
         } ${disabled ? 'cursor-default' : 'hover:-translate-y-1 hover:brightness-110'}`}
       >
-        {!isFree && (
-          <div className={`flex h-9 items-center justify-center text-[11px] font-black uppercase tracking-wide ${
-            isProMax ? 'bg-[#2155ff]' : 'bg-[#f21984]'
-          }`}>
-            {isProMax ? '* ' : '+ '}{badge}
+        {uiContent.cardHeader.enabled ? (
+          <div className="flex h-9 items-center justify-center text-[11px] font-black uppercase tracking-wide" style={{ backgroundColor: accentColor }}>
+            {isFree ? '' : isProMax ? '* ' : '+ '}{headerLabel}
           </div>
+        ) : (
+          <div className="h-9" aria-hidden="true" />
         )}
 
-        <div className={`relative m-4 overflow-hidden rounded-[13px] border p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] ${isDark ? 'border-white/8' : 'border-slate-950/8'} ${heroPanelClass}`}>
+        <div className={`relative m-4 overflow-hidden rounded-[13px] border p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] ${isDark ? 'border-white/8' : 'border-slate-950/8'} ${heroPanelClass}`} style={paidHeroStyle}>
           <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(112deg,rgba(255,255,255,0.18),transparent_24%,transparent_70%,rgba(255,255,255,0.08))]" />
-          <div className="relative flex items-start justify-between gap-3">
+          <div className="relative flex min-h-[34px] items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h3 className="text-[28px] font-black uppercase leading-none tracking-tight">{title}</h3>
-                {!isFree && (
+                {!isFree && uiContent.versionBadge.enabled && uiContent.versionBadge.label && (
                   <span className="rounded-[4px] bg-[#63dff0] px-2 py-0.5 text-[10px] font-black uppercase italic text-[#07242b] shadow-[0_0_18px_rgba(99,223,240,0.35)]">
-                    VDJV 2.0
+                    {uiContent.versionBadge.label}
                   </span>
                 )}
               </div>
-              <p className={`mt-3 line-clamp-2 text-sm ${subtitleClass}`}>{subtitle}</p>
+              <div className={`mt-3 min-h-[42px] space-y-1 text-sm ${subtitleClass}`}>
+                {subtitleRows.slice(0, 2).map((row) => (
+                  <p key={row} className="line-clamp-1">{row}</p>
+                ))}
+              </div>
             </div>
             {isFree ? (
               <span className={`rounded-md px-2.5 py-1 text-[10px] font-black uppercase ${neutralBadgeClass}`}>{badge}</span>
             ) : (
-              <span className="rounded-[4px] bg-[#f21984] px-2 py-1 text-[10px] font-black uppercase text-white shadow-[0_0_18px_rgba(242,25,132,0.45)]">
-                {promoPercent}% OFF
+              <span className={`shrink-0 whitespace-nowrap rounded-[4px] px-2 py-1 text-[10px] font-black uppercase ${
+                isCurrentPaidTier
+                  ? currentPlanBadgeClass
+                  : 'text-white'
+              }`} style={!isCurrentPaidTier ? { backgroundColor: accentColor, boxShadow: `0 0 18px ${accentRgb(accentColor, 0.45)}` } : undefined}>
+                {isCurrentPaidTier ? 'Current Plan' : `${promoPercent}% OFF`}
               </span>
             )}
           </div>
 
           <div className={`relative mt-5 rounded-[10px] p-4 ${innerPanelClass}`}>
             <div className="text-sm font-black">
-              * {isFree ? 'Daily trial access' : isProMax ? 'All current Store banks' : 'Full sampler tools'}
+              * {primaryOtherRow.title}
             </div>
-            <div className={`mt-2 text-sm leading-relaxed ${mutedTextClass}`}>
-              {isFree
-                ? `${freeDailyPlaysLabel} Default Bank plays. Upgrade to remove daily play limits.`
-                : isProMax
-                  ? 'PRO plus Store bank grant snapshot at approval time.'
-                  : 'Unlock checkout, free promos, search, mapping, backup, and editing.'}
-            </div>
+            {primaryOtherRow.body && (
+              <div className={`mt-2 min-h-[40px] text-sm leading-relaxed ${subtitleClass}`}>{primaryOtherRow.body}</div>
+            )}
             <div className={`mt-4 h-1 rounded-full ${isDark ? 'bg-white/22' : 'bg-slate-950/12'}`}>
-              <div className={`h-full rounded-full ${isFree ? 'w-1/3 bg-white/50' : isProMax ? 'w-full bg-[#6aa0ff]' : 'w-2/3 bg-[#f24ca2]'}`} />
+              <div
+                className={`h-full rounded-full ${isFree ? 'bg-white/50' : ''}`}
+                style={{
+                  width: `${uiContent.meterPercent}%`,
+                  ...(!isFree ? { backgroundColor: accentColor } : {}),
+                }}
+              />
             </div>
             <div className={`mt-4 flex justify-between text-xs font-bold ${secondaryTextClass}`}>
               <span>{isFree ? 'Limited' : 'Unlocked'}</span>
@@ -748,9 +903,9 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
           </div>
         </div>
 
-        <div className="relative px-4">
+        <div className="relative flex min-h-[166px] flex-col justify-end px-4">
           <div className="flex flex-wrap items-end gap-2">
-            {previousPrice && <span className="text-[28px] font-black text-[#f21984] line-through decoration-2">{previousPrice}</span>}
+            {previousPrice && <span className="text-[28px] font-black line-through decoration-2" style={{ color: accentColor }}>{previousPrice}</span>}
             <span className="text-[42px] font-black leading-none tracking-tight">{price}</span>
             {!isFree && <span className={`pb-1 text-xs ${noteTextClass}`}>one-time request</span>}
           </div>
@@ -765,7 +920,8 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
             type="button"
             onClick={() => tier ? selectPlan(tier) : undefined}
             disabled={disabled}
-            className={`mt-4 flex h-12 w-full items-center justify-center rounded-[10px] text-sm font-black transition disabled:cursor-default ${
+            style={paidButtonStyle}
+            className={`mt-4 flex h-12 w-full items-center justify-center rounded-[10px] text-sm font-black uppercase transition disabled:cursor-default ${
               disabled && !isFree ? disabledCtaClass : ctaClass
             }`}
           >
@@ -793,23 +949,17 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
 
         <div className={`relative mx-4 mt-5 rounded-[10px] border p-3 ${detailBoxClass}`}>
           <div className={`mb-2 text-[11px] font-black uppercase tracking-wider ${isDark ? 'text-white/88' : 'text-slate-700'}`}>
-            {isProMax ? 'Store Access' : isFree ? 'Locked Features' : 'Included Tools'}
+            {uiContent.inclusionTitle}
           </div>
           <div className={`space-y-2 text-xs ${detailMutedClass}`}>
-            <div className="flex items-center justify-between gap-3">
-              <span>{isProMax ? 'Published Store banks' : 'Bank Store downloads'}</span>
-              <span className={`rounded px-1.5 py-0.5 font-black ${isProMax ? enabledBadgeClass : isFree ? lockBadgeClass : enabledBadgeClass}`}>
-                {isProMax ? 'GRANTED' : isFree ? 'LOCKED' : 'ENABLED'}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span>{isProMax ? 'Own bank quota' : 'Search / mappings'}</span>
-              <span className={`rounded px-1.5 py-0.5 font-black ${isFree ? lockBadgeClass : neutralBadgeClass}`}>{isProMax ? '12' : isFree ? 'LOCKED' : 'ENABLED'}</span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span>{isProMax ? 'Device bank cap' : 'Backup / repair'}</span>
-              <span className={`rounded px-1.5 py-0.5 font-black ${isFree ? lockBadgeClass : enabledBadgeClass}`}>{isProMax ? '150' : isFree ? 'LOCKED' : 'ENABLED'}</span>
-            </div>
+            {inclusions.map((item) => (
+              <div key={`${item.title}:${item.badge}`} className="flex items-center justify-between gap-3">
+                <span>{item.title}</span>
+                <span className={`rounded px-1.5 py-0.5 font-black ${item.enabled ? enabledBadgeClass : lockBadgeClass}`}>
+                  {item.badge}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -820,8 +970,16 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`w-[98vw] max-h-[96vh] overflow-hidden p-0 sm:max-w-[1380px] ${dialogShellClass}`}>
-        <div className="max-h-[96vh] overflow-y-auto p-4 sm:p-6">
+      <DialogContent
+        className={`w-[98vw] max-h-[96vh] overflow-hidden p-0 sm:max-w-[1380px] ${dialogShellClass}`}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          window.requestAnimationFrame(() => {
+            dialogBodyRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+          });
+        }}
+      >
+        <div ref={dialogBodyRef} className="max-h-[96vh] overflow-y-auto p-4 sm:p-6">
         {step === 'plans' && (
           <style>{`
             @media (max-width: 767px) {
@@ -840,7 +998,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
         {step === 'plans' && (
           <div className="relative -mx-4 -mt-4 mb-5 h-[280px] overflow-hidden rounded-t-lg md:hidden">
             <video
-              src="/assets/preview.mp4"
+              src={resolveTierVideoSrc(freeUiContent)}
               autoPlay
               loop
               muted
@@ -849,12 +1007,12 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
             />
             <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.1)_0%,rgba(0,0,0,0.44)_100%)]" />
             <div className="absolute inset-x-0 bottom-0 h-[160px] bg-[radial-gradient(120%_100%_at_50%_100%,rgba(180,40,120,0.48)_0%,rgba(140,30,100,0.24)_50%,transparent_72%)]" />
-            <div className="absolute left-0 right-0 top-11 flex flex-col items-center gap-1 text-center">
-              <p className="text-sm font-semibold text-white/78">Special Offer</p>
-              <p className="select-none text-[60px] font-black uppercase leading-[68px] tracking-[-0.05em] text-transparent drop-shadow-[0_4px_16px_rgba(0,0,0,0.26)] [background-clip:text] [-webkit-text-fill-color:transparent] [background-image:linear-gradient(182deg,rgb(255,255,255)_50%,rgba(255,255,255,0.6)_74%)]">
+            <div className="pointer-events-none absolute left-0 right-0 z-10 flex flex-col items-center gap-1 px-4 text-center text-white [top:calc(env(safe-area-inset-top,0px)+2.35rem)]">
+              <p className="text-sm font-semibold text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)]">Special Offer</p>
+              <p className="select-none text-[clamp(42px,14vw,60px)] font-black uppercase leading-[1.05] text-white drop-shadow-[0_4px_16px_rgba(0,0,0,0.46)]">
                 {heroPromoPercent}% OFF
               </p>
-              <p className="text-sm font-semibold text-white/78">Pay less, play more</p>
+              <p className="text-sm font-semibold text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)]">Pay less, play more</p>
             </div>
           </div>
         )}
@@ -889,7 +1047,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
               </div>
             )}
 
-            <div className={`relative -mx-4 rounded-[1.6rem] border py-4 md:mx-0 md:border-0 md:bg-transparent md:px-0 md:shadow-none ${planRailShellClass}`}>
+            <div ref={planRailShellRef} className={`relative -mx-4 rounded-[1.6rem] border py-4 md:mx-0 md:border-0 md:bg-transparent md:px-0 md:shadow-none ${planRailShellClass}`}>
               <div className="mb-3 flex items-center justify-center gap-2 text-xs">
                 <span className={`rounded-full px-3 py-1 ${currentTierPillClass}`}>Current tier: {currentTierLabel}</span>
               </div>
@@ -914,7 +1072,11 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
                 type="button"
                 aria-label="Previous plan"
                 onClick={() => showMobilePlan(mobilePlanIndex - 1)}
-                className="absolute left-1 top-24 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
+                className={`absolute left-1 top-24 z-10 flex h-10 w-10 items-center justify-center rounded-full border shadow-[0_14px_34px_rgba(15,23,42,0.24)] md:hidden ${
+                  isDark
+                    ? 'border-white/20 bg-white/18 text-white backdrop-blur'
+                    : 'border-slate-900/10 bg-slate-950 text-white'
+                }`}
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
@@ -922,7 +1084,11 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
                 type="button"
                 aria-label="Next plan"
                 onClick={() => showMobilePlan(mobilePlanIndex + 1)}
-                className="absolute right-1 top-24 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur md:hidden"
+                className={`absolute right-1 top-24 z-10 flex h-10 w-10 items-center justify-center rounded-full border shadow-[0_14px_34px_rgba(15,23,42,0.24)] md:hidden ${
+                  isDark
+                    ? 'border-white/20 bg-white/18 text-white backdrop-blur'
+                    : 'border-slate-900/10 bg-slate-950 text-white'
+                }`}
               >
                 <ChevronRight className="h-5 w-5" />
               </button>
@@ -937,10 +1103,6 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
                   />
                 ))}
               </div>
-            </div>
-
-            <div className={`rounded-2xl border px-4 py-3 text-xs leading-relaxed backdrop-blur ${planFootnoteClass}`}>
-              PRO MAX grants Store banks that are published at upgrade approval time. Future new releases are not automatically included unless admin grants them later.
             </div>
 
             {successMessage && (

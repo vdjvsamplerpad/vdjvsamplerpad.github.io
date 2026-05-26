@@ -64,8 +64,8 @@ export const DEFAULT_ACCOUNT_LIMITS: Record<AccountTier, AccountLimits> = {
     ownedBankQuota: 2,
     ownedBankPadCap: 25,
     deviceTotalBankCap: 4,
-    defaultBankDailyPlays: 100,
-    deckCount: 2,
+    defaultBankDailyPlays: 50,
+    deckCount: 1,
   },
   pro: {
     ownedBankQuota: 6,

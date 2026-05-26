@@ -48,7 +48,7 @@ export type AccountCapabilitySnapshot = {
   refreshedAt: string;
 };
 
-export const ACCOUNT_CAPABILITIES_CACHE_KEY = 'vdjv-account-capabilities-v1';
+export const ACCOUNT_CAPABILITIES_CACHE_KEY = 'vdjv-account-capabilities-v4';
 
 const proFeatures: AccountFeatures = {
   bankStoreBrowse: true,
@@ -122,8 +122,8 @@ export const DEFAULT_ACCOUNT_CAPABILITIES: Record<AccountTier, AccountCapability
       ownedBankQuota: 2,
       ownedBankPadCap: 25,
       deviceTotalBankCap: 4,
-      defaultBankDailyPlays: 100,
-      deckCount: 2,
+      defaultBankDailyPlays: 50,
+      deckCount: 1,
     },
     features: {
       ...proFeatures,

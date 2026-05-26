@@ -8,6 +8,25 @@ export type AudioBackendType = 'buffer' | 'media';
 
 export type StopMode = 'instant' | 'fadeout' | 'brake' | 'backspin' | 'filter';
 
+export type StopTimingOverridesMs = Partial<Record<StopMode, number>>;
+export type ConfigurableStopTimingMode = Exclude<StopMode, 'instant'>;
+
+export interface StopTimingRange {
+    minMs: number;
+    maxMs: number;
+}
+
+export const STOP_TIMING_RANGES: Record<StopMode, StopTimingRange> = {
+    instant: { minMs: 10, maxMs: 40 },
+    fadeout: { minMs: 250, maxMs: 3000 },
+    brake: { minMs: 450, maxMs: 3000 },
+    backspin: { minMs: 350, maxMs: 2200 },
+    filter: { minMs: 400, maxMs: 3000 },
+};
+
+export const STOP_TIMING_MODES: StopMode[] = ['instant', 'fadeout', 'brake', 'backspin', 'filter'];
+export const CONFIGURABLE_STOP_TIMING_MODES: ConfigurableStopTimingMode[] = ['fadeout', 'brake', 'backspin', 'filter'];
+
 export type TriggerMode = 'toggle' | 'hold' | 'stutter' | 'unmute';
 
 export type PlaybackMode = 'once' | 'loop' | 'stopper';
@@ -90,6 +109,70 @@ export interface StopTimingProfile {
     volumeSmoothingSec: number;
     softMuteSmoothingSec: number;
     masterSmoothingSec: number;
+}
+
+const clampStopTimingDurationMs = (mode: StopMode, value: unknown): number | null => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    const range = STOP_TIMING_RANGES[mode];
+    return Math.max(range.minMs, Math.min(range.maxMs, Math.round(numeric)));
+};
+
+export function normalizeStopTimingOverrides(value: unknown): StopTimingOverridesMs {
+    const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+    const next: StopTimingOverridesMs = {};
+    CONFIGURABLE_STOP_TIMING_MODES.forEach((mode) => {
+        const parsed = clampStopTimingDurationMs(mode, raw[mode]);
+        if (parsed !== null) next[mode] = parsed;
+    });
+    return next;
+}
+
+export function getStopModeDurationMs(mode: StopMode, profile: StopTimingProfile = getStopTimingProfile()): number {
+    switch (mode) {
+        case 'instant':
+            return Math.round(profile.instantStopFinalizeDelayMs);
+        case 'fadeout':
+            return Math.round(profile.defaultFadeOutMs);
+        case 'brake':
+            return Math.round(profile.brakeWebDurationMs);
+        case 'backspin':
+            return Math.round(profile.backspinWebTotalMs);
+        case 'filter':
+            return Math.round(profile.filterDurationSec * 1000);
+    }
+}
+
+export function applyStopTimingOverrides(
+    profile: StopTimingProfile,
+    overrides?: StopTimingOverridesMs | null,
+): StopTimingProfile {
+    const normalized = normalizeStopTimingOverrides(overrides);
+    const next: StopTimingProfile = { ...profile };
+
+    if (typeof normalized.fadeout === 'number') {
+        next.defaultFadeOutMs = normalized.fadeout;
+    }
+
+    if (typeof normalized.brake === 'number') {
+        next.brakeWebDurationMs = normalized.brake;
+        next.brakeDurationSec = normalized.brake / 1000;
+    }
+
+    if (typeof normalized.backspin === 'number') {
+        const baseTotal = Math.max(1, profile.backspinWebTotalMs);
+        const speedUpRatio = Math.max(0.2, Math.min(0.7, profile.backspinWebSpeedUpMs / baseTotal));
+        next.backspinWebTotalMs = normalized.backspin;
+        next.backspinWebSpeedUpMs = Math.max(120, Math.min(normalized.backspin - 80, Math.round(normalized.backspin * speedUpRatio)));
+        next.backspinIOSDurationSec = normalized.backspin / 1000;
+        next.backspinIOSPitchRampSec = Math.max(0.12, Math.min(0.45, next.backspinWebSpeedUpMs / 1000));
+    }
+
+    if (typeof normalized.filter === 'number') {
+        next.filterDurationSec = normalized.filter / 1000;
+    }
+
+    return next;
 }
 
 /** Platform-specific timing profiles */

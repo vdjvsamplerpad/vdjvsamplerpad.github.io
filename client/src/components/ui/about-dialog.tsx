@@ -5,6 +5,7 @@ import { ActionGroup } from '@/components/ui/action-group';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { ExternalLink, LogOut, Trash2 } from 'lucide-react';
 import { MidiInputInfo, MidiMessage } from '@/lib/midi';
@@ -14,6 +15,13 @@ import { normalizeShortcutKey } from '@/lib/keyboard-shortcuts';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { ProgressDialog } from '@/components/ui/progress-dialog';
 import { StopMode } from '@/components/sampler/types/sampler';
+import {
+  STOP_TIMING_RANGES,
+  getStopModeDurationMs,
+  getStopTimingProfile,
+  normalizeStopTimingOverrides,
+  type StopTimingOverridesMs,
+} from '@/lib/audio-engine';
 import type { GraphicsProfile } from '@/lib/performance-monitor';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { supabase } from '@/lib/supabase';
@@ -42,6 +50,14 @@ const DEFAULT_SUPPORT_MESSENGER_URL = (
   ((import.meta as any).env?.VITE_SUPPORT_MESSENGER_URL as string | undefined) || ''
 ).trim();
 const MAX_PROGRESS_LOG_LINES = 80;
+
+const STOP_TIMING_LABELS: Record<StopMode, string> = {
+  instant: 'Instant stop',
+  fadeout: 'Fade out timing',
+  brake: 'Brake timing',
+  backspin: 'Backspin timing',
+  filter: 'Filter sweep timing',
+};
 
 const appendProgressLogLine = (
   setLines: React.Dispatch<React.SetStateAction<string[]>>,
@@ -130,6 +146,63 @@ const SectionLabel = ({
   </div>
 );
 
+type SettingsPanelId = 'general' | 'system' | 'channels' | 'backup';
+type SettingsPanelOption = { id: SettingsPanelId; label: string; disabled?: boolean };
+
+const SettingsSectionTabs = ({
+  sections,
+  active,
+  onChange,
+}: {
+  sections: SettingsPanelOption[];
+  active: SettingsPanelId;
+  onChange: (panel: SettingsPanelId) => void;
+}) => {
+  const activeIndex = Math.max(0, sections.findIndex((section) => section.id === active));
+  const count = Math.max(1, sections.length);
+
+  return (
+    <div
+      role="tablist"
+      aria-label="Settings sections"
+      className="relative grid min-h-10 overflow-hidden rounded-full border border-white/20 bg-white/65 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] dark:bg-white/[0.055] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+      style={{ gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }}
+    >
+      <span
+        aria-hidden="true"
+        className="absolute bottom-1 top-1 rounded-full bg-[#B9FF12] shadow-[0_10px_24px_rgba(185,255,18,0.28)] transition-transform duration-300 ease-out motion-reduce:transition-none"
+        style={{
+          left: '0.25rem',
+          width: `calc((100% - 0.5rem) / ${count})`,
+          transform: `translateX(calc(${activeIndex} * 100%))`,
+        }}
+      />
+      {sections.map((section) => {
+        const selected = active === section.id;
+        return (
+          <button
+            key={section.id}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            disabled={section.disabled}
+            className={`relative z-10 min-h-8 rounded-full px-3 text-[11px] font-bold transition-colors sm:text-xs ${
+              selected
+                ? 'text-slate-950'
+                : section.disabled
+                  ? 'cursor-not-allowed text-slate-400 opacity-45 dark:text-slate-500'
+                  : 'text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white'
+            }`}
+            onClick={() => onChange(section.id)}
+          >
+            <span className="block truncate">{section.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
 
 interface AboutDialogProps {
   open: boolean;
@@ -201,10 +274,12 @@ interface AboutDialogProps {
   isDualMode: boolean;
   padSize: number;
   stopMode: StopMode;
+  stopTimingOverrides: StopTimingOverridesMs;
   padSizeMin: number;
   padSizeMax: number;
   onPadSizeChange: (size: number) => void;
   onStopModeChange: (mode: StopMode) => void;
+  onStopTimingOverridesChange: (overrides: StopTimingOverridesMs) => void;
   defaultTriggerMode: 'toggle' | 'hold' | 'stutter' | 'unmute';
   onDefaultTriggerModeChange: (mode: 'toggle' | 'hold' | 'stutter' | 'unmute') => void;
   graphicsProfile: GraphicsProfile;
@@ -293,10 +368,12 @@ export function AboutDialog({
   isDualMode,
   padSize,
   stopMode,
+  stopTimingOverrides,
   padSizeMin,
   padSizeMax,
   onPadSizeChange,
   onStopModeChange,
+  onStopTimingOverridesChange,
   defaultTriggerMode,
   onDefaultTriggerModeChange,
   graphicsProfile,
@@ -318,6 +395,17 @@ export function AboutDialog({
   const canUseMappingImportExport = capabilities.features.mappingImportExport;
   const canUseBackupRepair = capabilities.features.backupRepair;
   const canUseAdvancedStopModes = capabilities.features.advancedStopModes;
+  const effectiveStopMode = canUseAdvancedStopModes ? stopMode : 'instant';
+  const normalizedStopTimingOverrides = React.useMemo(
+    () => normalizeStopTimingOverrides(stopTimingOverrides),
+    [stopTimingOverrides],
+  );
+  const stopTimingProfile = React.useMemo(() => getStopTimingProfile(), []);
+  const activeStopTimingRange = STOP_TIMING_RANGES[effectiveStopMode];
+  const recommendedStopTimingMs = getStopModeDurationMs(effectiveStopMode, stopTimingProfile);
+  const activeStopTimingMs = normalizedStopTimingOverrides[effectiveStopMode] ?? recommendedStopTimingMs;
+  const hasActiveStopTimingOverride = typeof normalizedStopTimingOverrides[effectiveStopMode] === 'number';
+  const canEditActiveStopTiming = effectiveStopMode !== 'instant';
   const [appUpdateActionError, setAppUpdateActionError] = React.useState<string | null>(null);
   const [appUpdateActionBusy, setAppUpdateActionBusy] = React.useState(false);
   const [voucherCode, setVoucherCode] = React.useState('');
@@ -369,7 +457,7 @@ export function AboutDialog({
       setAppUpdateActionBusy(false);
     }
   }, [effectiveAppUpdateBusy, onInstallAppUpdate]);
-  const [activePanel, setActivePanel] = React.useState<'general' | 'system' | 'channels' | 'backup'>('general');
+  const [activePanel, setActivePanel] = React.useState<SettingsPanelId>('general');
   const [systemMappingError, setSystemMappingError] = React.useState<string | null>(null);
   const [channelMappingError, setChannelMappingError] = React.useState<string | null>(null);
   const [mappingNotice, setMappingNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -535,6 +623,23 @@ export function AboutDialog({
     if (canUseAdvancedStopModes || stopMode === 'instant') return;
     onStopModeChange('instant');
   }, [canUseAdvancedStopModes, onStopModeChange, stopMode]);
+
+  const updateActiveStopTiming = React.useCallback((value: number) => {
+    if (effectiveStopMode === 'instant') return;
+    const range = STOP_TIMING_RANGES[effectiveStopMode];
+    const nextValue = Math.max(range.minMs, Math.min(range.maxMs, Math.round(Number(value) || recommendedStopTimingMs)));
+    onStopTimingOverridesChange({
+      ...normalizedStopTimingOverrides,
+      [effectiveStopMode]: nextValue,
+    });
+  }, [effectiveStopMode, normalizedStopTimingOverrides, onStopTimingOverridesChange, recommendedStopTimingMs]);
+
+  const resetActiveStopTiming = React.useCallback(() => {
+    if (effectiveStopMode === 'instant') return;
+    const next = { ...normalizedStopTimingOverrides };
+    delete next[effectiveStopMode];
+    onStopTimingOverridesChange(next);
+  }, [effectiveStopMode, normalizedStopTimingOverrides, onStopTimingOverridesChange]);
 
   React.useEffect(() => {
     return () => {
@@ -1371,7 +1476,7 @@ export function AboutDialog({
   const masterVolumeUpKeyError = getInlineMappingError('master-volumeUp-key');
   const masterVolumeDownKeyError = getInlineMappingError('master-volumeDown-key');
   const masterMuteKeyError = getInlineMappingError('master-mute-key');
-  const availablePanels = React.useMemo((): Array<{ id: 'general' | 'system' | 'channels' | 'backup'; label: string; disabled?: boolean }> => {
+  const availablePanels = React.useMemo((): SettingsPanelOption[] => {
     if (!isAuthenticated) {
       return [{ id: 'general', label: 'General' }];
     }
@@ -1388,12 +1493,6 @@ export function AboutDialog({
       { id: 'backup', label: 'Backup' },
     ];
   }, [canUseChannelShortcuts, canUseSystemShortcuts, capabilities.effectiveTier, isAuthenticated]);
-  const activePanelIndex = Math.max(0, availablePanels.findIndex((panel) => panel.id === activePanel));
-  const activePanelStyle = {
-    ['--lp-version-count' as string]: availablePanels.length,
-    ['--lp-version-index' as string]: activePanelIndex,
-  } as React.CSSProperties;
-
   React.useEffect(() => {
     if (availablePanels.some((panel) => panel.id === activePanel && !panel.disabled)) return;
     setActivePanel(availablePanels[0]?.id || 'general');
@@ -1401,31 +1500,24 @@ export function AboutDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[96vw] max-h-[92vh] overflow-hidden sm:max-w-4xl bg-white border-gray-300 dark:bg-gray-900 dark:border-gray-700">
+      <DialogContent className="flex h-[92dvh] w-[96vw] max-h-[92dvh] flex-col gap-3 overflow-hidden p-4 sm:h-[min(92dvh,46rem)] sm:max-w-4xl sm:p-6 bg-white border-gray-300 dark:bg-gray-900 dark:border-gray-700">
         <DialogHeader className="pb-2 border-b border-gray-200 dark:border-gray-700">
           <DialogTitle>Setting</DialogTitle>
           <DialogDescription>
             Configure app preferences, MIDI mappings, channel controls, and backup tools.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3 py-2 max-h-[calc(92vh-96px)] overflow-y-auto pr-1 text-sm">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 py-2 text-sm">
           {availablePanels.length > 1 && (
-            <div className="lp-version-options" style={activePanelStyle}>
-              <span className="lp-version-liquid" aria-hidden="true" />
-              {availablePanels.map((panel) => (
-                <button
-                  key={panel.id}
-                  type="button"
-                  className={`lp-version-option min-w-0 px-1 text-[10px] sm:text-xs ${activePanel === panel.id ? 'is-active' : ''}`}
-                  disabled={panel.disabled}
-                  onClick={() => setActivePanel(panel.id)}
-                >
-                  {panel.label}
-                </button>
-              ))}
-            </div>
+            <SettingsSectionTabs
+              sections={availablePanels}
+              active={activePanel}
+              onChange={setActivePanel}
+            />
           )}
 
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            <div className="space-y-3 pb-2">
           {activePanel === 'general' && (
             <>
               <div className="rounded-lg border p-3 space-y-3 bg-gray-50/60 dark:bg-gray-900/30">
@@ -1506,7 +1598,7 @@ export function AboutDialog({
                 </div>
                 <div className="space-y-1">
                   <FieldLabel label="Stop Mode" help="Chooses how pads stop when you turn them off or trigger a compatible stop action, such as instant cut, fade out, brake, backspin, or filter sweep." />
-                  <Select value={canUseAdvancedStopModes ? stopMode : 'instant'} onValueChange={(value) => onStopModeChange(value as StopMode)} disabled={!canUseAdvancedStopModes}>
+                  <Select value={effectiveStopMode} onValueChange={(value) => onStopModeChange(value as StopMode)} disabled={!canUseAdvancedStopModes}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
@@ -1524,6 +1616,55 @@ export function AboutDialog({
                   </Select>
                   {!canUseAdvancedStopModes && (
                     <p className="text-[10px] text-amber-600 dark:text-amber-300">Advanced stop modes require PRO.</p>
+                  )}
+                  {canEditActiveStopTiming && (
+                  <div className="mt-2 rounded-lg border border-gray-200 bg-white/70 p-3 dark:border-gray-800 dark:bg-gray-950/40">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <FieldLabel
+                          label={STOP_TIMING_LABELS[effectiveStopMode]}
+                          help="Adjusts only the duration of the selected stop mode. Recommended keeps the app's tuned platform default."
+                        />
+                        <p className="text-[10px] text-gray-500">
+                          {hasActiveStopTimingOverride ? 'Custom' : 'Recommended'}: {activeStopTimingMs} ms
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-[10px]"
+                        disabled={!hasActiveStopTimingOverride}
+                        onClick={resetActiveStopTiming}
+                      >
+                        Reset
+                      </Button>
+                    </div>
+                    <div className="mt-3 flex items-center gap-3">
+                      <Slider
+                        min={activeStopTimingRange.minMs}
+                        max={activeStopTimingRange.maxMs}
+                        step={25}
+                        value={[activeStopTimingMs]}
+                        onValueChange={(next) => updateActiveStopTiming(next[0] ?? recommendedStopTimingMs)}
+                        className="min-w-0 flex-1"
+                      />
+                      <Input
+                        type="number"
+                        min={activeStopTimingRange.minMs}
+                        max={activeStopTimingRange.maxMs}
+                        step={25}
+                        value={activeStopTimingMs}
+                        onChange={(event) => updateActiveStopTiming(Number(event.target.value))}
+                        className="h-8 w-20 text-xs"
+                      />
+                    </div>
+                    <div className="mt-1 flex justify-between text-[10px] text-gray-500">
+                      <span>{activeStopTimingRange.minMs} ms</span>
+                      <span>Default {recommendedStopTimingMs} ms</span>
+                      <span>{activeStopTimingRange.maxMs} ms</span>
+                    </div>
+                  </div>
                   )}
                 </div>
                 <div className="space-y-1">
@@ -2472,6 +2613,8 @@ export function AboutDialog({
               </div>
             </div>
           )}
+            </div>
+          </div>
         </div>
       </DialogContent>
       <ProgressDialog

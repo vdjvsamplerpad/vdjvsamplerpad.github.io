@@ -1,5 +1,6 @@
 import {
   executeStop,
+  type StopTimingProfile,
   type StopTarget,
 } from '../../../lib/audio-engine';
 import { shouldUseEagerMediaPreload } from '../../../lib/audio-engine/mediaPreloadPolicy';
@@ -108,10 +109,6 @@ const IS_ANDROID_ENV = IS_ANDROID_RUNTIME_ENV;
 const IS_CAPACITOR_NATIVE = IS_CAPACITOR_NATIVE_RUNTIME;
 
 export type StopMode = 'instant' | 'fadeout' | 'brake' | 'backspin' | 'filter';
-
-interface StopTimingProfile {
-  volumeSmoothingSec: number;
-}
 
 export interface DeckLoadedPadRef {
   bankId: string;
@@ -1178,7 +1175,7 @@ export class AudioDeckRuntime {
       isActive: () => channel.isPlaying && !audio.paused,
     });
 
-    channel.stopCancel = executeStop(stopTarget, mode, this.audioContext ?? undefined);
+    channel.stopCancel = executeStop(stopTarget, mode, this.audioContext ?? undefined, timing);
   }
 
   loadPadToChannel(channelId: number, padId: string): boolean {
@@ -1664,7 +1661,7 @@ export class AudioDeckRuntime {
   }
 
   setChannelCount(count: number): void {
-    const safe = clampDeckChannelCount(count, 2, MAX_PLAYBACK_CHANNELS);
+    const safe = clampDeckChannelCount(count, 1, MAX_PLAYBACK_CHANNELS);
     if (safe === this.deckChannelCount) return;
     if (safe < this.deckChannelCount) this.cleanupRemovedChannels(safe);
     if (safe > this.deckChannelCount) {

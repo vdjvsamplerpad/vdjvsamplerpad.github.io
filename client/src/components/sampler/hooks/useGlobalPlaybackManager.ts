@@ -3,7 +3,12 @@ import { getIOSAudioService, type IOSAudioService } from '../../../lib/ios-audio
 import {
   AudioEngineCore,
   type EngineHealth,
-  type AudioBackendType
+  type AudioBackendType,
+  type StopTimingOverridesMs,
+  type StopTimingProfile,
+  applyStopTimingOverrides,
+  getStopTimingProfile as getSharedStopTimingProfile,
+  normalizeStopTimingOverrides,
 } from '../../../lib/audio-engine';
 import {
   DEFAULT_AUDIO_RUNTIME_STAGE,
@@ -283,28 +288,6 @@ export interface AudioInstance {
   padLatencyProbe: PadLatencyProbe | null;
 }
 
-export interface StopTimingProfile {
-  instantStopFadeSec: number;
-  instantStopFinalizeDelayMs: number;
-  defaultFadeOutMs: number;
-  brakeDurationSec: number;
-  brakeMinRate: number;
-  brakeWebDurationMs: number;
-  backspinIOSPitchStart: number;
-  backspinIOSPitchEnd: number;
-  backspinIOSPitchRampSec: number;
-  backspinIOSDurationSec: number;
-  backspinWebSpeedUpMs: number;
-  backspinWebTotalMs: number;
-  backspinWebMaxRate: number;
-  backspinWebMinRate: number;
-  filterDurationSec: number;
-  filterEndHz: number;
-  volumeSmoothingSec: number;
-  softMuteSmoothingSec: number;
-  masterSmoothingSec: number;
-}
-
 export interface GlobalPlaybackManager {
   registerPad: (padId: string, padData: AudioPadRuntimeRegistrationData, bankId: string, bankName: string) => Promise<void>;
   preloadPad: (padId: string, padData: AudioPadRuntimeRegistrationData, bankId: string, bankName: string) => Promise<boolean>;
@@ -389,6 +372,7 @@ export interface GlobalPlaybackManager {
   getAudioRuntimeInfo: () => AudioRuntimeInfo;
   getPadWarmStatus: (padId: string) => PadWarmStatus;
   getAudioRecoveryState: () => AudioRecoveryState;
+  setStopTimingOverrides: (overrides?: StopTimingOverridesMs | null) => void;
   getPadLatencyStats: () => PadLatencyStats | null;
   resetPadLatencyStats: () => void;
   // Audio Engine V3 facade. diagnostics.
@@ -478,6 +462,7 @@ class GlobalPlaybackManagerClass {
   private v3StateRuntime: AudioPadV3StateRuntime = new AudioPadV3StateRuntime();
   private v3PadRuntime!: AudioPadV3Runtime;
   private audioRuntimeStage: AudioRuntimeStage = DEFAULT_AUDIO_RUNTIME_STAGE;
+  private stopTimingOverrides: StopTimingOverridesMs = {};
 
   private computeV3EffectiveVolume(snapshot: DeckPadSnapshot, transport?: { softMuted?: boolean } | null): number {
     if (this.globalMuted) return 0;
@@ -526,6 +511,11 @@ class GlobalPlaybackManagerClass {
 
   setAndroidMuteGateLegacy(enabled: boolean): AndroidMuteGateMode {
     return setAndroidMuteGateLegacyValue(this.isAndroid, enabled);
+  }
+
+  setStopTimingOverrides(overrides?: StopTimingOverridesMs | null): void {
+    this.stopTimingOverrides = normalizeStopTimingOverrides(overrides);
+    this.v3Engine.setStopTimingOverrides(this.stopTimingOverrides);
   }
 
   getAndroidMuteGateMode(): AndroidMuteGateMode {
@@ -781,75 +771,7 @@ class GlobalPlaybackManagerClass {
   }
 
   private getStopTimingProfile(): StopTimingProfile {
-    if (this.isIOS) {
-      return {
-        instantStopFadeSec: 0.014,
-        instantStopFinalizeDelayMs: 18,
-        defaultFadeOutMs: 900,
-        brakeDurationSec: 1.35,
-        brakeMinRate: 0.08,
-        brakeWebDurationMs: 1350,
-        backspinIOSPitchStart: 1.7,
-        backspinIOSPitchEnd: 2.8,
-        backspinIOSPitchRampSec: 0.22,
-        backspinIOSDurationSec: 0.56,
-        backspinWebSpeedUpMs: 420,
-        backspinWebTotalMs: 900,
-        backspinWebMaxRate: 2.8,
-        backspinWebMinRate: 0.24,
-        filterDurationSec: 1.2,
-        filterEndHz: 120,
-        volumeSmoothingSec: 0.016,
-        softMuteSmoothingSec: 0.014,
-        masterSmoothingSec: 0.012
-      };
-    }
-
-    if (this.isAndroid) {
-      return {
-        instantStopFadeSec: 0.02,
-        instantStopFinalizeDelayMs: 24,
-        defaultFadeOutMs: 800,
-        brakeDurationSec: 1.2,
-        brakeMinRate: 0.1,
-        brakeWebDurationMs: 1200,
-        backspinIOSPitchStart: 1.8,
-        backspinIOSPitchEnd: 3,
-        backspinIOSPitchRampSec: 0.24,
-        backspinIOSDurationSec: 0.58,
-        backspinWebSpeedUpMs: 380,
-        backspinWebTotalMs: 780,
-        backspinWebMaxRate: 2.7,
-        backspinWebMinRate: 0.28,
-        filterDurationSec: 1.1,
-        filterEndHz: 160,
-        volumeSmoothingSec: 0.02,
-        softMuteSmoothingSec: 0.018,
-        masterSmoothingSec: 0.015
-      };
-    }
-
-    return {
-      instantStopFadeSec: 0.012,
-      instantStopFinalizeDelayMs: 14,
-      defaultFadeOutMs: 900,
-      brakeDurationSec: 1.4,
-      brakeMinRate: 0.08,
-      brakeWebDurationMs: 1400,
-      backspinIOSPitchStart: 1.8,
-      backspinIOSPitchEnd: 3.1,
-      backspinIOSPitchRampSec: 0.28,
-      backspinIOSDurationSec: 0.62,
-      backspinWebSpeedUpMs: 500,
-      backspinWebTotalMs: 950,
-      backspinWebMaxRate: 3,
-      backspinWebMinRate: 0.2,
-      filterDurationSec: 1.35,
-      filterEndHz: 100,
-      volumeSmoothingSec: 0.012,
-      softMuteSmoothingSec: 0.01,
-      masterSmoothingSec: 0.01
-    };
+    return applyStopTimingOverrides(getSharedStopTimingProfile(), this.stopTimingOverrides);
   }
 
   private setGain(instance: AudioInstance, gain: number) {

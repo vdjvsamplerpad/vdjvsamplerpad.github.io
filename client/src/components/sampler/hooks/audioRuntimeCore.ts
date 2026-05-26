@@ -1,4 +1,5 @@
 import type { AudioEngineCore } from '../../../lib/audio-engine';
+import { getCapacitorAppPlugin } from '@/lib/capacitor-app-plugin';
 import { usesLegacyAudioRuntimePath, type AudioRuntimeStage } from './audioRuntimeStage';
 
 const IS_CAPACITOR_NATIVE = typeof window !== 'undefined' &&
@@ -56,9 +57,7 @@ export class AudioRuntimeCore {
 
   setupNativeAppStateListener(): void {
     if (this.nativeAppStateListenerReady || typeof window === 'undefined') return;
-    const capacitor = (window as any).Capacitor;
-    if (!capacitor?.isNativePlatform?.()) return;
-    const appPlugin = capacitor?.Plugins?.App;
+    const appPlugin = getCapacitorAppPlugin();
     if (!appPlugin?.addListener) return;
 
     this.nativeAppStateListenerReady = true;

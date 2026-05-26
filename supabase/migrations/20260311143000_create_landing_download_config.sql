@@ -8,9 +8,7 @@ create table if not exists public.landing_download_config (
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
-
 alter table public.landing_download_config enable row level security;
-
 insert into public.landing_download_config (
   id,
   is_active,

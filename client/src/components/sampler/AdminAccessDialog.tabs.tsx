@@ -7,6 +7,14 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { CopyableValue, copyTextToClipboard } from '@/components/ui/copyable-value';
 import { adminApi, type AdminAccountRegistrationRequest, type AdminAccountUpgradeRequest, type AdminClientCrashReport, type AdminInstallerPurchaseRequestGroup, type DefaultBankRelease, type InstallerBuyProduct, type LandingDownloadConfig, type LandingPlatformKey, type LandingSocialKey, type LandingVersionKey } from '@/lib/admin-api';
+import {
+  CONFIGURABLE_STOP_TIMING_MODES,
+  STOP_TIMING_RANGES,
+  getStopModeDurationMs,
+  getStopTimingProfile,
+  normalizeStopTimingOverrides,
+  type ConfigurableStopTimingMode,
+} from '@/lib/audio-engine';
 import type { AdminLegalDocumentState, LegalDocument, LegalDocumentKey, LegalSection } from '@/lib/legal-content';
 import { prepareManagedImageUpload } from '@/lib/image-upload';
 import { uploadManagedStoreAsset } from '@/lib/store-asset-upload';
@@ -30,13 +38,21 @@ import type {
 } from './AdminAccessDialog.shared';
 import { CatalogCard, Pagination, ProofImagePreview } from './AdminAccessDialog.widgets';
 import {
-  AdminActionCluster,
   AdminControlsBar,
   AdminPageScaffold,
   AdminRefreshButton,
   AdminReviewDialog,
+  AdminSectionTabs,
   AdminStatsStrip,
+  AdminToolbar,
 } from './AdminAccessDialog.layout';
+
+const ADMIN_STOP_TIMING_LABELS: Record<ConfigurableStopTimingMode, string> = {
+  fadeout: 'Fade Out',
+  brake: 'Brake',
+  backspin: 'Backspin',
+  filter: 'Filter Sweep',
+};
 
 interface AccountRequestsTabProps {
   theme: AdminDialogTheme;
@@ -266,6 +282,7 @@ interface StoreBannersTabProps {
   onResetBanner: (id: string) => void;
   onSaveBanner: (banner: StoreMarketingBanner) => void;
   onDeleteBanner: (banner: StoreMarketingBanner) => void;
+  onReload: () => void;
 }
 
 interface StorePromotionsTabProps {
@@ -320,6 +337,7 @@ interface StorePromotionsTabProps {
   onReset: () => void;
   onSave: () => Promise<boolean>;
   onDelete: (promotionId: string) => void;
+  onReload: () => void;
 }
 
 interface StoreConfigTabProps {
@@ -546,36 +564,59 @@ const getRequestStatusOptions = (scope: 'pending' | 'history'): Array<{ value: R
 function RequestFilterBar({
   theme,
   scope,
+  search,
+  searchPlaceholder = 'Search requests...',
   statusFilter,
   channelFilter,
   decisionFilter,
   automationFilter,
   ocrStatusFilter,
+  resultLabel,
+  onSearchChange,
   onStatusFilterChange,
   onChannelFilterChange,
   onDecisionFilterChange,
   onAutomationFilterChange,
   onOcrStatusFilterChange,
+  extraMoreFilters,
+  activeFilterCount = 0,
+  onClearFilters,
 }: {
   theme: AdminDialogTheme;
   scope: 'pending' | 'history';
+  search: string;
+  searchPlaceholder?: string;
   statusFilter: RequestStatusFilter;
   channelFilter: RequestChannelFilter;
   decisionFilter: RequestDecisionFilter;
   automationFilter: RequestAutomationFilter;
   ocrStatusFilter: RequestOcrStatusFilter;
+  resultLabel?: React.ReactNode;
+  onSearchChange: (value: string) => void;
   onStatusFilterChange: (value: RequestStatusFilter) => void;
   onChannelFilterChange: (value: RequestChannelFilter) => void;
   onDecisionFilterChange: (value: RequestDecisionFilter) => void;
   onAutomationFilterChange: (value: RequestAutomationFilter) => void;
   onOcrStatusFilterChange: (value: RequestOcrStatusFilter) => void;
+  extraMoreFilters?: React.ReactNode;
+  activeFilterCount?: number;
+  onClearFilters?: () => void;
 }) {
   const selectClass = `h-9 w-full rounded-md border px-3 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`;
   const statusOptions = getRequestStatusOptions(scope);
 
   return (
-    <div className="space-y-2">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+    <AdminToolbar
+      search={{
+        value: search,
+        onChange: onSearchChange,
+        placeholder: searchPlaceholder,
+      }}
+      resultLabel={resultLabel}
+      activeFilterCount={activeFilterCount}
+      onClearFilters={onClearFilters}
+      primaryFilters={(
+        <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
         <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as RequestStatusFilter)} className={selectClass}>
           {statusOptions.map((option) => <option key={`status-${option.value}`} value={option.value}>{option.label}</option>)}
         </select>
@@ -585,12 +626,11 @@ function RequestFilterBar({
         <select value={decisionFilter} onChange={(event) => onDecisionFilterChange(event.target.value as RequestDecisionFilter)} className={selectClass}>
           {REQUEST_DECISION_OPTIONS.map((option) => <option key={`decision-${option.value}`} value={option.value}>{option.label}</option>)}
         </select>
-      </div>
-      <details className={`rounded-md border px-3 py-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-white/60'}`}>
-        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide opacity-70">
-          More filters
-        </summary>
-        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        </div>
+      )}
+      moreFilters={(
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {extraMoreFilters}
           <select value={automationFilter} onChange={(event) => onAutomationFilterChange(event.target.value as RequestAutomationFilter)} className={selectClass}>
             {REQUEST_AUTOMATION_OPTIONS.map((option) => <option key={`automation-${option.value}`} value={option.value}>{option.label}</option>)}
           </select>
@@ -598,8 +638,8 @@ function RequestFilterBar({
             {REQUEST_OCR_STATUS_OPTIONS.map((option) => <option key={`ocr-${option.value}`} value={option.value}>{option.label}</option>)}
           </select>
         </div>
-      </details>
-    </div>
+      )}
+    />
   );
 }
 
@@ -744,6 +784,16 @@ export function LandingDownloadTab({
 }: LandingDownloadTabProps) {
   const isDark = theme === 'dark';
   const [activeSection, setActiveSection] = React.useState<'downloads' | 'social'>('downloads');
+  const configSnapshot = React.useMemo(() => JSON.stringify(config), [config]);
+  const savedConfigSnapshotRef = React.useRef(configSnapshot);
+  React.useEffect(() => {
+    if (loading) savedConfigSnapshotRef.current = configSnapshot;
+  }, [configSnapshot, loading]);
+  const hasUnsavedChanges = savedConfigSnapshotRef.current !== configSnapshot;
+  const handleSave = () => {
+    onSave();
+    savedConfigSnapshotRef.current = configSnapshot;
+  };
   const totalPlatformSlots = LANDING_VERSION_OPTIONS.length * LANDING_PLATFORM_OPTIONS.length;
   const configuredLinkCount = LANDING_VERSION_OPTIONS.reduce((sum, version) => (
     sum + LANDING_PLATFORM_OPTIONS.filter((platform) => String(config.downloadLinks[version][platform] || '').trim()).length
@@ -769,58 +819,32 @@ export function LandingDownloadTab({
       description="Manage landing page installer links, version copy, buy-section content, and social links from one admin form."
       actions={(
         <>
-          <AdminRefreshButton loading={loading} disabled={saving} onClick={onRefresh} />
-          <Button size="sm" variant="success" className="rounded-[14px]" onClick={onSave} disabled={loading || saving}>
+          <Button size="sm" variant="success" className="rounded-[14px]" onClick={handleSave} disabled={loading || saving}>
             {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
             Save Changes
           </Button>
+          <AdminRefreshButton loading={loading} disabled={saving} onClick={onRefresh} />
         </>
       )}
       stats={<AdminStatsStrip items={landingStats} />}
+      stickySave={{
+        dirty: hasUnsavedChanges,
+        saving,
+        disabled: loading || saving,
+        label: 'Save Changes',
+        message: 'Unsaved landing page edits are local until saved.',
+        onSave: handleSave,
+      }}
     >
-      <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-white'}`}>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1">
-            <div className="text-base font-semibold">Landing Page Management</div>
-            <div className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
-              Manage landing downloads, version copy, and footer social links without touching the landing page source.
-            </div>
-          </div>
-        </div>
-
-        <div className={`mt-4 rounded-2xl border p-1 ${isDark ? 'border-gray-700 bg-gray-950/50' : 'border-gray-200 bg-slate-50'}`}>
-          <div className="grid gap-1 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => setActiveSection('downloads')}
-              className={`rounded-xl px-4 py-3 text-left transition ${
-                activeSection === 'downloads'
-                  ? (isDark ? 'bg-gray-800 text-white shadow-sm' : 'bg-white text-slate-950 shadow-sm')
-                  : (isDark ? 'text-gray-300 hover:bg-gray-900/70' : 'text-slate-600 hover:bg-white/70')
-              }`}
-            >
-              <div className="text-sm font-semibold">Downloads</div>
-              <div className={`text-xs ${activeSection === 'downloads' ? (isDark ? 'text-gray-300' : 'text-slate-500') : (isDark ? 'text-gray-400' : 'text-slate-500')}`}>
-                Version copy, buy section content, and platform download links.
-              </div>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveSection('social')}
-              className={`rounded-xl px-4 py-3 text-left transition ${
-                activeSection === 'social'
-                  ? (isDark ? 'bg-gray-800 text-white shadow-sm' : 'bg-white text-slate-950 shadow-sm')
-                  : (isDark ? 'text-gray-300 hover:bg-gray-900/70' : 'text-slate-600 hover:bg-white/70')
-              }`}
-            >
-              <div className="text-sm font-semibold">Social Links</div>
-              <div className={`text-xs ${activeSection === 'social' ? (isDark ? 'text-gray-300' : 'text-slate-500') : (isDark ? 'text-gray-400' : 'text-slate-500')}`}>
-                Footer buttons for Facebook, Instagram, and YouTube.
-              </div>
-            </button>
-          </div>
-        </div>
-      </div>
+      <AdminSectionTabs
+        sections={[
+          { key: 'downloads', label: 'Downloads' },
+          { key: 'social', label: 'Social Links' },
+        ]}
+        active={activeSection}
+        onChange={(next) => setActiveSection(next as 'downloads' | 'social')}
+        className="w-full"
+      />
 
       {activeSection === 'downloads' ? (
         <div className="space-y-4 pr-1">
@@ -1075,6 +1099,8 @@ export function LegalPagesTab({
   const inputClass = isDark ? 'bg-gray-950 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900';
   const textareaClass = `min-h-[120px] w-full rounded-md border px-3 py-2 text-sm leading-6 outline-none focus:ring-2 focus:ring-fuchsia-500 ${inputClass}`;
   const keys: LegalDocumentKey[] = ['privacy', 'terms'];
+  const [activeDocumentKey, setActiveDocumentKey] = React.useState<LegalDocumentKey>('privacy');
+  const [publishConfirmKey, setPublishConfirmKey] = React.useState<LegalDocumentKey | null>(null);
   const legalStats = keys.map((documentKey) => {
     const state = documents[documentKey];
     return {
@@ -1140,9 +1166,9 @@ export function LegalPagesTab({
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="success" onClick={() => onSaveDraft(documentKey)} disabled={disabled}>
               {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
-              Save Draft
+              Save Changes
             </Button>
-            <Button size="sm" onClick={() => onPublish(documentKey)} disabled={disabled}>
+            <Button size="sm" variant="success" onClick={() => setPublishConfirmKey(documentKey)} disabled={disabled}>
               {publishing ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Check className="w-3.5 h-3.5 mr-2" />}
               Publish
             </Button>
@@ -1226,20 +1252,32 @@ export function LegalPagesTab({
         <AdminRefreshButton loading={loading} disabled={Boolean(savingKey) || Boolean(publishingKey)} onClick={onRefresh} />
       )}
       stats={<AdminStatsStrip items={legalStats} />}
+      controls={(
+        <AdminSectionTabs
+          sections={[
+            { key: 'privacy', label: 'Privacy' },
+            { key: 'terms', label: 'TOS' },
+          ]}
+          active={activeDocumentKey}
+          onChange={(next) => setActiveDocumentKey(next as LegalDocumentKey)}
+        />
+      )}
     >
-      <div className={`rounded-2xl border p-4 ${cardClass}`}>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1">
-            <div className="text-base font-semibold">Legal Pages</div>
-            <div className={`text-sm ${mutedText}`}>
-              Controlled admin edits for public legal pages. Drafts are stored separately from published pages.
-            </div>
-          </div>
-        </div>
-      </div>
-      <div className="grid gap-3 xl:grid-cols-2">
-        {keys.map(renderDocumentEditor)}
-      </div>
+      {renderDocumentEditor(activeDocumentKey)}
+      <ConfirmationDialog
+        open={Boolean(publishConfirmKey)}
+        onOpenChange={(open) => {
+          if (!open) setPublishConfirmKey(null);
+        }}
+        title="Publish legal page?"
+        description={`This will replace the public ${publishConfirmKey === 'privacy' ? 'Privacy Policy' : 'Terms of Service'} with the current draft.`}
+        confirmText="Publish"
+        theme={theme}
+        onConfirm={() => {
+          if (publishConfirmKey) onPublish(publishConfirmKey);
+          setPublishConfirmKey(null);
+        }}
+      />
     </AdminPageScaffold>
   );
 }
@@ -1288,6 +1326,38 @@ export function SamplerDefaultsTab({
   const isDark = theme === 'dark';
   const cardClass = isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white';
   const mutedText = isDark ? 'text-gray-400' : 'text-gray-600';
+  const [resetConfirmOpen, setResetConfirmOpen] = React.useState(false);
+  const configSnapshot = React.useMemo(() => JSON.stringify(config), [config]);
+  const savedConfigSnapshotRef = React.useRef(configSnapshot);
+  const stopTimingProfile = React.useMemo(() => getStopTimingProfile(), []);
+  const stopTimingOverrides = React.useMemo(
+    () => normalizeStopTimingOverrides(config.uiDefaults.defaultStopTimingOverrides),
+    [config.uiDefaults.defaultStopTimingOverrides],
+  );
+  const updateDefaultStopTiming = React.useCallback((mode: ConfigurableStopTimingMode, value: string) => {
+    const trimmed = value.trim();
+    const nextOverrides = { ...stopTimingOverrides };
+    if (!trimmed) {
+      delete nextOverrides[mode];
+    } else {
+      nextOverrides[mode] = Number(trimmed);
+    }
+    onConfigChange({
+      ...config,
+      uiDefaults: {
+        ...config.uiDefaults,
+        defaultStopTimingOverrides: normalizeStopTimingOverrides(nextOverrides),
+      },
+    });
+  }, [config, onConfigChange, stopTimingOverrides]);
+  React.useEffect(() => {
+    if (loading) savedConfigSnapshotRef.current = configSnapshot;
+  }, [configSnapshot, loading]);
+  const hasUnsavedChanges = savedConfigSnapshotRef.current !== configSnapshot;
+  const handleSave = () => {
+    onSave();
+    savedConfigSnapshotRef.current = configSnapshot;
+  };
   const samplerStats = [
     { label: 'Channels', value: `${config.uiDefaults.defaultChannelCountMobile}/${config.uiDefaults.defaultChannelCountDesktop}`, detail: 'Mobile / desktop defaults', toneClass: 'text-cyan-500' },
     { label: 'Owned Quota', value: config.quotaDefaults.ownedBankQuota, detail: 'Owned bank default quota', toneClass: 'text-violet-500' },
@@ -1302,30 +1372,27 @@ export function SamplerDefaultsTab({
       description="Set first-run defaults for the sampler UI, new banks, new pads, quotas, shortcuts, and upload limits."
       actions={(
         <>
-          <AdminRefreshButton loading={loading} disabled={saving} onClick={onRefresh} />
-          <Button size="sm" className="rounded-[14px]" variant="outline" onClick={onReset} disabled={loading || saving}>
+          <Button size="sm" className="rounded-[14px]" variant="outline" onClick={() => setResetConfirmOpen(true)} disabled={loading || saving}>
             <RotateCcw className="w-3.5 h-3.5 mr-2" />
             Reset
           </Button>
-          <Button size="sm" variant="success" className="rounded-[14px]" onClick={onSave} disabled={loading || saving}>
+          <Button size="sm" variant="success" className="rounded-[14px]" onClick={handleSave} disabled={loading || saving}>
             {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
-            Save Defaults
+            Save Changes
           </Button>
+          <AdminRefreshButton loading={loading} disabled={saving} onClick={onRefresh} />
         </>
       )}
       stats={<AdminStatsStrip items={samplerStats} />}
+      stickySave={{
+        dirty: hasUnsavedChanges,
+        saving,
+        disabled: loading || saving,
+        label: 'Save Changes',
+        message: 'Unsaved sampler default edits are local until saved.',
+        onSave: handleSave,
+      }}
     >
-      <div className={`rounded-2xl border p-4 ${cardClass}`}>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1">
-            <div className="text-base font-semibold">Sampler Defaults</div>
-            <div className={`text-sm ${mutedText}`}>
-              These values seed first-run app behavior, blank default-bank setup, new pad creation, quota fallbacks, and upload limits.
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div className="grid gap-3 xl:grid-cols-2">
         <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
           <div>
@@ -1362,6 +1429,37 @@ export function SamplerDefaultsTab({
                 <option value="backspin">Backspin</option>
                 <option value="filter">Filter</option>
               </select>
+            </div>
+            <div className="space-y-1 sm:col-span-2">
+              <Label>Stop Timing Overrides</Label>
+              <div className={`rounded-lg border p-3 ${isDark ? 'border-gray-800 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+                  {CONFIGURABLE_STOP_TIMING_MODES.map((mode) => {
+                    const range = STOP_TIMING_RANGES[mode];
+                    const recommendedMs = getStopModeDurationMs(mode, stopTimingProfile);
+                    const value = stopTimingOverrides[mode];
+                    return (
+                      <div key={mode} className="space-y-1">
+                        <Label className="text-[11px]">{ADMIN_STOP_TIMING_LABELS[mode]}</Label>
+                        <Input
+                          type="number"
+                          min={range.minMs}
+                          max={range.maxMs}
+                          step={25}
+                          placeholder={`${recommendedMs} ms`}
+                          value={typeof value === 'number' ? value : ''}
+                          onChange={(event) => updateDefaultStopTiming(mode, event.target.value)}
+                          className={isDark ? 'bg-gray-800 border-gray-700' : ''}
+                        />
+                        <p className={`text-[10px] ${mutedText}`}>{range.minMs}-{range.maxMs} ms</p>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className={`mt-2 text-[11px] ${mutedText}`}>
+                  Blank uses the tuned default for each platform. Instant Stop is intentionally not editable.
+                </p>
+              </div>
             </div>
             <div className="space-y-1">
               <Label>Side Panel Mode</Label>
@@ -1520,6 +1618,18 @@ export function SamplerDefaultsTab({
           ))}
         </div>
       </div>
+      <ConfirmationDialog
+        open={resetConfirmOpen}
+        onOpenChange={setResetConfirmOpen}
+        title="Reset sampler defaults?"
+        description="This resets the draft values in this admin form to the bundled defaults. Save after reset to publish the change."
+        confirmText="Reset Draft"
+        theme={theme}
+        onConfirm={() => {
+          onReset();
+          setResetConfirmOpen(false);
+        }}
+      />
     </AdminPageScaffold>
   );
 }
@@ -1544,6 +1654,8 @@ export function DefaultBankTab({
   onPublish,
   onRollback,
 }: DefaultBankTabProps) {
+  const [publishConfirmOpen, setPublishConfirmOpen] = React.useState(false);
+  const [rollbackConfirmVersion, setRollbackConfirmVersion] = React.useState<number | null>(null);
   const releaseStats = [
     { label: 'Next Version', value: `v${nextVersion}`, detail: 'Ready to publish', toneClass: 'text-violet-500' },
     { label: 'Sources', value: sourceOptions.length, detail: 'Loaded banks available', toneClass: 'text-blue-500' },
@@ -1557,11 +1669,11 @@ export function DefaultBankTab({
       description="Publish, inspect, and roll back the remote default-bank release used by the app."
       actions={(
         <>
-          <AdminRefreshButton loading={loading} onClick={onRefresh} />
-          <Button onClick={onPublish} disabled={publishLoading || !selectedSourceId} className="h-9 rounded-[14px]">
-            {publishLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-            Publish New Version
+          <Button size="sm" variant="success" onClick={() => setPublishConfirmOpen(true)} disabled={publishLoading || !selectedSourceId} className="rounded-[14px]">
+            {publishLoading ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-2" />}
+            Publish
           </Button>
+          <AdminRefreshButton loading={loading} onClick={onRefresh} />
         </>
       )}
       stats={<AdminStatsStrip items={releaseStats} />}
@@ -1611,7 +1723,7 @@ export function DefaultBankTab({
             />
           </div>
 
-          <Button onClick={onPublish} disabled={publishLoading || !selectedSourceId} className="w-full">
+          <Button variant="success" onClick={() => setPublishConfirmOpen(true)} disabled={publishLoading || !selectedSourceId} className="w-full">
             {publishLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
             Publish New Version
           </Button>
@@ -1677,7 +1789,7 @@ export function DefaultBankTab({
                       size="sm"
                       variant="outline"
                       disabled={rollbackLoading || release.isActive}
-                      onClick={() => onRollback(release.version)}
+                      onClick={() => setRollbackConfirmVersion(release.version)}
                     >
                       Rollback
                     </Button>
@@ -1688,6 +1800,32 @@ export function DefaultBankTab({
           </table>
         </div>
       </div>
+      <ConfirmationDialog
+        open={publishConfirmOpen}
+        onOpenChange={setPublishConfirmOpen}
+        title="Publish default bank release?"
+        description={`Publish v${nextVersion} from the selected source bank. Apps will use this release after their next default-bank check.`}
+        confirmText="Publish"
+        theme={theme}
+        onConfirm={() => {
+          setPublishConfirmOpen(false);
+          onPublish();
+        }}
+      />
+      <ConfirmationDialog
+        open={rollbackConfirmVersion !== null}
+        onOpenChange={(open) => {
+          if (!open) setRollbackConfirmVersion(null);
+        }}
+        title="Rollback default bank?"
+        description={`Switch the active default-bank release to v${rollbackConfirmVersion ?? '-'}.`}
+        confirmText="Rollback"
+        theme={theme}
+        onConfirm={() => {
+          if (rollbackConfirmVersion !== null) onRollback(rollbackConfirmVersion);
+          setRollbackConfirmVersion(null);
+        }}
+      />
     </AdminPageScaffold>
   );
 }
@@ -1811,55 +1949,60 @@ export function AccountRequestsTab({
       panelClass={panelClass}
       title="Account Requests"
       description="Review legacy account registrations and tier upgrade requests in one approval queue."
-      controls={(
-        <AdminControlsBar
-          left={(
-            <div className="space-y-3">
-              <AdminActionCluster>
-                <Button size="sm" className="rounded-[14px]" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
-                  Pending ({accountPendingTotal})
-                </Button>
-                <Button size="sm" className="rounded-[14px]" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
-                  History ({accountHistoryTotal})
-                </Button>
-                <AdminRefreshButton
-                  loading={accountRowsLoading}
-                  onClick={() => {
-                    onRefresh();
-                    void loadUpgradeRequests();
-                  }}
-                />
-              </AdminActionCluster>
-              <RequestFilterBar
-                theme={theme}
-                scope={filter}
-                statusFilter={statusFilter}
-                channelFilter={channelFilter}
-                decisionFilter={decisionFilter}
-                automationFilter={automationFilter}
-                ocrStatusFilter={ocrStatusFilter}
-                onStatusFilterChange={onStatusFilterChange}
-                onChannelFilterChange={onChannelFilterChange}
-                onDecisionFilterChange={onDecisionFilterChange}
-                onAutomationFilterChange={onAutomationFilterChange}
-                onOcrStatusFilterChange={onOcrStatusFilterChange}
-              />
-            </div>
-          )}
-          right={(
-            <div className="flex flex-col gap-3 sm:items-end">
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
-                <Input
-                  value={search}
-                  onChange={(event) => onSearchChange(event.target.value)}
-                  placeholder="Search requests..."
-                  className={`h-9 w-full pl-8 text-sm sm:w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
-                />
-              </div>
-            </div>
-          )}
+      actions={(
+        <AdminRefreshButton
+          loading={accountRowsLoading}
+          onClick={() => {
+            onRefresh();
+            void loadUpgradeRequests();
+          }}
         />
+      )}
+      controls={(
+        <div className="space-y-3">
+          <AdminSectionTabs
+            sections={[
+              { key: 'pending', label: `Pending (${accountPendingTotal})` },
+              { key: 'history', label: `History (${accountHistoryTotal})` },
+            ]}
+            active={filter}
+            onChange={(next) => onFilterChange(next as 'pending' | 'history')}
+          />
+          <RequestFilterBar
+            theme={theme}
+            scope={filter}
+            search={search}
+            searchPlaceholder="Search requests..."
+            resultLabel={`${rows.length + upgradeRows.length} results`}
+            statusFilter={statusFilter}
+            channelFilter={channelFilter}
+            decisionFilter={decisionFilter}
+            automationFilter={automationFilter}
+            ocrStatusFilter={ocrStatusFilter}
+            onSearchChange={onSearchChange}
+            onStatusFilterChange={onStatusFilterChange}
+            onChannelFilterChange={onChannelFilterChange}
+            onDecisionFilterChange={onDecisionFilterChange}
+            onAutomationFilterChange={onAutomationFilterChange}
+            onOcrStatusFilterChange={onOcrStatusFilterChange}
+            activeFilterCount={
+              Number(statusFilter !== 'all')
+              + Number(channelFilter !== 'all')
+              + Number(decisionFilter !== 'all')
+              + Number(automationFilter !== 'all')
+              + Number(ocrStatusFilter !== 'all')
+              + Number(Boolean(search.trim()))
+            }
+            onClearFilters={() => {
+              onStatusFilterChange('all');
+              onChannelFilterChange('all');
+              onDecisionFilterChange('all');
+              onAutomationFilterChange('all');
+              onOcrStatusFilterChange('all');
+              onSearchChange('');
+            }}
+          />
+        </div>
       )}
     >
 
@@ -2300,61 +2443,66 @@ export function StoreRequestsTab({
       panelClass={panelClass}
       title="Store Requests"
       description="Review bank-store checkout proofs, OCR results, and fulfillment decisions in a single queue."
+      actions={<AdminRefreshButton loading={loading} onClick={onRefresh} />}
       controls={(
-        <AdminControlsBar
-          left={(
-            <div className="space-y-3">
-              <AdminActionCluster>
-                <Button size="sm" className="rounded-[14px]" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => onFilterChange('pending')}>
-                  Pending ({pendingCount})
-                </Button>
-                <Button size="sm" className="rounded-[14px]" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => onFilterChange('history')}>
-                  History ({historyCount})
-                </Button>
-                <AdminRefreshButton loading={loading} onClick={onRefresh} />
-              </AdminActionCluster>
-              <RequestFilterBar
-                theme={theme}
-                scope={filter}
-                statusFilter={statusFilter}
-                channelFilter={channelFilter}
-                decisionFilter={decisionFilter}
-                automationFilter={automationFilter}
-                ocrStatusFilter={ocrStatusFilter}
-                onStatusFilterChange={onStatusFilterChange}
-                onChannelFilterChange={onChannelFilterChange}
-                onDecisionFilterChange={onDecisionFilterChange}
-                onAutomationFilterChange={onAutomationFilterChange}
-                onOcrStatusFilterChange={onOcrStatusFilterChange}
-              />
-            </div>
-          )}
-          right={(
-            <div className="flex flex-col gap-3 sm:items-end">
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
-                <Input
-                  value={search}
-                  onChange={(event) => onSearchChange(event.target.value)}
-                  placeholder="Search requests..."
-                  className={`h-9 w-full pl-8 text-sm sm:w-56 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
-                />
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <select
-                  value={bankFilter}
-                  onChange={(event) => onBankFilterChange(event.target.value)}
-                  className={`h-9 min-w-0 rounded-md border px-3 text-sm sm:min-w-64 ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
-                >
-                  <option value="all">All banks</option>
-                  {bankOptions.map((bankName) => (
-                    <option key={`store-request-bank-${bankName}`} value={bankName}>{bankName}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
-        />
+        <div className="space-y-3">
+          <AdminSectionTabs
+            sections={[
+              { key: 'pending', label: `Pending (${pendingCount})` },
+              { key: 'history', label: `History (${historyCount})` },
+            ]}
+            active={filter}
+            onChange={(next) => onFilterChange(next as 'pending' | 'history')}
+          />
+          <RequestFilterBar
+            theme={theme}
+            scope={filter}
+            search={search}
+            searchPlaceholder="Search requests..."
+            resultLabel={`${rows.length} results`}
+            statusFilter={statusFilter}
+            channelFilter={channelFilter}
+            decisionFilter={decisionFilter}
+            automationFilter={automationFilter}
+            ocrStatusFilter={ocrStatusFilter}
+            onSearchChange={onSearchChange}
+            onStatusFilterChange={onStatusFilterChange}
+            onChannelFilterChange={onChannelFilterChange}
+            onDecisionFilterChange={onDecisionFilterChange}
+            onAutomationFilterChange={onAutomationFilterChange}
+            onOcrStatusFilterChange={onOcrStatusFilterChange}
+            extraMoreFilters={(
+              <select
+                value={bankFilter}
+                onChange={(event) => onBankFilterChange(event.target.value)}
+                className={`h-9 w-full rounded-md border px-3 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+              >
+                <option value="all">All banks</option>
+                {bankOptions.map((bankName) => (
+                  <option key={`store-request-bank-${bankName}`} value={bankName}>{bankName}</option>
+                ))}
+              </select>
+            )}
+            activeFilterCount={
+              Number(statusFilter !== 'all')
+              + Number(channelFilter !== 'all')
+              + Number(decisionFilter !== 'all')
+              + Number(automationFilter !== 'all')
+              + Number(ocrStatusFilter !== 'all')
+              + Number(bankFilter !== 'all')
+              + Number(Boolean(search.trim()))
+            }
+            onClearFilters={() => {
+              onStatusFilterChange('all');
+              onChannelFilterChange('all');
+              onDecisionFilterChange('all');
+              onAutomationFilterChange('all');
+              onOcrStatusFilterChange('all');
+              onBankFilterChange('all');
+              onSearchChange('');
+            }}
+          />
+        </div>
       )}
     >
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
@@ -2732,60 +2880,66 @@ export function InstallerRequestsTab({
       panelClass={panelClass}
       title="Installer Requests"
       description="Review V2 and V3 installer purchase proofs, OCR results, and license fulfillment decisions in one queue."
+      actions={<AdminRefreshButton loading={loading} onClick={() => void loadRequests()} />}
       controls={(
-        <AdminControlsBar
-          left={(
-            <div className="space-y-3">
-              <AdminActionCluster>
-                <Button size="sm" className="rounded-[14px]" variant={filter === 'pending' ? 'default' : 'outline'} onClick={() => setFilter('pending')}>
-                  Pending ({pendingCount})
-                </Button>
-                <Button size="sm" className="rounded-[14px]" variant={filter === 'history' ? 'default' : 'outline'} onClick={() => setFilter('history')}>
-                  History ({historyCount})
-                </Button>
-                <AdminRefreshButton loading={loading} onClick={() => void loadRequests()} />
-              </AdminActionCluster>
-              <RequestFilterBar
-                theme={theme}
-                scope={filter}
-                statusFilter={statusFilter}
-                channelFilter={channelFilter}
-                decisionFilter={decisionFilter}
-                automationFilter={automationFilter}
-                ocrStatusFilter={ocrStatusFilter}
-                onStatusFilterChange={(value) => { setStatusFilter(value); setPage(1); }}
-                onChannelFilterChange={(value) => { setChannelFilter(value); setPage(1); }}
-                onDecisionFilterChange={(value) => { setDecisionFilter(value); setPage(1); }}
-                onAutomationFilterChange={(value) => { setAutomationFilter(value); setPage(1); }}
-                onOcrStatusFilterChange={(value) => { setOcrStatusFilter(value); setPage(1); }}
-              />
-            </div>
-          )}
-          right={(
-            <div className="flex flex-col gap-3 sm:items-end">
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 opacity-50" />
-                <Input
-                  value={search}
-                  onChange={(event) => { setSearch(event.target.value); setPage(1); }}
-                  placeholder="Search email, SKU, receipt, or license..."
-                  className={`h-9 w-full pl-8 text-sm sm:w-64 ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}`}
-                />
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <select
-                  value={installerItemFilter}
-                  onChange={(event) => { setInstallerItemFilter(event.target.value); setPage(1); }}
-                  className={`h-9 min-w-0 rounded-md border px-3 text-sm sm:min-w-72 ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
-                >
-                  {installerItemOptions.map((option) => (
-                    <option key={`installer-filter-${option.value}`} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
-        />
+        <div className="space-y-3">
+          <AdminSectionTabs
+            sections={[
+              { key: 'pending', label: `Pending (${pendingCount})` },
+              { key: 'history', label: `History (${historyCount})` },
+            ]}
+            active={filter}
+            onChange={(next) => setFilter(next as 'pending' | 'history')}
+          />
+          <RequestFilterBar
+            theme={theme}
+            scope={filter}
+            search={search}
+            searchPlaceholder="Search email, SKU, receipt, or license..."
+            resultLabel={`${rows.length} results`}
+            statusFilter={statusFilter}
+            channelFilter={channelFilter}
+            decisionFilter={decisionFilter}
+            automationFilter={automationFilter}
+            ocrStatusFilter={ocrStatusFilter}
+            onSearchChange={(value) => { setSearch(value); setPage(1); }}
+            onStatusFilterChange={(value) => { setStatusFilter(value); setPage(1); }}
+            onChannelFilterChange={(value) => { setChannelFilter(value); setPage(1); }}
+            onDecisionFilterChange={(value) => { setDecisionFilter(value); setPage(1); }}
+            onAutomationFilterChange={(value) => { setAutomationFilter(value); setPage(1); }}
+            onOcrStatusFilterChange={(value) => { setOcrStatusFilter(value); setPage(1); }}
+            extraMoreFilters={(
+              <select
+                value={installerItemFilter}
+                onChange={(event) => { setInstallerItemFilter(event.target.value); setPage(1); }}
+                className={`h-9 w-full rounded-md border px-3 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+              >
+                {installerItemOptions.map((option) => (
+                  <option key={`installer-filter-${option.value}`} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            )}
+            activeFilterCount={
+              Number(statusFilter !== 'all')
+              + Number(channelFilter !== 'all')
+              + Number(decisionFilter !== 'all')
+              + Number(automationFilter !== 'all')
+              + Number(ocrStatusFilter !== 'all')
+              + Number(installerItemFilter !== 'all')
+              + Number(Boolean(search.trim()))
+            }
+            onClearFilters={() => {
+              setStatusFilter('all');
+              setChannelFilter('all');
+              setDecisionFilter('all');
+              setAutomationFilter('all');
+              setOcrStatusFilter('all');
+              setInstallerItemFilter('all');
+              setSearch('');
+              setPage(1);
+            }}
+          />
+        </div>
       )}
     >
       {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
@@ -3161,6 +3315,11 @@ export function CrashReportsTab({
   const visiblePlaybackCount = rows.filter((row) => row.domain === 'playback').length;
   const visibleStoreCount = rows.filter((row) => row.domain === 'bank_store').length;
   const visibleFixedCount = rows.filter((row) => row.status === 'fixed').length;
+  const activeFilterCount = Number(Boolean(search.trim()))
+    + Number(statusFilter !== 'all')
+    + Number(domainFilter !== 'all')
+    + Number(platformFilter !== 'all')
+    + Number(appVersionFilter !== 'all');
 
   return (
     <AdminPageScaffold
@@ -3180,8 +3339,46 @@ export function CrashReportsTab({
           ]}
         />
       )}
+      controls={(
+        <AdminToolbar
+          search={{
+            value: search,
+            onChange: onSearchChange,
+            placeholder: 'Search title or stage...',
+          }}
+          resultLabel={`${rows.length}/${totalCount} reports`}
+          activeFilterCount={activeFilterCount}
+          onClearFilters={() => {
+            onSearchChange('');
+            onStatusFilterChange('all');
+            onDomainFilterChange('all');
+            onPlatformFilterChange('all');
+            onAppVersionFilterChange('all');
+          }}
+          primaryFilters={(
+            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as CrashReportsTabProps['statusFilter'])} className={selectClass}>
+                {CRASH_REPORT_STATUS_OPTIONS.map((option) => <option key={`crash-status-${option.value}`} value={option.value}>{option.label}</option>)}
+              </select>
+              <select value={domainFilter} onChange={(event) => onDomainFilterChange(event.target.value as CrashReportsTabProps['domainFilter'])} className={selectClass}>
+                {CRASH_REPORT_DOMAIN_OPTIONS.map((option) => <option key={`crash-domain-${option.value}`} value={option.value}>{option.label}</option>)}
+              </select>
+              <select value={platformFilter} onChange={(event) => onPlatformFilterChange(event.target.value)} className={selectClass}>
+                <option value="all">All Platforms</option>
+                {platformOptions.map((option) => <option key={`crash-platform-${option}`} value={option}>{option}</option>)}
+              </select>
+            </div>
+          )}
+          moreFilters={(
+            <select value={appVersionFilter} onChange={(event) => onAppVersionFilterChange(event.target.value)} className={selectClass}>
+              <option value="all">All Versions</option>
+              {appVersionOptions.map((option) => <option key={`crash-version-${option}`} value={option}>{option}</option>)}
+            </select>
+          )}
+        />
+      )}
     >
-      <div className={`rounded-lg border p-3 space-y-3 ${cardClass}`}>
+      <div className={`hidden rounded-lg border p-3 space-y-3 ${cardClass}`}>
         <div className="flex flex-wrap items-center gap-2">
           <div className="text-sm font-semibold">Client Crash Reports</div>
           <div className="flex-1" />
@@ -3496,6 +3693,14 @@ export function StoreCatalogTab({
   const bundleThumbInputRef = React.useRef<HTMLInputElement | null>(null);
   const currentMaintenanceMessage = String(storeConfig.store_maintenance_message || '').trim();
   const isDark = theme === 'dark';
+  const selectClass = `h-9 w-full rounded-md border px-3 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`;
+  const activeFilterCount = Number(Boolean(search.trim()))
+    + Number(typeFilter !== 'all')
+    + Number(bankFilter !== 'all')
+    + Number(statusFilter !== 'all')
+    + Number(paidFilter !== 'all')
+    + Number(pinnedFilter !== 'all')
+    + Number(sort !== 'pinned_first');
   const bundleBankChoices = React.useMemo(() => {
     const byId = new Map<string, { id: string; label: string }>();
     storeDrafts.forEach((draft) => {
@@ -3609,17 +3814,21 @@ export function StoreCatalogTab({
       title="Store Catalog"
       description="Manage store catalog items, bundles, maintenance mode, and the storefront listing state used by Bank Store."
       actions={(
-        <Button
-          size="sm"
-          onClick={() => {
-            resetBundleDialog();
-            setBundleDialogOpen(true);
-          }}
-          className={isDark ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}
-        >
-          <Plus className="w-3.5 h-3.5 mr-1.5" />
-          Create Bundle
-        </Button>
+        <>
+          <Button
+            size="sm"
+            variant="success"
+            onClick={() => {
+              resetBundleDialog();
+              setBundleDialogOpen(true);
+            }}
+            className="rounded-[14px]"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1.5" />
+            Create Bundle
+          </Button>
+          <AdminRefreshButton loading={loading} onClick={onReload} />
+        </>
       )}
       stats={(
         <AdminStatsStrip
@@ -3631,17 +3840,77 @@ export function StoreCatalogTab({
           ]}
         />
       )}
+      controls={(
+        <AdminToolbar
+          search={{
+            value: search,
+            onChange: onSearchChange,
+            placeholder: 'Search title or asset name...',
+          }}
+          resultLabel={`${filteredCount} catalog items`}
+          activeFilterCount={activeFilterCount}
+          onClearFilters={onResetFilters}
+          primaryFilters={(
+            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              <select value={typeFilter} onChange={(event) => onTypeFilterChange(event.target.value as StoreCatalogTypeFilter)} className={selectClass}>
+                <option value="all">All types</option>
+                <option value="single_bank">Single Banks</option>
+                <option value="bank_bundle">Bundles</option>
+              </select>
+              <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as 'all' | 'published' | 'draft' | 'coming_soon')} className={selectClass}>
+                <option value="all">All status</option>
+                <option value="published">Published</option>
+                <option value="coming_soon">Coming Soon</option>
+                <option value="draft">Draft</option>
+              </select>
+              <select value={paidFilter} onChange={(event) => onPaidFilterChange(event.target.value as 'all' | 'paid' | 'free')} className={selectClass}>
+                <option value="all">All pricing</option>
+                <option value="paid">Paid</option>
+                <option value="free">Free</option>
+              </select>
+            </div>
+          )}
+          moreFilters={(
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <select value={bankFilter} onChange={(event) => onBankFilterChange(event.target.value)} className={selectClass}>
+                <option value="all">All banks</option>
+                {bankOptions.map((bankName) => (
+                  <option key={bankName} value={bankName}>{bankName}</option>
+                ))}
+              </select>
+              <select value={pinnedFilter} onChange={(event) => onPinnedFilterChange(event.target.value as 'all' | 'pinned' | 'unpinned')} className={selectClass}>
+                <option value="all">All pin states</option>
+                <option value="pinned">Pinned</option>
+                <option value="unpinned">Unpinned</option>
+              </select>
+              <select value={sort} onChange={(event) => onSortChange(event.target.value as StoreCatalogSort)} className={selectClass}>
+                <option value="pinned_first">Pinned first</option>
+                <option value="newest">Newest</option>
+                <option value="title_asc">Bank A-Z</option>
+                <option value="title_desc">Bank Z-A</option>
+                <option value="price_high">Price high-low</option>
+                <option value="price_low">Price low-high</option>
+                <option value="status">Status</option>
+              </select>
+            </div>
+          )}
+        />
+      )}
     >
       <div className="space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Manage store catalog items. Drafts are created automatically during Admin Export.</p>
-        </div>
-        <div className={`rounded-lg border p-3 space-y-3 ${theme === 'dark' ? 'border-amber-700/40 bg-amber-500/10' : 'border-amber-200 bg-amber-50/80'}`}>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="space-y-1">
-              <div className="text-sm font-semibold">Store Maintenance Mode</div>
-              <div className="text-xs opacity-75">
-                Hide the Bank Store for end users and guests while still allowing admins to browse and manage it.
+        <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'border-amber-700/40 bg-amber-500/10' : 'border-amber-200 bg-amber-50/80'}`}>
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold">Store Maintenance</span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${storeConfig.store_maintenance_enabled ? (theme === 'dark' ? 'bg-amber-400 text-black' : 'bg-amber-600 text-white') : (theme === 'dark' ? 'bg-emerald-500/18 text-emerald-200' : 'bg-emerald-100 text-emerald-700')}`}>
+                  {storeConfig.store_maintenance_enabled ? 'Active' : 'Live'}
+                </span>
+              </div>
+              <div className="truncate text-xs opacity-75" title={currentMaintenanceMessage || undefined}>
+                {storeConfig.store_maintenance_enabled
+                  ? (currentMaintenanceMessage || 'Using fallback maintenance message.')
+                  : 'Maintenance is off. Admins can start or edit the end-user message from here.'}
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -3674,25 +3943,6 @@ export function StoreCatalogTab({
                   Start Maintenance
                 </Button>
               )}
-            </div>
-          </div>
-          <div className="grid gap-3 md:grid-cols-[minmax(0,220px),1fr]">
-            <div className={`rounded-lg border px-3 py-2.5 space-y-1 ${theme === 'dark' ? 'border-amber-700/40 bg-gray-900/40' : 'border-amber-200 bg-white/70'}`}>
-              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-80">Current Status</div>
-              <div className={`text-sm font-semibold ${storeConfig.store_maintenance_enabled ? (theme === 'dark' ? 'text-amber-300' : 'text-amber-800') : ''}`}>
-                {storeConfig.store_maintenance_enabled ? 'Maintenance is active' : 'Store is live'}
-              </div>
-              <div className="text-xs opacity-70">
-                End users and guests are blocked while maintenance is active. Admins still bypass it.
-              </div>
-            </div>
-            <div className={`rounded-lg border px-3 py-2.5 space-y-1 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white/70'}`}>
-              <div className="text-[11px] font-semibold uppercase tracking-wide opacity-80">Maintenance Message</div>
-              <div className="text-sm leading-relaxed">
-                {storeConfig.store_maintenance_enabled
-                  ? (currentMaintenanceMessage || 'Bank Store is under maintenance. Downloads and browsing are temporarily unavailable.')
-                  : (currentMaintenanceMessage || 'Fallback message will be used if you start maintenance without entering a custom message.')}
-              </div>
             </div>
           </div>
         </div>
@@ -3904,14 +4154,14 @@ export function StoreCatalogTab({
                 <Button type="button" variant="outline" onClick={() => setBundleDialogOpen(false)} disabled={loading || bundleSubmitting}>
                   Cancel
                 </Button>
-                <Button type="button" onClick={() => void submitBundleDialog()} disabled={loading || bundleSubmitting} className={theme === 'dark' ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}>
+                <Button type="button" variant="success" onClick={() => void submitBundleDialog()} disabled={loading || bundleSubmitting}>
                   {bundleSubmitting ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : null}
                   Create Bundle
                 </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <div className={`rounded-lg border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50/70'}`}>
+        <div className={`hidden rounded-lg border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50/70'}`}>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-7 gap-2">
             <div className="xl:col-span-2">
               <div className="text-[10px] uppercase tracking-wide opacity-70 mb-1">Search</div>
@@ -4029,6 +4279,7 @@ export function StorePromotionsTab({
   onReset,
   onSave,
   onDelete,
+  onReload,
 }: StorePromotionsTabProps) {
   const [editorOpen, setEditorOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<StorePromotion | null>(null);
@@ -4098,6 +4349,7 @@ export function StorePromotionsTab({
       onEdit={handleEdit}
       onReset={onReset}
       onSave={handleSave}
+      onReload={onReload}
       deleteTarget={deleteTarget}
       onDeleteTargetChange={setDeleteTarget}
       onDelete={onDelete}
@@ -4128,6 +4380,7 @@ function StorePromotionsSurface({
   onEdit,
   onReset,
   onSave,
+  onReload,
   deleteTarget,
   onDeleteTargetChange,
   onDelete,
@@ -4153,6 +4406,7 @@ function StorePromotionsSurface({
   onEdit: (promotion: StorePromotion) => void;
   onReset: () => void;
   onSave: () => Promise<void>;
+  onReload: () => void;
   deleteTarget: StorePromotion | null;
   onDeleteTargetChange: (promotion: StorePromotion | null) => void;
   onDelete: (promotionId: string) => void;
@@ -4199,10 +4453,13 @@ function StorePromotionsSurface({
         title="Promotions"
         description="Schedule temporary discounts and free-access windows without changing the base catalog price."
         actions={(
-          <Button onClick={onCreate} disabled={loading} className={isDark ? 'bg-teal-500 hover:bg-teal-400 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'}>
-            <Plus className="w-4 h-4 mr-2" />
-            New Promotion
-          </Button>
+          <>
+            <Button size="sm" onClick={onCreate} disabled={loading} variant="success" className="rounded-[14px]">
+              <Plus className="w-3.5 h-3.5 mr-1.5" />
+              Create Promotion
+            </Button>
+            <AdminRefreshButton loading={loading} onClick={onReload} />
+          </>
         )}
         stats={(
           <AdminStatsStrip
@@ -4692,8 +4949,10 @@ export function StoreBannersTab({
   onResetBanner,
   onSaveBanner,
   onDeleteBanner,
+  onReload,
 }: StoreBannersTabProps) {
   const [deleteTarget, setDeleteTarget] = React.useState<StoreMarketingBanner | null>(null);
+  const [createBannerOpen, setCreateBannerOpen] = React.useState(false);
   const isDark = theme === 'dark';
 
   return (
@@ -4702,6 +4961,15 @@ export function StoreBannersTab({
         panelClass={panelClass}
         title="Store Banners"
         description="Manage the rotating banners shown above the Bank Store list, including inactive rows and unsaved edits."
+        actions={(
+          <>
+            <Button type="button" size="sm" variant="success" className="rounded-[14px]" onClick={() => setCreateBannerOpen(true)}>
+              <Plus className="w-3.5 h-3.5" />
+              Create Banner
+            </Button>
+            <AdminRefreshButton loading={loading || bannerLoading} onClick={onReload} />
+          </>
+        )}
         stats={(
           <AdminStatsStrip
             items={[
@@ -4712,12 +4980,22 @@ export function StoreBannersTab({
             ]}
           />
         )}
+        controls={(
+          <AdminSectionTabs
+            sections={[
+              { key: 'active', label: `Active (${bannerStats.active})` },
+              { key: 'inactive', label: `Inactive (${bannerStats.inactive})` },
+            ]}
+            active={showInactive ? 'inactive' : 'active'}
+            onChange={(next) => onShowInactiveChange(next === 'inactive')}
+          />
+        )}
       >
       <div className="space-y-3">
         {loading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : (
           <div className="pr-1">
             <div className="space-y-4">
-            <div className={`rounded-xl border p-4 space-y-3 max-w-3xl ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+            <div className={`hidden rounded-xl border p-4 space-y-3 max-w-3xl ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
               <div className="flex items-center gap-2">
                 <Plus className="w-4 h-4" />
                 <div>
@@ -4775,14 +5053,10 @@ export function StoreBannersTab({
                 <div className="text-sm font-semibold">Existing Banners</div>
                 {!showInactive && bannerStats.inactive > 0 ? (
                   <span className={`text-[11px] px-2 py-1 rounded-full border ${isDark ? 'border-amber-700/60 text-amber-300 bg-amber-950/20' : 'border-amber-300 text-amber-700 bg-amber-50'}`}>
-                    Inactive rows hidden after save
+                    Inactive rows in separate tab
                   </span>
                 ) : null}
                 <div className="flex-1" />
-                <label className="flex items-center gap-2 text-xs rounded-md border px-2.5 py-1.5">
-                  <input type="checkbox" checked={showInactive} onChange={(event) => onShowInactiveChange(event.target.checked)} />
-                  Show inactive
-                </label>
               </div>
 
               <div className="space-y-3">
@@ -4791,7 +5065,7 @@ export function StoreBannersTab({
                     <Store className="w-8 h-8 mx-auto mb-2 opacity-40" />
                     <div className="text-sm font-medium">No banners in this view</div>
                     <div className="text-xs mt-1">
-                      {showInactive ? 'Create a banner to populate the store slider.' : 'Try enabling "Show inactive" to review hidden banners.'}
+                      {showInactive ? 'Create or reactivate a banner to populate the store slider.' : 'Switch to Inactive to review hidden banners.'}
                     </div>
                   </div>
                 ) : (
@@ -4951,6 +5225,67 @@ export function StoreBannersTab({
         )}
       </div>
 
+      <Dialog open={createBannerOpen} onOpenChange={setCreateBannerOpen} useHistory={false}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Create New Banner</DialogTitle>
+            <DialogDescription>Start with an image, optionally add a link, then choose its position in the store slider.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+            <div className={`rounded-lg border overflow-hidden h-36 ${isDark ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
+              {(newBannerPreviewUrl || newBannerImageUrl) ? (
+                <img src={newBannerPreviewUrl || newBannerImageUrl} alt="New banner preview" className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-[11px] opacity-60">
+                  <Upload className="w-4 h-4" />
+                  <span>No preview yet</span>
+                </div>
+              )}
+            </div>
+            <div className="grid gap-3">
+              <div className="space-y-1">
+                <Label>Image URL</Label>
+                <Input value={newBannerImageUrl} onChange={(event) => onNewBannerImageUrlChange(event.target.value)} placeholder="https://..." className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
+              </div>
+              <div className="space-y-1">
+                <Label>Link URL</Label>
+                <Input value={newBannerLinkUrl} onChange={(event) => onNewBannerLinkUrlChange(event.target.value)} placeholder="Optional destination" className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
+              </div>
+              <div className="space-y-1">
+                <Label>Upload Image</Label>
+                <div className="flex items-center gap-2">
+                  <Input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={onNewBannerFileChange} disabled={bannerLoading} className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
+                  {newBannerHasFile && (
+                    <Button type="button" size="sm" variant="outline" onClick={onClearNewBannerFile} className="h-9 px-3 text-xs">
+                      Remove
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label>Sort Order</Label>
+                <Input type="number" min={0} step={1} value={newBannerSortOrder} onChange={(event) => onNewBannerSortOrderChange(event.target.value)} placeholder="0" className={`h-9 text-xs w-[140px] ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCreateBannerOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              variant="success"
+              onClick={() => {
+                onCreateBanner();
+                setCreateBannerOpen(false);
+              }}
+              disabled={bannerLoading}
+            >
+              {bannerLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
+              Create Banner
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <ConfirmationDialog
         open={deleteTarget !== null}
         onOpenChange={(open) => {
@@ -4987,6 +5322,16 @@ export function StoreConfigTab({
 }: StoreConfigTabProps) {
   const [confirmAction, setConfirmAction] = React.useState<{ target: 'account' | 'store' | 'installer_v2' | 'installer_v3'; action: 'start' | 'stop' } | null>(null);
   const [nowMs, setNowMs] = React.useState(() => Date.now());
+  const configSnapshot = React.useMemo(() => JSON.stringify(storeConfig), [storeConfig]);
+  const savedConfigSnapshotRef = React.useRef(configSnapshot);
+  React.useEffect(() => {
+    if (loading) savedConfigSnapshotRef.current = configSnapshot;
+  }, [configSnapshot, loading]);
+  const hasUnsavedChanges = savedConfigSnapshotRef.current !== configSnapshot;
+  const handleSave = () => {
+    onSave();
+    savedConfigSnapshotRef.current = configSnapshot;
+  };
   const runningAutomationCount =
     Number(Boolean(storeConfig.account_auto_approve_enabled))
     + Number(Boolean(storeConfig.store_auto_approve_enabled))
@@ -5193,14 +5538,21 @@ export function StoreConfigTab({
 
   return (
     <AdminPageScaffold
-      panelClass={`${panelClass} overflow-visible lg:h-full lg:min-h-0 lg:overflow-auto`}
+      panelClass={panelClass}
       title="Payment and Store Controls"
       description="Configure checkout instructions, payment channels, QR support, automation, and decision emails from one place."
-      actions={<Button onClick={onSave} variant="success" disabled={loading} className="w-full rounded-[14px] sm:w-auto sm:min-w-[220px]">Save Pay Config</Button>}
+      actions={<Button size="sm" onClick={handleSave} variant="success" disabled={loading} className="rounded-[14px]">Save Changes</Button>}
+      stickySave={{
+        dirty: hasUnsavedChanges,
+        saving: loading,
+        disabled: loading,
+        label: 'Save Changes',
+        message: 'Unsaved pay config edits are local until saved.',
+        onSave: handleSave,
+      }}
       stats={(
         <AdminStatsStrip
           items={[
-            { label: 'Account Price', value: storeConfig.account_price_php || '0', detail: 'Current base price', toneClass: 'text-gray-500' },
             { label: 'Banner Delay', value: `${storeConfig.banner_rotation_ms || '5000'} ms`, detail: 'Store banner autoplay', toneClass: 'text-blue-500' },
             { label: 'Automation', value: `${runningAutomationCount}/4`, detail: 'Auto-approval flows', toneClass: 'text-emerald-500' },
             { label: 'Checkout Support', value: hasQrImage ? 'QR ready' : 'No QR uploaded', detail: hasMessengerConfig ? 'Messenger ready' : 'Messenger not configured', toneClass: 'text-amber-500' },
@@ -5214,7 +5566,7 @@ export function StoreConfigTab({
             <div className="flex flex-col gap-1">
               <div className="text-base font-semibold">Payment Setup</div>
               <div className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
-                Core payment channels, pricing, QR, and store banner timing.
+                Core payment channels, QR, and store banner timing. Account pricing now comes from Tier & Vouchers.
               </div>
             </div>
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.95fr)] gap-4">
@@ -5235,11 +5587,7 @@ export function StoreConfigTab({
                 </div>
               </div>
               <div className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label>Account Price (PHP)</Label>
-                    <Input type="number" min={0} step="0.01" value={storeConfig.account_price_php} onChange={(event) => onStoreConfigChange({ ...storeConfig, account_price_php: event.target.value })} placeholder="e.g. 299.00" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />
-                  </div>
+                <div className="grid grid-cols-1 gap-3">
                   <div className="space-y-1">
                     <Label>Banner Rotation (ms)</Label>
                     <Input type="number" min={3000} max={15000} step={500} value={storeConfig.banner_rotation_ms} onChange={(event) => onStoreConfigChange({ ...storeConfig, banner_rotation_ms: event.target.value })} placeholder="5000" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />

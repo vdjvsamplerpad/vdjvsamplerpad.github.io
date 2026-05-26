@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { getCapacitorAppPlugin, isNativeCapacitorRuntime } from '@/lib/capacitor-app-plugin';
 import { resolveClientCrashReportPlatform, sendClientCrashReport } from '@/lib/client-crash-report';
 import {
     STORE_DOWNLOAD_DEBUG_MAX_ENTRIES,
@@ -434,18 +435,8 @@ export function useOnlineStoreDebugLog({
 
     React.useEffect(() => {
         if (!enabled || typeof window === 'undefined') return;
-        const capacitor = (window as Window & typeof globalThis & {
-            Capacitor?: {
-                isNativePlatform?: () => boolean;
-                Plugins?: {
-                    App?: {
-                        addListener?: (eventName: string, callback: (payload?: any) => void) => Promise<{ remove: () => Promise<void> } | { remove: () => void }> | { remove: () => Promise<void> } | { remove: () => void };
-                    };
-                };
-            };
-        }).Capacitor;
-        if (!capacitor?.isNativePlatform?.()) return;
-        const appPlugin = capacitor?.Plugins?.App;
+        if (!isNativeCapacitorRuntime()) return;
+        const appPlugin = getCapacitorAppPlugin();
         if (!appPlugin?.addListener) return;
 
         const handles: Array<{ remove?: () => Promise<void> | void } | null> = [];

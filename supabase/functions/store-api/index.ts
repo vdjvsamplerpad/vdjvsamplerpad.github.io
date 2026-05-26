@@ -158,11 +158,41 @@ const computeStorePurchaseCredit = async (admin: ReturnType<typeof createService
 const getTierConfig = async (admin: ReturnType<typeof createServiceClient>, tier: StoredAccountTier) => {
   const { data, error } = await admin
     .from("account_tier_configs")
-    .select("tier,display_name,description,price_php,limits,features,is_active,updated_at")
+    .select("tier,display_name,description,price_php,limits,features,ui_content,is_active,updated_at")
     .eq("tier", tier)
     .maybeSingle();
   if (error) throw new Error(error.message);
   return data;
+};
+
+const asPlainObject = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+const resolveTierUiContent = async (tierConfig: any): Promise<Record<string, unknown>> => {
+  const uiContent = asPlainObject(tierConfig?.ui_content);
+  const video = asPlainObject(uiContent.video);
+  const provider = asString(video.storageProvider ?? video.storage_provider, 40);
+  const bucket = asString(video.storageBucket ?? video.storage_bucket, 300);
+  const key = asString(video.storageKey ?? video.storage_key, 2000);
+  if (provider === "r2" && bucket && key) {
+    try {
+      const signed = await createPresignedGetUrl(bucket, key);
+      return {
+        ...uiContent,
+        video: {
+          ...video,
+          storageProvider: "r2",
+          storageBucket: bucket,
+          storageKey: key,
+          src: signed.url,
+          urlExpiresAt: signed.expiresAt,
+        },
+      };
+    } catch {
+      return uiContent;
+    }
+  }
+  return uiContent;
 };
 
 const quoteUpgradeRequest = async (
@@ -180,6 +210,17 @@ const quoteUpgradeRequest = async (
     quotePrice,
     promoDiscountPercent: getTierPromoDiscountPercent(tierConfig),
     purchaseCreditSnapshot: credit.rows,
+  };
+};
+
+const quotePublicUpgradeTier = (tierConfig: any) => {
+  const basePrice = normalizeTierPrice((tierConfig as any)?.price_php);
+  return {
+    basePrice,
+    creditPhp: 0,
+    quotePrice: basePrice,
+    promoDiscountPercent: getTierPromoDiscountPercent(tierConfig),
+    purchaseCreditSnapshot: [],
   };
 };
 
@@ -1812,6 +1853,14 @@ const absolutizePublicSiteUrl = (value: string): string => {
   return `${siteBase}${trimmed}`;
 };
 
+const normalizePublicSitePathUrl = (value: string): string => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (!trimmed.startsWith("/")) return trimmed;
+  return trimmed;
+};
+
 const canonicalizeExternalUrl = (value: string): string => {
   const trimmed = String(value || "").trim();
   if (!trimmed) return trimmed;
@@ -2639,6 +2688,9 @@ const getStoreCatalog = async (req: Request) => {
   const userId = user?.id || null;
   const userIsAdmin = userId ? await isAdminUser(userId) : false;
   const accountCapabilities = await loadAccountCapabilitySnapshot(admin, userId);
+  if (!userIsAdmin && !accountCapabilities.features.bankStoreBrowse) {
+    return fail(403, "BANK_STORE_BROWSE_LOCKED", { tier: accountCapabilities.effectiveTier });
+  }
   const maintenanceState = await getStoreMaintenanceState(req, admin);
   if ("response" in maintenanceState) return maintenanceState.response;
   if (maintenanceState.enabled && !maintenanceState.isAdmin) {
@@ -2917,12 +2969,14 @@ const getStorePaymentConfig = async (req: Request) => {
   if ("response" in maintenanceState) return maintenanceState.response;
   const { data: config, error } = await admin
     .from("store_payment_settings")
-    .select("instructions,gcash_number,maya_number,messenger_url,qr_image_path,account_price_php,banner_rotation_ms,store_maintenance_enabled,store_maintenance_message")
+    .select("instructions,gcash_number,maya_number,messenger_url,qr_image_path,banner_rotation_ms,store_maintenance_enabled,store_maintenance_message")
     .eq("id", "default")
     .eq("is_active", true)
     .maybeSingle();
   if (error) return fail(500, error.message);
   if (!config) return ok({ config: null });
+  const proTierConfig = await getTierConfig(admin, "pro").catch(() => null);
+  const proQuote = proTierConfig ? quotePublicUpgradeTier(proTierConfig) : null;
   return ok({
     config: {
       instructions: asString((config as any)?.instructions, 4000) || "",
@@ -2930,7 +2984,7 @@ const getStorePaymentConfig = async (req: Request) => {
       maya_number: asString((config as any)?.maya_number, 120) || "",
       messenger_url: asString((config as any)?.messenger_url, 2000) || "",
       qr_image_path: asString((config as any)?.qr_image_path, 2000) || "",
-      account_price_php: asPriceNumber((config as any)?.account_price_php),
+      account_price_php: proQuote?.quotePrice ?? 0,
       banner_rotation_ms: normalizeBannerRotationMs((config as any)?.banner_rotation_ms) ?? STORE_BANNER_ROTATION_DEFAULT_MS,
       store_maintenance_enabled: Boolean((config as any)?.store_maintenance_enabled),
       store_maintenance_message: asString((config as any)?.store_maintenance_message, 2000) || "",
@@ -3065,27 +3119,32 @@ const deleteOwnAccount = async (req: Request, body: any) => {
 const getAccountUpgradeOptions = async (req: Request) => {
   const admin = createServiceClient();
   const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
-  if (!user?.id) return fail(401, "NOT_AUTHENTICATED");
-  const profile = await ensureProfileForAccountUser(admin, user);
-  const capabilities = await loadAccountCapabilitySnapshot(admin, user.id);
+  const userId = asUuid(user?.id);
+  const profile = userId ? await ensureProfileForAccountUser(admin, user) : null;
+  const capabilities = await loadAccountCapabilitySnapshot(admin, userId || null);
   const targets: StoredAccountTier[] = ["pro", "pro_max"];
-  const { data: pendingRows, error: pendingError } = await admin
-    .from("account_upgrade_requests")
-    .select("id,target_tier,status,receipt_reference,created_at,quote_price_php_snapshot")
-    .eq("user_id", user.id)
-    .eq("status", "pending")
-    .in("target_tier", targets);
+  const { data: pendingRows, error: pendingError } = userId
+    ? await admin
+      .from("account_upgrade_requests")
+      .select("id,target_tier,status,receipt_reference,created_at,quote_price_php_snapshot")
+      .eq("user_id", userId)
+      .eq("status", "pending")
+      .in("target_tier", targets)
+    : { data: [], error: null };
   if (pendingError) return fail(500, pendingError.message);
   const pendingByTier = new Map<string, any>();
   for (const row of pendingRows || []) {
     const target = normalizeUpgradeTier((row as any)?.target_tier);
     if (target && !pendingByTier.has(target)) pendingByTier.set(target, row);
   }
+  const freeConfig = await getTierConfig(admin, "free");
+  const freeUiContent = await resolveTierUiContent(freeConfig);
   const tiers = await Promise.all(targets.map(async (targetTier) => {
     const config = await getTierConfig(admin, targetTier);
-    const quote = await quoteUpgradeRequest(admin, user.id, targetTier);
-    const alreadyOnTier = capabilities.effectiveTier === targetTier || capabilities.effectiveTier === "pro_max";
-    const isDowngrade = capabilities.effectiveTier === "pro" && targetTier === "pro";
+    const uiContent = await resolveTierUiContent(config);
+    const quote = userId ? await quoteUpgradeRequest(admin, userId, targetTier) : quotePublicUpgradeTier(config);
+    const alreadyOnTier = userId && (capabilities.effectiveTier === targetTier || capabilities.effectiveTier === "pro_max");
+    const isDowngrade = userId && capabilities.effectiveTier === "pro" && targetTier === "pro";
     const pendingRequest = pendingByTier.get(targetTier) || null;
     return {
       tier: targetTier,
@@ -3093,6 +3152,7 @@ const getAccountUpgradeOptions = async (req: Request) => {
       description: asString((config as any)?.description, 1000) || "",
       pricePhp: normalizeTierPrice((config as any)?.price_php),
       promoDiscountPercent: getTierPromoDiscountPercent(config),
+      uiContent,
       isActive: (config as any)?.is_active !== false,
       available: !pendingRequest && !alreadyOnTier && !isDowngrade && (config as any)?.is_active !== false,
       pendingRequest,
@@ -3100,12 +3160,21 @@ const getAccountUpgradeOptions = async (req: Request) => {
     };
   }));
   return ok({
-    user: {
-      id: user.id,
-      email: user.email || null,
-    },
+    user: userId ? {
+      id: userId,
+      email: user?.email || null,
+    } : null,
     profile,
     capabilities,
+    freeTier: {
+      tier: "free",
+      displayName: asString((freeConfig as any)?.display_name, 80) || "FREE",
+      description: asString((freeConfig as any)?.description, 1000) || "",
+      pricePhp: normalizeTierPrice((freeConfig as any)?.price_php),
+      promoDiscountPercent: getTierPromoDiscountPercent(freeConfig),
+      uiContent: freeUiContent,
+      isActive: (freeConfig as any)?.is_active !== false,
+    },
     tiers,
   });
 };
@@ -3400,7 +3469,7 @@ const buildLandingEmailRedirectUrl = (
   platform: LandingPlatformKey,
   fallbackUrl: string,
 ): string => {
-  const redirectUrl = absolutizePublicSiteUrl(`/?goVersion=${encodeURIComponent(version)}&goPlatform=${encodeURIComponent(platform)}`);
+  const redirectUrl = absolutizePublicSiteUrl(`/go/${encodeURIComponent(version.toLowerCase())}/${encodeURIComponent(platform)}`);
   return /^https?:\/\//i.test(redirectUrl) ? redirectUrl : fallbackUrl;
 };
 const DEFAULT_LANDING_PLATFORM_DESCRIPTIONS = {
@@ -3505,7 +3574,7 @@ const normalizeLandingDownloadConfig = (row: any) => {
     downloadLinks[version] = {};
     platformDescriptions[version] = {};
     LANDING_PLATFORM_KEYS.forEach((platform) => {
-      downloadLinks[version][platform] = absolutizePublicSiteUrl(
+      downloadLinks[version][platform] = normalizePublicSitePathUrl(
         asString(downloadEntry?.[platform], 2000) || DEFAULT_LANDING_DOWNLOAD_LINKS[version][platform]
       );
       platformDescriptions[version][platform] = asString(platformEntry?.[platform], 500) || DEFAULT_LANDING_PLATFORM_DESCRIPTIONS[version][platform];
@@ -3577,6 +3646,7 @@ const getLandingDownloadConfig = async () => {
 const INSTALLER_BUY_VERSION_KEYS = ["V2", "V3"] as const;
 type InstallerBuyVersionKey = typeof INSTALLER_BUY_VERSION_KEYS[number];
 type InstallerBuyProductType = "standard" | "update" | "promax";
+type InstallerPricingTier = "standard" | "pro" | "pro_max";
 
 const normalizeInstallerBuyVersion = (value: unknown): InstallerBuyVersionKey | null => {
   const normalized = String(value || "").trim().toUpperCase();
@@ -3588,6 +3658,101 @@ const normalizeInstallerBuyProductType = (value: unknown): InstallerBuyProductTy
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "standard" || normalized === "update" || normalized === "promax") return normalized;
   return null;
+};
+
+const normalizeInstallerPricingTier = (value: unknown): InstallerPricingTier | null => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "standard" || normalized === "pro" || normalized === "pro_max") return normalized;
+  if (normalized === "promax") return "pro_max";
+  return null;
+};
+
+const mapInstallerTierConfigRow = (row: any) => {
+  const version = normalizeInstallerBuyVersion(row?.version) || "V2";
+  const tier = normalizeInstallerPricingTier(row?.tier) || "standard";
+  return {
+    id: asString(row?.id, 80) || "",
+    version,
+    tier,
+    displayName: asString(row?.display_name, 120) || (tier === "pro_max" ? "PRO MAX" : tier.toUpperCase()),
+    description: asString(row?.description, 2000) || "",
+    uiContent: asPlainObject(row?.ui_content),
+    isActive: row?.is_active !== false,
+    createdAt: asString(row?.created_at, 80) || null,
+    updatedAt: asString(row?.updated_at, 80) || null,
+  };
+};
+
+const listInstallerTierConfigs = async (
+  admin: ReturnType<typeof createServiceClient>,
+  version?: InstallerBuyVersionKey | null,
+) => {
+  let query: any = admin
+    .from("installer_tier_configs")
+    .select("*")
+    .eq("is_active", true)
+    .order("version", { ascending: true })
+    .order("tier", { ascending: true });
+  if (version) query = query.eq("version", version);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return (data || []).map(mapInstallerTierConfigRow);
+};
+
+const listAdminInstallerTierConfigs = async (req: Request) => {
+  const admin = createServiceClient();
+  const url = new URL(req.url);
+  const version = normalizeInstallerBuyVersion(url.searchParams.get("version"));
+  try {
+    let query: any = admin
+      .from("installer_tier_configs")
+      .select("*")
+      .order("version", { ascending: true })
+      .order("tier", { ascending: true });
+    if (version) query = query.eq("version", version);
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return ok({ items: (data || []).map(mapInstallerTierConfigRow) });
+  } catch (error) {
+    return fail(500, error instanceof Error ? error.message : "Failed to load installer tier configs");
+  }
+};
+
+const saveAdminInstallerTierConfig = async (body: any, adminUserId: string) => {
+  const admin = createServiceClient();
+  const version = normalizeInstallerBuyVersion(body?.version);
+  const tier = normalizeInstallerPricingTier(body?.tier);
+  const displayName = asString(body?.displayName, 120)?.trim() || "";
+  const description = asString(body?.description, 2000) || "";
+  const uiContent = asPlainObject(body?.uiContent);
+  const isActive = body?.isActive !== false;
+  if (!version) return badRequest("Invalid version");
+  if (!tier) return badRequest("Invalid tier");
+  if (!displayName) return badRequest("displayName is required");
+  const payload = {
+    version,
+    tier,
+    display_name: displayName,
+    description,
+    ui_content: uiContent,
+    is_active: isActive,
+    updated_by: adminUserId,
+  };
+  let upsert = await admin
+    .from("installer_tier_configs")
+    .upsert(payload, { onConflict: "version,tier" })
+    .select("*")
+    .single();
+  if (upsert.error && /updated_by/i.test(upsert.error.message || "")) {
+    const { updated_by: _skip, ...fallback } = payload;
+    upsert = await admin
+      .from("installer_tier_configs")
+      .upsert(fallback, { onConflict: "version,tier" })
+      .select("*")
+      .single();
+  }
+  if (upsert.error) return fail(500, upsert.error.message);
+  return ok({ item: mapInstallerTierConfigRow(upsert.data) });
 };
 
 type InstallerManifestPackageKind = "standard" | "update";
@@ -3775,13 +3940,54 @@ const listEnabledInstallerBuyProducts = async (admin: ReturnType<typeof createSe
 
 const getPublicBuyConfig = async () => {
   const admin = createServiceClient();
-  const [{ data: landingRow, error: landingError }, { data: paymentRow, error: paymentError }, products] = await Promise.all([
+  const [
+    { data: landingRow, error: landingError },
+    { data: paymentRow, error: paymentError },
+    products,
+    installerTierConfigs,
+    freeConfig,
+    proConfig,
+    proMaxConfig,
+  ] = await Promise.all([
     admin.from("landing_download_config").select("*").eq("id", "default").eq("is_active", true).maybeSingle(),
-    admin.from("store_payment_settings").select("instructions,gcash_number,maya_number,messenger_url,qr_image_path,account_price_php").eq("id", "default").eq("is_active", true).maybeSingle(),
+    admin.from("store_payment_settings").select("instructions,gcash_number,maya_number,messenger_url,qr_image_path").eq("id", "default").eq("is_active", true).maybeSingle(),
     listEnabledInstallerBuyProducts(admin),
+    listInstallerTierConfigs(admin),
+    getTierConfig(admin, "free"),
+    getTierConfig(admin, "pro"),
+    getTierConfig(admin, "pro_max"),
   ]);
   if (landingError) return fail(500, landingError.message);
   if (paymentError) return fail(500, paymentError.message);
+  const [freeUiContent, proUiContent, proMaxUiContent] = await Promise.all([
+    resolveTierUiContent(freeConfig),
+    resolveTierUiContent(proConfig),
+    resolveTierUiContent(proMaxConfig),
+  ]);
+  const toPublicTier = (tier: StoredAccountTier, config: any, uiContent: Record<string, unknown>) => {
+    const quote = quotePublicUpgradeTier(config);
+    const promoDiscountPercent = getTierPromoDiscountPercent(config);
+    return {
+      tier,
+      displayName: asString((config as any)?.display_name, 80) || (tier === "pro_max" ? "PRO MAX" : tier.toUpperCase()),
+      description: asString((config as any)?.description, 1000) || "",
+      pricePhp: normalizeTierPrice((config as any)?.price_php),
+      promoDiscountPercent,
+      uiContent,
+      isActive: (config as any)?.is_active !== false,
+      quote: {
+        basePrice: quote.basePrice,
+        creditPhp: quote.creditPhp,
+        quotePrice: quote.quotePrice,
+        promoDiscountPercent,
+        discountPercent: promoDiscountPercent,
+        discountPhp: promoDiscountPercent > 0 ? Math.max(0, Math.round((quote.basePrice - quote.quotePrice) * 100) / 100) : 0,
+      },
+    };
+  };
+  const freeTier = toPublicTier("free", freeConfig, freeUiContent);
+  const proTier = toPublicTier("pro", proConfig, proUiContent);
+  const proMaxTier = toPublicTier("pro_max", proMaxConfig, proMaxUiContent);
   return ok({
     config: normalizeLandingDownloadConfig(landingRow || {}),
     paymentConfig: {
@@ -3790,9 +3996,11 @@ const getPublicBuyConfig = async () => {
       maya_number: asString((paymentRow as any)?.maya_number, 80) || "",
       messenger_url: asString((paymentRow as any)?.messenger_url, 500) || "",
       qr_image_path: asString((paymentRow as any)?.qr_image_path, 1000) || "",
-      account_price_php: asPriceNumber((paymentRow as any)?.account_price_php),
     },
+    freeTier,
+    accountTiers: [proTier, proMaxTier],
     v2v3Products: products,
+    installerTierConfigs,
   });
 };
 
@@ -5171,6 +5379,7 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
   const password = String(body?.password || "");
   const confirmPassword = String(body?.confirmPassword || "");
   const paymentChannel = asString(body?.paymentChannel, 40);
+  const targetTier = normalizeUpgradeTier(body?.targetTier ?? body?.target_tier) || "pro";
   let payerName = asString(body?.payerName, 120);
   let referenceNo = asString(body?.referenceNo, 120);
   const notes = asString(body?.notes, 1000);
@@ -5248,7 +5457,7 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
 
   const { data: existingReqs, error: existingReqsError } = await admin
     .from("account_registration_requests")
-    .select("id,status,created_at")
+    .select("id,status,target_tier,created_at")
     .eq("email_normalized", email)
     .order("created_at", { ascending: false });
   if (existingReqsError) return fail(500, existingReqsError.message);
@@ -5261,14 +5470,25 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
   const { ciphertext, iv, keyVersion } = await encryptRegistrationPassword(password);
   const { data: paymentConfig } = await admin
     .from("store_payment_settings")
-    .select("instructions,gcash_number,maya_number,messenger_url,qr_image_path,account_price_php,updated_at")
+    .select("instructions,gcash_number,maya_number,messenger_url,qr_image_path,updated_at")
     .eq("id", "default")
     .eq("is_active", true)
     .maybeSingle();
-  const paymentSnapshot = paymentConfig || {};
+  const targetTierConfig = await getTierConfig(admin, targetTier);
+  const targetRegistrationQuote = quotePublicUpgradeTier(targetTierConfig);
+  const accountRegistrationPrice = Number.isFinite(targetRegistrationQuote.quotePrice)
+    ? targetRegistrationQuote.quotePrice
+    : 0;
+  const paymentSnapshot = {
+    ...(paymentConfig || {}),
+    account_tier: targetTier,
+    account_tier_price_php: accountRegistrationPrice,
+    account_tier_updated_at: asString((targetTierConfig as any)?.updated_at, 80) || null,
+  };
   const receiptReference = buildAccountReceiptReference();
   const insertPayload: Record<string, unknown> = {
     email,
+    target_tier: targetTier,
     display_name: displayName,
     password_ciphertext: ciphertext,
     password_iv: iv,
@@ -5281,7 +5501,7 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
     notes: notes || null,
     proof_path: proofPath || null,
     payment_settings_snapshot: paymentSnapshot,
-    account_price_php_snapshot: asPriceNumber((paymentConfig as any)?.account_price_php),
+    account_price_php_snapshot: accountRegistrationPrice,
     decision_email_status: "pending",
     ocr_reference_no: ocrMetadata.referenceNo,
     ocr_payer_name: ocrMetadata.payerName,
@@ -5392,7 +5612,7 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
         })) {
           automationResult = "wallet_number_mismatch";
         } else {
-          const expectedAmount = roundMoney(asPriceNumber((paymentConfig as any)?.account_price_php) || 0);
+          const expectedAmount = roundMoney(accountRegistrationPrice);
           const detectedAmount = roundMoney(ocrMetadata.amountPhp);
           if (!matchesAutoApprovalAmount(expectedAmount, detectedAmount)) {
             automationResult = "amount_mismatch";
@@ -5827,12 +6047,19 @@ const executeAccountApproval = async (input: {
     return fail(500, updateAuthResult.error.message);
   }
 
-  const samplerConfigResult = await getNormalizedSamplerAppConfig(input.admin);
-  if (samplerConfigResult.error) {
+  const targetTier = normalizeUpgradeTier(input.requestRow?.target_tier) || "pro";
+  let proTierDefaults: AccountCapabilitySnapshot;
+  try {
+    const proTierConfig = await getTierConfig(input.admin, targetTier);
+    proTierDefaults = buildAccountCapabilitySnapshot(
+      { id: authUserId, role: "user", account_tier: targetTier, tier_source: "registration" },
+      proTierConfig,
+      null,
+    );
+  } catch (error) {
     if (createdNewAuthUser) await cleanupCreatedAuthUser(input.admin, authUserId);
-    return fail(500, samplerConfigResult.error.message);
+    return fail(500, error instanceof Error ? error.message : String(error));
   }
-  const quotaDefaults = samplerConfigResult.config.quotaDefaults;
 
   const { error: profileUpsertError } = await input.admin
     .from("profiles")
@@ -5841,12 +6068,12 @@ const executeAccountApproval = async (input: {
         id: authUserId,
         role: "user",
         display_name: input.requestRow.display_name || input.requestRow.email,
-        account_tier: "pro",
-        tier_source: "migration_legacy",
+        account_tier: targetTier,
+        tier_source: "registration",
         tier_updated_at: input.reviewedAtIso,
-        owned_bank_quota: quotaDefaults.ownedBankQuota,
-        owned_bank_pad_cap: quotaDefaults.ownedBankPadCap,
-        device_total_bank_cap: quotaDefaults.deviceTotalBankCap,
+        owned_bank_quota: proTierDefaults.limits.ownedBankQuota,
+        owned_bank_pad_cap: proTierDefaults.limits.ownedBankPadCap,
+        device_total_bank_cap: proTierDefaults.limits.deviceTotalBankCap,
         updated_at: input.reviewedAtIso,
       },
       { onConflict: "id" },
@@ -5854,6 +6081,15 @@ const executeAccountApproval = async (input: {
   if (profileUpsertError) {
     if (createdNewAuthUser) await cleanupCreatedAuthUser(input.admin, authUserId);
     return fail(500, profileUpsertError.message);
+  }
+
+  if (targetTier === "pro_max") {
+    try {
+      await grantPublishedStoreBanksToUser(input.admin, authUserId);
+    } catch (error) {
+      if (createdNewAuthUser) await cleanupCreatedAuthUser(input.admin, authUserId);
+      return fail(500, error instanceof Error ? error.message : String(error));
+    }
   }
 
   const { error: updateError } = await input.admin
@@ -6051,7 +6287,7 @@ const listAdminAccountRegistrationRequests = async (req: Request) => {
   let query: any = admin
     .from("account_registration_requests")
     .select(
-      "id,email,display_name,status,payment_channel,payer_name,reference_no,receipt_reference,notes,proof_path,rejection_message,decision_email_status,decision_email_error,reviewed_by,reviewed_at,approved_auth_user_id,is_refunded,refunded_at,refunded_by,created_at,ocr_reference_no,ocr_payer_name,ocr_amount_php,ocr_recipient_number,ocr_provider,ocr_scanned_at,ocr_status,ocr_error_code,decision_source,automation_result",
+      "id,email,display_name,target_tier,status,payment_channel,payer_name,reference_no,receipt_reference,notes,proof_path,rejection_message,decision_email_status,decision_email_error,reviewed_by,reviewed_at,approved_auth_user_id,is_refunded,refunded_at,refunded_by,created_at,ocr_reference_no,ocr_payer_name,ocr_amount_php,ocr_recipient_number,ocr_provider,ocr_scanned_at,ocr_status,ocr_error_code,decision_source,automation_result",
       { count: "exact" },
     )
     .order("created_at", { ascending: false });
@@ -9426,14 +9662,6 @@ const saveAdminStoreConfig = async (body: any, adminUserId: string) => {
   const readMergedString = (field: string, max: number): string =>
     hasField(field) ? asString(body?.[field], max) : asString((existingConfig as any)?.[field], max);
 
-  const hasAccountPrice = Object.prototype.hasOwnProperty.call(body || {}, "account_price_php");
-  const accountPriceRaw = hasAccountPrice ? body?.account_price_php : undefined;
-  const parsedAccountPrice = accountPriceRaw === null || accountPriceRaw === "" || typeof accountPriceRaw === "undefined"
-    ? (hasAccountPrice ? null : asPriceNumber((existingConfig as any)?.account_price_php))
-    : asPriceNumber(accountPriceRaw);
-  if (hasAccountPrice && accountPriceRaw !== null && accountPriceRaw !== "" && parsedAccountPrice === null) {
-    return badRequest("account_price_php must be a valid non-negative number");
-  }
   const hasBannerRotation = Object.prototype.hasOwnProperty.call(body || {}, "banner_rotation_ms");
   const bannerRotationRaw = hasBannerRotation ? body?.banner_rotation_ms : undefined;
   const parsedBannerRotation = bannerRotationRaw === null || bannerRotationRaw === "" || typeof bannerRotationRaw === "undefined"
@@ -9559,7 +9787,6 @@ const saveAdminStoreConfig = async (body: any, adminUserId: string) => {
     updated_by: adminUserId,
     updated_at: new Date().toISOString(),
   };
-  if (hasAccountPrice) payload.account_price_php = parsedAccountPrice;
   payload.banner_rotation_ms = parsedBannerRotation ?? STORE_BANNER_ROTATION_DEFAULT_MS;
   let upsert = await admin.from("store_payment_settings").upsert(payload, { onConflict: "id" }).select("*").single();
   if (upsert.error && /updated_by/i.test(upsert.error.message || "")) {
@@ -9838,6 +10065,13 @@ Deno.serve(async (req) => {
     }
     if (req.method === "GET" && scoped[2] === "installer-buy" && scoped[3] === "products" && scoped.length === 4) {
       return await listAdminInstallerBuyProducts(req);
+    }
+    if (req.method === "GET" && scoped[2] === "installer-buy" && scoped[3] === "tier-configs" && scoped.length === 4) {
+      return await listAdminInstallerTierConfigs(req);
+    }
+    if (req.method === "POST" && scoped[2] === "installer-buy" && scoped[3] === "tier-configs" && scoped[4] === "save" && scoped.length === 5) {
+      const body = await req.json().catch(() => ({}));
+      return await saveAdminInstallerTierConfig(body, adminUserId);
     }
     if (req.method === "POST" && scoped[2] === "installer-buy" && scoped[3] === "products" && scoped[4] === "save" && scoped.length === 5) {
       const body = await req.json().catch(() => ({}));

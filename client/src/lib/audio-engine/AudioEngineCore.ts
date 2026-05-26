@@ -16,12 +16,17 @@ import {
     type EngineHealth,
     type EngineConfig,
     type StopMode,
+    type StopTimingOverridesMs,
+    type StopTimingProfile,
     type HotcueTuple,
     type PlaybackMode,
     DEFAULT_ENGINE_CONFIG,
     IS_IOS,
     IS_ANDROID,
     MAX_PLAYBACK_CHANNELS,
+    applyStopTimingOverrides,
+    getStopTimingProfile,
+    normalizeStopTimingOverrides,
 } from './types';
 import { selectBackend, shouldFallbackToMedia } from './BackendSelector';
 import { BufferBackend } from './BufferBackend';
@@ -87,6 +92,7 @@ export class AudioEngineCore implements LifecycleDelegate {
     private masterVolume = 1;
     private globalMuted = false;
     private globalEQ: EqSettings = { low: 0, mid: 0, high: 0 };
+    private stopTimingOverrides: StopTimingOverridesMs = {};
 
     private lifecycle: LifecycleManager;
     private iosAudioService: any = null;
@@ -944,7 +950,15 @@ export class AudioEngineCore implements LifecycleDelegate {
             isActive: () => t.state.isPlaying,
         };
 
-        t.stopCancel = executeStop(target, mode, this.ctx ?? undefined);
+        t.stopCancel = executeStop(target, mode, this.ctx ?? undefined, this.getEffectiveStopTimingProfile());
+    }
+
+    setStopTimingOverrides(overrides?: StopTimingOverridesMs | null): void {
+        this.stopTimingOverrides = normalizeStopTimingOverrides(overrides);
+    }
+
+    private getEffectiveStopTimingProfile(): StopTimingProfile {
+        return applyStopTimingOverrides(getStopTimingProfile(), this.stopTimingOverrides);
     }
 
     disposeTransport(padId: string): void {

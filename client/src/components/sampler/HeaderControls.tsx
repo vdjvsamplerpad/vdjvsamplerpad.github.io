@@ -5,9 +5,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2, ArrowUpCircle } from 'lucide-react';
 import type { SamplerBank, StopMode } from './types/sampler';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { getCachedUser, useAuthActions, useAuthState } from '@/hooks/useAuth';
 import type { SystemAction, SystemMappings } from '@/lib/system-mappings';
+import {
+  applyStopTimingOverrides,
+  getStopModeDurationMs,
+  getStopTimingProfile,
+  type StopTimingOverridesMs,
+} from '@/lib/audio-engine';
 import type { MidiDeviceProfile } from '@/lib/midi/device-profiles';
 import type { GraphicsProfile } from '@/lib/performance-monitor';
 import type { DefaultBankSourceOption } from './AdminAccessDialog.shared';
@@ -25,6 +31,40 @@ const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then(
 const AboutDialog = React.lazy(() => import('@/components/ui/about-dialog').then((module) => ({ default: module.AboutDialog }))) as unknown as typeof AboutDialogType;
 const HeaderAdminDebugPanel = React.lazy(() => import('./HeaderAdminDebugPanel').then((module) => ({ default: module.HeaderAdminDebugPanel }))) as unknown as typeof HeaderAdminDebugPanelType;
 const AccountUpgradeDialog = React.lazy(() => import('./AccountUpgradeDialog').then((module) => ({ default: module.AccountUpgradeDialog }))) as unknown as typeof AccountUpgradeDialogType;
+
+type StopAnimationState = {
+  key: number;
+  durationMs: number;
+};
+
+type StopModePickerState = {
+  open: boolean;
+  center: { x: number; y: number };
+  activeMode: StopMode | null;
+  isCompact: boolean;
+};
+
+type StopGestureState = {
+  pointerId: number;
+  holdOpened: boolean;
+  suppressClick: boolean;
+  isCompact: boolean;
+  center: { x: number; y: number };
+};
+
+const STOP_MODE_HOLD_MS = 360;
+const STOP_MODE_RADIAL_OPTIONS: Array<{
+  mode: StopMode;
+  label: string;
+  shortLabel: string;
+  angleDeg: number;
+}> = [
+  { mode: 'instant', label: 'Instant Stop', shortLabel: 'Instant', angleDeg: 200 },
+  { mode: 'fadeout', label: 'Fade Out', shortLabel: 'Fade', angleDeg: 235 },
+  { mode: 'brake', label: 'Brake', shortLabel: 'Brake', angleDeg: 270 },
+  { mode: 'backspin', label: 'BrakeSpin', shortLabel: 'Spin', angleDeg: 305 },
+  { mode: 'filter', label: 'FilterSweep', shortLabel: 'Filter', angleDeg: 340 },
+];
 
 const normalizeHexColor = (value?: string | null): string | null => {
   if (!value) return null;
@@ -50,6 +90,68 @@ const getReadableTextColor = (hex: string): string => {
   return luminance > 0.58 ? '#0f172a' : '#ffffff';
 };
 
+const getStopModeLabel = (mode: StopMode): string => (
+  STOP_MODE_RADIAL_OPTIONS.find((option) => option.mode === mode)?.label || 'Instant Stop'
+);
+
+const getStopModePickerGeometry = (
+  mode: StopMode,
+  center: { x: number; y: number },
+  isCompact: boolean,
+) => {
+  const option = STOP_MODE_RADIAL_OPTIONS.find((item) => item.mode === mode) || STOP_MODE_RADIAL_OPTIONS[0];
+  const index = Math.max(0, STOP_MODE_RADIAL_OPTIONS.findIndex((item) => item.mode === option.mode));
+  if (!isCompact) {
+    return {
+      x: center.x,
+      y: center.y - 242 + index * 54,
+    };
+  }
+  const radius = isCompact ? 118 : 132;
+  const radians = (option.angleDeg * Math.PI) / 180;
+  return {
+    x: center.x + Math.cos(radians) * radius,
+    y: center.y + Math.sin(radians) * radius,
+  };
+};
+
+const getStopModeFromPointer = (
+  clientX: number,
+  clientY: number,
+  center: { x: number; y: number },
+  isCompact: boolean,
+): StopMode | null => {
+  const dx = clientX - center.x;
+  const dy = clientY - center.y;
+  const radialDistance = Math.hypot(dx, dy);
+  if (dy > 42 || radialDistance < 48) return null;
+
+  let nearest: { mode: StopMode; distance: number } | null = null;
+  STOP_MODE_RADIAL_OPTIONS.forEach((option) => {
+    const point = getStopModePickerGeometry(option.mode, center, isCompact);
+    const distance = Math.hypot(clientX - point.x, clientY - point.y);
+    if (!nearest || distance < nearest.distance) {
+      nearest = { mode: option.mode, distance };
+    }
+  });
+
+  const maxDistance = isCompact ? 76 : 84;
+  if (!isCompact) {
+    const inVerticalBand = Math.abs(clientX - center.x) <= 92
+      && clientY <= center.y - 24
+      && clientY >= center.y - 282;
+    if (nearest && (nearest.distance <= maxDistance || inVerticalBand)) {
+      return nearest.mode;
+    }
+    return null;
+  }
+  const broadArcDistance = isCompact ? 205 : 225;
+  if (nearest && (nearest.distance <= maxDistance || (clientY < center.y + 10 && radialDistance <= broadArcDistance))) {
+    return nearest.mode;
+  }
+  return null;
+};
+
 
 interface HeaderControlsProps {
   primaryBank: SamplerBank | null;
@@ -58,6 +160,7 @@ interface HeaderControlsProps {
   isDualMode: boolean;
   padSize: number;
   stopMode: StopMode;
+  stopTimingOverrides: StopTimingOverridesMs;
   editMode: boolean;
   globalMuted: boolean;
   sideMenuOpen: boolean;
@@ -85,6 +188,7 @@ interface HeaderControlsProps {
   onExitDualMode: () => void;
   onPadSizeChange: (size: number) => void;
   onStopModeChange: (mode: StopMode) => void;
+  onStopTimingOverridesChange: (overrides: StopTimingOverridesMs) => void;
   defaultTriggerMode: SamplerBank['pads'][number]['triggerMode'];
   onDefaultTriggerModeChange: (mode: SamplerBank['pads'][number]['triggerMode']) => void;
   graphicsProfile: GraphicsProfile;
@@ -306,6 +410,7 @@ export function HeaderControls({
   isDualMode,
   padSize,
   stopMode,
+  stopTimingOverrides,
   editMode,
   globalMuted,
   sideMenuOpen,
@@ -333,6 +438,7 @@ export function HeaderControls({
   onExitDualMode,
   onPadSizeChange,
   onStopModeChange,
+  onStopTimingOverridesChange,
   defaultTriggerMode,
   onDefaultTriggerModeChange,
   graphicsProfile,
@@ -404,9 +510,22 @@ export function HeaderControls({
   const [showDisplayNamePrompt, setShowDisplayNamePrompt] = React.useState(false);
   const [displayNamePromptValue, setDisplayNamePromptValue] = React.useState('');
   const [savingDisplayNamePrompt, setSavingDisplayNamePrompt] = React.useState(false);
+  const [stopAnimation, setStopAnimation] = React.useState<StopAnimationState | null>(null);
+  const [stopModePicker, setStopModePicker] = React.useState<StopModePickerState | null>(null);
+  const stopAnimationTimeoutRef = React.useRef<number | null>(null);
+  const stopModeHoldTimeoutRef = React.useRef<number | null>(null);
+  const stopClickSuppressTimeoutRef = React.useRef<number | null>(null);
+  const stopGestureRef = React.useRef<StopGestureState | null>(null);
   const appVersion = (import.meta as any).env?.VITE_APP_VERSION || 'unknown';
   const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.onFullscreenChange);
   const { state: appUpdateState, checkForUpdates, installUpdate } = useAppUpdate();
+  const baseStopTimingProfile = React.useMemo(() => getStopTimingProfile(), []);
+  const activeStopDurationMs = React.useMemo(() => (
+    Math.max(10, getStopModeDurationMs(
+      stopMode,
+      applyStopTimingOverrides(baseStopTimingProfile, stopTimingOverrides)
+    ))
+  ), [baseStopTimingProfile, stopMode, stopTimingOverrides]);
 
   // Dynamically load AdminAccessDialog only for admin users
   React.useEffect(() => {
@@ -432,6 +551,183 @@ export function HeaderControls({
     pushNotice({ variant: 'info', message });
     setUpgradeOpen(true);
   }, [pushNotice, user]);
+
+  React.useEffect(() => () => {
+    if (stopAnimationTimeoutRef.current !== null) {
+      window.clearTimeout(stopAnimationTimeoutRef.current);
+      stopAnimationTimeoutRef.current = null;
+    }
+    if (stopModeHoldTimeoutRef.current !== null) {
+      window.clearTimeout(stopModeHoldTimeoutRef.current);
+      stopModeHoldTimeoutRef.current = null;
+    }
+    if (stopClickSuppressTimeoutRef.current !== null) {
+      window.clearTimeout(stopClickSuppressTimeoutRef.current);
+      stopClickSuppressTimeoutRef.current = null;
+    }
+  }, []);
+
+  const startStopAnimation = React.useCallback(() => {
+    if (stopMode === 'instant') {
+      return;
+    }
+    if (stopAnimationTimeoutRef.current !== null) {
+      window.clearTimeout(stopAnimationTimeoutRef.current);
+      stopAnimationTimeoutRef.current = null;
+    }
+    const durationMs = Math.max(10, Math.round(activeStopDurationMs));
+    flushSync(() => {
+      setStopAnimation((current) => ({
+        key: (current?.key ?? 0) + 1,
+        durationMs,
+      }));
+    });
+    stopAnimationTimeoutRef.current = window.setTimeout(() => {
+      setStopAnimation(null);
+      stopAnimationTimeoutRef.current = null;
+    }, durationMs);
+  }, [activeStopDurationMs, stopMode]);
+
+  const handleStopAllWithAnimation = React.useCallback(() => {
+    startStopAnimation();
+    onStopAll();
+  }, [onStopAll, startStopAnimation]);
+
+  const closeStopModePicker = React.useCallback(() => {
+    setStopModePicker(null);
+  }, []);
+
+  const isStopModeAllowed = React.useCallback((mode: StopMode) => (
+    mode === 'instant' || capabilities.features.advancedStopModes
+  ), [capabilities.features.advancedStopModes]);
+
+  const handleStopModeSelection = React.useCallback((mode: StopMode | null) => {
+    closeStopModePicker();
+    if (!mode) return;
+    if (!isStopModeAllowed(mode)) {
+      openUpgradeDialog('Advanced stop modes require PRO.');
+      return;
+    }
+    if (mode !== stopMode) {
+      onStopModeChange(mode);
+      pushNotice({ variant: 'success', message: `Stop mode: ${getStopModeLabel(mode)}` });
+    }
+  }, [closeStopModePicker, isStopModeAllowed, onStopModeChange, openUpgradeDialog, pushNotice, stopMode]);
+
+  const clearStopHoldTimer = React.useCallback(() => {
+    if (stopModeHoldTimeoutRef.current !== null) {
+      window.clearTimeout(stopModeHoldTimeoutRef.current);
+      stopModeHoldTimeoutRef.current = null;
+    }
+  }, []);
+
+  const armStopClickSuppression = React.useCallback((gesture: StopGestureState) => {
+    if (stopClickSuppressTimeoutRef.current !== null) {
+      window.clearTimeout(stopClickSuppressTimeoutRef.current);
+      stopClickSuppressTimeoutRef.current = null;
+    }
+    stopGestureRef.current = { ...gesture, suppressClick: true };
+    stopClickSuppressTimeoutRef.current = window.setTimeout(() => {
+      const current = stopGestureRef.current;
+      if (current?.pointerId === gesture.pointerId && current.suppressClick) {
+        stopGestureRef.current = null;
+      }
+      stopClickSuppressTimeoutRef.current = null;
+    }, 450);
+  }, []);
+
+  const handleStopPointerDown = React.useCallback((event: React.PointerEvent<HTMLButtonElement>, isCompact: boolean) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const center = {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+    clearStopHoldTimer();
+    if (stopClickSuppressTimeoutRef.current !== null) {
+      window.clearTimeout(stopClickSuppressTimeoutRef.current);
+      stopClickSuppressTimeoutRef.current = null;
+    }
+    stopGestureRef.current = {
+      pointerId: event.pointerId,
+      holdOpened: false,
+      suppressClick: false,
+      isCompact,
+      center,
+    };
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+    }
+    stopModeHoldTimeoutRef.current = window.setTimeout(() => {
+      const gesture = stopGestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      gesture.holdOpened = true;
+      gesture.suppressClick = true;
+      setStopModePicker({
+        open: true,
+        center,
+        activeMode: null,
+        isCompact,
+      });
+    }, STOP_MODE_HOLD_MS);
+  }, [clearStopHoldTimer]);
+
+  const handleStopPointerMove = React.useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const gesture = stopGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId || !gesture.holdOpened) return;
+    event.preventDefault();
+    const activeMode = getStopModeFromPointer(event.clientX, event.clientY, gesture.center, gesture.isCompact);
+    setStopModePicker((current) => {
+      if (!current || current.activeMode === activeMode) return current;
+      return { ...current, activeMode };
+    });
+  }, []);
+
+  const handleStopPointerUp = React.useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const gesture = stopGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    clearStopHoldTimer();
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+    }
+    if (gesture.holdOpened) {
+      armStopClickSuppression(gesture);
+      const selectedMode = getStopModeFromPointer(event.clientX, event.clientY, gesture.center, gesture.isCompact);
+      handleStopModeSelection(selectedMode);
+      return;
+    }
+    armStopClickSuppression(gesture);
+    handleStopAllWithAnimation();
+  }, [armStopClickSuppression, clearStopHoldTimer, handleStopAllWithAnimation, handleStopModeSelection]);
+
+  const handleStopClick = React.useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    const gesture = stopGestureRef.current;
+    if (gesture?.suppressClick) {
+      event.preventDefault();
+      event.stopPropagation();
+      stopGestureRef.current = null;
+      if (stopClickSuppressTimeoutRef.current !== null) {
+        window.clearTimeout(stopClickSuppressTimeoutRef.current);
+        stopClickSuppressTimeoutRef.current = null;
+      }
+      return;
+    }
+    handleStopAllWithAnimation();
+  }, [handleStopAllWithAnimation]);
+
+  const handleStopPointerCancel = React.useCallback(() => {
+    clearStopHoldTimer();
+    if (stopClickSuppressTimeoutRef.current !== null) {
+      window.clearTimeout(stopClickSuppressTimeoutRef.current);
+      stopClickSuppressTimeoutRef.current = null;
+    }
+    stopGestureRef.current = null;
+    closeStopModePicker();
+  }, [clearStopHoldTimer, closeStopModePicker]);
 
   // Track previous user to detect login
   const prevUserIdRef = React.useRef<string | null>(null);
@@ -701,6 +997,15 @@ export function HeaderControls({
     ? window.innerHeight > window.innerWidth
     : windowWidth < 768;
   const isCompactBottomNav = windowWidth < 768 || isPortraitViewport;
+  const effectiveGraphicsTierKey = React.useMemo(() => {
+    const label = effectiveGraphicsTierLabel.toLowerCase();
+    if (label.includes('lowest')) return 'lowest';
+    if (label.includes('medium')) return 'medium';
+    if (label.includes('high')) return 'high';
+    if (label.includes('low')) return 'low';
+    return graphicsProfile === 'auto' ? 'medium' : graphicsProfile;
+  }, [effectiveGraphicsTierLabel, graphicsProfile]);
+  const useGlassStopModePicker = effectiveGraphicsTierKey === 'high';
   const defaultTrialSummary = freePlaySummary?.visible
     ? {
       visible: true,
@@ -877,6 +1182,42 @@ export function HeaderControls({
       {/* Slide-down notifications */}
       <NoticesPortal notices={notices} dismiss={dismiss} theme={theme} />
 
+      {stopModePicker?.open && typeof document !== 'undefined' && createPortal(
+        <div className="pointer-events-none fixed inset-0 z-[80]" aria-hidden="true">
+          {STOP_MODE_RADIAL_OPTIONS.map((option) => {
+            const point = getStopModePickerGeometry(option.mode, stopModePicker.center, stopModePicker.isCompact);
+            const selected = stopModePicker.activeMode === option.mode;
+            const current = stopMode === option.mode;
+            const locked = !isStopModeAllowed(option.mode);
+            return (
+              <div
+                key={option.mode}
+                className={cn(
+                  'fixed flex -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-2xl border text-center font-black shadow-[0_18px_45px_rgba(15,23,42,0.32)] transition-all duration-150',
+                  stopModePicker.isCompact ? 'h-12 w-[4.55rem] text-[10px]' : 'h-11 w-28 text-[11px]',
+                  useGlassStopModePicker && 'backdrop-blur-xl',
+                  useGlassStopModePicker
+                    ? theme === 'dark'
+                      ? 'border-slate-600/80 bg-slate-950/82 text-slate-50'
+                      : 'border-white/80 bg-white/82 text-slate-900'
+                    : theme === 'dark'
+                      ? 'border-slate-700 bg-slate-950 text-slate-50'
+                      : 'border-slate-300 bg-white text-slate-900',
+                  current && !selected && 'border-red-300 text-red-500 ring-2 ring-red-300/35',
+                  selected && 'scale-110 border-[#B9FF12] bg-[#B9FF12] text-slate-950 ring-4 ring-[#B9FF12]/30',
+                  locked && !selected && 'opacity-65'
+                )}
+                style={{ left: point.x, top: point.y }}
+              >
+                <span className="max-w-full truncate px-1">{stopModePicker.isCompact ? option.shortLabel : option.label}</span>
+                {locked ? <span className="mt-0.5 text-[8px] uppercase tracking-[0.18em] opacity-80">PRO</span> : null}
+              </div>
+            );
+          })}
+        </div>,
+        document.body
+      )}
+
       <input
         ref={fileInputRef}
         type="file"
@@ -1029,7 +1370,7 @@ export function HeaderControls({
 
           {/* Stop All Button */}
           <Button
-            onClick={onStopAll}
+            onClick={handleStopAllWithAnimation}
             variant="outline"
             size={isMobileScreen ? "sm" : "default"}
             className={controlClass(isMobileScreen ? 'w-10' : 'w-24', 'danger')}
@@ -1140,20 +1481,20 @@ export function HeaderControls({
       >
         <div
           className={cn(
-            'pointer-events-auto mx-auto flex items-center border shadow-lg',
+            'pointer-events-auto mx-auto items-center border shadow-lg',
             isCompactBottomNav
               ? theme === 'dark'
-                ? 'h-[4.85rem] rounded-[2rem] border-slate-700 bg-neutral-950 px-3 pb-2 pt-3'
-                : 'h-[4.85rem] rounded-[2rem] border-slate-200 bg-white px-3 pb-2 pt-3'
+                ? 'flex h-[4.85rem] rounded-[2rem] border-slate-700 bg-neutral-950 px-3 pb-2 pt-3'
+                : 'flex h-[4.85rem] rounded-[2rem] border-slate-200 bg-white px-3 pb-2 pt-3'
               : theme === 'dark'
-                ? 'gap-2 rounded-2xl border-slate-800 bg-slate-950 p-1.5'
-                : 'gap-2 rounded-2xl border-slate-200 bg-white p-1.5'
+                ? 'grid grid-cols-[6rem_6rem_6rem_7rem_6rem_6rem_6rem] gap-2 rounded-2xl border-slate-800 bg-slate-950 p-1.5'
+                : 'grid grid-cols-[6rem_6rem_6rem_7rem_6rem_6rem_6rem] gap-2 rounded-2xl border-slate-200 bg-white p-1.5'
           )}
         >
           <button
             type="button"
             onClick={onToggleSideMenu}
-            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-24', sideMenuOpen && 'border-red-400 text-red-500')}
+            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-full', sideMenuOpen && 'border-red-400 text-red-500')}
           >
             {renderNavIcon(
               <Menu className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />,
@@ -1166,7 +1507,7 @@ export function HeaderControls({
             <button
               type="button"
               onClick={handleUploadClick}
-              className={cn(navButtonBase, 'w-24')}
+              className={cn(navButtonBase, 'w-full')}
               title="Upload audio to current bank"
             >
               {renderNavIcon(<Upload className="h-4 w-4" />)}
@@ -1177,7 +1518,7 @@ export function HeaderControls({
           <button
             type="button"
             onClick={handleSearchSlotClick}
-            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-28', searchOpen && 'border-red-400 text-red-500')}
+            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-full', searchOpen && 'border-red-400 text-red-500')}
             title={capabilities.features.search ? 'Search pads' : 'Upgrade or sign in for full search'}
           >
             {capabilities.features.search
@@ -1209,26 +1550,70 @@ export function HeaderControls({
 
           <button
             type="button"
-            onClick={onStopAll}
+            onClick={handleStopClick}
+            onPointerDown={(event) => handleStopPointerDown(event, isCompactBottomNav)}
+            onPointerMove={handleStopPointerMove}
+            onPointerUp={handleStopPointerUp}
+            onPointerCancel={handleStopPointerCancel}
+            onContextMenu={(event) => event.preventDefault()}
             className={cn(
-              'relative flex items-center justify-center border font-black text-white shadow-lg transition-transform active:scale-95',
+              'relative flex touch-none select-none items-center justify-center border font-black text-white shadow-lg transition-transform active:scale-95',
               isCompactBottomNav
-                ? 'mx-1 -mt-12 h-[4.65rem] w-[4.65rem] shrink-0 rounded-full border-red-200 bg-red-600 ring-[0.5rem] ring-slate-300/60'
-                : 'h-12 w-28 rounded-2xl border-red-400 bg-red-600',
+                ? 'mx-1 -mt-12 h-[4.65rem] w-[4.65rem] shrink-0 overflow-visible rounded-full border-red-200 bg-red-600 ring-[0.5rem] ring-red-200/80'
+                : 'h-12 w-full overflow-hidden rounded-2xl border-red-400 bg-red-600',
               theme === 'dark' && isCompactBottomNav ? 'ring-slate-700/80' : ''
             )}
             title="Stop all pads"
           >
+            {stopAnimation && isCompactBottomNav ? (
+              <svg
+                key={`stop-ring-${stopAnimation.key}`}
+                className="pointer-events-none absolute -inset-2.5 z-20 -rotate-90 overflow-visible"
+                viewBox="0 0 100 100"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="45"
+                  fill="none"
+                  stroke="rgba(185,255,18,0.16)"
+                  strokeWidth="5"
+                />
+                <circle
+                  className="vdjv-stop-ring-deprogress"
+                  cx="50"
+                  cy="50"
+                  r="45"
+                  fill="none"
+                  pathLength="1"
+                  stroke="#B9FF12"
+                  strokeDasharray="1"
+                  strokeDashoffset="0"
+                  strokeLinecap="round"
+                  strokeWidth="5"
+                  style={{ animationDuration: `${stopAnimation.durationMs}ms` }}
+                />
+              </svg>
+            ) : null}
+            {stopAnimation && !isCompactBottomNav ? (
+              <span
+                key={`stop-bar-${stopAnimation.key}`}
+                className="vdjv-stop-bar-deprogress pointer-events-none absolute inset-0 z-0 bg-[#B9FF12]/85"
+                style={{ animationDuration: `${stopAnimation.durationMs}ms` }}
+                aria-hidden="true"
+              />
+            ) : null}
             <span className="absolute inset-2 rounded-full bg-white/10" />
-            <Square className={isCompactBottomNav ? 'relative h-6 w-6' : 'relative h-4 w-4'} />
-            {!isCompactBottomNav && <span className="relative ml-2 text-xs">Stop</span>}
+            <Square className={isCompactBottomNav ? 'relative z-10 h-6 w-6' : 'relative z-10 h-4 w-4'} />
+            {!isCompactBottomNav && <span className="relative z-10 ml-2 text-xs">Stop</span>}
           </button>
 
           <button
             type="button"
             onClick={onToggleMute}
             aria-pressed={globalMuted}
-            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-24', globalMuted && 'border-red-400 text-red-500')}
+            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-full', globalMuted && 'border-red-400 text-red-500')}
             title={globalMuted ? 'Master output is muted. Click to unmute.' : 'Mute all sampler output.'}
           >
             {renderNavIcon(
@@ -1242,7 +1627,7 @@ export function HeaderControls({
             <button
               type="button"
               onClick={onToggleEditMode}
-              className={cn(navButtonBase, 'w-20', editMode && 'border-amber-400 text-amber-500')}
+              className={cn(navButtonBase, 'w-full', editMode && 'border-amber-400 text-amber-500')}
               title={editMode ? 'Exit Edit Mode' : 'Edit pads'}
             >
               {renderNavIcon(<Pencil className="h-4 w-4" />, editMode ? 'bg-amber-400' : undefined)}
@@ -1253,7 +1638,7 @@ export function HeaderControls({
           <button
             type="button"
             onClick={channelLoadArmed ? onCancelChannelLoad : onToggleMixer}
-            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-24', (mixerOpen || channelLoadArmed) && 'border-emerald-400 text-emerald-500')}
+            className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-full', (mixerOpen || channelLoadArmed) && 'border-emerald-400 text-emerald-500')}
           >
             {renderNavIcon(
               channelLoadArmed ? <X className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} /> : <Sliders className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />,
@@ -1553,10 +1938,12 @@ export function HeaderControls({
             isDualMode={isDualMode}
             padSize={padSize}
             stopMode={stopMode}
+            stopTimingOverrides={stopTimingOverrides}
             padSizeMin={minPadSize}
             padSizeMax={maxPadSize}
             onPadSizeChange={handlePadSizeFromDialog}
             onStopModeChange={onStopModeChange}
+            onStopTimingOverridesChange={onStopTimingOverridesChange}
             defaultTriggerMode={defaultTriggerMode}
             onDefaultTriggerModeChange={onDefaultTriggerModeChange}
             graphicsProfile={graphicsProfile}

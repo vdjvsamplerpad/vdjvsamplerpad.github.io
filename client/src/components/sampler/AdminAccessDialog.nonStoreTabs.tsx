@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { CopyableValue } from '@/components/ui/copyable-value';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -34,7 +35,7 @@ import {
   RevenueAdvancedChart,
   SortHeader,
 } from './AdminAccessDialog.widgets';
-import { AdminActionCluster, AdminPageScaffold, AdminRefreshButton, AdminStatsStrip } from './AdminAccessDialog.layout';
+import { AdminActionCluster, AdminControlsBar, AdminPageScaffold, AdminRefreshButton, AdminStatsStrip, AdminToolbar } from './AdminAccessDialog.layout';
 
 interface HomeTabProps {
   theme: AdminDialogTheme;
@@ -84,6 +85,7 @@ interface AssignmentsTabProps {
   allGrantIds: string[];
   allRevokeIds: string[];
   assignmentBanks: AdminBank[];
+  assignmentBanksQuery: string;
   assignmentBanksPage: number;
   assignmentBanksTotalPages: number;
   assignmentBankSortBy: AssignmentBankSortBy;
@@ -98,6 +100,7 @@ interface AssignmentsTabProps {
   onSelectUser: (id: string) => void;
   onGrant: (ids: string[]) => void;
   onRevoke: (ids: string[]) => void;
+  onAssignmentBanksQueryChange: (value: string) => void;
   onAssignmentBanksPageChange: (page: number) => void;
   onToggleAssignmentBankSort: (next: AssignmentBankSortBy) => void;
   onToggleBankSelection: (id: string) => void;
@@ -109,11 +112,16 @@ interface BanksTabProps {
   banksLoading: boolean;
   banksQuery: string;
   banks: AdminBank[];
+  allBanks: AdminBank[];
+  bankCatalogFilter: 'all' | 'published' | 'draft' | 'coming_soon' | 'no_catalog';
+  bankAccessFilter: 'all' | 'has_access' | 'no_access';
   banksPage: number;
   banksTotalPages: number;
   banksSortBy: BankSortBy;
   banksSortDir: SortDirection;
   onBanksQueryChange: (value: string) => void;
+  onBankCatalogFilterChange: (value: 'all' | 'published' | 'draft' | 'coming_soon' | 'no_catalog') => void;
+  onBankAccessFilterChange: (value: 'all' | 'has_access' | 'no_access') => void;
   onRefreshBanks: () => void;
   onBanksPageChange: (page: number) => void;
   onToggleBankSort: (next: BankSortBy) => void;
@@ -128,11 +136,16 @@ interface UsersTabProps {
   usersLoading: boolean;
   usersQuery: string;
   users: AdminUser[];
+  allUsers: AdminUser[];
+  userTierFilter: 'all' | 'free' | 'pro' | 'pro_max' | 'admin';
+  userStatusFilter: 'all' | 'active' | 'banned' | 'never_signed_in';
   usersPage: number;
   usersTotalPages: number;
   usersSortBy: UserSortBy;
   usersSortDir: SortDirection;
   onUsersQueryChange: (value: string) => void;
+  onUserTierFilterChange: (value: 'all' | 'free' | 'pro' | 'pro_max' | 'admin') => void;
+  onUserStatusFilterChange: (value: 'all' | 'active' | 'banned' | 'never_signed_in') => void;
   onRefreshUsers: () => void;
   onUsersPageChange: (page: number) => void;
   onToggleUserSort: (next: UserSortBy) => void;
@@ -144,7 +157,6 @@ interface ActiveTabProps {
   theme: AdminDialogTheme;
   panelClass: string;
   cardClass: string;
-  titleClass: string;
   activeLoading: boolean;
   activeCounts: { activeUsers: number; activeSessions: number; activeTodayUsers: number };
   activeUsersRows: ActiveSessionRow[];
@@ -169,6 +181,7 @@ interface ActivityTabProps {
   activityRows: AdminActivityRow[];
   activityPage: number;
   activityTotalPages: number;
+  activitySummary: { successBankExport: number; successBankImport: number };
   activitySearch: string;
   activitySortBy: ActivitySortBy;
   activitySortDir: SortDirection;
@@ -213,12 +226,19 @@ interface AdminAccessNonStoreTabsProps {
   activity: ActivityTabProps;
 }
 
-const DESKTOP_FILL_CLASS = 'overflow-visible lg:h-full lg:min-h-0';
-const DESKTOP_FLEX_PANEL_CLASS = 'overflow-visible lg:h-full lg:min-h-0 lg:flex lg:flex-col';
-const DESKTOP_SCROLL_REGION_CLASS = 'overflow-visible lg:flex-1 lg:min-h-0 lg:overflow-auto';
-const DESKTOP_SECTION_CARD_CLASS = 'overflow-visible lg:min-h-0 lg:flex lg:flex-col';
-const TABLE_SHELL_CLASS = 'border rounded overflow-hidden lg:flex-1 lg:min-h-0 lg:overflow-hidden';
-const TABLE_CONTAINER_CLASS = 'overflow-x-auto lg:h-full lg:overflow-auto';
+const DESKTOP_FILL_CLASS = 'min-h-0';
+const DESKTOP_FLEX_PANEL_CLASS = 'min-h-0';
+const DESKTOP_SCROLL_REGION_CLASS = 'min-h-0';
+const DESKTOP_SECTION_CARD_CLASS = 'min-h-0';
+const TABLE_SHELL_CLASS = 'border rounded overflow-hidden';
+const TABLE_CONTAINER_CLASS = 'overflow-x-auto';
+
+const truncateAdminStatText = (value: string | null | undefined, maxLength = 28): string => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '-';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+};
 
 function HomeTab({
   theme,
@@ -330,9 +350,6 @@ function HomeTab({
   const heroShellClass = isDark
     ? 'relative overflow-hidden rounded-[24px] border border-white/10 bg-[radial-gradient(110%_95%_at_90%_0%,rgba(255,20,132,0.3),transparent_48%),radial-gradient(100%_80%_at_0%_0%,rgba(74,144,255,0.22),transparent_42%),linear-gradient(180deg,rgba(18,22,33,0.98),rgba(13,16,26,0.96))] p-4 shadow-[0_28px_80px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.06)]'
     : 'relative overflow-hidden rounded-[24px] border border-slate-900/10 bg-[radial-gradient(110%_95%_at_90%_0%,rgba(255,20,132,0.12),transparent_48%),radial-gradient(100%_80%_at_0%_0%,rgba(74,144,255,0.1),transparent_42%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(246,248,255,0.96))] p-4 shadow-[0_28px_80px_rgba(15,23,42,0.1),inset_0_1px_0_rgba(255,255,255,0.88)]';
-  const heroSubPanelClass = isDark
-    ? 'rounded-[18px] border border-white/10 bg-white/[0.05] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
-    : 'rounded-[18px] border border-slate-900/10 bg-white/72 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]';
   const heroMiniCardClass = isDark
     ? 'rounded-[16px] border border-white/8 bg-white/[0.04] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]'
     : 'rounded-[16px] border border-slate-900/8 bg-white/78 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.92)]';
@@ -452,7 +469,59 @@ function HomeTab({
       panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
       title="ADMIN OVERVIEW"
       description="Revenue, queues, and activity in Manila time."
+      actions={<AdminRefreshButton loading={homeLoading} onClick={onRefresh} />}
       stats={<AdminStatsStrip items={primaryStats} />}
+      controls={(
+        <AdminControlsBar
+          left={(
+            <div className="grid gap-2 md:grid-cols-[160px_160px_auto_minmax(0,1fr)] md:items-end">
+              <div className="space-y-1">
+                <Label>From</Label>
+                <Input
+                  type="date"
+                  value={homeFromDate}
+                  onChange={(event) => onHomeFromDateChange(event.target.value)}
+                  className={`h-10 text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>To</Label>
+                <Input
+                  type="date"
+                  value={homeToDate}
+                  onChange={(event) => onHomeToDateChange(event.target.value)}
+                  className={`h-10 text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
+                />
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="success"
+                className="h-10 rounded-[14px] px-4"
+                onClick={onRefresh}
+                disabled={homeLoading}
+              >
+                Apply
+              </Button>
+              <div className="flex flex-wrap gap-2">
+                {HOME_WINDOW_OPTIONS.map((option) => (
+                  <Button
+                    key={option}
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-9 rounded-full px-3 text-xs"
+                    onClick={() => onApplyPresetRange(option)}
+                  >
+                    {option === 1 ? 'Today' : `${option}d`}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+          right={<div className="rounded-xl border px-3 py-2 text-xs opacity-75">{heroRangeMeta}</div>}
+        />
+      )}
     >
       <div className={`${DESKTOP_SCROLL_REGION_CLASS} space-y-4 pr-0 lg:pr-1`}>
         {homeError && (
@@ -465,7 +534,7 @@ function HomeTab({
           <>
             <div className={heroShellClass}>
               <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(112deg,rgba(255,255,255,0.16),transparent_24%,transparent_70%,rgba(255,255,255,0.08))] dark:bg-[linear-gradient(112deg,rgba(255,255,255,0.08),transparent_24%,transparent_70%,rgba(255,255,255,0.03))]" />
-              <div className="relative grid gap-4 xl:grid-cols-[minmax(0,1.12fr)_420px]">
+              <div className="relative grid gap-4">
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={queueMetaClass}>Selected range</span>
@@ -499,43 +568,6 @@ function HomeTab({
                         </div>
                       ))}
                     </div>
-                  </div>
-                </div>
-                <div className={heroSubPanelClass}>
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-black tracking-tight">Control Rail</div>
-                      <div className="text-xs opacity-70">Date range and quick presets.</div>
-                    </div>
-                    <AdminRefreshButton loading={homeLoading} label="Apply" onClick={onRefresh} />
-                  </div>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <Input
-                      type="date"
-                      value={homeFromDate}
-                      onChange={(event) => onHomeFromDateChange(event.target.value)}
-                      className={`h-10 text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
-                    />
-                    <Input
-                      type="date"
-                      value={homeToDate}
-                      onChange={(event) => onHomeToDateChange(event.target.value)}
-                      className={`h-10 text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
-                    />
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {HOME_WINDOW_OPTIONS.map((option) => (
-                      <Button
-                        key={option}
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-9 rounded-full px-3 text-xs"
-                        onClick={() => onApplyPresetRange(option)}
-                      >
-                        {option === 1 ? 'Today' : `${option}d`}
-                      </Button>
-                    ))}
                   </div>
                 </div>
               </div>
@@ -699,6 +731,7 @@ function AssignmentsTab({
   allGrantIds,
   allRevokeIds,
   assignmentBanks,
+  assignmentBanksQuery,
   assignmentBanksPage,
   assignmentBanksTotalPages,
   assignmentBankSortBy,
@@ -713,15 +746,28 @@ function AssignmentsTab({
   onSelectUser,
   onGrant,
   onRevoke,
+  onAssignmentBanksQueryChange,
   onAssignmentBanksPageChange,
   onToggleAssignmentBankSort,
   onToggleBankSelection,
 }: AssignmentsTabProps) {
+  const [pendingRevokeIds, setPendingRevokeIds] = React.useState<string[] | null>(null);
+  const [pendingGrantAllIds, setPendingGrantAllIds] = React.useState<string[] | null>(null);
+  const requestRevoke = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setPendingRevokeIds(ids);
+  };
+  const requestGrantAll = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setPendingGrantAllIds(ids);
+  };
+
   return (
     <AdminPageScaffold
       panelClass={cardClass}
       title="Assignments"
       description="Grant and revoke bank access by selecting a user, then applying changes against the official bank list."
+      actions={<AdminRefreshButton loading={usersLoading} label="Refresh" onClick={onRefreshUsers} />}
     >
     <div className={`grid grid-cols-1 gap-3 lg:grid-cols-2 ${DESKTOP_FILL_CLASS} lg:overflow-hidden`}>
       <div className={`border rounded p-3 space-y-3 ${DESKTOP_SECTION_CARD_CLASS} ${cardClass}`}>
@@ -731,7 +777,6 @@ function AssignmentsTab({
             <Button size="sm" variant={assignmentUserSortBy === 'created_at' ? 'secondary' : 'outline'} onClick={() => onToggleAssignmentUserSort('created_at')}>
               Newest
             </Button>
-            <AdminRefreshButton loading={usersLoading} label="Refresh" onClick={onRefreshUsers} />
           </AdminActionCluster>
         </div>
         <Input value={usersQuery} onChange={(event) => onUsersQueryChange(event.target.value)} placeholder="Search users..." onKeyDown={(event) => event.key === 'Enter' && onRefreshUsers()} className="h-9 text-sm" />
@@ -781,12 +826,21 @@ function AssignmentsTab({
             {accessLoading ? 'Loading access...' : selectedUser ? `${selectedUser.display_name} (${selectedUser.email || 'no email'})` : 'Select a user first'}
           </div>
         </div>
-        <AdminActionCluster>
-          <Button size="sm" className="rounded-[14px]" onClick={() => onGrant(selectedGrantIds)} disabled={!selectedUserId || selectedGrantIds.length === 0 || bulkLoading}>Grant Selected ({selectedGrantIds.length})</Button>
-          <Button size="sm" className="rounded-[14px]" variant="outline" onClick={() => onRevoke(selectedRevokeIds)} disabled={!selectedUserId || selectedRevokeIds.length === 0 || bulkLoading}>Revoke Selected ({selectedRevokeIds.length})</Button>
-          <Button size="sm" className="rounded-[14px]" variant="secondary" onClick={() => onGrant(allGrantIds)} disabled={!selectedUserId || allGrantIds.length === 0 || bulkLoading}>Grant All ({allGrantIds.length})</Button>
-          <Button size="sm" className="rounded-[14px]" variant="outline" onClick={() => onRevoke(allRevokeIds)} disabled={!selectedUserId || allRevokeIds.length === 0 || bulkLoading}>Revoke All ({allRevokeIds.length})</Button>
-        </AdminActionCluster>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 opacity-50" />
+          <Input
+            value={assignmentBanksQuery}
+            onChange={(event) => onAssignmentBanksQueryChange(event.target.value)}
+            placeholder="Search banks..."
+            className="h-9 pl-9 text-sm"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+          <Button size="sm" variant="success" className="w-full rounded-[14px]" onClick={() => onGrant(selectedGrantIds)} disabled={!selectedUserId || selectedGrantIds.length === 0 || bulkLoading}>Grant Selected ({selectedGrantIds.length})</Button>
+          <Button size="sm" className="w-full rounded-[14px]" variant="destructive" onClick={() => requestRevoke(selectedRevokeIds)} disabled={!selectedUserId || selectedRevokeIds.length === 0 || bulkLoading}>Revoke Selected ({selectedRevokeIds.length})</Button>
+          <Button size="sm" className="w-full rounded-[14px]" variant="success" onClick={() => requestGrantAll(allGrantIds)} disabled={!selectedUserId || allGrantIds.length === 0 || bulkLoading}>Grant All ({allGrantIds.length})</Button>
+          <Button size="sm" className="w-full rounded-[14px]" variant="destructive" onClick={() => requestRevoke(allRevokeIds)} disabled={!selectedUserId || allRevokeIds.length === 0 || bulkLoading}>Revoke All ({allRevokeIds.length})</Button>
+        </div>
         <div className={TABLE_SHELL_CLASS}>
           <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[860px] block md:table">
             <TableHeader className="hidden md:table-header-group">
@@ -823,6 +877,38 @@ function AssignmentsTab({
         </div>
         <Pagination page={assignmentBanksPage} totalPages={assignmentBanksTotalPages} onPageChange={onAssignmentBanksPageChange} />
       </div>
+      <ConfirmationDialog
+        open={Boolean(pendingRevokeIds)}
+        onOpenChange={(open) => {
+          if (!open) setPendingRevokeIds(null);
+        }}
+        title="Revoke bank access?"
+        description={`This will revoke ${pendingRevokeIds?.length || 0} bank access ${pendingRevokeIds?.length === 1 ? 'grant' : 'grants'} from the selected user.`}
+        confirmText="Revoke"
+        variant="destructive"
+        theme={theme}
+        onConfirm={() => {
+          const ids = pendingRevokeIds || [];
+          setPendingRevokeIds(null);
+          onRevoke(ids);
+        }}
+      />
+      <ConfirmationDialog
+        open={Boolean(pendingGrantAllIds)}
+        onOpenChange={(open) => {
+          if (!open) setPendingGrantAllIds(null);
+        }}
+        title="Grant all bank access?"
+        description={`This will grant ${pendingGrantAllIds?.length || 0} banks to the selected user.`}
+        confirmText="Grant All"
+        variant="default"
+        theme={theme}
+        onConfirm={() => {
+          const ids = pendingGrantAllIds || [];
+          setPendingGrantAllIds(null);
+          onGrant(ids);
+        }}
+      />
     </div>
     </AdminPageScaffold>
   );
@@ -834,11 +920,16 @@ function BanksTab({
   banksLoading,
   banksQuery,
   banks,
+  allBanks,
+  bankCatalogFilter,
+  bankAccessFilter,
   banksPage,
   banksTotalPages,
   banksSortBy,
   banksSortDir,
   onBanksQueryChange,
+  onBankCatalogFilterChange,
+  onBankAccessFilterChange,
   onRefreshBanks,
   onBanksPageChange,
   onToggleBankSort,
@@ -846,19 +937,74 @@ function BanksTab({
   onEditBank,
   onDeleteBank,
 }: BanksTabProps) {
+  const selectClass = `h-9 rounded-md border bg-background/70 px-3 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-900 text-gray-100' : ''}`;
+  const mostAccessedBank = React.useMemo(() => (
+    allBanks.reduce<AdminBank | null>((best, bank) => (!best || Number(bank.access_count || 0) > Number(best.access_count || 0) ? bank : best), null)
+  ), [allBanks]);
+  const latestReleasedBank = React.useMemo(() => (
+    allBanks
+      .filter((bank) => bank.store_catalog?.is_published || bank.store_catalog)
+      .sort((left, right) => {
+        const leftTime = new Date(left.created_at || left.store_catalog?.updated_at || 0).getTime();
+        const rightTime = new Date(right.created_at || right.store_catalog?.updated_at || 0).getTime();
+        return rightTime - leftTime;
+      })[0] || null
+  ), [allBanks]);
+  const publishedStoreBanks = allBanks.filter((bank) => bank.store_catalog?.is_published).length;
+  const protectedAssets = allBanks.filter((bank) => bank.store_catalog?.asset_protection === 'encrypted').length;
+  const bankFilterCount = Number(Boolean(banksQuery.trim())) + Number(bankCatalogFilter !== 'all') + Number(bankAccessFilter !== 'all');
+
   return (
     <AdminPageScaffold
       panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
       title="Banks"
       description="Search, inspect, edit, and manage access for the banks currently stored in the system."
+      actions={<AdminRefreshButton loading={banksLoading} onClick={onRefreshBanks} />}
+      stats={<AdminStatsStrip items={[
+        { label: 'Most Accessed', value: mostAccessedBank?.access_count ?? 0, detail: mostAccessedBank?.title || 'No access data yet', toneClass: 'text-emerald-500' },
+        {
+          label: 'Latest Release',
+          value: latestReleasedBank ? truncateAdminStatText(latestReleasedBank.title, 24) : '-',
+          detail: latestReleasedBank ? truncateAdminStatText(latestReleasedBank.description || 'No description', 46) : 'No released store bank',
+          toneClass: 'text-blue-500',
+        },
+        { label: 'Published Store', value: publishedStoreBanks, detail: 'Live catalog banks', toneClass: 'text-fuchsia-500' },
+        { label: 'Protected Assets', value: protectedAssets, detail: 'Encrypted catalog files', toneClass: 'text-amber-500' },
+      ]} />}
+      controls={(
+        <AdminToolbar
+          search={{
+            value: banksQuery,
+            onChange: onBanksQueryChange,
+            onSubmit: onRefreshBanks,
+            placeholder: 'Search title or description...',
+          }}
+          resultLabel={`Page ${banksPage}/${banksTotalPages}`}
+          activeFilterCount={bankFilterCount}
+          onClearFilters={() => {
+            onBanksQueryChange('');
+            onBankCatalogFilterChange('all');
+            onBankAccessFilterChange('all');
+          }}
+          primaryFilters={(
+            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+              <select className={selectClass} value={bankCatalogFilter} onChange={(event) => onBankCatalogFilterChange(event.target.value as typeof bankCatalogFilter)}>
+                <option value="all">All catalog states</option>
+                <option value="published">Published</option>
+                <option value="coming_soon">Coming Soon</option>
+                <option value="draft">Draft</option>
+                <option value="no_catalog">No catalog item</option>
+              </select>
+              <select className={selectClass} value={bankAccessFilter} onChange={(event) => onBankAccessFilterChange(event.target.value as typeof bankAccessFilter)}>
+                <option value="all">All access states</option>
+                <option value="has_access">Has access grants</option>
+                <option value="no_access">No access grants</option>
+              </select>
+            </div>
+          )}
+        />
+      )}
     >
-      <div className="flex flex-wrap gap-2 items-end">
-        <div className="flex-1 space-y-1">
-          <Label>Search Banks</Label>
-          <Input value={banksQuery} onChange={(event) => onBanksQueryChange(event.target.value)} placeholder="Search title or description..." onKeyDown={(event) => event.key === 'Enter' && onRefreshBanks()} />
-        </div>
-        <AdminRefreshButton loading={banksLoading} onClick={onRefreshBanks} />
-      </div>
       <div className={TABLE_SHELL_CLASS}>
         <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
           <TableHeader className="hidden md:table-header-group">
@@ -906,31 +1052,88 @@ function UsersTab({
   usersLoading,
   usersQuery,
   users,
+  allUsers,
+  userTierFilter,
+  userStatusFilter,
   usersPage,
   usersTotalPages,
   usersSortBy,
   usersSortDir,
   onUsersQueryChange,
+  onUserTierFilterChange,
+  onUserStatusFilterChange,
   onRefreshUsers,
   onUsersPageChange,
   onToggleUserSort,
   onOpenCreateUser,
   onOpenUserDetails,
 }: UsersTabProps) {
+  const selectClass = `h-9 rounded-md border bg-background/70 px-3 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-900 text-gray-100' : ''}`;
+  const proUsers = allUsers.filter((user) => (user.effective_account_tier || user.account_tier) === 'pro').length;
+  const proMaxUsers = allUsers.filter((user) => (user.effective_account_tier || user.account_tier) === 'pro_max' || user.role === 'admin').length;
+  const bannedUsers = allUsers.filter(isUserBanned).length;
+  const recentUser = React.useMemo(() => (
+    [...allUsers].sort((left, right) => new Date(right.created_at || 0).getTime() - new Date(left.created_at || 0).getTime())[0] || null
+  ), [allUsers]);
+  const userFilterCount = Number(Boolean(usersQuery.trim())) + Number(userTierFilter !== 'all') + Number(userStatusFilter !== 'all');
+
   return (
     <AdminPageScaffold
       panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
       title="Users"
       description="Search users, review tier and sign-in details, and open full account edits from one list."
+      actions={(
+        <>
+          <Button size="sm" variant="success" className="rounded-[14px]" onClick={onOpenCreateUser}><Plus className="w-4 h-4 mr-1" />Add User</Button>
+          <AdminRefreshButton loading={usersLoading} onClick={onRefreshUsers} />
+        </>
+      )}
+      stats={<AdminStatsStrip items={[
+        { label: 'PRO Users', value: proUsers, detail: 'Effective PRO accounts', toneClass: 'text-blue-500' },
+        { label: 'PRO MAX Users', value: proMaxUsers, detail: 'Includes admins', toneClass: 'text-fuchsia-500' },
+        { label: 'Banned', value: bannedUsers, detail: 'Accounts currently blocked', toneClass: 'text-red-500' },
+        {
+          label: 'Latest User',
+          value: recentUser ? truncateAdminStatText(recentUser.display_name || recentUser.email || 'Unnamed user', 24) : '-',
+          detail: recentUser?.email || 'No email',
+          toneClass: 'text-emerald-500',
+        },
+      ]} />}
+      controls={(
+        <AdminToolbar
+          search={{
+            value: usersQuery,
+            onChange: onUsersQueryChange,
+            onSubmit: onRefreshUsers,
+            placeholder: 'Search name, email, id...',
+          }}
+          resultLabel={`Page ${usersPage}/${usersTotalPages}`}
+          activeFilterCount={userFilterCount}
+          onClearFilters={() => {
+            onUsersQueryChange('');
+            onUserTierFilterChange('all');
+            onUserStatusFilterChange('all');
+          }}
+          primaryFilters={(
+            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+              <select className={selectClass} value={userTierFilter} onChange={(event) => onUserTierFilterChange(event.target.value as typeof userTierFilter)}>
+                <option value="all">All tiers</option>
+                <option value="free">FREE</option>
+                <option value="pro">PRO</option>
+                <option value="pro_max">PRO MAX</option>
+                <option value="admin">Admins</option>
+              </select>
+              <select className={selectClass} value={userStatusFilter} onChange={(event) => onUserStatusFilterChange(event.target.value as typeof userStatusFilter)}>
+                <option value="all">All statuses</option>
+                <option value="active">Active</option>
+                <option value="banned">Banned</option>
+                <option value="never_signed_in">Never signed in</option>
+              </select>
+            </div>
+          )}
+        />
+      )}
     >
-      <div className="flex flex-wrap gap-2 items-end">
-        <div className="flex-1 space-y-1">
-          <Label>Search Users</Label>
-          <Input value={usersQuery} onChange={(event) => onUsersQueryChange(event.target.value)} placeholder="Search name, email, id..." onKeyDown={(event) => event.key === 'Enter' && onRefreshUsers()} />
-        </div>
-        <Button onClick={onOpenCreateUser}><Plus className="w-4 h-4 mr-1" />Add User</Button>
-        <AdminRefreshButton loading={usersLoading} onClick={onRefreshUsers} />
-      </div>
       <div className={TABLE_SHELL_CLASS}>
         <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[1120px] block md:table">
           <TableHeader className="hidden md:table-header-group">
@@ -1008,7 +1211,6 @@ function UsersTab({
 function ActiveTab({
   panelClass,
   cardClass,
-  titleClass,
   activeLoading,
   activeCounts,
   activeUsersRows,
@@ -1024,6 +1226,27 @@ function ActiveTab({
   onActiveTodayPageChange,
   onToggleActiveSort,
 }: ActiveTabProps) {
+  const [activeSearch, setActiveSearch] = React.useState('');
+  const [activePlatformFilter, setActivePlatformFilter] = React.useState('all');
+  const platformOptions = React.useMemo(() => {
+    const values = new Set<string>();
+    [...activeUsersRows, ...activeTodayUsersRows].forEach((row) => {
+      const platform = String(row.platform || row.browser || row.os || '').trim();
+      if (platform) values.add(platform);
+    });
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  }, [activeTodayUsersRows, activeUsersRows]);
+  const filterActiveRows = React.useCallback((rows: ActiveSessionRow[]) => {
+    const query = activeSearch.trim().toLowerCase();
+    return rows.filter((row) => {
+      const haystack = [row.email, row.user_id, row.device_name, row.platform, row.browser, row.os].filter(Boolean).join(' ').toLowerCase();
+      const platform = String(row.platform || row.browser || row.os || '').trim();
+      return (!query || haystack.includes(query)) && (activePlatformFilter === 'all' || platform === activePlatformFilter);
+    });
+  }, [activePlatformFilter, activeSearch]);
+  const filteredActiveUsersRows = React.useMemo(() => filterActiveRows(activeUsersRows), [activeUsersRows, filterActiveRows]);
+  const filteredActiveTodayRows = React.useMemo(() => filterActiveRows(activeTodayUsersRows), [activeTodayUsersRows, filterActiveRows]);
+  const activeFilterCount = Number(Boolean(activeSearch.trim())) + Number(activePlatformFilter !== 'all');
   const renderActiveRows = (
     rows: ActiveSessionRow[],
     emptyLabel: string,
@@ -1033,11 +1256,11 @@ function ActiveTab({
       <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
         <TableHeader className="hidden md:table-header-group">
           <TableRow>
-            <TableHead>User</TableHead>
-            <TableHead>Email</TableHead>
-            <TableHead>Device Name</TableHead>
-            <TableHead>Platform / Browser / OS</TableHead>
-            <TableHead>Last Seen</TableHead>
+            <TableHead><SortHeader title="User" active={activeSortBy === 'user_id'} direction={activeSortDir} onClick={() => onToggleActiveSort('user_id')} /></TableHead>
+            <TableHead><SortHeader title="Email" active={activeSortBy === 'email'} direction={activeSortDir} onClick={() => onToggleActiveSort('email')} /></TableHead>
+            <TableHead><SortHeader title="Device" active={activeSortBy === 'device_name'} direction={activeSortDir} onClick={() => onToggleActiveSort('device_name')} /></TableHead>
+            <TableHead><SortHeader title="Platform" active={activeSortBy === 'platform'} direction={activeSortDir} onClick={() => onToggleActiveSort('platform')} /></TableHead>
+            <TableHead><SortHeader title="Last Seen" active={activeSortBy === 'last_seen_at'} direction={activeSortDir} onClick={() => onToggleActiveSort('last_seen_at')} /></TableHead>
           </TableRow>
         </TableHeader>
         <TableBody className="block md:table-row-group space-y-2 md:space-y-0 p-2 md:p-0">
@@ -1069,6 +1292,7 @@ function ActiveTab({
         panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
         title="Active Users"
         description="Monitor current live sessions and today’s unique heartbeat activity."
+        actions={<AdminRefreshButton loading={activeLoading} onClick={onRefreshActive} />}
         stats={(
           <AdminStatsStrip
             items={[
@@ -1078,36 +1302,36 @@ function ActiveTab({
             ]}
           />
         )}
+        controls={(
+          <AdminToolbar
+            search={{
+              value: activeSearch,
+              onChange: setActiveSearch,
+              placeholder: 'Search active users...',
+            }}
+            resultLabel={`${filteredActiveUsersRows.length + filteredActiveTodayRows.length} visible`}
+            activeFilterCount={activeFilterCount}
+            onClearFilters={() => {
+              setActiveSearch('');
+              setActivePlatformFilter('all');
+            }}
+            primaryFilters={(
+              <select className="h-9 rounded-md border bg-background/70 px-3 text-sm" value={activePlatformFilter} onChange={(event) => setActivePlatformFilter(event.target.value)}>
+                <option value="all">All platforms</option>
+                {platformOptions.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
+              </select>
+            )}
+          />
+        )}
       >
-        <div className="flex items-center justify-between">
-          <div>
-            <Label>Active Users</Label>
-            <div className="text-xs opacity-70">Current live sessions, including admins, stay in the first table. Today&apos;s unique non-admin users are listed below.</div>
-          </div>
-          <AdminRefreshButton loading={activeLoading} onClick={onRefreshActive} />
-        </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Users</div><div className="text-xl font-semibold">{activeCounts.activeUsers}</div></div>
-          <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Sessions</div><div className="text-xl font-semibold">{activeCounts.activeSessions}</div></div>
-          <div className={`border rounded p-3 ${cardClass}`}><div className={`text-xs opacity-80 ${titleClass}`}>Active Today</div><div className="text-xl font-semibold">{activeCounts.activeTodayUsers}</div></div>
-        </div>
-
           <div className={`border rounded p-3 space-y-3 ${cardClass}`}>
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-semibold">Currently Active</div>
                 <div className="text-xs opacity-70">Live sessions right now, including admins for monitoring.</div>
               </div>
-            <div className="hidden md:flex items-center gap-2 text-xs opacity-70">
-              <span>Sort:</span>
-              <Button size="sm" variant={activeSortBy === 'user_id' ? 'secondary' : 'outline'} onClick={() => onToggleActiveSort('user_id')}>User</Button>
-              <Button size="sm" variant={activeSortBy === 'email' ? 'secondary' : 'outline'} onClick={() => onToggleActiveSort('email')}>Email</Button>
-              <Button size="sm" variant={activeSortBy === 'device_name' ? 'secondary' : 'outline'} onClick={() => onToggleActiveSort('device_name')}>Device</Button>
-              <Button size="sm" variant={activeSortBy === 'platform' ? 'secondary' : 'outline'} onClick={() => onToggleActiveSort('platform')}>Platform</Button>
-              <Button size="sm" variant={activeSortBy === 'last_seen_at' ? 'secondary' : 'outline'} onClick={() => onToggleActiveSort('last_seen_at')}>Last Seen</Button>
-            </div>
           </div>
-          {renderActiveRows(activeUsersRows, 'No active users', 'text-cyan-600 dark:text-cyan-400')}
+          {renderActiveRows(filteredActiveUsersRows, 'No active users', 'text-cyan-600 dark:text-cyan-400')}
           <Pagination page={activePage} totalPages={activeTotalPages} onPageChange={onActivePageChange} />
         </div>
 
@@ -1116,7 +1340,7 @@ function ActiveTab({
               <div className="text-sm font-semibold">Active Today</div>
               <div className="text-xs opacity-70">Unique non-admin users with at least one heartbeat today, ordered by most recent activity.</div>
             </div>
-            {renderActiveRows(activeTodayUsersRows, 'No users have heartbeat activity today', 'text-sky-600 dark:text-sky-400')}
+            {renderActiveRows(filteredActiveTodayRows, 'No users have heartbeat activity today', 'text-sky-600 dark:text-sky-400')}
             <Pagination page={activeTodayPage} totalPages={activeTodayTotalPages} onPageChange={onActiveTodayPageChange} />
           </div>
       </AdminPageScaffold>
@@ -1131,6 +1355,7 @@ function ActivityTab({
   activityRows,
   activityPage,
   activityTotalPages,
+  activitySummary,
   activitySearch,
   activitySortBy,
   activitySortDir,
@@ -1176,6 +1401,21 @@ function ActivityTab({
       panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
       title="Activity"
       description="Review export and non-export operational activity, with filters for outcome, phase, category, and user."
+      actions={(
+        <AdminRefreshButton
+          loading={activityLoading || otherActivityLoading}
+          onClick={() => {
+            onRefreshActivity();
+            onRefreshOtherActivity();
+          }}
+        />
+      )}
+      stats={<AdminStatsStrip items={[
+        { label: 'Success Bank Export', value: activitySummary.successBankExport, detail: 'All matching export logs', toneClass: 'text-emerald-500' },
+        { label: 'Success Bank Import', value: activitySummary.successBankImport, detail: 'All matching import logs', toneClass: 'text-blue-500' },
+        { label: 'Export Pages', value: `${activityPage}/${activityTotalPages}`, detail: 'Current export view', toneClass: 'text-amber-500' },
+        { label: 'Other Pages', value: `${otherActivityPage}/${otherActivityTotalPages}`, detail: 'Current other activity view', toneClass: 'text-fuchsia-500' },
+      ]} />}
     >
       <div className={`border rounded p-3 space-y-3 ${DESKTOP_SECTION_CARD_CLASS} ${cardClass}`}>
         <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
@@ -1183,10 +1423,54 @@ function ActivityTab({
             <div className="text-sm font-semibold">Export Activity</div>
             <div className="text-xs opacity-70">Page {activityPage}/{activityTotalPages} - {exportFilterCount} active filters</div>
           </div>
-          <AdminRefreshButton loading={activityLoading} label="Refresh" onClick={onRefreshActivity} />
         </div>
 
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
+        <AdminToolbar
+          search={{
+            value: activitySearch,
+            onChange: (value) => { onActivitySearchChange(value); onActivityPageChange(1); },
+            placeholder: 'Search bank, email, event...',
+          }}
+          resultLabel={`Page ${activityPage}/${activityTotalPages}`}
+          activeFilterCount={exportFilterCount}
+          onClearFilters={() => {
+            onActivityCategoryFilterChange('all');
+            onActivityPhaseFilterChange('all');
+            onActivityStatusFilterChange('all');
+            onActivityUploadResultFilterChange('all');
+            onActivitySearchChange('');
+            onActivityPageChange(1);
+          }}
+          primaryFilters={(
+            <div className="grid w-full grid-cols-1 gap-2 md:grid-cols-4">
+              <select className={`h-9 rounded-md border px-3 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-800 text-gray-100' : 'border-gray-300 bg-white text-gray-900'}`} value={activityCategoryFilter} onChange={(event) => { onActivityCategoryFilterChange(event.target.value as typeof activityCategoryFilter); onActivityPhaseFilterChange('all'); onActivityPageChange(1); }}>
+                <option value="all">All Types</option>
+                <option value="bank_export">Bank Export</option>
+                <option value="backup_recovery">Backup / Recovery</option>
+              </select>
+              <select className={`h-9 rounded-md border px-3 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-800 text-gray-100' : 'border-gray-300 bg-white text-gray-900'}`} value={activityPhaseFilter} onChange={(event) => { onActivityPhaseFilterChange(event.target.value as typeof activityPhaseFilter); onActivityPageChange(1); }}>
+                <option value="all">All Export</option>
+                <option value="requested">Requested</option>
+                <option value="local_export">Local Export</option>
+                <option value="remote_upload">Remote Upload</option>
+                <option value="backup_export">Backup Export</option>
+                <option value="backup_restore">Backup Restore</option>
+                <option value="media_recovery">Media Recovery</option>
+              </select>
+              <select className={`h-9 rounded-md border px-3 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-800 text-gray-100' : 'border-gray-300 bg-white text-gray-900'}`} value={activityStatusFilter} onChange={(event) => { onActivityStatusFilterChange(event.target.value as typeof activityStatusFilter); onActivityPageChange(1); }}>
+                <option value="all">All Status</option>
+                <option value="success">Success</option>
+                <option value="failed">Failed</option>
+              </select>
+              <select className={`h-9 rounded-md border px-3 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-800 text-gray-100' : 'border-gray-300 bg-white text-gray-900'}`} value={activityUploadResultFilter} onChange={(event) => { onActivityUploadResultFilterChange(event.target.value as typeof activityUploadResultFilter); onActivityPageChange(1); }}>
+                <option value="all">All Upload</option>
+                <option value="duplicate_no_change">No Change</option>
+              </select>
+            </div>
+          )}
+        />
+
+        <div className="hidden gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
           <div className="space-y-3">
             <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
               <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">Category</div>
@@ -1332,10 +1616,31 @@ function ActivityTab({
             <div className="text-sm font-semibold">Other Activity</div>
             <div className="text-xs opacity-70">Page {otherActivityPage}/{otherActivityTotalPages} - {otherFilterCount} active filters</div>
           </div>
-          <AdminRefreshButton loading={otherActivityLoading} label="Refresh" onClick={onRefreshOtherActivity} />
         </div>
 
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
+        <AdminToolbar
+          search={{
+            value: otherActivitySearch,
+            onChange: (value) => { onOtherActivitySearchChange(value); onOtherActivityPageChange(1); },
+            placeholder: 'Search user, event, bank...',
+          }}
+          resultLabel={`Page ${otherActivityPage}/${otherActivityTotalPages}`}
+          activeFilterCount={otherFilterCount}
+          onClearFilters={() => {
+            onOtherActivityStatusFilterChange('all');
+            onOtherActivitySearchChange('');
+            onOtherActivityPageChange(1);
+          }}
+          primaryFilters={(
+            <select className={`h-9 rounded-md border px-3 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-800 text-gray-100' : 'border-gray-300 bg-white text-gray-900'}`} value={otherActivityStatusFilter} onChange={(event) => { onOtherActivityStatusFilterChange(event.target.value as typeof otherActivityStatusFilter); onOtherActivityPageChange(1); }}>
+              <option value="all">All Status</option>
+              <option value="success">Success</option>
+              <option value="failed">Failed</option>
+            </select>
+          )}
+        />
+
+        <div className="hidden gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
           <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-950/30' : 'border-gray-200 bg-gray-50'}`}>
             <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">Status</div>
             <div className="mt-2 flex flex-wrap gap-2">

@@ -95,7 +95,6 @@ const EMPTY_STORE_CONFIG: StoreConfigDraft = {
   maya_number: '',
   messenger_url: '',
   qr_image_path: '',
-  account_price_php: '',
   banner_rotation_ms: '5000',
   store_maintenance_enabled: false,
   store_maintenance_message: '',
@@ -384,17 +383,12 @@ export function useAdminAccessStoreManager({
       if (res.ok) {
         const data = await res.json();
         if (data.config) {
-          const rawAccountPrice = data.config.account_price_php;
-          const normalizedAccountPrice = typeof rawAccountPrice === 'number' && Number.isFinite(rawAccountPrice)
-            ? String(rawAccountPrice)
-            : '';
           setStoreConfig({
             instructions: data.config.instructions || '',
             gcash_number: data.config.gcash_number || '',
             maya_number: data.config.maya_number || '',
             messenger_url: data.config.messenger_url || '',
             qr_image_path: data.config.qr_image_path || '',
-            account_price_php: normalizedAccountPrice,
             banner_rotation_ms: typeof data.config.banner_rotation_ms === 'number' && Number.isFinite(data.config.banner_rotation_ms)
               ? String(Math.max(3000, Math.min(15000, Math.floor(data.config.banner_rotation_ms))))
               : '5000',
@@ -1051,13 +1045,6 @@ export function useAdminAccessStoreManager({
   }, [pushNotice]);
 
   const validateStoreConfigDraft = React.useCallback((config: StoreConfigDraft) => {
-    const rawAccountPrice = String(config.account_price_php || '').trim();
-    if (rawAccountPrice) {
-      const parsed = Number(rawAccountPrice);
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        throw new Error('Account Price must be a non-negative number.');
-      }
-    }
     const rawBannerRotation = String(config.banner_rotation_ms || '').trim();
     const parsedBannerRotation = Number(rawBannerRotation);
     if (!rawBannerRotation || !Number.isFinite(parsedBannerRotation) || parsedBannerRotation < 3000 || parsedBannerRotation > 15000) {
@@ -1152,12 +1139,10 @@ export function useAdminAccessStoreManager({
   }, []);
 
   const buildStoreConfigPayload = React.useCallback((config: StoreConfigDraft, qrImagePath: string) => {
-    const rawAccountPrice = String(config.account_price_php || '').trim();
     const rawBannerRotation = String(config.banner_rotation_ms || '').trim();
     return {
       ...config,
       qr_image_path: qrImagePath,
-      account_price_php: rawAccountPrice ? Number(rawAccountPrice) : null,
       banner_rotation_ms: Math.floor(Number(rawBannerRotation)),
       store_maintenance_message: String(config.store_maintenance_message || '').trim(),
       account_auto_approve_start_hour: Math.floor(Number(config.account_auto_approve_start_hour)),
@@ -1208,7 +1193,6 @@ export function useAdminAccessStoreManager({
       const savedConfig: StoreConfigDraft = {
         ...nextConfig,
         qr_image_path: finalQrPath,
-        account_price_php: String(nextConfig.account_price_php || '').trim(),
         banner_rotation_ms: String(Math.floor(Number(nextConfig.banner_rotation_ms))),
         account_auto_approve_start_hour: String(Math.floor(Number(nextConfig.account_auto_approve_start_hour))),
         account_auto_approve_end_hour: String(Math.floor(Number(nextConfig.account_auto_approve_end_hour))),
@@ -1695,7 +1679,11 @@ export function useAdminAccessStoreManager({
   }, [storePromotions]);
 
   const visibleStoreBanners = React.useMemo(
-    () => storeBanners.filter((banner) => showInactiveBanners || banner.is_active || dirtyStoreBannerIds.has(banner.id)),
+    () => storeBanners.filter((banner) => (
+      showInactiveBanners
+        ? (!banner.is_active || dirtyStoreBannerIds.has(banner.id))
+        : (banner.is_active || dirtyStoreBannerIds.has(banner.id))
+    )),
     [dirtyStoreBannerIds, showInactiveBanners, storeBanners],
   );
 

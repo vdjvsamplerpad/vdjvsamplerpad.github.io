@@ -222,7 +222,8 @@ function resolveAuthAppRedirectUrl(appReturnUrl?: string): string | undefined {
       host === 'localhost' ||
       host === '127.0.0.1' ||
       host === 'vdjvsamplerpad.online' ||
-      host.endsWith('.vdjvsamplerpad.online')
+      host.endsWith('.vdjvsamplerpad.online') ||
+      host === 'vdjvsamplerpad.github.io'
     ) {
       url.pathname = '/vdjv/'
     } else if (url.pathname === '/vdjv') {

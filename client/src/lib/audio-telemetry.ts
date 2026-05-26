@@ -1,3 +1,5 @@
+import { getCapacitorAppPlugin, isNativeCapacitorRuntime } from '@/lib/capacitor-app-plugin';
+
 export type AudioTelemetryLevel = 'info' | 'warn' | 'error';
 
 export interface AudioTelemetryEvent {
@@ -73,6 +75,27 @@ const STORAGE_CURRENT_KEY = 'vdjv_audio_diag_current_session_v1';
 const STORAGE_RECOVERED_KEY = 'vdjv_audio_diag_recovered_session_v1';
 const MAX_EVENTS = 400;
 const DEFAULT_RECENT_LINES = 12;
+const RECOVERABLE_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const ACTIVE_PLAYBACK_RECOVERY_WINDOW_MS = 2 * 60 * 1000;
+const RECOVERY_ERROR_EVENT_TYPES = new Set([
+  'window_error',
+  'unhandled_rejection',
+  'pad_register_failed',
+  'pad_play_failed',
+  'audio_engine_disabled',
+]);
+const RECOVERY_PLAYBACK_EVENT_TYPES = new Set([
+  'pad_play_request',
+  'pad_play_started',
+  'channel_play_diag',
+  'warmup_item_start',
+  'warmup_item_result',
+]);
+const RECOVERY_ACTIVE_PLAYBACK_EVENT_TYPES = new Set([
+  'pad_play_request',
+  'pad_play_started',
+  'channel_play_diag',
+]);
 
 const DEFAULT_COUNTERS = (): AudioTelemetryCounters => ({
   warmQueued: 0,
@@ -108,9 +131,6 @@ const resolvePlatform = (): string => {
   if (/Android/.test(ua)) return 'android-web';
   return 'desktop-web';
 };
-
-const isCapacitorNativeRuntime = (): boolean =>
-  typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -191,9 +211,12 @@ export class AudioTelemetryStore {
   private nativeLifecycleHooksReady = false;
 
   constructor(appVersion: string) {
-    this.recoveredCrashSession = this.readSession(STORAGE_RECOVERED_KEY);
+    const existingRecovered = this.readSession(STORAGE_RECOVERED_KEY);
+    this.recoveredCrashSession = existingRecovered && this.shouldRecoverSession(existingRecovered)
+      ? existingRecovered
+      : null;
     const previous = this.readSession(STORAGE_CURRENT_KEY);
-    if (previous && !previous.cleanExit) {
+    if (previous && !previous.cleanExit && this.shouldRecoverSession(previous)) {
       this.recoveredCrashSession = previous;
       this.persistRecovered();
     }
@@ -314,6 +337,36 @@ export class AudioTelemetryStore {
       }
     }
     this.notify();
+  }
+
+  private shouldRecoverSession(session: AudioTelemetrySession): boolean {
+    if (session.cleanExit) return false;
+    const updatedAt = Number(session.updatedAt || session.startedAt || 0);
+    if (!updatedAt) return false;
+    const ageMs = safeNow() - updatedAt;
+    if (ageMs < -60_000 || ageMs > RECOVERABLE_SESSION_MAX_AGE_MS) return false;
+    const events = Array.isArray(session.events) ? session.events : [];
+    if (events.length === 0) return false;
+
+    const hasErrorSignal = Number(session.counters?.errors || 0) > 0
+      || events.some((event) => event.level === 'error' || RECOVERY_ERROR_EVENT_TYPES.has(event.type));
+    if (hasErrorSignal) return true;
+
+    const hasPlaybackSignal = Number(session.counters?.playRequested || 0) > 0
+      || Number(session.counters?.playStarted || 0) > 0
+      || events.some((event) => RECOVERY_PLAYBACK_EVENT_TYPES.has(event.type));
+    if (!hasPlaybackSignal) return false;
+
+    const latestHeartbeat = [...events].reverse().find((event) => event.type === 'heartbeat');
+    if (latestHeartbeat && updatedAt - latestHeartbeat.at <= ACTIVE_PLAYBACK_RECOVERY_WINDOW_MS) {
+      const data = latestHeartbeat.data || {};
+      const activeCount = Number(data.playingCount || 0);
+      const loadedTransports = Number(data.loadedTransports || 0);
+      if (activeCount > 0 || loadedTransports > 0) return true;
+    }
+
+    const latestActivePlayback = [...events].reverse().find((event) => RECOVERY_ACTIVE_PLAYBACK_EVENT_TYPES.has(event.type));
+    return Boolean(latestActivePlayback && updatedAt - latestActivePlayback.at <= ACTIVE_PLAYBACK_RECOVERY_WINDOW_MS);
   }
 
   private bumpCounters(event: AudioTelemetryEvent): void {
@@ -457,7 +510,7 @@ export class AudioTelemetryStore {
       this.markSessionActive(reason);
     };
 
-    const isNativeCapacitor = isCapacitorNativeRuntime();
+    const isNativeCapacitor = isNativeCapacitorRuntime();
 
     window.addEventListener('beforeunload', () => {
       handleCleanExit('beforeunload');
@@ -523,9 +576,7 @@ export class AudioTelemetryStore {
     handleResume: (reason: string) => void,
   ): void {
     if (this.nativeLifecycleHooksReady || typeof window === 'undefined') return;
-    const capacitor = (window as any).Capacitor;
-    if (!capacitor?.isNativePlatform?.()) return;
-    const appPlugin = capacitor?.Plugins?.App;
+    const appPlugin = getCapacitorAppPlugin();
     if (!appPlugin?.addListener) return;
 
     this.nativeLifecycleHooksReady = true;

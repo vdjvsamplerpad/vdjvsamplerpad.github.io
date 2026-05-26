@@ -189,6 +189,7 @@ interface AuthActions {
   signIn: (email: string, password: string) => Promise<{ error?: AuthError | null; data?: { user: User | null } }>
   signInWithGoogle: (redirectTo?: string) => Promise<{ error?: AuthError | null }>
   signOut: () => Promise<{ error?: AuthError | null }>
+  deleteAccount: () => Promise<{ error?: AuthError | null }>
   refreshAccountCapabilities: () => Promise<AccountCapabilitySnapshot>
   requestPasswordReset: (email: string) => Promise<{ error?: AuthError | null }>
   verifyPasswordResetCode: (email: string, code: string) => Promise<{ error?: AuthError | null }>
@@ -1153,6 +1154,88 @@ function useAuthValue(): AuthProviderValue {
     return { error }
   }, [setAuthTransition, state.user])
 
+  const deleteAccount = React.useCallback(async () => {
+    if (authTransitionStatusRef.current !== 'idle') {
+      return {
+        error: {
+          message: 'Authentication is already in progress. Please wait.',
+        } as AuthError,
+      }
+    }
+
+    const activeUser = state.user || getCachedUser()
+    if (!activeUser?.id) {
+      return {
+        error: {
+          message: 'You need to sign in first.',
+        } as AuthError,
+      }
+    }
+
+    setPasswordRecoveryMode(false)
+    setSessionConflictReason(null)
+    setAuthTransition('signing_out', activeUser.email || null)
+    signOutInProgressRef.current = true
+
+    try {
+      const { data } = await supabase.auth.getSession()
+      const token = data.session?.access_token
+      if (!token) throw new Error('Sign in again before deleting this account.')
+
+      const response = await fetch(edgeFunctionUrl('store-api', 'account/delete'), {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ confirm: true }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(String(payload?.error || payload?.message || 'Account deletion failed.'))
+      }
+
+      setPendingOfflineSignout(false)
+      setHideProtectedBanksLock(true)
+      cacheBanState(false)
+      cacheUserData(null, null)
+      clearUserBankCache(activeUser.id)
+      cacheRefreshedForUserIdRef.current = null
+      setState((s) => ({
+        ...s,
+        user: null,
+        profile: null,
+        loading: false,
+        authTransition: {
+          status: 'idle',
+          email: null,
+        },
+        sessionConflictReason: null,
+        banned: false,
+        offlineTrustedSession: false,
+        lastSessionValidationAt: null,
+        capabilities: fallbackCapabilitiesForProfile(null),
+      }))
+      resetProductAnalytics()
+      try {
+        await supabase.auth.signOut({ scope: 'local' })
+      } catch {
+      }
+      signOutInProgressRef.current = false
+      return { error: null }
+    } catch (error) {
+      signOutInProgressRef.current = false
+      setAuthTransition('idle')
+      return {
+        error: {
+          message: error instanceof Error ? error.message : 'Account deletion failed.',
+        } as AuthError,
+      }
+    }
+  }, [setAuthTransition, setSessionConflictReason, state.user])
+
   const requestPasswordReset = React.useCallback(async (email: string) => {
     try {
       // Check if a recent reset was already sent (within last 5 minutes)
@@ -1206,6 +1289,17 @@ function useAuthValue(): AuthProviderValue {
     setState((s) => ({ ...s, capabilities }))
     return capabilities
   }, [state.profile, state.user])
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleTierConfigUpdate = () => {
+      const activeUser = state.user || getCachedUser()
+      if (activeUser?.id) writeCachedCapabilities(activeUser.id, null)
+      void refreshAccountCapabilities()
+    }
+    window.addEventListener('vdjv-account-tier-config-updated', handleTierConfigUpdate)
+    return () => window.removeEventListener('vdjv-account-tier-config-updated', handleTierConfigUpdate)
+  }, [refreshAccountCapabilities, state.user])
 
   const verifyPasswordResetCode = React.useCallback(async (email: string, code: string) => {
     try {
@@ -1280,6 +1374,7 @@ function useAuthValue(): AuthProviderValue {
     signIn,
     signInWithGoogle,
     signOut,
+    deleteAccount,
     refreshAccountCapabilities,
     requestPasswordReset,
     verifyPasswordResetCode,
@@ -1288,6 +1383,7 @@ function useAuthValue(): AuthProviderValue {
     clearSessionConflictReason,
   }), [
     clearSessionConflictReason,
+    deleteAccount,
     requestPasswordReset,
     refreshAccountCapabilities,
     signIn,
