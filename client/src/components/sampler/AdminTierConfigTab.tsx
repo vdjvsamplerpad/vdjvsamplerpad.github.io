@@ -18,7 +18,7 @@ import {
   type EditableAccountTier,
   normalizeTierUiContent,
 } from '@/lib/account-tier-content';
-import { ACCOUNT_CAPABILITIES_CACHE_KEY } from '@/lib/account-capabilities';
+import { ACCOUNT_CAPABILITIES_CACHE_KEY, DEFAULT_ACCOUNT_CAPABILITIES } from '@/lib/account-capabilities';
 import type { AdminDialogTheme } from './AdminAccessDialog.shared';
 import {
   AdminControlsBar,
@@ -82,6 +82,8 @@ const LIMIT_KEY_ALIASES: Record<string, string> = {
   ownedBankQuota: 'owned_bank_quota',
   ownedBankPadCap: 'owned_bank_pad_cap',
   deviceTotalBankCap: 'device_total_bank_cap',
+  deckMinCount: 'deck_min_count',
+  deckDefaultCount: 'deck_default_count',
   deckCount: 'deck_count',
 };
 
@@ -118,6 +120,7 @@ const CAPABILITY_CACHE_PREFIXES = [
   'vdjv-account-capabilities-v1',
   'vdjv-account-capabilities-v2',
   'vdjv-account-capabilities-v3',
+  'vdjv-account-capabilities-v4',
   ACCOUNT_CAPABILITIES_CACHE_KEY,
 ];
 
@@ -163,7 +166,11 @@ const toSnakeFeatureObject = (features: Record<string, unknown>): Record<string,
 };
 
 const buildTierDraft = (tier: AdminAccountTierConfig): TierDraft => {
-  const limits = toCamelLimitObject(tier.limits || {});
+  const defaultLimits = DEFAULT_ACCOUNT_CAPABILITIES[tier.tier].limits;
+  const limits = {
+    ...defaultLimits,
+    ...toCamelLimitObject(tier.limits || {}),
+  };
   const features = toCamelFeatureObject(tier.features || {});
   return {
     displayName: tier.display_name || tier.tier,
@@ -182,7 +189,6 @@ const COMMON_LIMIT_FIELDS = [
   ['ownedBankQuota', 'Owned banks'],
   ['ownedBankPadCap', 'Pads per owned bank'],
   ['deviceTotalBankCap', 'Total banks/device'],
-  ['deckCount', 'Deck channels'],
 ] as const;
 
 const COMMON_FEATURE_FIELDS = [
@@ -926,6 +932,26 @@ export function AdminTierConfigTab({
                         />
                       </label>
                     ))}
+                    <div className="rounded-md border px-2 py-2">
+                      <div className="mb-2 text-xs font-semibold">Deck channel range</div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {([
+                          ['deckMinCount', 'Min'],
+                          ['deckDefaultCount', 'Default'],
+                          ['deckCount', 'Max'],
+                        ] as const).map(([key, label]) => (
+                          <label key={key} className="space-y-1 text-[10px] uppercase tracking-wide text-gray-500">
+                            <span>{label}</span>
+                            <Input
+                              value={String(limits[key] ?? '')}
+                              onChange={(event) => updateTierLimit(tier.tier, key, event.target.value)}
+                              className="h-8 text-xs"
+                              inputMode="numeric"
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div className="rounded-md border p-2">

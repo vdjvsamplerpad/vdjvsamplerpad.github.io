@@ -27,7 +27,7 @@ export interface PadData {
   savedHotcuesMs?: [number | null, number | null, number | null, number | null];
   color: string;
   triggerMode: 'toggle' | 'hold' | 'stutter' | 'unmute';
-  playbackMode: 'once' | 'loop' | 'stopper';
+  playbackMode: 'once' | 'loop' | 'stopper' | 'bank_stopper';
   padGroup?: number | null;
   padGroupUniversal?: boolean;
   volume: number;
@@ -155,7 +155,7 @@ export interface PlayingPadInfo {
   endMs?: number; // Total duration
   playStartTime?: number;
   tempoRate?: number;
-  playbackMode?: 'once' | 'loop' | 'stopper';
+  playbackMode?: 'once' | 'loop' | 'stopper' | 'bank_stopper';
   timingSource?: 'date' | 'performance';
   channelId?: number | null;
 }

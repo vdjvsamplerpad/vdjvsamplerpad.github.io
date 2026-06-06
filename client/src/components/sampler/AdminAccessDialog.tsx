@@ -175,6 +175,10 @@ export function AdminAccessDialog({
     newBannerImageFile,
     newBannerImageUrl,
     newBannerLinkUrl,
+    newBannerScheduleMode,
+    newBannerStartsAt,
+    newBannerEndsAt,
+    newBannerTimezone,
     newBannerPreviewUrl,
     newBannerSortOrder,
     pagedDrafts,
@@ -188,6 +192,10 @@ export function AdminAccessDialog({
     setNewBannerImageFile,
     setNewBannerImageUrl,
     setNewBannerLinkUrl,
+    setNewBannerScheduleMode,
+    setNewBannerStartsAt,
+    setNewBannerEndsAt,
+    setNewBannerTimezone,
     setNewBannerSortOrder,
     setShowInactiveBanners,
     setStoreCatalogBankFilter,
@@ -1573,7 +1581,7 @@ export function AdminAccessDialog({
     if (usersSortBy === next) setUsersSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else {
       setUsersSortBy(next);
-      setUsersSortDir(next === 'created_at' || next === 'last_sign_in_at' || next === 'last_sign_in_app_version' ? 'desc' : 'asc');
+      setUsersSortDir(next === 'created_at' || next === 'last_sign_in_at' || next === 'last_sign_in_app_version' || next === 'attendance_days_total' ? 'desc' : 'asc');
     }
   };
 
@@ -1734,8 +1742,8 @@ export function AdminAccessDialog({
       setError('Pad cap must be between 1 and 256.');
       return;
     }
-    if (!Number.isFinite(deviceTotalBankCap) || deviceTotalBankCap < 1 || deviceTotalBankCap > 1000) {
-      setError('Bank cap must be between 1 and 1000.');
+    if (!Number.isFinite(deviceTotalBankCap) || deviceTotalBankCap < 10 || deviceTotalBankCap > 1000) {
+      setError('Bank cap must be between 10 and 1000.');
       return;
     }
     let limitOverrides: Record<string, number | null> | undefined;
@@ -2722,12 +2730,23 @@ export function AdminAccessDialog({
                   newBannerImageUrl={newBannerImageUrl}
                   newBannerLinkUrl={newBannerLinkUrl}
                   newBannerSortOrder={newBannerSortOrder}
+                  newBannerScheduleMode={newBannerScheduleMode}
+                  newBannerStartsAt={newBannerStartsAt}
+                  newBannerEndsAt={newBannerEndsAt}
+                  newBannerTimezone={newBannerTimezone}
+                  bannerRotationMs={storeConfig.banner_rotation_ms}
                   newBannerHasFile={Boolean(newBannerImageFile)}
                   bannerUploadingIds={bannerUploadingIds}
                   onShowInactiveChange={setShowInactiveBanners}
                   onNewBannerImageUrlChange={setNewBannerImageUrl}
                   onNewBannerLinkUrlChange={setNewBannerLinkUrl}
                   onNewBannerSortOrderChange={setNewBannerSortOrder}
+                  onNewBannerScheduleModeChange={setNewBannerScheduleMode}
+                  onNewBannerStartsAtChange={setNewBannerStartsAt}
+                  onNewBannerEndsAtChange={setNewBannerEndsAt}
+                  onNewBannerTimezoneChange={setNewBannerTimezone}
+                  onBannerRotationMsChange={(value) => setStoreConfig({ ...storeConfig, banner_rotation_ms: value })}
+                  onSaveBannerSettings={() => void handleStoreConfigSave()}
                   onNewBannerFileChange={handleNewBannerImageChange}
                   onClearNewBannerFile={() => setNewBannerImageFile(null)}
                   onCreateBanner={() => void handleCreateStoreBanner()}

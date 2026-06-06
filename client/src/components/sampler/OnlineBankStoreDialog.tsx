@@ -6,7 +6,7 @@ import { OnlineStoreDebugPanel } from '@/components/sampler/OnlineStoreDebugPane
 import { OnlineStoreCartBar } from '@/components/sampler/OnlineStoreCartBar';
 import { OnlineStorePurchasePane } from '@/components/sampler/OnlineStorePurchasePane';
 import { OnlineStoreRejectedOverlay } from '@/components/sampler/OnlineStoreRejectedOverlay';
-import { Loader2, Download, ShoppingCart, LockIcon, ExternalLink, Check, X, ChevronLeft, ChevronRight, ChevronDown, Search, Plus, AlertCircle, RotateCcw, Timer, Copy } from 'lucide-react';
+import { Loader2, Download, ShoppingCart, LockIcon, ExternalLink, Check, X, ChevronLeft, ChevronRight, ChevronDown, Search, Plus, AlertCircle, RotateCcw, Timer, Copy, Share2, Crown } from 'lucide-react';
 import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { Input } from '@/components/ui/input';
 import { useOnlineStoreDebugLog } from '@/components/sampler/hooks/useOnlineStoreDebugLog';
@@ -181,6 +181,7 @@ export function OnlineBankStoreDialog({
     const isAdmin = profile?.role === 'admin';
     const isFreeAccount = !isGuest && capabilities.effectiveTier === 'free';
     const canBrowseBankStore = isAdmin || capabilities.features.bankStoreBrowse;
+    const showProMaxStoreFooterCta = Boolean(effectiveUser && !isAdmin && capabilities.effectiveTier !== 'pro_max');
 
     const [loading, setLoading] = React.useState(false);
     const [items, setItems] = React.useState<StoreItem[]>([]);
@@ -229,6 +230,7 @@ export function OnlineBankStoreDialog({
     const [purchaseReceipt, setPurchaseReceipt] = React.useState<PurchaseReceiptState | null>(null);
     const [refreshAssetsItem, setRefreshAssetsItem] = React.useState<StoreItem | null>(null);
     const [downloadConfirmState, setDownloadConfirmState] = React.useState<{ item: StoreItem; options?: StoreHandleDownloadOptions } | null>(null);
+    const [freePromoConfirmItem, setFreePromoConfirmItem] = React.useState<StoreItem | null>(null);
     const dialogScrollRef = React.useRef<HTMLDivElement | null>(null);
     const proofOcrSeqRef = React.useRef(0);
     const loadSeqRef = React.useRef(0);
@@ -251,6 +253,8 @@ export function OnlineBankStoreDialog({
         downloadSupportLogText,
         recoveredDownloadCrash,
         sendingRecoveredReport,
+        supportLogExportActionLabel,
+        supportReportExportActionLabel,
         pushDownloadDebugLog,
         copyDownloadDebugLog,
         copyDownloadSupportLog,
@@ -447,6 +451,7 @@ export function OnlineBankStoreDialog({
             setPurchaseReceipt(null);
             setBannerIndex(0);
             setDownloadConfirmState(null);
+            setFreePromoConfirmItem(null);
             confirmedLargeDownloadIdsRef.current.clear();
         }
     }, [canBrowseBankStore, isOnline, loadData, open, requestUpgrade]);
@@ -717,6 +722,112 @@ export function OnlineBankStoreDialog({
     }, [banners, bannerIndex]);
 
     const isDark = theme === 'dark';
+    const SupportLogExportIcon = supportLogExportActionLabel.startsWith('Share')
+        ? Share2
+        : supportLogExportActionLabel.startsWith('Copy')
+            ? Copy
+            : Download;
+    const SupportReportExportIcon = supportReportExportActionLabel.startsWith('Share')
+        ? Share2
+        : supportReportExportActionLabel.startsWith('Copy')
+            ? Copy
+            : Download;
+
+    const renderStoreDownloadAction = React.useCallback((
+        item: StoreItem,
+        options?: {
+            idleLabel?: string;
+            onStart?: () => void;
+        },
+    ) => {
+        const transfer = transfers[item.id];
+        if (transfer?.phase === 'error') {
+            return (
+                <div className="flex flex-wrap justify-end gap-2">
+                    <Button
+                        size="sm"
+                        onClick={options?.onStart || (() => startStoreDownload(item))}
+                        disabled={!isOnline}
+                        className="h-8 px-3 text-xs font-medium rounded-full bg-red-500/90 hover:bg-red-500 text-white border-0 disabled:opacity-50 shadow-lg"
+                        title={transfer.error}
+                    >
+                        <RotateCcw className="w-3.5 h-3.5 mr-1" />Try Again
+                    </Button>
+                    {!isAdmin && downloadSupportLogText.trim() && (
+                        <>
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void copyDownloadSupportLog()}
+                                className={`h-8 w-8 p-0 rounded-full backdrop-blur-sm ${
+                                    isDark
+                                        ? 'border-white/15 text-gray-200 hover:bg-white/10'
+                                        : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                                }`}
+                                title="Copy log"
+                                aria-label="Copy log"
+                            >
+                                <Copy className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void exportDownloadSupportLog()}
+                                className={`h-8 w-8 p-0 rounded-full backdrop-blur-sm ${
+                                    isDark
+                                        ? 'border-white/15 text-gray-200 hover:bg-white/10'
+                                        : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                                }`}
+                                title={supportLogExportActionLabel}
+                                aria-label={supportLogExportActionLabel}
+                            >
+                                <SupportLogExportIcon className="w-3.5 h-3.5" />
+                            </Button>
+                        </>
+                    )}
+                </div>
+            );
+        }
+        if (transfer?.phase === 'downloading') {
+            return (
+                <Button
+                    size="sm"
+                    onClick={() => cancelDownload(item.id)}
+                    className="h-8 px-3 text-xs font-medium rounded-full bg-rose-500/90 hover:bg-rose-500 text-white border-0 shadow-lg"
+                >
+                    <X className="w-3.5 h-3.5 mr-1" />Cancel {normalizeProgress(transfer.progress)}%
+                </Button>
+            );
+        }
+        return (
+            <Button
+                size="sm"
+                onClick={options?.onStart || (() => startStoreDownload(item))}
+                disabled={!isOnline || transfer?.phase === 'importing'}
+                className={`h-8 transition-all text-xs font-medium rounded-full text-white border-0 disabled:opacity-50 shadow-lg ${transfer ? 'bg-indigo-600 px-4' : 'bg-green-500 hover:bg-green-400 px-3'}`}
+            >
+                {transfer?.phase === 'importing' ? (
+                    <span className="flex items-center gap-1 w-[72px] justify-center text-center">
+                        Importing {normalizeProgress(transfer.progress)}%
+                    </span>
+                ) : (
+                    <><Download className="w-3.5 h-3.5 mr-1" />{options?.idleLabel || 'Download'}</>
+                )}
+            </Button>
+        );
+    }, [
+        cancelDownload,
+        copyDownloadSupportLog,
+        downloadSupportLogText,
+        exportDownloadSupportLog,
+        isAdmin,
+        isDark,
+        isOnline,
+        normalizeProgress,
+        startStoreDownload,
+        supportLogExportActionLabel,
+        transfers,
+    ]);
 
     const renderCatalogPrice = React.useCallback((item: StoreItem) => {
         if (item.price_php === null) return <span className="text-amber-300 text-sm">Price to be announced</span>;
@@ -802,12 +913,89 @@ export function OnlineBankStoreDialog({
         setStorePage(effectiveTotalPages);
     }, [effectiveTotalPages, storePage]);
 
+    const renderBankStoreCardGridSkeleton = React.useCallback(() => {
+        const skeletonCardClass = isDark
+            ? 'border-white/10 bg-white/[0.045]'
+            : 'border-slate-950/10 bg-slate-950/[0.045]';
+        const skeletonBlockClass = isDark
+            ? 'bg-white/[0.095]'
+            : 'bg-slate-950/[0.10]';
+        const skeletonFaintBlockClass = isDark
+            ? 'bg-white/[0.06]'
+            : 'bg-slate-950/[0.065]';
+        const skeletonLineBorderClass = isDark ? 'border-white/10' : 'border-slate-950/10';
+
+        return (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3" aria-busy="true" aria-label="Loading bank store banks">
+                {Array.from({ length: 6 }).map((_, index) => (
+                    <div
+                        key={index}
+                        className={`relative isolate h-[190px] overflow-hidden rounded-2xl border sm:h-[210px] ${skeletonCardClass} animate-pulse`}
+                    >
+                        <div className={`absolute inset-0 rounded-[inherit] ${skeletonFaintBlockClass}`} />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+                        <div className="relative z-10 flex h-full flex-col justify-end p-4">
+                            <div className="mb-1 flex items-start justify-between gap-2">
+                                <div className={`h-5 w-36 max-w-[60%] rounded ${skeletonBlockClass}`} />
+                                <div className={`h-6 w-16 rounded-full ${skeletonFaintBlockClass}`} />
+                            </div>
+                            <div className={`h-3.5 w-48 max-w-[80%] rounded ${skeletonFaintBlockClass}`} />
+                            <div className={`mt-2 h-3.5 w-32 max-w-[60%] rounded ${skeletonFaintBlockClass}`} />
+                            <div className={`mt-4 flex items-center justify-between gap-3 border-t pt-3 ${skeletonLineBorderClass}`}>
+                                <div className="min-w-0 flex-1">
+                                    <div className={`h-4 w-24 rounded ${skeletonBlockClass}`} />
+                                    <div className={`mt-2 h-3 w-16 rounded ${skeletonFaintBlockClass}`} />
+                                </div>
+                                <div className={`h-8 w-24 rounded-full ${skeletonBlockClass}`} />
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        );
+    }, [isDark]);
+
+    const renderBankStoreLoadingSkeleton = React.useCallback(() => {
+        const skeletonShellClass = isDark
+            ? 'border-white/10 bg-[#0b0e12] shadow-[0_0_0_1px_rgba(255,255,255,0.02)]'
+            : 'border-slate-950/10 bg-white/70 shadow-[0_20px_70px_rgba(15,23,42,0.10)]';
+        const skeletonFaintBlockClass = isDark
+            ? 'bg-white/[0.06]'
+            : 'bg-slate-950/[0.065]';
+
+        return (
+            <div className="space-y-6" aria-busy="true" aria-label="Loading bank store">
+                <div className={`overflow-hidden rounded-2xl border ${skeletonShellClass} animate-pulse`}>
+                    <div className={`aspect-[16/6] sm:aspect-[21/6] ${skeletonFaintBlockClass}`} />
+                </div>
+
+                <div className="space-y-3 animate-pulse">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                        <div className={`h-10 flex-1 rounded-xl ${skeletonFaintBlockClass}`} />
+                        <div className={`h-10 w-full rounded-xl sm:w-[200px] ${skeletonFaintBlockClass}`} />
+                    </div>
+                </div>
+
+                {renderBankStoreCardGridSkeleton()}
+            </div>
+        );
+    }, [isDark, renderBankStoreCardGridSkeleton]);
+
+    const showFullStoreLoadingSkeleton = loading
+        && !selectedItem
+        && !checkoutMode
+        && !purchaseReceipt
+        && items.length === 0
+        && !activeBanner;
+
     return (
         <>
             <Dialog open={open} onOpenChange={handleDialogOpenChange}>
                 <DialogContent
-                    overlayClassName="z-[110]"
-                    className={`!left-[50%] !top-[50%] !translate-x-[-50%] !translate-y-[-50%] fixed z-[120] w-[95vw] max-w-5xl max-h-[88vh] md:max-h-[85vh] overflow-hidden flex flex-col p-0 rounded-2xl md:rounded-3xl border shadow-2xl transition-all ${isDark ? 'bg-gray-950 border-white/10 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.7)]' : 'bg-white border-gray-200/80 shadow-[0_30px_60px_-15px_rgba(29,78,216,0.15)]'}`}
+                    depth="nested"
+                    mobileFullscreen
+                    overlayClassName="bg-black/72 backdrop-blur-sm"
+                    className={`fixed h-[100dvh] w-screen max-h-[100dvh] max-w-none overflow-hidden flex flex-col rounded-none border-0 p-0 shadow-2xl transition-all sm:h-auto sm:w-[95vw] sm:max-w-5xl sm:max-h-[88vh] sm:rounded-2xl sm:border md:max-h-[85vh] md:rounded-3xl ${isDark ? 'bg-gray-950 border-white/10 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.7)]' : 'bg-white border-gray-200/80 shadow-[0_30px_60px_-15px_rgba(29,78,216,0.15)]'}`}
                     aria-describedby={undefined}
                     onOpenAutoFocus={(event) => {
                         event.preventDefault();
@@ -866,14 +1054,13 @@ export function OnlineBankStoreDialog({
                             onClear={clearDownloadDebugLog}
                             onCopy={copyDownloadDebugLog}
                             onExport={exportDownloadDebugLog}
+                            exportLabel={supportLogExportActionLabel}
                         />
                     )}
 
                     <div ref={dialogScrollRef} className="flex-1 overflow-y-auto p-6 scroll-smooth">
-                        {loading && !selectedItem && !checkoutMode && !purchaseReceipt ? (
-                            <div className="flex items-center justify-center py-12">
-                                <Loader2 className={`w-8 h-8 animate-spin ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`} />
-                            </div>
+                        {showFullStoreLoadingSkeleton ? (
+                            renderBankStoreLoadingSkeleton()
                         ) : purchaseReceipt ? (
                             <div className="max-w-xl mx-auto py-4">
                                 <PaymentReceiptCard
@@ -1034,7 +1221,9 @@ export function OnlineBankStoreDialog({
                                     </div>
 
                                 </div>
-                                {displayedItems.length === 0 ? (
+                                {loading ? (
+                                    renderBankStoreCardGridSkeleton()
+                                ) : displayedItems.length === 0 ? (
                                     <div className={`text-center py-20 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
                                         <ShoppingCart className="w-12 h-12 mx-auto mb-4 opacity-20" />
                                         <p className="text-lg font-medium">{storeSearch ? 'No matching items' : 'No items available'}</p>
@@ -1046,8 +1235,8 @@ export function OnlineBankStoreDialog({
                                             {displayedItems.map((item) => {
                                                 const { hasImportedCopy, hasUpdateAvailable } = getImportedVersionState(item);
                                                 return (
-                                                <div key={item.id} className={`group relative h-[190px] sm:h-[210px] flex flex-col rounded-2xl border transition-all duration-300 overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 ${isDark ? 'border-white/5 bg-gray-800/30 hover:border-indigo-500/40 hover:bg-gray-800/50' : 'border-gray-200 hover:border-indigo-300 hover:shadow-indigo-900/10 bg-white'}`}>
-                                                    <div className="absolute inset-0 overflow-hidden">
+                                                <div key={item.id} className={`group relative isolate h-[190px] sm:h-[210px] flex flex-col rounded-2xl border transition-all duration-300 overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 ${isDark ? 'border-white/5 bg-gray-800/30 hover:border-indigo-500/40 hover:bg-gray-800/50' : 'border-gray-200 hover:border-indigo-300 hover:shadow-indigo-900/10 bg-white'}`}>
+                                                    <div className="absolute inset-0 overflow-hidden rounded-[inherit]">
                                                         <StoreCardThumbnail
                                                             src={item.thumbnail_path}
                                                             alt={item.bank.title ? `${item.bank.title} thumbnail` : 'Bank thumbnail'}
@@ -1059,7 +1248,7 @@ export function OnlineBankStoreDialog({
                                                     {/* Flash Sale Top Banner Slot */}
                                                     <div className="relative z-20 shrink-0 h-8 sm:h-9">
                                                         {item.has_active_promotion && item.promotion_type === 'flash_sale' && item.promotion_ends_at && !(item.status === 'granted_download' || item.status === 'pro_max_unlocked' || hasImportedCopy) && (
-                                                            <div className="absolute inset-0 bg-gradient-to-r from-rose-600/90 to-rose-500/90 backdrop-blur-md border-b border-rose-400/30 px-3 py-1.5 flex items-center justify-between text-[10px] sm:text-[11px] font-bold text-white tracking-wide shadow-lg">
+                                                            <div className="absolute inset-0 rounded-t-[inherit] bg-gradient-to-r from-rose-600/90 to-rose-500/90 backdrop-blur-md border-b border-rose-400/30 px-3 py-1.5 flex items-center justify-between text-[10px] sm:text-[11px] font-bold text-white tracking-wide shadow-lg">
                                                                 <div className="flex items-center gap-1.5 shrink-0 uppercase tracking-wider">
                                                                     <Timer className="w-3 h-3 sm:w-3.5 sm:h-3.5 animate-pulse" />
                                                                     <span className="hidden sm:inline">{item.promotion_badge || 'Flash Sale'}</span>
@@ -1244,16 +1433,16 @@ export function OnlineBankStoreDialog({
                                                                                 <Button
                                                                                     size="sm"
                                                                                     variant="outline"
-                                                                                    onClick={exportDownloadSupportLog}
+                                                                                    onClick={() => void exportDownloadSupportLog()}
                                                                                     className={`h-8 w-8 p-0 rounded-full backdrop-blur-sm ${
                                                                                         isDark
                                                                                             ? 'border-white/15 text-gray-200 hover:bg-white/10'
                                                                                             : 'border-gray-300 text-gray-700 hover:bg-gray-100'
                                                                                     }`}
-                                                                                    title="Export log"
-                                                                                    aria-label="Export log"
+                                                                                    title={supportLogExportActionLabel}
+                                                                                    aria-label={supportLogExportActionLabel}
                                                                                 >
-                                                                                    <Download className="w-3.5 h-3.5" />
+                                                                                    <SupportLogExportIcon className="w-3.5 h-3.5" />
                                                                                 </Button>
                                                                             </>
                                                                         )}
@@ -1304,17 +1493,17 @@ export function OnlineBankStoreDialog({
                                                                     <AlertCircle className="w-3.5 h-3.5 mr-1" />Not Approved
                                                                 </Button>
                                                             ) : item.is_promotion_free_claim ? (
-                                                                <Button
-                                                                    size="sm"
-                                                                    onClick={() => {
+                                                                hasImportedCopy ? (
+                                                                    <span className="inline-flex h-8 items-center rounded-full border border-emerald-300/35 bg-emerald-500/20 px-3 text-xs font-semibold uppercase tracking-wide text-emerald-100 shadow-lg">
+                                                                        <Check className="mr-1.5 h-3.5 w-3.5" />Claimed
+                                                                    </span>
+                                                                ) : renderStoreDownloadAction(item, {
+                                                                    idleLabel: 'Get Free',
+                                                                    onStart: () => {
                                                                         if (!effectiveUser) { requestLogin(); return; }
-                                                                        setSelectedItem(item);
-                                                                    }}
-                                                                    disabled={!isOnline}
-                                                                    className={`h-8 px-4 text-xs font-semibold rounded-full disabled:opacity-50 shadow-lg transition-all ${isDark ? 'bg-emerald-500 hover:bg-emerald-400 text-white border-0' : 'bg-emerald-600 hover:bg-emerald-700 text-white border-0'}`}
-                                                                >
-                                                                    Get Free
-                                                                </Button>
+                                                                        setFreePromoConfirmItem(item);
+                                                                    },
+                                                                })
                                                             ) : (
                                                                 <>
                                                                     <Button
@@ -1362,15 +1551,49 @@ export function OnlineBankStoreDialog({
                                         {/* Pagination */}
                                         {effectiveTotalPages > 1 && (
                                             <div className="flex items-center justify-center gap-4 pt-6 pb-2">
-                                                <Button size="sm" variant="outline" disabled={storePage <= 1} onClick={() => setStorePage(p => p - 1)} className={`h-9 w-9 p-0 rounded-full transition-colors ${isDark ? 'border-white/10 text-gray-300 hover:bg-white/10 hover:text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}>
+                                                <Button size="sm" variant="outline" disabled={storePage <= 1 || loading} onClick={() => { setLoading(true); setStorePage(p => p - 1); }} className={`h-9 w-9 p-0 rounded-full transition-colors ${isDark ? 'border-white/10 text-gray-300 hover:bg-white/10 hover:text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}>
                                                     <ChevronLeft className="w-4 h-4" />
                                                 </Button>
                                                 <span className={`text-sm font-medium ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
                                                     Page <span className={`text-base mx-1 ${isDark ? 'text-white' : 'text-gray-900'}`}>{storePage}</span> of {effectiveTotalPages}
                                                 </span>
-                                                <Button size="sm" variant="outline" disabled={storePage >= effectiveTotalPages} onClick={() => setStorePage(p => p + 1)} className={`h-9 w-9 p-0 rounded-full transition-colors ${isDark ? 'border-white/10 text-gray-300 hover:bg-white/10 hover:text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}>
+                                                <Button size="sm" variant="outline" disabled={storePage >= effectiveTotalPages || loading} onClick={() => { setLoading(true); setStorePage(p => p + 1); }} className={`h-9 w-9 p-0 rounded-full transition-colors ${isDark ? 'border-white/10 text-gray-300 hover:bg-white/10 hover:text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}>
                                                     <ChevronRight className="w-4 h-4" />
                                                 </Button>
+                                            </div>
+                                        )}
+                                        {showProMaxStoreFooterCta && (
+                                            <div className={`mt-5 overflow-hidden rounded-2xl border p-4 shadow-lg ${
+                                                isDark
+                                                    ? 'border-amber-300/20 bg-gradient-to-br from-amber-300/12 via-white/[0.04] to-indigo-500/10 text-amber-50'
+                                                    : 'border-amber-200 bg-gradient-to-br from-amber-50 via-white to-indigo-50 text-amber-950'
+                                            }`}>
+                                                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                                                    <div className="min-w-0 flex items-start gap-3">
+                                                        <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border ${
+                                                            isDark
+                                                                ? 'border-amber-300/25 bg-amber-300/12 text-amber-100'
+                                                                : 'border-amber-200 bg-amber-100 text-amber-800'
+                                                        }`}>
+                                                            <Crown className="h-5 w-5" />
+                                                        </span>
+                                                        <div className="min-w-0">
+                                                            <div className="text-sm font-black uppercase tracking-[0.14em]">Unlock every Store bank</div>
+                                                            <p className={`mt-1 text-sm font-semibold leading-relaxed ${
+                                                                isDark ? 'text-amber-50/78' : 'text-amber-900/72'
+                                                            }`}>
+                                                                PRO MAX unlocks all current Bank Store downloads in one payment, with less checkout hassle and better value than buying banks one by one.
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                    <Button
+                                                        type="button"
+                                                        onClick={() => requestUpgrade('Upgrade to PRO MAX to unlock all current Bank Store downloads in one payment.')}
+                                                        className="shrink-0 rounded-xl bg-amber-400 px-4 font-black text-black hover:bg-amber-300"
+                                                    >
+                                                        Upgrade to PRO MAX
+                                                    </Button>
+                                                </div>
                                             </div>
                                         )}
                                     </>
@@ -1437,8 +1660,9 @@ export function OnlineBankStoreDialog({
                         useHistory={false}
                     >
                         <DialogContent
-                            overlayClassName="z-[149]"
-                            className="z-[150] sm:max-w-lg"
+                            depth="system"
+                            overlayClassName="bg-black/70 backdrop-blur-sm"
+                            className="sm:max-w-lg"
                             aria-describedby={undefined}
                         >
                             <DialogHeader>
@@ -1485,9 +1709,9 @@ export function OnlineBankStoreDialog({
                                             <Copy className="mr-2 h-4 w-4" />
                                             Copy Report
                                         </Button>
-                                        <Button type="button" variant="outline" onClick={exportRecoveredSupportLog} disabled={sendingRecoveredReport}>
-                                            <Download className="mr-2 h-4 w-4" />
-                                            Export Report
+                                        <Button type="button" variant="outline" onClick={() => void exportRecoveredSupportLog()} disabled={sendingRecoveredReport}>
+                                            <SupportReportExportIcon className="mr-2 h-4 w-4" />
+                                            {supportReportExportActionLabel}
                                         </Button>
                                         <Button type="button" variant="ghost" onClick={dismissRecoveredDownloadCrash} disabled={sendingRecoveredReport}>
                                             Dismiss
@@ -1506,8 +1730,9 @@ export function OnlineBankStoreDialog({
                         useHistory={false}
                     >
                         <DialogContent
-                            overlayClassName="z-[159]"
-                            className="z-[160] sm:max-w-md"
+                            depth="system"
+                            overlayClassName="bg-black/70 backdrop-blur-sm"
+                            className="sm:max-w-md"
                             aria-describedby={undefined}
                         >
                             <DialogHeader>
@@ -1557,6 +1782,61 @@ export function OnlineBankStoreDialog({
                     </Dialog>
 
                     <Dialog
+                        open={Boolean(freePromoConfirmItem)}
+                        onOpenChange={(nextOpen) => {
+                            if (!nextOpen) setFreePromoConfirmItem(null);
+                        }}
+                        useHistory={false}
+                    >
+                        <DialogContent
+                            depth="system"
+                            overlayClassName="bg-black/70 backdrop-blur-sm"
+                            className="sm:max-w-md"
+                            aria-describedby={undefined}
+                            onOpenAutoFocus={(event) => event.preventDefault()}
+                        >
+                            <DialogHeader>
+                                <DialogTitle>Limited-time Free Download</DialogTitle>
+                                <DialogDescription>
+                                    {freePromoConfirmItem
+                                        ? `${freePromoConfirmItem.bank.title} is free only while this promotion is active.`
+                                        : 'This free download is limited to the active promotion window.'}
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4 text-sm">
+                                <p className={isDark ? 'text-gray-300' : 'text-gray-600'}>
+                                    This does not permanently grant the bank to your account. If the promo has ended and you delete this bank from your device, you can no longer download it for free and will need to purchase it.
+                                </p>
+                                {freePromoConfirmItem?.promotion_ends_at ? (
+                                    <div className={`rounded-xl border px-3 py-2 text-xs ${
+                                        isDark
+                                            ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100'
+                                            : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                    }`}>
+                                        Promo ends {new Date(freePromoConfirmItem.promotion_ends_at).toLocaleString()}
+                                    </div>
+                                ) : null}
+                                <div className="grid grid-cols-1 gap-2">
+                                    <Button
+                                        onClick={() => {
+                                            if (!freePromoConfirmItem) return;
+                                            const next = freePromoConfirmItem;
+                                            setFreePromoConfirmItem(null);
+                                            startStoreDownload(next);
+                                        }}
+                                        className="bg-emerald-600 text-white hover:bg-emerald-500"
+                                    >
+                                        Continue Free Download
+                                    </Button>
+                                    <Button variant="ghost" onClick={() => setFreePromoConfirmItem(null)}>
+                                        Cancel
+                                    </Button>
+                                </div>
+                            </div>
+                        </DialogContent>
+                    </Dialog>
+
+                    <Dialog
                         open={Boolean(downloadConfirmState)}
                         onOpenChange={(nextOpen) => {
                             if (!nextOpen) setDownloadConfirmState(null);
@@ -1564,8 +1844,9 @@ export function OnlineBankStoreDialog({
                         useHistory={false}
                     >
                         <DialogContent
-                            overlayClassName="z-[159]"
-                            className="z-[160] sm:max-w-md"
+                            depth="system"
+                            overlayClassName="bg-black/70 backdrop-blur-sm"
+                            className="sm:max-w-md"
                             aria-describedby={undefined}
                             onOpenAutoFocus={(event) => event.preventDefault()}
                         >

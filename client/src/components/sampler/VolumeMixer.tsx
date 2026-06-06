@@ -1164,7 +1164,7 @@ export function VolumeMixer({
     : `${(20 * Math.log10(Math.max(masterVolume, 0.0001))).toFixed(1)} dB`;
 
   return (
-    <div className={`fixed inset-y-0 right-0 z-50 w-[24rem] md:w-[24rem] max-w-[95vw] border-l shadow-2xl transition-transform duration-300 ${panelClasses} ${open ? 'translate-x-0' : 'translate-x-full'}`}>
+    <div className={`fixed inset-y-0 right-0 z-[35] w-[24rem] md:w-[24rem] max-w-[95vw] border-l shadow-2xl transition-transform duration-300 ${panelClasses} ${open ? 'translate-x-0' : 'translate-x-full'}`}>
       <div className="flex items-center justify-between border-b border-red-500/15 px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold">Mixer</h2>
@@ -1200,7 +1200,13 @@ export function VolumeMixer({
         </div>
       </div>
 
-      <div className="h-[calc(100dvh-64px)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] p-3 space-y-3 touch-pan-y">
+      <div
+        className="h-[calc(100dvh-64px)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] p-3 space-y-3 touch-pan-y"
+        style={{
+          paddingBottom: 'var(--vdjv-bottom-nav-clearance)',
+          scrollPaddingBottom: 'var(--vdjv-bottom-nav-clearance)',
+        }}
+      >
 
         <section className={`rounded-lg border p-3 ${sectionClasses}`}>
           <div className="flex items-center justify-between gap-2 mb-2">

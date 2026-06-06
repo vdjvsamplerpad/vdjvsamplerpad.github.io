@@ -453,11 +453,15 @@ function HomeTab({
       </div>
     </div>
   );
-  const accountQueueRows = (homeData?.queues?.accountRequests || []).map((row) => ({
-    id: row.id,
-    title: row.display_name || row.email || 'Unknown',
-    meta: `${row.email || '-'} | ${row.payment_channel || '-'}`,
-  }));
+  const accountQueueRows = (homeData?.queues?.accountRequests || []).map((row) => {
+    const userLabel = row.display_name || row.email || 'Unknown';
+    const tierLabel = row.target_tier === 'pro_max' ? 'PRO MAX' : row.target_tier === 'pro' ? 'PRO' : 'PRO';
+    return {
+      id: row.id,
+      title: row.request_type === 'account_upgrade' ? `Upgrade ${tierLabel}: ${userLabel}` : userLabel,
+      meta: `${row.email || '-'} | ${row.payment_channel || '-'}`,
+    };
+  });
   const storeQueueRows = (homeData?.queues?.storeRequests || []).map((row) => ({
     id: row.id,
     title: row.user_label || 'Unknown User',
@@ -613,11 +617,7 @@ function HomeTab({
               {renderQueuePreview(
                 'Account Queue',
                 `${Number(homeData?.counts?.pendingAccountRequests || 0)} pending account requests`,
-                (homeData?.queues?.accountRequests || []).map((row) => ({
-                  id: row.id,
-                  title: row.display_name || row.email || 'Unknown',
-                  meta: `${row.email || '-'} | ${row.payment_channel || '-'}`,
-                })),
+                accountQueueRows,
                 Number(homeData?.counts?.pendingAccountRequests || 0),
                 'bg-rose-400',
                 'Open Account Requests',
@@ -1076,6 +1076,17 @@ function UsersTab({
     [...allUsers].sort((left, right) => new Date(right.created_at || 0).getTime() - new Date(left.created_at || 0).getTime())[0] || null
   ), [allUsers]);
   const userFilterCount = Number(Boolean(usersQuery.trim())) + Number(userTierFilter !== 'all') + Number(userStatusFilter !== 'all');
+  const renderAttendance = (user: AdminUser) => {
+    const total = Math.max(0, Number(user.attendance_days_total || 0));
+    const days7 = Math.max(0, Number(user.attendance_days_7 || 0));
+    const days30 = Math.max(0, Number(user.attendance_days_30 || 0));
+    return (
+      <div className="leading-tight">
+        <div className="text-sm font-semibold">{total} {total === 1 ? 'day' : 'days'}</div>
+        <div className="text-[11px] opacity-60">7d {days7} / 30d {days30}</div>
+      </div>
+    );
+  };
 
   return (
     <AdminPageScaffold
@@ -1135,7 +1146,7 @@ function UsersTab({
       )}
     >
       <div className={TABLE_SHELL_CLASS}>
-        <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[1120px] block md:table">
+        <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[1220px] block md:table">
           <TableHeader className="hidden md:table-header-group">
             <TableRow>
               <TableHead><SortHeader title="Display Name" active={usersSortBy === 'display_name'} direction={usersSortDir} onClick={() => onToggleUserSort('display_name')} /></TableHead>
@@ -1143,6 +1154,7 @@ function UsersTab({
               <TableHead>Tier</TableHead>
               <TableHead><SortHeader title="Created" active={usersSortBy === 'created_at'} direction={usersSortDir} onClick={() => onToggleUserSort('created_at')} /></TableHead>
               <TableHead><SortHeader title="Last Sign-In" active={usersSortBy === 'last_sign_in_at'} direction={usersSortDir} onClick={() => onToggleUserSort('last_sign_in_at')} /></TableHead>
+              <TableHead><SortHeader title="Attendance" active={usersSortBy === 'attendance_days_total'} direction={usersSortDir} onClick={() => onToggleUserSort('attendance_days_total')} /></TableHead>
               <TableHead><SortHeader title="Last Device" active={usersSortBy === 'last_sign_in_device_name'} direction={usersSortDir} onClick={() => onToggleUserSort('last_sign_in_device_name')} /></TableHead>
               <TableHead><SortHeader title="Platform" active={usersSortBy === 'last_sign_in_platform'} direction={usersSortDir} onClick={() => onToggleUserSort('last_sign_in_platform')} /></TableHead>
               <TableHead><SortHeader title="Last Version" active={usersSortBy === 'last_sign_in_app_version'} direction={usersSortDir} onClick={() => onToggleUserSort('last_sign_in_app_version')} /></TableHead>
@@ -1178,9 +1190,13 @@ function UsersTab({
                 </TableCell>
                 <TableCell className="hidden md:table-cell">{user.created_at ? new Date(user.created_at).toLocaleString() : '-'}</TableCell>
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : '-'}</TableCell>
+                <TableCell className="hidden md:table-cell">{renderAttendance(user)}</TableCell>
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_device_name || '-'}</TableCell>
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_platform || '-'}</TableCell>
                 <TableCell className="hidden md:table-cell">{user.last_sign_in_app_version || '-'}</TableCell>
+                <TableCell className="block md:hidden py-1 text-xs border-none">
+                  <span className="font-semibold opacity-70">Attendance: </span>{renderAttendance(user)}
+                </TableCell>
                 <TableCell className="block md:hidden py-1 text-xs opacity-70 border-none">
                   <span className="font-semibold">Last Device: </span>{user.last_sign_in_device_name || '-'}
                 </TableCell>
@@ -1199,7 +1215,7 @@ function UsersTab({
                 </TableCell>
               </TableRow>
             ))}
-            {!usersLoading && users.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={10} className="block md:table-cell text-center py-3 opacity-70">No users</TableCell></TableRow>}
+            {!usersLoading && users.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={11} className="block md:table-cell text-center py-3 opacity-70">No users</TableCell></TableRow>}
           </TableBody>
         </Table>
       </div>
@@ -1247,19 +1263,34 @@ function ActiveTab({
   const filteredActiveUsersRows = React.useMemo(() => filterActiveRows(activeUsersRows), [activeUsersRows, filterActiveRows]);
   const filteredActiveTodayRows = React.useMemo(() => filterActiveRows(activeTodayUsersRows), [activeTodayUsersRows, filterActiveRows]);
   const activeFilterCount = Number(Boolean(activeSearch.trim())) + Number(activePlatformFilter !== 'all');
+  const renderAttendanceSummary = (row: ActiveSessionRow) => {
+    const days7 = Math.max(0, Number(row.attendance_days_7 || 0));
+    const days30 = Math.max(0, Number(row.attendance_days_30 || 0));
+    const daysTotal = Math.max(0, Number(row.attendance_days_total || 0));
+    const heartbeatsToday = Math.max(0, Number(row.today_heartbeat_count || 0));
+    if (days7 === 0 && days30 === 0 && daysTotal === 0 && heartbeatsToday === 0) return <span className="opacity-60">-</span>;
+    return (
+      <div className="space-y-0.5">
+        <div className="text-xs font-black">{daysTotal} day{daysTotal === 1 ? '' : 's'} total</div>
+        <div className="text-[11px] opacity-70">{days7} in 7d / {days30} in 30d</div>
+        <div className="text-[11px] opacity-70">{heartbeatsToday} heartbeat{heartbeatsToday === 1 ? '' : 's'} today</div>
+      </div>
+    );
+  };
   const renderActiveRows = (
     rows: ActiveSessionRow[],
     emptyLabel: string,
     accentClass: string,
   ) => (
     <div className={TABLE_SHELL_CLASS}>
-      <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[980px] block md:table">
+      <Table containerClassName={TABLE_CONTAINER_CLASS} className="md:min-w-[1120px] block md:table">
         <TableHeader className="hidden md:table-header-group">
           <TableRow>
             <TableHead><SortHeader title="User" active={activeSortBy === 'user_id'} direction={activeSortDir} onClick={() => onToggleActiveSort('user_id')} /></TableHead>
             <TableHead><SortHeader title="Email" active={activeSortBy === 'email'} direction={activeSortDir} onClick={() => onToggleActiveSort('email')} /></TableHead>
             <TableHead><SortHeader title="Device" active={activeSortBy === 'device_name'} direction={activeSortDir} onClick={() => onToggleActiveSort('device_name')} /></TableHead>
             <TableHead><SortHeader title="Platform" active={activeSortBy === 'platform'} direction={activeSortDir} onClick={() => onToggleActiveSort('platform')} /></TableHead>
+            <TableHead>Attendance</TableHead>
             <TableHead><SortHeader title="Last Seen" active={activeSortBy === 'last_seen_at'} direction={activeSortDir} onClick={() => onToggleActiveSort('last_seen_at')} /></TableHead>
           </TableRow>
         </TableHeader>
@@ -1278,10 +1309,11 @@ function ActiveTab({
               </TableCell>
               <TableCell className="block md:table-cell text-xs opacity-70 border-none md:border-b py-0 md:py-4"><span className="md:hidden font-semibold opacity-100">Device: </span>{row.device_name || '-'}</TableCell>
               <TableCell className="block md:table-cell text-xs opacity-70 border-none md:border-b py-0 md:py-4">{[row.platform, row.browser, row.os].filter(Boolean).join(' / ') || '-'}</TableCell>
+              <TableCell className="block md:table-cell text-xs border-none md:border-b py-1 md:py-4"><span className="md:hidden font-semibold text-gray-500 dark:text-gray-400 mr-1">Attendance: </span>{renderAttendanceSummary(row)}</TableCell>
               <TableCell className={`block md:table-cell text-xs font-medium border-none md:border-b pt-1 md:pt-4 ${accentClass}`}><span className="md:hidden font-semibold text-gray-500 dark:text-gray-400 mr-1">Last seen: </span>{new Date(row.last_seen_at).toLocaleString()}</TableCell>
             </TableRow>
           ))}
-          {!activeLoading && rows.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={5} className="block md:table-cell text-center py-3 opacity-70">{emptyLabel}</TableCell></TableRow>}
+          {!activeLoading && rows.length === 0 && <TableRow className="block md:table-row"><TableCell colSpan={6} className="block md:table-cell text-center py-3 opacity-70">{emptyLabel}</TableCell></TableRow>}
         </TableBody>
       </Table>
     </div>
@@ -1291,14 +1323,14 @@ function ActiveTab({
       <AdminPageScaffold
         panelClass={`${DESKTOP_FLEX_PANEL_CLASS} ${panelClass}`}
         title="Active Users"
-        description="Monitor current live sessions and today’s unique heartbeat activity."
+        description="Monitor current live sessions and daily attendance."
         actions={<AdminRefreshButton loading={activeLoading} onClick={onRefreshActive} />}
         stats={(
           <AdminStatsStrip
             items={[
               { label: 'Active Users', value: activeCounts.activeUsers, detail: 'Unique live users', toneClass: 'text-cyan-500' },
               { label: 'Active Sessions', value: activeCounts.activeSessions, detail: 'Current sessions', toneClass: 'text-blue-500' },
-              { label: 'Active Today', value: activeCounts.activeTodayUsers, detail: 'Today unique users', toneClass: 'text-sky-500' },
+              { label: 'Active Today', value: activeCounts.activeTodayUsers, detail: 'Today attendance', toneClass: 'text-sky-500' },
             ]}
           />
         )}
@@ -1338,7 +1370,7 @@ function ActiveTab({
           <div className={`border rounded p-3 space-y-3 ${cardClass}`}>
             <div>
               <div className="text-sm font-semibold">Active Today</div>
-              <div className="text-xs opacity-70">Unique non-admin users with at least one heartbeat today, ordered by most recent activity.</div>
+              <div className="text-xs opacity-70">Unique non-admin users with attendance today, ordered by most recent activity.</div>
             </div>
             {renderActiveRows(filteredActiveTodayRows, 'No users have heartbeat activity today', 'text-sky-600 dark:text-sky-400')}
             <Pagination page={activeTodayPage} totalPages={activeTodayTotalPages} onPageChange={onActiveTodayPageChange} />

@@ -40,8 +40,9 @@ export function ConfirmationDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange} useHistory={false}>
       <DialogContent
-        overlayClassName="z-[129]"
-        className={`z-[130] sm:max-w-md ${theme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'
+        depth="nested"
+        overlayClassName="bg-black/70 backdrop-blur-sm"
+        className={`sm:max-w-md ${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'
         }`}>
         <DialogHeader>
           <div className="flex items-center gap-3">

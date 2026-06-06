@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Check, Clock3, Download } from 'lucide-react'
+import { Check, Clock3, Download, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CopyableValue } from '@/components/ui/copyable-value'
 
@@ -17,6 +17,7 @@ export type PaymentReceiptAction = {
   label: string
   onClick: () => void
   disabled?: boolean
+  loading?: boolean
 }
 
 interface PaymentReceiptCardProps {
@@ -363,10 +364,17 @@ export function PaymentReceiptCard({
       <div className="mt-4 space-y-2">
         <Button
           type="button"
-          className={`w-full text-white ${isPending ? 'bg-amber-600 hover:bg-amber-500' : 'bg-emerald-600 hover:bg-emerald-500'}`}
+          className={`w-full disabled:opacity-100 ${
+            isPending
+              ? (isDark
+                ? 'bg-amber-600 text-white hover:bg-amber-500 disabled:border disabled:border-amber-400/30 disabled:bg-amber-500/20 disabled:text-amber-100'
+                : 'bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:border disabled:border-amber-300 disabled:bg-amber-100 disabled:text-amber-900')
+              : 'bg-emerald-600 text-white hover:bg-emerald-500 disabled:border disabled:border-emerald-400/30 disabled:bg-emerald-500/15 disabled:text-emerald-100'
+          }`}
           onClick={primaryAction.onClick}
-          disabled={primaryAction.disabled}
+          disabled={primaryAction.disabled || primaryAction.loading}
         >
+          {primaryAction.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
           {primaryAction.label}
         </Button>
         {secondaryAction ? (

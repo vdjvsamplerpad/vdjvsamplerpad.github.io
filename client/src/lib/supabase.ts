@@ -38,6 +38,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   global: {
     headers: {
       'X-VDJV-Tier-Client': '1',
+      'X-VDJV-Promo-Client': '1',
       'X-VDJV-App-Version': appVersion,
     },
   },

@@ -14,7 +14,25 @@ type SupportLogSection = {
   body: string
 }
 
+export type SupportLogExportResult = {
+  status: 'shared' | 'downloaded' | 'copied'
+  fileName: string
+  message: string
+}
+
+type NavigatorShareDataWithFiles = {
+  title?: string
+  text?: string
+  files?: File[]
+}
+
+type NavigatorWithFileShare = Navigator & {
+  canShare?: (data?: NavigatorShareDataWithFiles) => boolean
+  share?: (data?: NavigatorShareDataWithFiles) => Promise<void>
+}
+
 const SUPPORT_LOG_FILE_PREFIX = 'vdjv-support-log'
+const SUPPORT_LOG_EXPORT_FOLDER = 'VDJV-Support-Logs'
 const MAX_STRING_LENGTH = 1200
 const REDACTED_VALUE = '[redacted]'
 const SENSITIVE_KEY_PATTERNS = [
@@ -55,11 +73,117 @@ const parseEmbeddedAppVersion = (ua: string): string | null => {
   return match?.[1]?.trim() || null
 }
 
+const getCapacitorRuntime = ():
+  | { isNativePlatform?: () => boolean; getPlatform?: () => string }
+  | null => {
+  if (typeof window === 'undefined') return null
+  return (window as Window & typeof globalThis & {
+    Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string }
+  }).Capacitor || null
+}
+
+const isNativeCapacitorSupportRuntime = (): boolean =>
+  getCapacitorRuntime()?.isNativePlatform?.() === true
+
+const isIosLikeUserAgent = (): boolean => {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  const isTouchMac = /Macintosh/i.test(ua) && (navigator.maxTouchPoints || 0) > 1
+  return /iPad|iPhone|iPod/i.test(ua) || isTouchMac
+}
+
+const isMobileLikeUserAgent = (): boolean => {
+  if (typeof navigator === 'undefined') return false
+  return /Android/i.test(navigator.userAgent || '') || isIosLikeUserAgent()
+}
+
+const createSupportLogFileName = (filePrefix = SUPPORT_LOG_FILE_PREFIX): string =>
+  `${filePrefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.log`
+
+const blobToBase64Data = async (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      const base64 = result.split(',')[1]
+      if (!base64) {
+        reject(new Error('EMPTY_SUPPORT_LOG_BASE64'))
+        return
+      }
+      resolve(base64)
+    }
+    reader.onerror = () => reject(reader.error || new Error('SUPPORT_LOG_FILE_READER_ERROR'))
+    reader.readAsDataURL(blob)
+  })
+
+const downloadSupportLogInBrowser = (blob: Blob, fileName: string): void => {
+  if (typeof document === 'undefined') return
+  const objectUrl = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+}
+
+const shareSupportLogWithCapacitor = async (
+  blob: Blob,
+  fileName: string,
+  title: string,
+): Promise<void> => {
+  const [{ Filesystem, Directory }, { Share }] = await Promise.all([
+    import('@capacitor/filesystem'),
+    import('@capacitor/share'),
+  ])
+  const base64Data = await blobToBase64Data(blob)
+  const saved = await Filesystem.writeFile({
+    path: `${SUPPORT_LOG_EXPORT_FOLDER}/${fileName}`,
+    data: base64Data,
+    directory: Directory.Cache,
+    recursive: true,
+  })
+  const uri = String(saved.uri || '').trim()
+  if (!uri) throw new Error('SUPPORT_LOG_SHARE_URI_MISSING')
+
+  try {
+    const canShare = await Share.canShare?.()
+    if (canShare && canShare.value === false) throw new Error('SUPPORT_LOG_NATIVE_SHARE_UNAVAILABLE')
+  } catch (error) {
+    if (error instanceof Error && error.message === 'SUPPORT_LOG_NATIVE_SHARE_UNAVAILABLE') throw error
+  }
+
+  await Share.share({
+    title,
+    text: 'VDJV support log',
+    files: [uri],
+    dialogTitle: 'Share support log',
+  })
+}
+
+const tryShareSupportLogWithWebShare = async (
+  blob: Blob,
+  fileName: string,
+  title: string,
+): Promise<boolean> => {
+  if (typeof navigator === 'undefined' || typeof File === 'undefined') return false
+  const shareNavigator = navigator as NavigatorWithFileShare
+  if (typeof shareNavigator.share !== 'function') return false
+  const file = new File([blob], fileName, { type: 'text/plain' })
+  const shareData: NavigatorShareDataWithFiles = {
+    title,
+    text: 'VDJV support log',
+    files: [file],
+  }
+  if (typeof shareNavigator.canShare === 'function' && !shareNavigator.canShare(shareData)) return false
+  await shareNavigator.share(shareData)
+  return true
+}
+
 const resolveSupportRuntime = (): string => {
   if (typeof window === 'undefined') return 'unknown'
-  const capacitor = (window as Window & typeof globalThis & {
-    Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string }
-  }).Capacitor
+  const capacitor = getCapacitorRuntime()
   if (capacitor?.isNativePlatform?.()) {
     const platform = String(capacitor.getPlatform?.() || '').trim().toLowerCase()
     return platform ? `capacitor-${platform}` : 'capacitor'
@@ -192,18 +316,67 @@ export const copySupportLogText = async (text: string): Promise<void> => {
   await copyTextToClipboard(text)
 }
 
-export const exportSupportLogText = (text: string, filePrefix = SUPPORT_LOG_FILE_PREFIX): void => {
-  if (!text.trim() || typeof document === 'undefined') return
-  const fileName = `${filePrefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.log`
+export const getSupportLogExportActionLabel = (noun = 'Log'): string => {
+  if (isNativeCapacitorSupportRuntime()) return `Share ${noun}`
+  if (isMobileLikeUserAgent()) {
+    const shareNavigator = typeof navigator !== 'undefined' ? navigator as NavigatorWithFileShare : null
+    if (typeof File !== 'undefined' && typeof shareNavigator?.share === 'function') return `Share ${noun}`
+    return `Copy ${noun}`
+  }
+  return `Download ${noun}`
+}
+
+export const getSupportLogExportDoneLabel = (result: SupportLogExportResult, noun = 'Log'): string => {
+  if (result.status === 'shared') return `Shared ${noun}`
+  if (result.status === 'downloaded') return `Downloaded ${noun}`
+  return `Copied ${noun}`
+}
+
+export const exportSupportLogText = async (
+  text: string,
+  filePrefix = SUPPORT_LOG_FILE_PREFIX,
+): Promise<SupportLogExportResult> => {
+  if (!text.trim() || typeof document === 'undefined') throw new Error('SUPPORT_LOG_EMPTY')
+  const fileName = createSupportLogFileName(filePrefix)
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-  const objectUrl = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = objectUrl
-  anchor.download = fileName
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  URL.revokeObjectURL(objectUrl)
+  const title = 'VDJV Support Log'
+
+  if (isNativeCapacitorSupportRuntime()) {
+    await shareSupportLogWithCapacitor(blob, fileName, title)
+    return {
+      status: 'shared',
+      fileName,
+      message: 'Support log opened in your device share sheet.',
+    }
+  }
+
+  try {
+    if (await tryShareSupportLogWithWebShare(blob, fileName, title)) {
+      return {
+        status: 'shared',
+        fileName,
+        message: 'Support log opened in your device share sheet.',
+      }
+    }
+  } catch {
+    if (!isMobileLikeUserAgent()) throw new Error('SUPPORT_LOG_WEB_SHARE_FAILED')
+  }
+
+  if (isMobileLikeUserAgent()) {
+    await copySupportLogText(text)
+    return {
+      status: 'copied',
+      fileName,
+      message: 'File export is not supported on this device. Support log copied instead.',
+    }
+  }
+
+  downloadSupportLogInBrowser(blob, fileName)
+  return {
+    status: 'downloaded',
+    fileName,
+    message: `Support log downloaded: ${fileName}`,
+  }
 }
 
 export const buildSanitizedSupportSection = (title: string, details: unknown): SupportLogSection => ({

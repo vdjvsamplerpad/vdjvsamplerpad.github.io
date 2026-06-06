@@ -1,6 +1,6 @@
 export type HotcueTuple = [number | null, number | null, number | null, number | null];
 export type PadTriggerMode = 'toggle' | 'hold' | 'stutter' | 'unmute';
-export type PadPlaybackMode = 'once' | 'loop' | 'stopper';
+export type PadPlaybackMode = 'once' | 'loop' | 'stopper' | 'bank_stopper';
 
 export const normalizePadTriggerModeValue = (value: unknown): PadTriggerMode => (
   value === 'toggle' || value === 'hold' || value === 'stutter' || value === 'unmute'
@@ -9,7 +9,7 @@ export const normalizePadTriggerModeValue = (value: unknown): PadTriggerMode => 
 );
 
 export const normalizePadPlaybackModeValue = (value: unknown): PadPlaybackMode => (
-  value === 'once' || value === 'loop' || value === 'stopper'
+  value === 'once' || value === 'loop' || value === 'stopper' || value === 'bank_stopper'
     ? value
     : 'once'
 );

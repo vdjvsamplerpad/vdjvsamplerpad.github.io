@@ -191,7 +191,7 @@ export const installDefaultBankReleaseArchive = async (
     value === 'toggle' || value === 'hold' || value === 'stutter' || value === 'unmute' ? value : 'toggle'
   );
   const toPlaybackMode = (value: unknown): PadData['playbackMode'] => (
-    value === 'once' || value === 'loop' || value === 'stopper' ? value : 'once'
+    value === 'once' || value === 'loop' || value === 'stopper' || value === 'bank_stopper' ? value : 'once'
   );
 
   const pads: PadData[] = [];

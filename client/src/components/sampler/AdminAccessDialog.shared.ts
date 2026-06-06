@@ -76,6 +76,7 @@ export type UserSortBy =
   | 'last_sign_in_device_name'
   | 'last_sign_in_platform'
   | 'last_sign_in_app_version'
+  | 'attendance_days_total'
   | 'ban_status';
 export type BankSortBy = 'title' | 'created_at' | 'access_count';
 export type AssignmentUserSortBy = 'display_name' | 'email' | 'created_at';
@@ -94,6 +95,7 @@ export type RequestAutomationFilter =
   | 'manual_review_disabled'
   | 'outside_window'
   | 'missing_reference'
+  | 'reference_mismatch'
   | 'missing_amount'
   | 'missing_recipient_number'
   | 'duplicate_reference'
@@ -498,6 +500,11 @@ export interface StoreMarketingBanner {
   link_url: string | null;
   sort_order: number;
   is_active: boolean;
+  schedule_mode?: 'always' | 'scheduled';
+  starts_at?: string | null;
+  ends_at?: string | null;
+  timezone?: string | null;
+  status?: 'inactive' | 'permanent' | 'scheduled' | 'active' | 'expired';
   created_at?: string;
   updated_at?: string;
 }

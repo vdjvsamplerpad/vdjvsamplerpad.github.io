@@ -83,7 +83,7 @@ export class AudioLegacyPadResourceRuntime {
         }
 
         if (instance.endTimeMs > 0 && currentTime >= instance.endTimeMs) {
-          if (instance.playbackMode === 'once' || instance.playbackMode === 'stopper') {
+          if (instance.playbackMode === 'once' || instance.playbackMode === 'stopper' || instance.playbackMode === 'bank_stopper') {
             this.host.stopPadById(instance.padId, 'instant');
           } else if (instance.playbackMode === 'loop') {
             instance.audioElement.currentTime = (instance.startTimeMs || 0) / 1000;
@@ -92,7 +92,7 @@ export class AudioLegacyPadResourceRuntime {
       };
 
       const handleEnded = () => {
-        if (instance.playbackMode === 'once' || instance.playbackMode === 'stopper') {
+        if (instance.playbackMode === 'once' || instance.playbackMode === 'stopper' || instance.playbackMode === 'bank_stopper') {
           instance.isPlaying = false;
           instance.progress = 0;
           instance.lastProgressNotify = 0;

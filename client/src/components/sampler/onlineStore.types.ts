@@ -53,6 +53,11 @@ export interface StoreBanner {
     link_url: string | null;
     sort_order: number;
     is_active: boolean;
+    schedule_mode?: 'always' | 'scheduled';
+    starts_at?: string | null;
+    ends_at?: string | null;
+    timezone?: string | null;
+    status?: 'inactive' | 'permanent' | 'scheduled' | 'active' | 'expired';
 }
 
 export interface PaymentConfig {
@@ -150,7 +155,7 @@ export type StoreDownloadDebugEntry = {
 export const STORE_DOWNLOAD_DEBUG_MAX_ENTRIES = 250;
 
 export type StoreSnapshot = {
-    version: 1 | 2 | 3 | 4 | 5 | 6;
+    version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
     userKey: string;
     savedAt: number;
     queryKey?: string;

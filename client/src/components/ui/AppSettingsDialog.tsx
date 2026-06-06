@@ -25,7 +25,7 @@ import {
 import type { GraphicsProfile } from '@/lib/performance-monitor';
 import { edgeFunctionUrl } from '@/lib/edge-api';
 import { supabase } from '@/lib/supabase';
-import { useAuthActions, useAuthState } from '@/hooks/useAuth';
+import { setPasswordRecoveryMode, useAuthActions, useAuthState } from '@/hooks/useAuth';
 import { isNativeBankImportAvailable, pickNativeSharedBankFile } from '@/lib/native-bank-import';
 import type { ImportBankSource } from '@/components/sampler/hooks/nativeBankImport.types';
 import { HelpTooltip } from '@/components/ui/help-tooltip';
@@ -50,6 +50,9 @@ const DEFAULT_SUPPORT_MESSENGER_URL = (
   ((import.meta as any).env?.VITE_SUPPORT_MESSENGER_URL as string | undefined) || ''
 ).trim();
 const MAX_PROGRESS_LOG_LINES = 80;
+const PASSWORD_RESET_COOLDOWN_MS = 5 * 60 * 1000;
+const PASSWORD_RESET_VERIFY_MAX_ATTEMPTS = 5;
+const PASSWORD_RESET_VERIFY_LOCKOUT_MS = 10 * 60 * 1000;
 
 const STOP_TIMING_LABELS: Record<StopMode, string> = {
   instant: 'Instant stop',
@@ -75,6 +78,54 @@ const appendProgressLogLine = (
 const renderHelpContent = (text: string) => (
   <p className="text-[11px] leading-relaxed">{text}</p>
 );
+
+const getSettingsPasswordResetKey = (email: string): string => `password_reset_${email.trim().toLowerCase()}`;
+
+const getSettingsResetVerifyAttemptKey = (email: string): string => `password_reset_verify_${email.trim().toLowerCase()}`;
+
+const readSettingsResetVerifyAttemptState = (email: string): { failures: number; blockedUntil: number | null } => {
+  if (typeof window === 'undefined') return { failures: 0, blockedUntil: null };
+  try {
+    const raw = localStorage.getItem(getSettingsResetVerifyAttemptKey(email));
+    if (!raw) return { failures: 0, blockedUntil: null };
+    const parsed = JSON.parse(raw) as { failures?: number; blockedUntil?: number | null };
+    return {
+      failures: Number.isFinite(parsed?.failures) ? Math.max(0, Number(parsed.failures)) : 0,
+      blockedUntil: typeof parsed?.blockedUntil === 'number' ? parsed.blockedUntil : null,
+    };
+  } catch {
+    return { failures: 0, blockedUntil: null };
+  }
+};
+
+const writeSettingsResetVerifyAttemptState = (
+  email: string,
+  next: { failures: number; blockedUntil: number | null },
+): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    if (next.failures <= 0 && !next.blockedUntil) {
+      localStorage.removeItem(getSettingsResetVerifyAttemptKey(email));
+      return;
+    }
+    localStorage.setItem(getSettingsResetVerifyAttemptKey(email), JSON.stringify(next));
+  } catch {
+  }
+};
+
+const readSettingsPasswordResetCooldownMinutes = (email: string): number => {
+  if (typeof window === 'undefined') return 0;
+  try {
+    const lastResetTime = localStorage.getItem(getSettingsPasswordResetKey(email));
+    if (!lastResetTime) return 0;
+    const elapsed = Date.now() - Number(lastResetTime);
+    if (!Number.isFinite(elapsed)) return 0;
+    const remaining = Math.max(0, PASSWORD_RESET_COOLDOWN_MS - elapsed);
+    return remaining > 0 ? Math.ceil(remaining / 1000 / 60) : 0;
+  } catch {
+    return 0;
+  }
+};
 
 const summarizeAppUpdateError = (
   error: string | null | undefined,
@@ -146,7 +197,7 @@ const SectionLabel = ({
   </div>
 );
 
-type SettingsPanelId = 'general' | 'system' | 'channels' | 'backup';
+type SettingsPanelId = 'app' | 'controls' | 'backup' | 'account';
 type SettingsPanelOption = { id: SettingsPanelId; label: string; disabled?: boolean };
 
 const SettingsSectionTabs = ({
@@ -201,6 +252,25 @@ const SettingsSectionTabs = ({
       })}
     </div>
   );
+};
+
+const getSettingsAuthProviders = (user: unknown): string[] => {
+  const metadata = (user as any)?.app_metadata || {};
+  const providers = new Set<string>();
+  const provider = typeof metadata.provider === 'string' ? metadata.provider.toLowerCase() : '';
+  if (provider) providers.add(provider);
+  if (Array.isArray(metadata.providers)) {
+    metadata.providers.forEach((entry: unknown) => {
+      const value = String(entry || '').toLowerCase();
+      if (value) providers.add(value);
+    });
+  }
+  const identities = Array.isArray((user as any)?.identities) ? (user as any).identities : [];
+  identities.forEach((identity: any) => {
+    const value = String(identity?.provider || '').toLowerCase();
+    if (value) providers.add(value);
+  });
+  return Array.from(providers);
 };
 
 
@@ -384,7 +454,14 @@ export function AppSettingsDialog({
   onSignOut
 }: AppSettingsDialogProps) {
   const { user, profile, capabilities } = useAuthState();
-  const { deleteAccount, refreshAccountCapabilities, requestPasswordReset, updateDisplayName } = useAuthActions();
+  const {
+    deleteAccount,
+    refreshAccountCapabilities,
+    requestPasswordReset,
+    updateDisplayName,
+    updatePassword,
+    verifyPasswordResetCode,
+  } = useAuthActions();
   const isAdmin = profile?.role === 'admin';
   const accountTierLabel = capabilities.effectiveTier === 'pro_max'
     ? 'PRO MAX'
@@ -413,6 +490,14 @@ export function AppSettingsDialog({
   const [voucherNotice, setVoucherNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [passwordBusy, setPasswordBusy] = React.useState(false);
   const [passwordNotice, setPasswordNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [passwordCodeSent, setPasswordCodeSent] = React.useState(false);
+  const [passwordCodeVerified, setPasswordCodeVerified] = React.useState(false);
+  const [passwordCode, setPasswordCode] = React.useState('');
+  const [newAccountPassword, setNewAccountPassword] = React.useState('');
+  const [confirmAccountPassword, setConfirmAccountPassword] = React.useState('');
+  const [passwordResetCooldown, setPasswordResetCooldown] = React.useState(0);
+  const [passwordCodeFailures, setPasswordCodeFailures] = React.useState(0);
+  const [passwordCodeBlockedSeconds, setPasswordCodeBlockedSeconds] = React.useState(0);
   const [displayNameDraft, setDisplayNameDraft] = React.useState('');
   const [displayNameBusy, setDisplayNameBusy] = React.useState(false);
   const [displayNameNotice, setDisplayNameNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -426,11 +511,85 @@ export function AppSettingsDialog({
   const effectiveAppUpdateBusy = appUpdateBusy || appUpdateActionBusy;
   const rawAppUpdateError = appUpdateActionError || appUpdateError;
   const summarizedAppUpdateError = summarizeAppUpdateError(rawAppUpdateError, appUpdatePlatform);
+  const openUpgradeFromSettings = React.useCallback((reason: string) => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('vdjv-open-upgrade', { detail: { reason } }));
+  }, []);
 
   React.useEffect(() => {
     setDisplayNameDraft(profile?.display_name || '');
     setDisplayNameNotice(null);
   }, [profile?.display_name]);
+
+  React.useEffect(() => {
+    setPasswordBusy(false);
+    setPasswordNotice(null);
+    setPasswordCodeSent(false);
+    setPasswordCodeVerified(false);
+    setPasswordCode('');
+    setNewAccountPassword('');
+    setConfirmAccountPassword('');
+    setPasswordResetCooldown(0);
+    setPasswordCodeFailures(0);
+    setPasswordCodeBlockedSeconds(0);
+  }, [isAdmin, user?.email]);
+
+  React.useEffect(() => {
+    if (!open || isAdmin) return;
+    const email = user?.email?.trim().toLowerCase();
+    if (!email) {
+      setPasswordResetCooldown(0);
+      return;
+    }
+    setPasswordResetCooldown(readSettingsPasswordResetCooldownMinutes(email));
+  }, [isAdmin, open, user?.email]);
+
+  React.useEffect(() => {
+    if (passwordResetCooldown <= 0) return;
+    const timer = window.setTimeout(() => {
+      const email = user?.email?.trim().toLowerCase();
+      setPasswordResetCooldown(email ? readSettingsPasswordResetCooldownMinutes(email) : 0);
+    }, 60000);
+    return () => window.clearTimeout(timer);
+  }, [passwordResetCooldown, user?.email]);
+
+  React.useEffect(() => {
+    if (!open || isAdmin) return;
+    const email = user?.email?.trim().toLowerCase();
+    if (!email) {
+      setPasswordCodeFailures(0);
+      setPasswordCodeBlockedSeconds(0);
+      return;
+    }
+
+    const syncResetVerifyState = () => {
+      const attemptState = readSettingsResetVerifyAttemptState(email);
+      setPasswordCodeFailures(attemptState.failures);
+      if (attemptState.blockedUntil && attemptState.blockedUntil > Date.now()) {
+        setPasswordCodeBlockedSeconds(Math.ceil((attemptState.blockedUntil - Date.now()) / 1000));
+        return;
+      }
+      if (attemptState.blockedUntil) {
+        writeSettingsResetVerifyAttemptState(email, { failures: attemptState.failures, blockedUntil: null });
+      }
+      setPasswordCodeBlockedSeconds(0);
+    };
+
+    syncResetVerifyState();
+    if (!passwordCodeSent) return;
+    const timer = window.setInterval(syncResetVerifyState, 1000);
+    return () => window.clearInterval(timer);
+  }, [isAdmin, open, passwordCodeSent, user?.email]);
+
+  React.useEffect(() => {
+    if (!isAdmin) return;
+    setShowDeleteAccountConfirm(false);
+    setDeleteAccountPassword('');
+    setDeleteAccountPhrase('');
+    setDeleteAccountAcknowledged(false);
+    setDeleteAccountOtp('');
+    setDeleteAccountNotice(null);
+  }, [isAdmin]);
 
   const handleCheckForAppUpdates = React.useCallback(async () => {
     if (!onCheckForAppUpdates || effectiveAppUpdateBusy) return;
@@ -457,7 +616,7 @@ export function AppSettingsDialog({
       setAppUpdateActionBusy(false);
     }
   }, [effectiveAppUpdateBusy, onInstallAppUpdate]);
-  const [activePanel, setActivePanel] = React.useState<SettingsPanelId>('general');
+  const [activePanel, setActivePanel] = React.useState<SettingsPanelId>('app');
   const [systemMappingError, setSystemMappingError] = React.useState<string | null>(null);
   const [channelMappingError, setChannelMappingError] = React.useState<string | null>(null);
   const [mappingNotice, setMappingNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -466,6 +625,12 @@ export function AppSettingsDialog({
   const [showSignOutConfirm, setShowSignOutConfirm] = React.useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = React.useState(false);
   const [showDeleteAccountConfirm, setShowDeleteAccountConfirm] = React.useState(false);
+  const [deleteAccountPassword, setDeleteAccountPassword] = React.useState('');
+  const [deleteAccountPhrase, setDeleteAccountPhrase] = React.useState('');
+  const [deleteAccountAcknowledged, setDeleteAccountAcknowledged] = React.useState(false);
+  const [deleteAccountOtp, setDeleteAccountOtp] = React.useState('');
+  const [deleteAccountOtpBusy, setDeleteAccountOtpBusy] = React.useState(false);
+  const [deleteAccountNotice, setDeleteAccountNotice] = React.useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [showBackupExportConfirm, setShowBackupExportConfirm] = React.useState(false);
   const [showBackupExportRiskConfirm, setShowBackupExportRiskConfirm] = React.useState(false);
   const [pendingBackupRiskMessage, setPendingBackupRiskMessage] = React.useState<string | null>(null);
@@ -484,6 +649,15 @@ export function AppSettingsDialog({
   const [backupProgressDescription, setBackupProgressDescription] = React.useState('');
   const [backupProgressMessage, setBackupProgressMessage] = React.useState<string | undefined>(undefined);
   const [backupLogLines, setBackupLogLines] = React.useState<string[]>([]);
+  const authProviders = React.useMemo(() => getSettingsAuthProviders(user), [user]);
+  const usesPasswordAccount = authProviders.includes('email') || (!authProviders.length && Boolean(user?.email));
+  const passwordSecurityTitle = usesPasswordAccount ? 'Change Password' : 'Set VDJV Password';
+  const passwordSecurityDescription = usesPasswordAccount
+    ? 'Verify your email before changing the password on this account.'
+    : 'Verify your email first, then set a VDJV password so this Google account can also sign in with email and password.';
+  const deleteAccountReady = deleteAccountPhrase.trim().toUpperCase() === 'DELETE'
+    && deleteAccountAcknowledged
+    && (usesPasswordAccount ? deleteAccountPassword.trim().length > 0 : deleteAccountOtp.trim().length >= 6);
   const [supportMessengerUrl, setSupportMessengerUrl] = React.useState<string>(() => {
     if (typeof window === 'undefined') return '';
     try {
@@ -547,10 +721,16 @@ export function AppSettingsDialog({
       setVoucherNotice(null);
       setPasswordNotice(null);
       setDisplayNameNotice(null);
-      setActivePanel('general');
+      setActivePanel('app');
       setShowSignOutConfirm(false);
       setShowDeleteAccountConfirm(false);
       setIsDeletingAccount(false);
+      setDeleteAccountPassword('');
+      setDeleteAccountPhrase('');
+      setDeleteAccountAcknowledged(false);
+      setDeleteAccountOtp('');
+      setDeleteAccountOtpBusy(false);
+      setDeleteAccountNotice(null);
       setShowBackupExportConfirm(false);
       setShowBackupExportRiskConfirm(false);
       setPendingBackupRiskMessage(null);
@@ -608,16 +788,10 @@ export function AppSettingsDialog({
   }, [open]);
 
   React.useEffect(() => {
-    if (!isAuthenticated && activePanel !== 'general') {
-      setActivePanel('general');
+    if ((activePanel === 'backup' || activePanel === 'account') && !isAuthenticated) {
+      setActivePanel('app');
     }
-  }, [isAuthenticated, activePanel]);
-
-  React.useEffect(() => {
-    if (activePanel === 'system' && !canUseSystemShortcuts) setActivePanel('general');
-    if (activePanel === 'channels' && !canUseChannelShortcuts) setActivePanel('general');
-    if (activePanel === 'backup' && !isAuthenticated) setActivePanel('general');
-  }, [activePanel, canUseChannelShortcuts, canUseSystemShortcuts, isAuthenticated]);
+  }, [activePanel, isAuthenticated]);
 
   React.useEffect(() => {
     if (canUseAdvancedStopModes || stopMode === 'instant') return;
@@ -653,7 +827,19 @@ export function AppSettingsDialog({
   }, []);
 
   const channelMappings = systemMappings.channelMappings || [];
-  const activeChannelCount = Math.max(2, Math.min(8, Math.floor(channelCount || 4)));
+  const deckChannelMax = React.useMemo(() => {
+    const configured = Number(capabilities.limits.deckCount);
+    return Number.isFinite(configured) ? Math.max(1, Math.min(8, Math.floor(configured))) : 8;
+  }, [capabilities.limits.deckCount]);
+  const deckChannelMin = React.useMemo(() => {
+    const configured = Number(capabilities.limits.deckMinCount);
+    return Number.isFinite(configured) ? Math.max(1, Math.min(deckChannelMax, Math.floor(configured))) : 1;
+  }, [capabilities.limits.deckMinCount, deckChannelMax]);
+  const activeChannelCount = Math.max(deckChannelMin, Math.min(deckChannelMax, Math.floor(channelCount || capabilities.limits.deckDefaultCount || deckChannelMin)));
+  const deckChannelOptions = React.useMemo(
+    () => Array.from({ length: deckChannelMax - deckChannelMin + 1 }, (_, idx) => deckChannelMin + idx),
+    [deckChannelMax, deckChannelMin]
+  );
   const activeChannelMappings = React.useMemo(
     () => channelMappings.slice(0, activeChannelCount),
     [activeChannelCount, channelMappings]
@@ -1343,12 +1529,71 @@ export function AppSettingsDialog({
     }
   }, [onSignOut, isSigningOut, onOpenChange]);
 
+  const requestDeleteAccountOtp = React.useCallback(async () => {
+    if (isAdmin) {
+      setDeleteAccountNotice({ type: 'info', message: 'Admin account deletion is managed manually.' });
+      return;
+    }
+    if (deleteAccountOtpBusy || !user?.email) return;
+    setDeleteAccountOtpBusy(true);
+    setDeleteAccountNotice(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in again before requesting a deletion code.');
+      const response = await fetch(edgeFunctionUrl('store-api', 'account/delete-code'), {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ confirm: true }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(String(payload?.error || payload?.message || 'Could not send deletion code.'));
+      }
+      setDeleteAccountNotice({
+        type: 'success',
+        message: `Deletion code sent to ${user.email}. It expires in about 10 minutes.`,
+      });
+    } catch (error) {
+      setDeleteAccountNotice({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Could not send deletion code.',
+      });
+    } finally {
+      setDeleteAccountOtpBusy(false);
+    }
+  }, [deleteAccountOtpBusy, isAdmin, user?.email]);
+
   const confirmDeleteAccount = React.useCallback(async () => {
+    if (isAdmin) {
+      setDeleteAccountNotice({ type: 'info', message: 'Admin account deletion is managed manually.' });
+      return;
+    }
     if (isDeletingAccount) return;
+    if (!deleteAccountReady) {
+      setDeleteAccountNotice({
+        type: 'error',
+        message: usesPasswordAccount
+          ? 'Enter your current password, type DELETE, and confirm the warning first.'
+          : 'Enter the email deletion code, type DELETE, and confirm the warning first.',
+      });
+      return;
+    }
     setIsDeletingAccount(true);
     setBackupNotice(null);
+    setDeleteAccountNotice(null);
     try {
-      const { error } = await deleteAccount();
+      const { error } = await deleteAccount({
+        phrase: deleteAccountPhrase.trim(),
+        acknowledge: deleteAccountAcknowledged,
+        password: usesPasswordAccount ? deleteAccountPassword : undefined,
+        otp: usesPasswordAccount ? undefined : deleteAccountOtp.trim(),
+      });
       if (error) throw new Error(error.message || 'Account deletion failed.');
       setShowDeleteAccountConfirm(false);
       onOpenChange(false);
@@ -1359,7 +1604,18 @@ export function AppSettingsDialog({
       });
       setIsDeletingAccount(false);
     }
-  }, [deleteAccount, isDeletingAccount, onOpenChange]);
+  }, [
+    deleteAccount,
+    deleteAccountAcknowledged,
+    deleteAccountOtp,
+    deleteAccountPassword,
+    deleteAccountPhrase,
+    deleteAccountReady,
+    isAdmin,
+    isDeletingAccount,
+    onOpenChange,
+    usesPasswordAccount,
+  ]);
 
   const mapVoucherRedeemError = React.useCallback((value: unknown): string => {
     const code = String(value || '').trim();
@@ -1384,9 +1640,22 @@ export function AppSettingsDialog({
 
   const handleSendPasswordSetupEmail = React.useCallback(async () => {
     if (passwordBusy) return;
+    if (isAdmin) {
+      setPasswordNotice({ type: 'error', message: 'Admin password changes are managed manually.' });
+      return;
+    }
     const email = user?.email?.trim().toLowerCase();
     if (!email) {
       setPasswordNotice({ type: 'error', message: 'No email is attached to this account.' });
+      return;
+    }
+    const activeCooldown = readSettingsPasswordResetCooldownMinutes(email);
+    if (activeCooldown > 0) {
+      setPasswordResetCooldown(activeCooldown);
+      setPasswordNotice({
+        type: 'error',
+        message: `Please wait ${activeCooldown} minute${activeCooldown > 1 ? 's' : ''} before requesting another security code.`,
+      });
       return;
     }
     setPasswordBusy(true);
@@ -1394,15 +1663,128 @@ export function AppSettingsDialog({
     try {
       const { error } = await requestPasswordReset(email);
       if (error) {
-        throw new Error(error.message || 'Password email failed.');
+        const message = error.message || 'Password email failed.';
+        if (message.includes('Please wait')) {
+          const match = message.match(/(\d+)/);
+          if (match) setPasswordResetCooldown(Number(match[1]));
+        }
+        throw new Error(message);
       }
-      setPasswordNotice({ type: 'success', message: 'Password setup/reset email sent. Open it from your email to continue securely.' });
+      setPasswordCodeSent(true);
+      setPasswordCodeVerified(false);
+      setPasswordCode('');
+      setNewAccountPassword('');
+      setConfirmAccountPassword('');
+      setPasswordResetCooldown(5);
+      setPasswordNotice({ type: 'success', message: `Security code sent to ${email}. Enter it below to continue.` });
     } catch (error) {
       setPasswordNotice({ type: 'error', message: error instanceof Error ? error.message : 'Password email failed.' });
     } finally {
       setPasswordBusy(false);
     }
-  }, [passwordBusy, requestPasswordReset, user?.email]);
+  }, [isAdmin, passwordBusy, requestPasswordReset, user?.email]);
+
+  const handleCompletePasswordChange = React.useCallback(async () => {
+    if (passwordBusy) return;
+    if (isAdmin) {
+      setPasswordNotice({ type: 'error', message: 'Admin password changes are managed manually.' });
+      return;
+    }
+    const email = user?.email?.trim().toLowerCase();
+    const code = passwordCode.trim();
+    const password = newAccountPassword;
+    const confirmation = confirmAccountPassword;
+    if (!email) {
+      setPasswordNotice({ type: 'error', message: 'No email is attached to this account.' });
+      return;
+    }
+    if (!passwordCodeVerified && code.length < 6) {
+      setPasswordNotice({ type: 'error', message: 'Enter the security code from your email.' });
+      return;
+    }
+    if (password.length < 8) {
+      setPasswordNotice({ type: 'error', message: 'Password must be at least 8 characters.' });
+      return;
+    }
+    if (password !== confirmation) {
+      setPasswordNotice({ type: 'error', message: 'Passwords do not match.' });
+      return;
+    }
+    if (passwordCodeBlockedSeconds > 0) {
+      const waitMinutes = Math.ceil(passwordCodeBlockedSeconds / 60);
+      setPasswordNotice({
+        type: 'error',
+        message: `Too many invalid security code attempts. Please wait ${waitMinutes} minute${waitMinutes > 1 ? 's' : ''} before trying again.`,
+      });
+      return;
+    }
+
+    setPasswordBusy(true);
+    setPasswordNotice(null);
+    let recoveryModeEnabled = false;
+    try {
+      if (!passwordCodeVerified) {
+        setPasswordRecoveryMode(true);
+        recoveryModeEnabled = true;
+        const { error: verifyError } = await verifyPasswordResetCode(email, code);
+        if (verifyError) {
+          setPasswordRecoveryMode(false);
+          recoveryModeEnabled = false;
+          const currentAttemptState = readSettingsResetVerifyAttemptState(email);
+          const nextFailures = currentAttemptState.failures + 1;
+          const blockedUntil = nextFailures >= PASSWORD_RESET_VERIFY_MAX_ATTEMPTS
+            ? Date.now() + PASSWORD_RESET_VERIFY_LOCKOUT_MS
+            : null;
+          writeSettingsResetVerifyAttemptState(email, { failures: nextFailures, blockedUntil });
+          setPasswordCodeFailures(nextFailures);
+          setPasswordCodeBlockedSeconds(blockedUntil ? Math.ceil((blockedUntil - Date.now()) / 1000) : 0);
+          throw new Error(verifyError.message || 'Security code verification failed.');
+        }
+        setPasswordCodeVerified(true);
+      }
+      writeSettingsResetVerifyAttemptState(email, { failures: 0, blockedUntil: null });
+      setPasswordCodeFailures(0);
+      setPasswordCodeBlockedSeconds(0);
+      const { error } = await updatePassword(password);
+      if (error) {
+        throw new Error(error.message || 'Password update failed.');
+      }
+      setPasswordRecoveryMode(false);
+      recoveryModeEnabled = false;
+      await supabase.auth.refreshSession().catch(() => {});
+      setPasswordCodeSent(false);
+      setPasswordCodeVerified(false);
+      setPasswordCode('');
+      setNewAccountPassword('');
+      setConfirmAccountPassword('');
+      setPasswordNotice({
+        type: 'success',
+        message: usesPasswordAccount
+          ? 'Password changed.'
+          : 'VDJV password set. You can now sign in with Google or email and password.',
+      });
+    } catch (error) {
+      setPasswordNotice({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Password update failed.',
+      });
+    } finally {
+      if (recoveryModeEnabled) setPasswordRecoveryMode(false);
+      setPasswordBusy(false);
+    }
+  }, [
+    confirmAccountPassword,
+    isAdmin,
+    newAccountPassword,
+    passwordBusy,
+    passwordCode,
+    passwordCodeBlockedSeconds,
+    passwordCodeVerified,
+    updatePassword,
+    user?.email,
+    usesPasswordAccount,
+    verifyPasswordResetCode,
+  ]);
 
   const handleSaveDisplayName = React.useCallback(async () => {
     if (displayNameBusy) return;
@@ -1477,34 +1859,33 @@ export function AppSettingsDialog({
   const masterVolumeDownKeyError = getInlineMappingError('master-volumeDown-key');
   const masterMuteKeyError = getInlineMappingError('master-mute-key');
   const availablePanels = React.useMemo((): SettingsPanelOption[] => {
-    if (!isAuthenticated) {
-      return [{ id: 'general', label: 'General' }];
-    }
-    if (capabilities.effectiveTier === 'free') {
-      return [
-        { id: 'general', label: 'General' },
-        { id: 'backup', label: 'Backup' },
-      ];
-    }
-    return [
-      { id: 'general', label: 'General' },
-      { id: 'system', label: 'System', disabled: !canUseSystemShortcuts },
-      { id: 'channels', label: 'Channel', disabled: !canUseChannelShortcuts },
-      { id: 'backup', label: 'Backup' },
+    const panels: SettingsPanelOption[] = [
+      { id: 'app', label: 'App' },
+      { id: 'controls', label: 'Controls' },
     ];
-  }, [canUseChannelShortcuts, canUseSystemShortcuts, capabilities.effectiveTier, isAuthenticated]);
+    if (isAuthenticated) {
+      panels.push(
+        { id: 'backup', label: 'Backup' },
+        { id: 'account', label: 'Account' },
+      );
+    }
+    return panels;
+  }, [isAuthenticated]);
   React.useEffect(() => {
     if (availablePanels.some((panel) => panel.id === activePanel && !panel.disabled)) return;
-    setActivePanel(availablePanels[0]?.id || 'general');
+    setActivePanel(availablePanels[0]?.id || 'app');
   }, [activePanel, availablePanels]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[92dvh] w-[96vw] max-h-[92dvh] flex-col gap-3 overflow-hidden p-4 sm:h-[min(92dvh,46rem)] sm:max-w-4xl sm:p-6 bg-white border-gray-300 dark:bg-gray-900 dark:border-gray-700">
+      <DialogContent
+        mobileFullscreen
+        className="flex h-[100dvh] w-screen max-h-[100dvh] flex-col gap-3 overflow-hidden rounded-none border-0 p-4 sm:h-[min(92dvh,46rem)] sm:w-full sm:max-w-4xl sm:rounded-lg sm:border sm:p-6 bg-white border-gray-300 dark:bg-gray-900 dark:border-gray-700"
+      >
         <DialogHeader className="pb-2 border-b border-gray-200 dark:border-gray-700">
-          <DialogTitle>Setting</DialogTitle>
+          <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            Configure app preferences, MIDI mappings, channel controls, and backup tools.
+            Configure app behavior, controls, backup tools, and account access.
           </DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-3 py-2 text-sm">
@@ -1518,7 +1899,7 @@ export function AppSettingsDialog({
 
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             <div className="space-y-3 pb-2">
-          {activePanel === 'general' && (
+          {activePanel === 'app' && (
             <>
               <div className="rounded-lg border p-3 space-y-3 bg-gray-50/60 dark:bg-gray-900/30">
                 <SectionLabel
@@ -1615,7 +1996,18 @@ export function AppSettingsDialog({
                     </SelectContent>
                   </Select>
                   {!canUseAdvancedStopModes && (
-                    <p className="text-[10px] text-amber-600 dark:text-amber-300">Advanced stop modes require PRO.</p>
+                    <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+                      <div className="font-semibold">Advanced stop modes require PRO.</div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 h-8 border-amber-400 bg-white/70 text-amber-800 hover:bg-amber-100 dark:bg-amber-950/20 dark:text-amber-200"
+                        onClick={() => openUpgradeFromSettings('Advanced stop modes require PRO.')}
+                      >
+                        Upgrade
+                      </Button>
+                    </div>
                   )}
                   {canEditActiveStopTiming && (
                   <div className="mt-2 rounded-lg border border-gray-200 bg-white/70 p-3 dark:border-gray-800 dark:bg-gray-950/40">
@@ -1680,126 +2072,6 @@ export function AppSettingsDialog({
                       <SelectItem value="unmute">Unmute</SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
-              </div>
-
-              <div className="rounded-lg border p-3 space-y-3 bg-gray-50/60 dark:bg-gray-900/30">
-                <SectionLabel
-                  label="Input & Mapping"
-                  help="Settings for MIDI input, keyboard mapping, shortcut visibility, and automatic assignment behavior."
-                />
-                {!canUseInputMapping ? (
-                  <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-                    Keyboard, MIDI, and mapping controls require PRO.
-                  </div>
-                ) : (
-                  <>
-                {!midiSupported && (
-                  <p className="text-xs text-red-500">Web MIDI not supported in this browser.</p>
-                )}
-                {midiSupported && (
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-0.5">
-                      <FieldLabel label="Enable MIDI Input" />
-                    </div>
-                    <Switch checked={midiEnabled} onCheckedChange={onToggleMidiEnabled} disabled={!midiSupported} />
-                  </div>
-                )}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="space-y-0.5">
-                    <FieldLabel label="Enable Keyboard Mapping"  />
-                  </div>
-                  <Switch checked={keyboardMappingEnabled} onCheckedChange={onToggleKeyboardMappingEnabled} />
-                </div>
-                {keyboardMappingEnabled && (
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-0.5">
-                      <FieldLabel label="Hide Keyboard Shortcut" />
-                    </div>
-                    <Switch checked={hideShortcutLabels} onCheckedChange={onToggleHideShortcutLabels} />
-                  </div>
-                )}
-                {!keyboardMappingEnabled && (
-                  <div className="rounded-md border border-dashed px-3 py-2 text-[11px] text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                    Keyboard shortcut labels stay hidden while keyboard mapping is disabled.
-                  </div>
-                )}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="space-y-0.5">
-                    <FieldLabel label="Auto Pad & Bank Mapping" help="Fills missing default keyboard mappings on new, imported, or duplicated content without overwriting assignments that already exist." />
-                  </div>
-                  <Switch checked={autoPadBankMapping} onCheckedChange={onToggleAutoPadBankMapping} />
-                </div>
-                {midiSupported && midiEnabled && midiAccessGranted && (
-                  <div className="space-y-2 border-t pt-3 border-gray-200 dark:border-gray-700">
-                    <div className="text-[10px] text-gray-500">
-                      Backend: {midiBackend === 'native' ? 'Native MIDI' : 'Web MIDI'}
-                      {!midiOutputSupported && (
-                        <span className="ml-2 text-red-500">LED output not available</span>
-                      )}
-                    </div>
-                    {midiError && <p className="text-xs text-red-500">{midiError}</p>}
-                    <div className="space-y-1">
-                      <FieldLabel label="MIDI Input" help="Choose which MIDI input device this app listens to." className="text-xs" />
-                      <Select
-                        value={midiSelectedInputId || ''}
-                        onValueChange={(value) => onSelectMidiInput(value || null)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select device" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {midiInputs.length === 0 && (
-                            <SelectItem value="none" disabled>
-                              No MIDI inputs
-                            </SelectItem>
-                          )}
-                          {midiInputs.map((input) => (
-                            <SelectItem key={input.id} value={input.id}>
-                              {input.name || input.id}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1">
-                      <FieldLabel label="Device Profile" help="Selects an output profile for devices that support MIDI feedback such as pad lights. Auto-detect tries to choose the best match." className="text-xs" />
-                      <Select
-                        value={midiDeviceProfileId || '__auto__'}
-                        onValueChange={(value) => onSelectMidiDeviceProfile(value === '__auto__' ? null : value)}
-                        disabled={!midiOutputSupported}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Auto-detect" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__auto__">Auto-detect</SelectItem>
-                          {midiDeviceProfiles.map((profile) => (
-                            <SelectItem key={profile.id} value={profile.id}>
-                              {profile.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                )}
-                  </>
-                )}
-              </div>
-
-              <div className="grid gap-2 sm:grid-cols-3">
-                <div className="rounded-lg border p-3 bg-gray-50/60 dark:bg-gray-900/30">
-                  <div className="text-xs uppercase tracking-wide text-gray-500">User</div>
-                  <div className="font-medium">{displayName}</div>
-                </div>
-                <div className="rounded-lg border p-3 bg-gray-50/60 dark:bg-gray-900/30">
-                  <div className="text-xs uppercase tracking-wide text-gray-500">Tier</div>
-                  <div className="font-medium">{accountTierLabel}</div>
-                </div>
-                <div className="rounded-lg border p-3 bg-gray-50/60 dark:bg-gray-900/30">
-                  <div className="text-xs uppercase tracking-wide text-gray-500">Version</div>
-                  <div className="font-medium">{version}</div>
                 </div>
               </div>
 
@@ -1872,117 +2144,142 @@ export function AppSettingsDialog({
                 </Button>
               </div>
 
-              {isAuthenticated && onSignOut && (
-                <div className="rounded-lg border border-gray-200 bg-gray-50/70 p-3 space-y-3 dark:border-gray-700 dark:bg-gray-900/30">
-                  <div>
-                    <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Account</div>
-                    <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">{accountTierLabel} - {displayName}</div>
-                  </div>
+              <div className="rounded-lg border p-3 bg-gray-50/60 text-xs text-gray-600 dark:bg-gray-900/30 dark:text-gray-300">
+                <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">About VDJV</div>
+                <p>
+                  VDJV Sampler Pad is built for DJs, hosts, and event performers who need fast sampler banks,
+                  store downloads, and stable live playback across web, Android, iOS web app, and desktop builds.
+                </p>
+                <div className="mt-2 text-[11px] text-gray-500">Version {version}</div>
+              </div>
 
-                  <div className="rounded-md border border-indigo-200 bg-white/80 p-2 space-y-2 dark:border-indigo-900/60 dark:bg-gray-950/30">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Redeem Voucher</div>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <Input
-                        value={voucherCode}
-                        onChange={(event) => {
-                          setVoucherCode(event.target.value);
-                          setVoucherNotice(null);
-                        }}
-                        placeholder="VDJV-XXXXXX-XXXXXX-XXXXXX"
-                        className="h-8 text-xs"
-                        disabled={voucherBusy}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 shrink-0"
-                        onClick={() => void handleRedeemVoucher()}
-                        disabled={voucherBusy || voucherCode.trim().length < 6}
-                      >
-                        {voucherBusy ? 'Checking...' : 'Redeem'}
-                      </Button>
-                    </div>
-                    {voucherNotice && (
-                      <div className={`text-[11px] ${voucherNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'}`}>
-                        {voucherNotice.message}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="rounded-md border border-gray-200 bg-white/80 p-2 space-y-2 dark:border-gray-700 dark:bg-gray-950/30">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Display Name</div>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <Input
-                        value={displayNameDraft}
-                        onChange={(event) => {
-                          setDisplayNameDraft(event.target.value);
-                          setDisplayNameNotice(null);
-                        }}
-                        placeholder="Your DJ name"
-                        className="h-8 text-xs"
-                        disabled={displayNameBusy}
-                        maxLength={50}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 shrink-0"
-                        onClick={() => void handleSaveDisplayName()}
-                        disabled={displayNameBusy || displayNameDraft.trim().length < 2 || displayNameDraft.trim() === (profile?.display_name || '').trim()}
-                      >
-                        {displayNameBusy ? 'Saving...' : 'Save'}
-                      </Button>
-                    </div>
-                    {displayNameNotice && (
-                      <div className={`text-[11px] ${displayNameNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'}`}>
-                        {displayNameNotice.message}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="rounded-md border border-gray-200 bg-white/80 p-2 space-y-2 dark:border-gray-700 dark:bg-gray-950/30">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Password Security</div>
-                    <div className="text-[11px] text-gray-500 dark:text-gray-400">
-                      For safety, password setup or reset is handled by email verification instead of changing it directly inside the app.
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      {passwordNotice ? (
-                        <div className={`text-[11px] ${passwordNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'}`}>
-                          {passwordNotice.message}
-                        </div>
-                      ) : (
-                        <div className="text-[11px] text-gray-500">{user?.email || 'Signed-in email required.'}</div>
-                      )}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 shrink-0"
-                        onClick={() => void handleSendPasswordSetupEmail()}
-                        disabled={passwordBusy || !user?.email}
-                      >
-                        {passwordBusy ? 'Sending...' : 'Send Email'}
-                      </Button>
-                    </div>
-                  </div>
-
+            </>
+          )}
+          {activePanel === 'controls' && (
+            <div className="rounded-lg border p-3 space-y-3 bg-gray-50/60 dark:bg-gray-900/30">
+              <SectionLabel
+                label="Input & Mapping"
+                help="Settings for MIDI input, keyboard mapping, shortcut visibility, and automatic assignment behavior."
+              />
+              {!canUseInputMapping ? (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+                  <div className="font-semibold">Keyboard, MIDI, and mapping controls require PRO.</div>
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-full border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30 dark:hover:text-red-200"
-                    onClick={() => setShowSignOutConfirm(true)}
-                    disabled={isSigningOut}
+                    size="sm"
+                    className="mt-2 h-8 border-amber-400 bg-white/70 text-amber-800 hover:bg-amber-100 dark:bg-amber-950/20 dark:text-amber-200"
+                    onClick={() => openUpgradeFromSettings('Keyboard, MIDI, and mapping controls require PRO.')}
                   >
-                    <LogOut className="w-4 h-4 mr-2" />
-                    {isSigningOut ? 'Signing out...' : 'Sign Out'}
+                    Upgrade
                   </Button>
                 </div>
+              ) : (
+                <>
+                  {!midiSupported && (
+                    <p className="text-xs text-red-500">Web MIDI not supported in this browser.</p>
+                  )}
+                  {midiSupported && (
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <FieldLabel label="Enable MIDI Input" />
+                      </div>
+                      <Switch checked={midiEnabled} onCheckedChange={onToggleMidiEnabled} disabled={!midiSupported} />
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <FieldLabel label="Enable Keyboard Mapping" />
+                    </div>
+                    <Switch checked={keyboardMappingEnabled} onCheckedChange={onToggleKeyboardMappingEnabled} />
+                  </div>
+                  {keyboardMappingEnabled && (
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <FieldLabel label="Hide Keyboard Shortcut" />
+                      </div>
+                      <Switch checked={hideShortcutLabels} onCheckedChange={onToggleHideShortcutLabels} />
+                    </div>
+                  )}
+                  {!keyboardMappingEnabled && (
+                    <div className="rounded-md border border-dashed px-3 py-2 text-[11px] text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                      Keyboard shortcut labels stay hidden while keyboard mapping is disabled.
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <FieldLabel label="Auto Pad & Bank Mapping" help="Fills missing default keyboard mappings on new, imported, or duplicated content without overwriting assignments that already exist." />
+                    </div>
+                    <Switch checked={autoPadBankMapping} onCheckedChange={onToggleAutoPadBankMapping} />
+                  </div>
+                  {midiSupported && midiEnabled && midiAccessGranted && (
+                    <div className="space-y-2 border-t pt-3 border-gray-200 dark:border-gray-700">
+                      <div className="text-[10px] text-gray-500">
+                        Backend: {midiBackend === 'native' ? 'Native MIDI' : 'Web MIDI'}
+                        {!midiOutputSupported && (
+                          <span className="ml-2 text-red-500">LED output not available</span>
+                        )}
+                      </div>
+                      {midiError && <p className="text-xs text-red-500">{midiError}</p>}
+                      <div className="space-y-1">
+                        <FieldLabel label="MIDI Input" help="Choose which MIDI input device this app listens to." className="text-xs" />
+                        <Select
+                          value={midiSelectedInputId || ''}
+                          onValueChange={(value) => onSelectMidiInput(value || null)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select device" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {midiInputs.length === 0 && (
+                              <SelectItem value="none" disabled>
+                                No MIDI inputs
+                              </SelectItem>
+                            )}
+                            {midiInputs.map((input) => (
+                              <SelectItem key={input.id} value={input.id}>
+                                {input.name || input.id}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <FieldLabel label="Device Profile" help="Selects an output profile for devices that support MIDI feedback such as pad lights. Auto-detect tries to choose the best match." className="text-xs" />
+                        <Select
+                          value={midiDeviceProfileId || '__auto__'}
+                          onValueChange={(value) => onSelectMidiDeviceProfile(value === '__auto__' ? null : value)}
+                          disabled={!midiOutputSupported}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Auto-detect" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__auto__">Auto-detect</SelectItem>
+                            {midiDeviceProfiles.map((profile) => (
+                              <SelectItem key={profile.id} value={profile.id}>
+                                {profile.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
-            </>
+            </div>
           )}
-          {isAuthenticated && canUseSystemShortcuts && activePanel === 'system' && (
+          {!canUseSystemShortcuts && activePanel === 'controls' && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+              <div className="font-semibold">System shortcuts require PRO.</div>
+              <p className="mt-1">Upgrade to map global actions such as stop all, mixer, edit mode, navigation, upload, and import.</p>
+              <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings('System shortcuts require PRO.')}>
+                Upgrade
+              </Button>
+            </div>
+          )}
+          {isAuthenticated && canUseSystemShortcuts && activePanel === 'controls' && (
             <div className="rounded-lg border p-3 space-y-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <SectionLabel
@@ -2216,7 +2513,16 @@ export function AppSettingsDialog({
 
             </div>
           )}
-          {isAuthenticated && canUseChannelShortcuts && activePanel === 'channels' && (
+          {!canUseChannelShortcuts && activePanel === 'controls' && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+              <div className="font-semibold">Channel deck mappings require PRO.</div>
+              <p className="mt-1">Upgrade to map deck stop, volume, transport, load controls, and hotcues.</p>
+              <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings('Channel deck mappings require PRO.')}>
+                Upgrade
+              </Button>
+            </div>
+          )}
+          {isAuthenticated && canUseChannelShortcuts && activePanel === 'controls' && (
             <div className="rounded-lg border p-3 space-y-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <SectionLabel
@@ -2237,7 +2543,7 @@ export function AppSettingsDialog({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {Array.from({ length: 7 }, (_, idx) => idx + 2).map((count) => (
+                        {deckChannelOptions.map((count) => (
                           <SelectItem key={`channel-count-${count}`} value={String(count)}>
                             {count}
                           </SelectItem>
@@ -2471,8 +2777,269 @@ export function AppSettingsDialog({
               </div>
             </div>
           )}
+          {isAuthenticated && activePanel === 'account' && (
+            <div className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <div className="rounded-lg border p-3 bg-gray-50/60 dark:bg-gray-900/30">
+                  <div className="text-xs uppercase tracking-wide text-gray-500">User</div>
+                  <div className="font-medium">{displayName}</div>
+                </div>
+                <div className="rounded-lg border p-3 bg-gray-50/60 dark:bg-gray-900/30">
+                  <div className="text-xs uppercase tracking-wide text-gray-500">Tier</div>
+                  <div className="font-medium">{accountTierLabel}</div>
+                </div>
+                <div className="rounded-lg border p-3 bg-gray-50/60 dark:bg-gray-900/30">
+                  <div className="text-xs uppercase tracking-wide text-gray-500">Email</div>
+                  <div className="truncate font-medium">{user?.email || '-'}</div>
+                </div>
+              </div>
+
+              {onSignOut && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50/70 p-3 space-y-3 dark:border-gray-700 dark:bg-gray-900/30">
+                  <SectionLabel label="Account Access" />
+
+                  <div className="rounded-md border border-indigo-200 bg-white/80 p-2 space-y-2 dark:border-indigo-900/60 dark:bg-gray-950/30">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Redeem Voucher</div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input
+                        value={voucherCode}
+                        onChange={(event) => {
+                          setVoucherCode(event.target.value);
+                          setVoucherNotice(null);
+                        }}
+                        placeholder="VDJV-XXXXXX-XXXXXX-XXXXXX"
+                        className="h-8 text-xs"
+                        disabled={voucherBusy}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 shrink-0"
+                        onClick={() => void handleRedeemVoucher()}
+                        disabled={voucherBusy || voucherCode.trim().length < 6}
+                      >
+                        {voucherBusy ? 'Checking...' : 'Redeem'}
+                      </Button>
+                    </div>
+                    {voucherNotice && (
+                      <div className={`text-[11px] ${voucherNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'}`}>
+                        {voucherNotice.message}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-md border border-gray-200 bg-white/80 p-2 space-y-2 dark:border-gray-700 dark:bg-gray-950/30">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Display Name</div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input
+                        value={displayNameDraft}
+                        onChange={(event) => {
+                          setDisplayNameDraft(event.target.value);
+                          setDisplayNameNotice(null);
+                        }}
+                        placeholder="Your DJ name"
+                        className="h-8 text-xs"
+                        disabled={displayNameBusy}
+                        maxLength={50}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 shrink-0"
+                        onClick={() => void handleSaveDisplayName()}
+                        disabled={displayNameBusy || displayNameDraft.trim().length < 2 || displayNameDraft.trim() === (profile?.display_name || '').trim()}
+                      >
+                        {displayNameBusy ? 'Saving...' : 'Save'}
+                      </Button>
+                    </div>
+                    {displayNameNotice && (
+                      <div className={`text-[11px] ${displayNameNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'}`}>
+                        {displayNameNotice.message}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-md border border-gray-200 bg-white/80 p-2 space-y-2 dark:border-gray-700 dark:bg-gray-950/30">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Password Security</div>
+                    {isAdmin ? (
+                      <div className="rounded-md border border-amber-300 bg-amber-50/85 p-2 text-[11px] leading-relaxed text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-100">
+                        Admin account security is managed manually. Password changes and account deletion are disabled in app settings.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                          <span className="font-semibold text-gray-700 dark:text-gray-200">{passwordSecurityTitle}.</span> {passwordSecurityDescription}
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          {passwordNotice ? (
+                            <div className={`text-[11px] ${passwordNotice.type === 'success' ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'}`}>
+                              {passwordNotice.message}
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-gray-500">{user?.email || 'Signed-in email required.'}</div>
+                          )}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 shrink-0"
+                            onClick={() => void handleSendPasswordSetupEmail()}
+                            disabled={passwordBusy || !user?.email || passwordResetCooldown > 0}
+                          >
+                            {passwordBusy
+                              ? 'Sending...'
+                              : passwordResetCooldown > 0
+                                ? `${passwordCodeSent ? 'Resend' : 'Send'} in ${passwordResetCooldown}m`
+                                : passwordCodeSent
+                                  ? 'Resend Code'
+                                  : 'Send Security Code'}
+                          </Button>
+                        </div>
+                        {passwordResetCooldown > 0 && (
+                          <div className="rounded-md border border-blue-200 bg-blue-50 p-2 text-[11px] text-blue-700 dark:border-blue-500/40 dark:bg-blue-950/30 dark:text-blue-200">
+                            Please wait {passwordResetCooldown} minute{passwordResetCooldown > 1 ? 's' : ''} before requesting another security code.
+                          </div>
+                        )}
+                        {passwordCodeSent && (
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            {passwordCodeBlockedSeconds > 0 && (
+                              <div className="rounded-md border border-red-200 bg-red-50 p-2 text-[11px] text-red-700 dark:border-red-500/40 dark:bg-red-950/30 dark:text-red-200 sm:col-span-2">
+                                Too many invalid security code attempts. Please wait {Math.ceil(passwordCodeBlockedSeconds / 60)} minute{Math.ceil(passwordCodeBlockedSeconds / 60) > 1 ? 's' : ''} before trying again.
+                              </div>
+                            )}
+                            {passwordCodeBlockedSeconds <= 0 && passwordCodeFailures > 0 && (
+                              <div className="rounded-md border border-yellow-200 bg-yellow-50 p-2 text-[11px] text-yellow-700 dark:border-yellow-500/40 dark:bg-yellow-950/30 dark:text-yellow-100 sm:col-span-2">
+                                Invalid security code attempts: {passwordCodeFailures}/{PASSWORD_RESET_VERIFY_MAX_ATTEMPTS}
+                              </div>
+                            )}
+                            <div className="space-y-1 sm:col-span-2">
+                              <Label htmlFor="settings-password-code" className="text-[11px] font-medium">
+                                Security code
+                              </Label>
+                              <Input
+                                id="settings-password-code"
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                value={passwordCode}
+                                onChange={(event) => {
+                                  setPasswordCode(event.target.value.replace(/\D/g, '').slice(0, 6));
+                                  setPasswordCodeVerified(false);
+                                  setPasswordNotice(null);
+                                }}
+                                placeholder="6-digit code"
+                                className="h-8 text-xs"
+                                disabled={passwordBusy || passwordCodeVerified || passwordCodeBlockedSeconds > 0}
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label htmlFor="settings-new-password" className="text-[11px] font-medium">
+                                New password
+                              </Label>
+                              <Input
+                                id="settings-new-password"
+                                type="password"
+                                autoComplete="new-password"
+                                value={newAccountPassword}
+                                onChange={(event) => {
+                                  setNewAccountPassword(event.target.value);
+                                  setPasswordNotice(null);
+                                }}
+                                placeholder="At least 8 characters"
+                                className="h-8 text-xs"
+                                disabled={passwordBusy}
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label htmlFor="settings-confirm-password" className="text-[11px] font-medium">
+                                Confirm password
+                              </Label>
+                              <Input
+                                id="settings-confirm-password"
+                                type="password"
+                                autoComplete="new-password"
+                                value={confirmAccountPassword}
+                                onChange={(event) => {
+                                  setConfirmAccountPassword(event.target.value);
+                                  setPasswordNotice(null);
+                                }}
+                                placeholder="Repeat password"
+                                className="h-8 text-xs"
+                                disabled={passwordBusy}
+                              />
+                            </div>
+                            <div className="sm:col-span-2 flex justify-end">
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="h-8"
+                                onClick={() => void handleCompletePasswordChange()}
+                                disabled={
+                                  passwordBusy
+                                  || !user?.email
+                                  || passwordCodeBlockedSeconds > 0
+                                  || (!passwordCodeVerified && passwordCode.trim().length < 6)
+                                  || newAccountPassword.length < 8
+                                  || confirmAccountPassword.length < 8
+                                }
+                              >
+                                {passwordBusy ? 'Saving...' : passwordSecurityTitle}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30 dark:hover:text-red-200"
+                    onClick={() => setShowSignOutConfirm(true)}
+                    disabled={isSigningOut}
+                  >
+                    <LogOut className="w-4 h-4 mr-2" />
+                    {isSigningOut ? 'Signing out...' : 'Sign Out'}
+                  </Button>
+                </div>
+              )}
+
+              {!isAdmin && (
+                <div className="rounded-lg border border-red-300 bg-red-50/60 p-3 space-y-2 dark:border-red-900/70 dark:bg-red-950/20">
+                  <SectionLabel
+                    label="Danger Zone"
+                    help="Permanently deletes your VDJV login account and active profile data. Export an account backup first if you want to keep local banks and settings."
+                  />
+                  <p className="text-xs text-red-700 dark:text-red-300">
+                    Delete your account only after exporting anything you need. This action requires extra verification.
+                  </p>
+                  {deleteAccountNotice && (
+                    <div className={`text-xs ${deleteAccountNotice.type === 'success' ? 'text-green-600 dark:text-green-400' : deleteAccountNotice.type === 'info' ? 'text-blue-600 dark:text-blue-300' : 'text-red-600 dark:text-red-300'}`}>
+                      {deleteAccountNotice.message}
+                    </div>
+                  )}
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => {
+                      setDeleteAccountNotice(null);
+                      setShowDeleteAccountConfirm(true);
+                    }}
+                    disabled={backupBusy || isDeletingAccount}
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    {isDeletingAccount ? 'Deleting Account...' : 'Delete Account'}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
           {isAuthenticated && activePanel === 'backup' && (
             <div className="space-y-3">
+              {false && (
               <div className="rounded-lg border p-3 space-y-1 bg-gray-50/60 dark:bg-gray-900/30">
                 <div className="text-xs uppercase tracking-wide text-gray-500">🎧🔥 About Us - VDJV Sampler Pad 🔥🎧</div>
                 <div className="space-y-2 text-xs text-gray-600 dark:text-gray-300">
@@ -2505,6 +3072,7 @@ export function AppSettingsDialog({
                   <p>Thank you for your support, ka-Power! ⚡ More power! 💪🔥</p>
                 </div>
               </div>
+              )}
               {canUseMappingImportExport && (
                 <div className="rounded-lg border p-3 space-y-2">
                 <SectionLabel
@@ -2531,6 +3099,15 @@ export function AppSettingsDialog({
                     onChange={handleImportMappings}
                   />
                 </div>
+                </div>
+              )}
+              {!canUseMappingImportExport && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+                  <div className="font-semibold">Mapping backup requires PRO.</div>
+                  <p className="mt-1">Upgrade to export and import keyboard, MIDI, and mapping setup.</p>
+                  <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings('Mapping backup requires PRO.')}>
+                    Upgrade
+                  </Button>
                 </div>
               )}
 
@@ -2587,6 +3164,16 @@ export function AppSettingsDialog({
                 />
               </div>
               )}
+              {!canUseBackupRepair && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+                  <div className="font-semibold">Account backup and repair require PRO.</div>
+                  <p className="mt-1">Upgrade to export account backups, restore backups, import shared banks, and repair missing media.</p>
+                  <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings('Account backup and repair require PRO.')}>
+                    Upgrade
+                  </Button>
+                </div>
+              )}
+              {false && (
               <div className="rounded-lg border border-red-300 bg-red-50/60 p-3 space-y-2 dark:border-red-900/70 dark:bg-red-950/20">
                 <SectionLabel
                   label="Account Deletion"
@@ -2611,6 +3198,7 @@ export function AppSettingsDialog({
                   {isDeletingAccount ? 'Deleting Account...' : 'Delete Account'}
                 </Button>
               </div>
+              )}
             </div>
           )}
             </div>
@@ -2670,8 +3258,8 @@ export function AppSettingsDialog({
         onConfirm={confirmRestoreBackup}
         theme={theme}
       />
-      <Dialog open={showRecoverModeDialog} onOpenChange={setShowRecoverModeDialog}>
-        <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+      <Dialog open={showRecoverModeDialog} onOpenChange={setShowRecoverModeDialog} useHistory={false}>
+        <DialogContent depth="nested" className="sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Repair from .bank Files</DialogTitle>
           </DialogHeader>
@@ -2707,16 +3295,141 @@ export function AppSettingsDialog({
         onConfirm={confirmSignOut}
         theme={theme}
       />
-      <ConfirmationDialog
+      <Dialog
         open={showDeleteAccountConfirm}
-        onOpenChange={setShowDeleteAccountConfirm}
-        title="Delete Account"
-        description="Permanently delete your VDJV account? This removes your login account and active profile data. Export an account backup first if you need to keep banks, media, settings, or mappings."
-        confirmText={isDeletingAccount ? 'Deleting...' : 'Delete Account'}
-        variant="destructive"
-        onConfirm={confirmDeleteAccount}
-        theme={theme}
-      />
+        useHistory={false}
+        onOpenChange={(nextOpen) => {
+          if (isDeletingAccount) return;
+          setShowDeleteAccountConfirm(nextOpen);
+          if (!nextOpen) {
+            setDeleteAccountPassword('');
+            setDeleteAccountPhrase('');
+            setDeleteAccountAcknowledged(false);
+            setDeleteAccountOtp('');
+            setDeleteAccountNotice(null);
+          }
+        }}
+      >
+        <DialogContent depth="nested" className="max-h-[88vh] max-w-[520px] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Delete Account</DialogTitle>
+            <DialogDescription>
+              This permanently removes your login account and active profile data. Export an account backup first if you need to keep banks, media, settings, or mappings.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            <div className="rounded-lg border border-red-300/70 bg-red-50/85 p-3 text-xs leading-relaxed text-red-700 dark:border-red-500/40 dark:bg-red-950/30 dark:text-red-200">
+              Account deletion cannot be undone. For safety, confirm your active sign-in method and type DELETE before the destructive action is enabled.
+            </div>
+            {usesPasswordAccount ? (
+              <div className="space-y-2">
+                <Label htmlFor="delete-account-password" className="text-xs font-medium">
+                  Current password
+                </Label>
+                <Input
+                  id="delete-account-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={deleteAccountPassword}
+                  onChange={(event) => setDeleteAccountPassword(event.target.value)}
+                  placeholder="Enter your password"
+                  disabled={isDeletingAccount}
+                />
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label htmlFor="delete-account-code" className="text-xs font-medium">
+                    Email delete code
+                  </Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    onClick={requestDeleteAccountOtp}
+                    disabled={deleteAccountOtpBusy || isDeletingAccount || !user?.email}
+                  >
+                    {deleteAccountOtpBusy ? 'Sending...' : 'Send Code'}
+                  </Button>
+                </div>
+                <Input
+                  id="delete-account-code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={deleteAccountOtp}
+                  onChange={(event) => setDeleteAccountOtp(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="6-digit code"
+                  disabled={isDeletingAccount}
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  OAuth accounts use a short-lived email code because there is no local VDJV password to re-check.
+                </p>
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="delete-account-phrase" className="text-xs font-medium">
+                Type DELETE
+              </Label>
+              <Input
+                id="delete-account-phrase"
+                value={deleteAccountPhrase}
+                onChange={(event) => setDeleteAccountPhrase(event.target.value)}
+                placeholder="DELETE"
+                disabled={isDeletingAccount}
+              />
+            </div>
+            <label className="flex items-start gap-3 rounded-lg border border-gray-200 bg-white/70 p-3 text-xs text-gray-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={deleteAccountAcknowledged}
+                onChange={(event) => setDeleteAccountAcknowledged(event.target.checked)}
+                disabled={isDeletingAccount}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 accent-red-600"
+              />
+              <span>I understand this removes my account access and profile data permanently.</span>
+            </label>
+            {deleteAccountNotice && (
+              <div
+                className={`rounded-lg border p-3 text-xs ${
+                  deleteAccountNotice.type === 'success'
+                    ? 'border-green-300 bg-green-50 text-green-700 dark:border-green-500/40 dark:bg-green-950/30 dark:text-green-200'
+                    : deleteAccountNotice.type === 'info'
+                      ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-950/30 dark:text-blue-200'
+                      : 'border-red-300 bg-red-50 text-red-700 dark:border-red-500/40 dark:bg-red-950/30 dark:text-red-200'
+                }`}
+              >
+                {deleteAccountNotice.message}
+              </div>
+            )}
+            <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setShowDeleteAccountConfirm(false);
+                  setDeleteAccountPassword('');
+                  setDeleteAccountPhrase('');
+                  setDeleteAccountAcknowledged(false);
+                  setDeleteAccountOtp('');
+                  setDeleteAccountNotice(null);
+                }}
+                disabled={isDeletingAccount}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={confirmDeleteAccount}
+                disabled={!deleteAccountReady || isDeletingAccount}
+              >
+                {isDeletingAccount ? 'Deleting...' : 'Delete Account'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

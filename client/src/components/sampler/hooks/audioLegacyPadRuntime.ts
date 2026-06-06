@@ -313,6 +313,10 @@ export class AudioLegacyPadRuntime {
       this.host.getAudioInstances().forEach(other => {
         if (other.padId !== instance.padId && other.isPlaying) this.host.stopPadById(other.padId, 'instant');
       });
+    } else if (instance.playbackMode === 'bank_stopper') {
+      this.host.getAudioInstances().forEach(other => {
+        if (other.padId !== instance.padId && other.bankId === instance.bankId && other.isPlaying) this.host.stopPadById(other.padId, 'instant');
+      });
     }
 
     this.stopFadeAutomation(instance);
@@ -352,7 +356,7 @@ export class AudioLegacyPadRuntime {
 
     source.onended = () => {
       if (instance.playToken !== playToken) return;
-      if (instance.playbackMode === 'once' || instance.playbackMode === 'stopper') {
+      if (instance.playbackMode === 'once' || instance.playbackMode === 'stopper' || instance.playbackMode === 'bank_stopper') {
         instance.isPlaying = false;
         instance.progress = 0;
         instance.lastProgressNotify = 0;
@@ -431,6 +435,10 @@ export class AudioLegacyPadRuntime {
     if (instance.playbackMode === 'stopper') {
       this.host.getAudioInstances().forEach(other => {
         if (other.padId !== instance.padId && other.isPlaying) this.host.stopPadById(other.padId, 'instant');
+      });
+    } else if (instance.playbackMode === 'bank_stopper') {
+      this.host.getAudioInstances().forEach(other => {
+        if (other.padId !== instance.padId && other.bankId === instance.bankId && other.isPlaying) this.host.stopPadById(other.padId, 'instant');
       });
     }
 

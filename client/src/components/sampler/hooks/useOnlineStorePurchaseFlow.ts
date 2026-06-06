@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { edgeFunctionUrl } from '@/lib/edge-api';
+import { edgeFunctionUrl, getClientCompatibilityHeaders } from '@/lib/edge-api';
 import { captureProductEvent } from '@/lib/productAnalytics';
 import { optimizeReceiptProofFile, runReceiptOcr } from '@/lib/receipt-ocr';
 import {
@@ -40,6 +40,25 @@ type UseOnlineStorePurchaseFlowArgs = {
     setFormRef: React.Dispatch<React.SetStateAction<string>>;
     setFormNotes: React.Dispatch<React.SetStateAction<string>>;
     setFormProofFile: React.Dispatch<React.SetStateAction<File | null>>;
+};
+
+const asPayloadObject = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+const getPurchaseSubmitErrorMessage = (payload: unknown): string => {
+    const root = asPayloadObject(payload);
+    const data = asPayloadObject(root.data);
+    const errorCode = String(root.error || data.error || '').trim();
+    const serverMessage = String(root.message || data.message || '').trim();
+    if (errorCode === 'PENDING_PURCHASE_LIMIT_REACHED') {
+        if (serverMessage) return serverMessage;
+        const maxPending = Number(root.max_pending ?? data.max_pending ?? 5);
+        return `You already have ${Number.isFinite(maxPending) ? maxPending : 5} pending Store requests. Wait for admin review or use cart checkout.`;
+    }
+    if (errorCode === 'UPDATE_REQUIRED') {
+        return serverMessage || 'Update the app to claim free download promos.';
+    }
+    return serverMessage || errorCode || 'We could not submit your request. Please try again.';
 };
 
 export function useOnlineStorePurchaseFlow({
@@ -191,6 +210,7 @@ export function useOnlineStorePurchaseFlow({
             const res = await fetch(edgeFunctionUrl('store-api', 'purchase-request'), {
                 method: 'POST',
                 headers: {
+                    ...getClientCompatibilityHeaders(),
                     'Content-Type': 'application/json',
                     Authorization: `Bearer ${token}`
                 },
@@ -204,16 +224,17 @@ export function useOnlineStorePurchaseFlow({
                 })
             });
 
-            if (!res.ok) {
-                throw new Error('We could not submit your request. Please try again.');
-            }
             const submitPayload = await res.json().catch(() => ({}));
+            if (!res.ok || submitPayload?.ok === false) {
+                throw new Error(getPurchaseSubmitErrorMessage(submitPayload));
+            }
             const submitData = (submitPayload?.data && typeof submitPayload.data === 'object' ? submitPayload.data : submitPayload) as Record<string, unknown>;
             const requestIds = Array.isArray(submitData.requestIds) ? submitData.requestIds : [];
             const fallbackRequestId = requestIds.length > 0 ? String(requestIds[0]) : '';
             const submitStatus = String(submitData.status || 'pending');
             const isApproved = submitStatus === 'approved';
             const isFreeClaim = Boolean(submitData.free_claim) || allFreePromotionClaim;
+            const promoExpiresAt = typeof submitData.promo_expires_at === 'string' ? submitData.promo_expires_at : '';
             const count = purchaseItems.length;
             const totalPaid = purchaseItems.reduce((sum, item) => {
                 const storeItem = checkoutMode
@@ -253,7 +274,7 @@ export function useOnlineStorePurchaseFlow({
                 submittedAt: new Date().toISOString(),
                 receiptNo: String(submitData.receipt_reference || submitData.batchId || fallbackRequestId || 'Pending verification'),
                 paymentReference: isFreeClaim
-                    ? 'Free promotion claim'
+                    ? (promoExpiresAt ? `Free promotion claim until ${new Date(promoExpiresAt).toLocaleString()}` : 'Free promotion claim')
                     : String(
                         submitData.reference_no ||
                         formRef ||

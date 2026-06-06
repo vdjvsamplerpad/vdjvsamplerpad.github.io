@@ -54,6 +54,14 @@ const ADMIN_STOP_TIMING_LABELS: Record<ConfigurableStopTimingMode, string> = {
   filter: 'Filter Sweep',
 };
 
+const ADMIN_STOP_MODE_LABELS: Record<SamplerAppConfig['uiDefaults']['defaultStopMode'], string> = {
+  instant: 'Instant',
+  fadeout: 'Fade Out',
+  brake: 'Brake',
+  backspin: 'Backspin',
+  filter: 'Filter Sweep',
+};
+
 interface AccountRequestsTabProps {
   theme: AdminDialogTheme;
   panelClass: string;
@@ -261,18 +269,29 @@ interface StoreBannersTabProps {
   bannerLoading: boolean;
   banners: StoreMarketingBanner[];
   dirtyBannerIds: Set<string>;
-  bannerStats: { total: number; active: number; inactive: number; dirty: number };
+  bannerStats: { total: number; active: number; inactive: number; scheduled?: number; expired?: number; dirty: number };
   showInactive: boolean;
   newBannerPreviewUrl: string | null;
   newBannerImageUrl: string;
   newBannerLinkUrl: string;
   newBannerSortOrder: string;
+  newBannerScheduleMode: 'always' | 'scheduled';
+  newBannerStartsAt: string;
+  newBannerEndsAt: string;
+  newBannerTimezone: string;
+  bannerRotationMs: string;
   newBannerHasFile: boolean;
   bannerUploadingIds: Set<string>;
   onShowInactiveChange: (value: boolean) => void;
   onNewBannerImageUrlChange: (value: string) => void;
   onNewBannerLinkUrlChange: (value: string) => void;
   onNewBannerSortOrderChange: (value: string) => void;
+  onNewBannerScheduleModeChange: (value: 'always' | 'scheduled') => void;
+  onNewBannerStartsAtChange: (value: string) => void;
+  onNewBannerEndsAtChange: (value: string) => void;
+  onNewBannerTimezoneChange: (value: string) => void;
+  onBannerRotationMsChange: (value: string) => void;
+  onSaveBannerSettings: () => void;
   onNewBannerFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onClearNewBannerFile: () => void;
   onCreateBanner: () => void;
@@ -414,6 +433,8 @@ interface DefaultBankTabProps {
 const formatAutomationLabel = (value: string | null | undefined): string => {
   const normalized = String(value || '').trim();
   if (!normalized) return '-';
+  if (normalized === 'not_image_proof') return 'No OCR Proof';
+  if (normalized === 'reference_mismatch') return 'Reference Mismatch';
   return normalized.replace(/_/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
 };
 
@@ -497,11 +518,6 @@ const formatAccountTierLabel = (value: string | null | undefined): string => {
   return normalized ? normalized.replace(/_/g, ' ').toUpperCase() : '-';
 };
 
-const isManualWalletPaymentChannel = (value: string | null | undefined): boolean => {
-  const normalized = String(value || '').trim().toLowerCase();
-  return normalized === 'gcash_manual' || normalized === 'maya_manual';
-};
-
 const formatHourLabel = (value: string): string => {
   const parsed = Number(value || 0);
   const normalized = Number.isFinite(parsed) ? Math.max(0, Math.min(23, Math.floor(parsed))) : 0;
@@ -527,6 +543,7 @@ const REQUEST_AUTOMATION_OPTIONS: Array<{ value: RequestAutomationFilter; label:
   { value: 'manual_review_disabled', label: 'Manual Review Disabled' },
   { value: 'outside_window', label: 'Outside Window' },
   { value: 'missing_reference', label: 'Missing Reference' },
+  { value: 'reference_mismatch', label: 'Reference Mismatch' },
   { value: 'missing_amount', label: 'Missing Amount' },
   { value: 'missing_recipient_number', label: 'Missing Recipient' },
   { value: 'duplicate_reference', label: 'Duplicate Reference' },
@@ -534,7 +551,7 @@ const REQUEST_AUTOMATION_OPTIONS: Array<{ value: RequestAutomationFilter; label:
   { value: 'amount_mismatch', label: 'Amount Mismatch' },
   { value: 'ocr_failed', label: 'OCR Failed' },
   { value: 'approval_error', label: 'Approval Error' },
-  { value: 'not_image_proof', label: 'Not Image Proof' },
+  { value: 'not_image_proof', label: 'No OCR Proof' },
 ];
 
 const REQUEST_OCR_STATUS_OPTIONS: Array<{ value: RequestOcrStatusFilter; label: string }> = [
@@ -560,6 +577,15 @@ const getRequestStatusOptions = (scope: 'pending' | 'history'): Array<{ value: R
       { value: 'rejected', label: 'Rejected' },
     ]
 );
+
+type AccountRequestTypeFilter = 'all' | 'legacy_registration' | 'upgrade_pro' | 'upgrade_pro_max';
+
+const ACCOUNT_REQUEST_TYPE_OPTIONS: Array<{ value: AccountRequestTypeFilter; label: string }> = [
+  { value: 'all', label: 'All Types' },
+  { value: 'upgrade_pro', label: 'UPGRADE PRO' },
+  { value: 'upgrade_pro_max', label: 'UPGRADE PRO MAX' },
+  { value: 'legacy_registration', label: 'LEGACY REGISTRATION' },
+];
 
 function RequestFilterBar({
   theme,
@@ -653,6 +679,52 @@ const formatCountdownRemaining = (expiresAt: string | null | undefined, nowMs: n
   if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m remaining`;
   if (hours > 0) return `${hours}h remaining`;
   return `${minutes}m remaining`;
+};
+
+const toDateTimeLocalInputValue = (value: string | null | undefined): string => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return '';
+  const adjusted = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60 * 1000);
+  return adjusted.toISOString().slice(0, 16);
+};
+
+const fromDateTimeLocalInputValue = (value: string): string | null => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed.toISOString();
+};
+
+const formatBannerScheduleStatus = (banner: StoreMarketingBanner): string => {
+  switch (banner.status) {
+    case 'permanent':
+      return 'Permanent';
+    case 'scheduled':
+      return 'Scheduled';
+    case 'active':
+      return 'Live';
+    case 'expired':
+      return 'Expired';
+    case 'inactive':
+    default:
+      return 'Inactive';
+  }
+};
+
+const bannerStatusToneClass = (banner: StoreMarketingBanner, isDark: boolean): string => {
+  switch (banner.status) {
+    case 'permanent':
+    case 'active':
+      return isDark ? 'border-emerald-700/60 text-emerald-300 bg-emerald-950/20' : 'border-emerald-300 text-emerald-700 bg-emerald-50';
+    case 'scheduled':
+      return isDark ? 'border-blue-700/60 text-blue-300 bg-blue-950/20' : 'border-blue-300 text-blue-700 bg-blue-50';
+    case 'expired':
+      return isDark ? 'border-orange-700/60 text-orange-300 bg-orange-950/20' : 'border-orange-300 text-orange-700 bg-orange-50';
+    case 'inactive':
+    default:
+      return isDark ? 'border-amber-700/60 text-amber-300 bg-amber-950/20' : 'border-amber-300 text-amber-700 bg-amber-50';
+  }
 };
 
 function InlineCopyButton({
@@ -1360,16 +1432,16 @@ export function SamplerDefaultsTab({
   };
   const samplerStats = [
     { label: 'Channels', value: `${config.uiDefaults.defaultChannelCountMobile}/${config.uiDefaults.defaultChannelCountDesktop}`, detail: 'Mobile / desktop defaults', toneClass: 'text-cyan-500' },
-    { label: 'Owned Quota', value: config.quotaDefaults.ownedBankQuota, detail: 'Owned bank default quota', toneClass: 'text-violet-500' },
-    { label: 'Pad Cap', value: config.quotaDefaults.ownedBankPadCap, detail: 'Owned bank pad cap', toneClass: 'text-amber-500' },
-    { label: 'Audio Limit', value: `${Math.round(config.audioLimits.maxPadAudioBytes / 1024 / 1024)} MB`, detail: `${Math.round(config.audioLimits.maxPadAudioDurationMs / 1000)}s max duration`, toneClass: 'text-fuchsia-500' },
+    { label: 'Stop Mode', value: ADMIN_STOP_MODE_LABELS[config.uiDefaults.defaultStopMode] || config.uiDefaults.defaultStopMode, detail: 'Default stop action', toneClass: 'text-violet-500' },
+    { label: 'Max Audio', value: `${Math.round(config.audioLimits.maxPadAudioBytes / 1024 / 1024)} MB`, detail: 'Per pad upload size', toneClass: 'text-amber-500' },
+    { label: 'Max Duration', value: `${Math.round(config.audioLimits.maxPadAudioDurationMs / 1000)}s`, detail: 'Per pad upload length', toneClass: 'text-fuchsia-500' },
   ];
 
   return (
     <AdminPageScaffold
       panelClass={panelClass}
       title="Sampler Defaults"
-      description="Set first-run defaults for the sampler UI, new banks, new pads, quotas, shortcuts, and upload limits."
+      description="Set first-run defaults for the sampler UI, new banks, new pads, shortcuts, and upload limits."
       actions={(
         <>
           <Button size="sm" className="rounded-[14px]" variant="outline" onClick={() => setResetConfirmOpen(true)} disabled={loading || saving}>
@@ -1540,7 +1612,8 @@ export function SamplerDefaultsTab({
               <select value={config.padDefaults.defaultPlaybackMode} onChange={(event) => onConfigChange({ ...config, padDefaults: { ...config.padDefaults, defaultPlaybackMode: event.target.value as SamplerAppConfig['padDefaults']['defaultPlaybackMode'] } })} className={`w-full h-10 rounded-md border px-3 text-sm ${isDark ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}>
                 <option value="once">Once</option>
                 <option value="loop">Loop</option>
-                <option value="stopper">Stopper</option>
+                <option value="bank_stopper">Bank Stopper</option>
+                <option value="stopper">All Stopper</option>
               </select>
             </div>
             <div className="space-y-1">
@@ -1576,27 +1649,15 @@ export function SamplerDefaultsTab({
 
         <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
           <div>
-            <div className="text-sm font-semibold">Quota and Limits</div>
-            <div className={`text-xs ${mutedText}`}>Used as defaults for new accounts and upload admission checks.</div>
+            <div className="text-sm font-semibold">Upload Limits</div>
+            <div className={`text-xs ${mutedText}`}>Account quotas now come from Tier Config. These limits only control per-pad audio admission.</div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>Owned Bank Quota</Label>
-              <Input type="number" min={1} max={500} value={config.quotaDefaults.ownedBankQuota} onChange={(event) => onConfigChange({ ...config, quotaDefaults: { ...config.quotaDefaults, ownedBankQuota: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
-            <div className="space-y-1">
-              <Label>Owned Bank Pad Cap</Label>
-              <Input type="number" min={1} max={256} value={config.quotaDefaults.ownedBankPadCap} onChange={(event) => onConfigChange({ ...config, quotaDefaults: { ...config.quotaDefaults, ownedBankPadCap: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
-            <div className="space-y-1">
-              <Label>Device Total Bank Cap</Label>
-              <Input type="number" min={10} max={1000} value={config.quotaDefaults.deviceTotalBankCap} onChange={(event) => onConfigChange({ ...config, quotaDefaults: { ...config.quotaDefaults, deviceTotalBankCap: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
             <div className="space-y-1">
               <Label>Max Pad Audio MB</Label>
               <Input type="number" min={1} max={500} value={Math.round(config.audioLimits.maxPadAudioBytes / 1024 / 1024)} onChange={(event) => onConfigChange({ ...config, audioLimits: { ...config.audioLimits, maxPadAudioBytes: Math.max(1, Number(event.target.value || 0)) * 1024 * 1024 } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
             </div>
-            <div className="space-y-1 sm:col-span-2">
+            <div className="space-y-1">
               <Label>Max Pad Audio Duration Seconds</Label>
               <Input type="number" min={10} max={7200} value={Math.round(config.audioLimits.maxPadAudioDurationMs / 1000)} onChange={(event) => onConfigChange({ ...config, audioLimits: { ...config.audioLimits, maxPadAudioDurationMs: Math.max(10, Number(event.target.value || 0)) * 1000 } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
             </div>
@@ -1865,12 +1926,14 @@ export function AccountRequestsTab({
 }: AccountRequestsTabProps) {
   const [selectedRequest, setSelectedRequest] = React.useState<AdminAccountRegistrationRequest | null>(null);
   const [refundRequest, setRefundRequest] = React.useState<AdminAccountRegistrationRequest | null>(null);
+  const [requestTypeFilter, setRequestTypeFilter] = React.useState<AccountRequestTypeFilter>('all');
   const [upgradeRows, setUpgradeRows] = React.useState<AdminAccountUpgradeRequest[]>([]);
   const [upgradePendingCount, setUpgradePendingCount] = React.useState(0);
   const [upgradeHistoryCount, setUpgradeHistoryCount] = React.useState(0);
   const [upgradeLoading, setUpgradeLoading] = React.useState(false);
   const [selectedUpgradeRequest, setSelectedUpgradeRequest] = React.useState<AdminAccountUpgradeRequest | null>(null);
   const [rejectUpgradeRequest, setRejectUpgradeRequest] = React.useState<AdminAccountUpgradeRequest | null>(null);
+  const [refundUpgradeRequest, setRefundUpgradeRequest] = React.useState<AdminAccountUpgradeRequest | null>(null);
   const [rejectUpgradeMessage, setRejectUpgradeMessage] = React.useState('');
   const [upgradeBusyId, setUpgradeBusyId] = React.useState<string | null>(null);
 
@@ -1895,9 +1958,9 @@ export function AccountRequestsTab({
         if (filter === 'history' && row.status === 'pending') return false;
         if (filter === 'pending' && row.status !== 'pending') return false;
         if (channelFilter !== 'all' && row.payment_channel !== channelFilter) return false;
-        if (decisionFilter !== 'all') return false;
-        if (automationFilter !== 'all') return false;
-        if (ocrStatusFilter !== 'all') return false;
+        if (decisionFilter !== 'all' && row.decision_source !== decisionFilter) return false;
+        if (automationFilter !== 'all' && row.automation_result !== automationFilter) return false;
+        if (ocrStatusFilter !== 'all' && row.ocr_status !== ocrStatusFilter) return false;
         return true;
       });
       setUpgradeRows(filteredRows);
@@ -1941,6 +2004,32 @@ export function AccountRequestsTab({
     }
   };
 
+  const handleUpgradeRefund = async (request: AdminAccountUpgradeRequest) => {
+    setUpgradeBusyId(request.id);
+    try {
+      await adminApi.accountUpgradeDecision(request.id, 'refund');
+      pushNotice({ variant: 'success', message: 'Upgrade request refunded from revenue. Account tier stays active.' });
+      setSelectedUpgradeRequest(null);
+      setRefundUpgradeRequest(null);
+      await Promise.all([loadUpgradeRequests(), onRefresh()]);
+    } catch (error) {
+      pushNotice({ variant: 'error', message: error instanceof Error ? error.message : 'Upgrade refund failed.' });
+    } finally {
+      setUpgradeBusyId(null);
+    }
+  };
+
+  const visibleLegacyRows = requestTypeFilter === 'all' || requestTypeFilter === 'legacy_registration'
+    ? rows
+    : [];
+  const visibleUpgradeRows = upgradeRows.filter((row) => {
+    if (requestTypeFilter === 'all') return true;
+    if (requestTypeFilter === 'upgrade_pro') return row.target_tier === 'pro';
+    if (requestTypeFilter === 'upgrade_pro_max') return row.target_tier === 'pro_max';
+    return false;
+  });
+  const visibleAccountRequestCount = visibleLegacyRows.length + visibleUpgradeRows.length;
+
   const accountPendingTotal = pendingCount + upgradePendingCount;
   const accountHistoryTotal = historyCount + upgradeHistoryCount;
   const accountRowsLoading = loading || upgradeLoading;
@@ -1973,7 +2062,7 @@ export function AccountRequestsTab({
             scope={filter}
             search={search}
             searchPlaceholder="Search requests..."
-            resultLabel={`${rows.length + upgradeRows.length} results`}
+            resultLabel={`${visibleAccountRequestCount} results`}
             statusFilter={statusFilter}
             channelFilter={channelFilter}
             decisionFilter={decisionFilter}
@@ -1985,12 +2074,27 @@ export function AccountRequestsTab({
             onDecisionFilterChange={onDecisionFilterChange}
             onAutomationFilterChange={onAutomationFilterChange}
             onOcrStatusFilterChange={onOcrStatusFilterChange}
+            extraMoreFilters={(
+              <select
+                value={requestTypeFilter}
+                onChange={(event) => {
+                  setRequestTypeFilter(event.target.value as AccountRequestTypeFilter);
+                  onPageChange(1);
+                }}
+                className={`h-9 w-full rounded-md border px-3 text-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+              >
+                {ACCOUNT_REQUEST_TYPE_OPTIONS.map((option) => (
+                  <option key={`account-request-type-${option.value}`} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            )}
             activeFilterCount={
               Number(statusFilter !== 'all')
               + Number(channelFilter !== 'all')
               + Number(decisionFilter !== 'all')
               + Number(automationFilter !== 'all')
               + Number(ocrStatusFilter !== 'all')
+              + Number(requestTypeFilter !== 'all')
               + Number(Boolean(search.trim()))
             }
             onClearFilters={() => {
@@ -1999,7 +2103,9 @@ export function AccountRequestsTab({
               onDecisionFilterChange('all');
               onAutomationFilterChange('all');
               onOcrStatusFilterChange('all');
+              setRequestTypeFilter('all');
               onSearchChange('');
+              onPageChange(1);
             }}
           />
         </div>
@@ -2011,11 +2117,11 @@ export function AccountRequestsTab({
       ) : (
         <>
         <div className="space-y-2">
-          {rows.length === 0 && upgradeRows.length === 0 ? (
+          {visibleAccountRequestCount === 0 ? (
               <p className="text-center py-8 opacity-50 text-sm">No {filter} account or upgrade requests.</p>
             ) : (
               <>
-              {upgradeRows.map((req) => (
+              {visibleUpgradeRows.map((req) => (
                 <div key={`upgrade-${req.id}`} className={`p-3 rounded-lg border ${cardClass}`}>
                   <div className="flex justify-between items-start gap-3">
                     <div className="min-w-0 flex-1">
@@ -2042,8 +2148,11 @@ export function AccountRequestsTab({
                         <div><span className="opacity-70">Date:</span> {new Date(req.created_at).toLocaleString()}</div>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        <RequestSummaryChip theme={theme} label="Decision" value={req.status === 'pending' ? 'Pending' : 'Manual'} tone="decision" />
+                        <RequestSummaryChip theme={theme} label="Decision" value={req.decision_source ? formatAutomationLabel(req.decision_source) : 'Pending'} tone="decision" />
+                        {req.automation_result && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automation_result)} tone="auto" />}
+                        {req.ocr_status && req.ocr_status !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocr_status)} tone="ocr" />}
                         {req.status !== 'pending' && <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />}
+                        {req.is_refunded && <RequestSummaryChip theme={theme} label="Refund" value="Refunded" tone="ocr" />}
                         <RequestSummaryChip theme={theme} label="Quote" value={`${formatRequestMoney(req.base_price_php_snapshot)} - ${formatRequestMoney(req.store_credit_php_snapshot)}`} tone="default" />
                       </div>
                       {req.status === 'rejected' && req.rejection_message && (
@@ -2060,8 +2169,8 @@ export function AccountRequestsTab({
                   </div>
                 </div>
               ))}
-              {rows.map((req) => {
-              const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
+              {visibleLegacyRows.map((req) => {
+              const suppressOcrDetails = false;
               const amountLabel = typeof req.ocr_amount_php === 'number'
                 ? formatOcrAmount(req.ocr_amount_php)
                 : '-';
@@ -2119,7 +2228,7 @@ export function AccountRequestsTab({
               {selectedRequest ? (
                 (() => {
                   const req = selectedRequest;
-                  const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
+                  const suppressOcrDetails = false;
                   return (
                     <>
                       <DialogHeader>
@@ -2267,7 +2376,11 @@ export function AccountRequestsTab({
                             </div>
                             <div className="flex flex-wrap gap-1.5">
                               <RequestSummaryChip theme={theme} label="Type" value={`Upgrade ${formatAccountTierLabel(req.target_tier)}`} tone="auto" />
+                              <RequestSummaryChip theme={theme} label="Decision" value={req.decision_source ? formatAutomationLabel(req.decision_source) : 'Pending'} tone="decision" />
+                              {req.automation_result && <RequestSummaryChip theme={theme} label="Auto" value={formatAutomationLabel(req.automation_result)} tone="auto" />}
+                              {req.ocr_status && req.ocr_status !== 'detected' && <RequestSummaryChip theme={theme} label="OCR" value={formatAutomationLabel(req.ocr_status)} tone="ocr" />}
                               <RequestSummaryChip theme={theme} label="Status" value={req.status} tone="status" />
+                              {req.is_refunded && <RequestSummaryChip theme={theme} label="Refund" value="Refunded" tone="ocr" />}
                             </div>
                           </div>
                         </div>
@@ -2298,6 +2411,7 @@ export function AccountRequestsTab({
                                 </div>
                               )}
                               {req.reviewed_at && <div className="sm:col-span-2"><span className="opacity-70">Reviewed:</span> {new Date(req.reviewed_at).toLocaleString()}{req.reviewed_by ? ` by ${req.reviewed_by.slice(0, 8)}...` : ''}</div>}
+                              {req.is_refunded && <div className="sm:col-span-2"><span className="opacity-70">Refunded:</span> {req.refunded_at ? new Date(req.refunded_at).toLocaleString() : '-'}{req.refunded_by ? ` by ${req.refunded_by.slice(0, 8)}...` : ''}</div>}
                               {req.notes && <div className="sm:col-span-2"><span className="opacity-70">Notes:</span> {req.notes}</div>}
                               {req.status === 'rejected' && req.rejection_message && <div className="sm:col-span-2"><span className="opacity-70">Reject Reason:</span> {req.rejection_message}</div>}
                             </div>
@@ -2305,6 +2419,29 @@ export function AccountRequestsTab({
                           <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
                             <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Proof</div>
                             {req.proof_path ? <ProofImagePreview path={req.proof_path} /> : <div className="text-sm opacity-60">No proof image</div>}
+                          </div>
+                        </div>
+                        <div className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+                          <div className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">OCR</div>
+                          <div className={`grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
+                            {req.ocr_reference_no && (
+                              <div>
+                                <span className="opacity-70">OCR Ref:</span>{' '}
+                                <CopyableValue value={req.ocr_reference_no} label="upgrade ocr reference" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                              </div>
+                            )}
+                            {req.ocr_recipient_number && (
+                              <div>
+                                <span className="opacity-70">OCR Wallet:</span>{' '}
+                                <CopyableValue value={req.ocr_recipient_number} label="upgrade ocr wallet number" valueClassName="font-mono text-inherit" buttonClassName="h-5 w-5" />
+                              </div>
+                            )}
+                            {typeof req.ocr_amount_php === 'number' && <div><span className="opacity-70">OCR Amount:</span> {formatOcrAmount(req.ocr_amount_php)}</div>}
+                            {req.ocr_provider && <div><span className="opacity-70">OCR Provider:</span> {req.ocr_provider}</div>}
+                            {req.ocr_status && <div><span className="opacity-70">OCR Status:</span> {formatAutomationLabel(req.ocr_status)}</div>}
+                            {req.ocr_error_code && <div className="sm:col-span-2"><span className="opacity-70">OCR Error:</span> {formatOcrErrorLabel(req.ocr_error_code)} <span className="opacity-60 font-mono text-[11px]">({req.ocr_error_code})</span></div>}
+                            {req.ocr_scanned_at && <div className="sm:col-span-2"><span className="opacity-70">OCR Scanned:</span> {new Date(req.ocr_scanned_at).toLocaleString()}</div>}
+                            {!req.ocr_status && !req.automation_result && <div className="sm:col-span-2 opacity-60">No OCR scan was recorded for this request.</div>}
                           </div>
                         </div>
                       </div>
@@ -2330,9 +2467,20 @@ export function AccountRequestsTab({
                             </Button>
                           </>
                         ) : (
-                          <Button variant="outline" onClick={() => setSelectedUpgradeRequest(null)}>
-                            Close
-                          </Button>
+                          <>
+                            {req.status === 'approved' && !req.is_refunded && (
+                              <Button
+                                variant="destructive"
+                                disabled={upgradeBusyId === req.id}
+                                onClick={() => setRefundUpgradeRequest(req)}
+                              >
+                                Refund
+                              </Button>
+                            )}
+                            <Button variant="outline" onClick={() => setSelectedUpgradeRequest(null)}>
+                              Close
+                            </Button>
+                          </>
                         )}
                       </DialogFooter>
                     </>
@@ -2379,6 +2527,18 @@ export function AccountRequestsTab({
               ) : null}
             </DialogContent>
           </Dialog>
+          <ConfirmationDialog
+            open={refundUpgradeRequest !== null}
+            onOpenChange={(open) => { if (!open) setRefundUpgradeRequest(null); }}
+            title="Refund Account Upgrade"
+            description="This only deducts the upgrade payment from revenue. The user keeps the current tier access."
+            confirmText="Confirm Refund"
+            variant="destructive"
+            onConfirm={async () => {
+              if (!refundUpgradeRequest) return;
+              await handleUpgradeRefund(refundUpgradeRequest);
+            }}
+          />
           <ConfirmationDialog
             open={refundRequest !== null}
             onOpenChange={(open) => { if (!open) setRefundRequest(null); }}
@@ -2511,7 +2671,7 @@ export function StoreRequestsTab({
             {rows.length === 0 ? (
               <p className="text-center py-8 opacity-50 text-sm">No {filter} purchase requests.</p>
             ) : rows.map((req) => {
-              const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
+              const suppressOcrDetails = false;
               return (
               <div key={req.id} className={`p-3 rounded-lg border ${cardClass}`}>
                 <div className="flex justify-between items-start gap-3">
@@ -2569,7 +2729,7 @@ export function StoreRequestsTab({
               {selectedRequest ? (
                 (() => {
                   const req = selectedRequest;
-                  const suppressOcrDetails = isManualWalletPaymentChannel(req.payment_channel);
+                  const suppressOcrDetails = false;
                   return (
                     <>
                       <DialogHeader>
@@ -2948,7 +3108,7 @@ export function InstallerRequestsTab({
             {rows.length === 0 ? (
               <p className="text-center py-8 opacity-50 text-sm">No {filter} installer requests.</p>
             ) : rows.map((req) => {
-              const suppressOcrDetails = isManualWalletPaymentChannel(req.paymentChannel);
+              const suppressOcrDetails = false;
               const firstItem = req.items[0];
               return (
                 <div key={req.bundleKey} className={`p-3 rounded-lg border ${cardClass}`}>
@@ -3002,7 +3162,7 @@ export function InstallerRequestsTab({
           {selectedRequest ? (
             (() => {
               const req = selectedRequest;
-              const suppressOcrDetails = isManualWalletPaymentChannel(req.paymentChannel);
+              const suppressOcrDetails = false;
               return (
                 <>
                   <DialogHeader>
@@ -4934,12 +5094,23 @@ export function StoreBannersTab({
   newBannerImageUrl,
   newBannerLinkUrl,
   newBannerSortOrder,
+  newBannerScheduleMode,
+  newBannerStartsAt,
+  newBannerEndsAt,
+  newBannerTimezone,
+  bannerRotationMs,
   newBannerHasFile,
   bannerUploadingIds,
   onShowInactiveChange,
   onNewBannerImageUrlChange,
   onNewBannerLinkUrlChange,
   onNewBannerSortOrderChange,
+  onNewBannerScheduleModeChange,
+  onNewBannerStartsAtChange,
+  onNewBannerEndsAtChange,
+  onNewBannerTimezoneChange,
+  onBannerRotationMsChange,
+  onSaveBannerSettings,
   onNewBannerFileChange,
   onClearNewBannerFile,
   onCreateBanner,
@@ -4974,8 +5145,8 @@ export function StoreBannersTab({
           <AdminStatsStrip
             items={[
               { label: 'Total', value: bannerStats.total, detail: 'All banners', toneClass: 'text-gray-500' },
-              { label: 'Active', value: bannerStats.active, detail: 'Live banners', toneClass: 'text-emerald-500' },
-              { label: 'Inactive', value: bannerStats.inactive, detail: 'Hidden banners', toneClass: 'text-amber-500' },
+              { label: 'Live Now', value: bannerStats.active, detail: 'Visible in store', toneClass: 'text-emerald-500' },
+              { label: 'Scheduled', value: bannerStats.scheduled || 0, detail: 'Waiting for window', toneClass: 'text-blue-500' },
               { label: 'Unsaved', value: bannerStats.dirty, detail: 'Draft edits', toneClass: 'text-blue-500' },
             ]}
           />
@@ -5048,6 +5219,36 @@ export function StoreBannersTab({
               </div>
             </div>
 
+            <div className={`rounded-xl border p-4 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
+              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold">Banner Settings</div>
+                  <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+                    Controls the autoplay delay for the Bank Store banner slider.
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <div className="space-y-1">
+                    <Label>Rotation (ms)</Label>
+                    <Input
+                      type="number"
+                      min={3000}
+                      max={15000}
+                      step={500}
+                      value={bannerRotationMs}
+                      onChange={(event) => onBannerRotationMsChange(event.target.value)}
+                      placeholder="5000"
+                      className={`h-9 w-full sm:w-[160px] text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`}
+                    />
+                  </div>
+                  <Button type="button" size="sm" variant="success" onClick={onSaveBannerSettings} disabled={loading || bannerLoading} className="h-9 px-4 text-xs">
+                    <Save className="w-3.5 h-3.5 mr-1" />
+                    Save Settings
+                  </Button>
+                </div>
+              </div>
+            </div>
+
             <div className={`rounded-xl border p-4 space-y-3 ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-white'}`}>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="text-sm font-semibold">Existing Banners</div>
@@ -5083,11 +5284,8 @@ export function StoreBannersTab({
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <div className="text-xs font-mono opacity-70">{banner.id.slice(0, 8)}...</div>
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${banner.is_active
-                            ? (isDark ? 'border-emerald-700/60 text-emerald-300 bg-emerald-950/20' : 'border-emerald-300 text-emerald-700 bg-emerald-50')
-                            : (isDark ? 'border-amber-700/60 text-amber-300 bg-amber-950/20' : 'border-amber-300 text-amber-700 bg-amber-50')
-                          }`}>
-                            {banner.is_active ? 'Active' : 'Inactive'}
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${bannerStatusToneClass(banner, isDark)}`}>
+                            {formatBannerScheduleStatus(banner)}
                           </span>
                           {isDirty ? (
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${isDark ? 'border-blue-700/60 text-blue-300 bg-blue-950/20' : 'border-blue-300 text-blue-700 bg-blue-50'}`}>
@@ -5132,6 +5330,60 @@ export function StoreBannersTab({
                                 <Input value={banner.link_url || ''} onChange={(event) => onUpdateBanner(banner.id, { link_url: event.target.value || null })} placeholder="Optional destination" className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
                               </div>
                             </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-[180px_minmax(0,1fr)] gap-3">
+                              <div className="space-y-1">
+                                <Label>Schedule</Label>
+                                <select
+                                  value={banner.schedule_mode || 'always'}
+                                  onChange={(event) => {
+                                    const nextMode = event.target.value === 'scheduled' ? 'scheduled' : 'always';
+                                    onUpdateBanner(banner.id, {
+                                      schedule_mode: nextMode,
+                                      starts_at: nextMode === 'scheduled' ? (banner.starts_at || null) : null,
+                                      ends_at: nextMode === 'scheduled' ? (banner.ends_at || null) : null,
+                                      timezone: banner.timezone || 'Asia/Manila',
+                                    });
+                                  }}
+                                  className={`h-9 w-full rounded-md border px-3 text-xs ${isDark ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+                                >
+                                  <option value="always">Always / Permanent</option>
+                                  <option value="scheduled">Scheduled Window</option>
+                                </select>
+                              </div>
+                              <div className="space-y-1">
+                                <Label>Timezone</Label>
+                                <Input
+                                  value={banner.timezone || 'Asia/Manila'}
+                                  onChange={(event) => onUpdateBanner(banner.id, { timezone: event.target.value || 'Asia/Manila' })}
+                                  placeholder="Asia/Manila"
+                                  className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`}
+                                />
+                              </div>
+                            </div>
+
+                            {(banner.schedule_mode || 'always') === 'scheduled' ? (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <Label>Starts</Label>
+                                  <Input
+                                    type="datetime-local"
+                                    value={toDateTimeLocalInputValue(banner.starts_at)}
+                                    onChange={(event) => onUpdateBanner(banner.id, { starts_at: fromDateTimeLocalInputValue(event.target.value) })}
+                                    className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`}
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label>Ends</Label>
+                                  <Input
+                                    type="datetime-local"
+                                    value={toDateTimeLocalInputValue(banner.ends_at)}
+                                    onChange={(event) => onUpdateBanner(banner.id, { ends_at: fromDateTimeLocalInputValue(event.target.value) })}
+                                    className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`}
+                                  />
+                                </div>
+                              </div>
+                            ) : null}
 
                             <div className="flex flex-wrap items-end gap-3">
                               <div className="space-y-1">
@@ -5262,6 +5514,35 @@ export function StoreBannersTab({
                   )}
                 </div>
               </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Schedule</Label>
+                  <select
+                    value={newBannerScheduleMode}
+                    onChange={(event) => onNewBannerScheduleModeChange(event.target.value === 'scheduled' ? 'scheduled' : 'always')}
+                    className={`h-9 w-full rounded-md border px-3 text-xs ${isDark ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'}`}
+                  >
+                    <option value="always">Always / Permanent</option>
+                    <option value="scheduled">Scheduled Window</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Timezone</Label>
+                  <Input value={newBannerTimezone} onChange={(event) => onNewBannerTimezoneChange(event.target.value)} placeholder="Asia/Manila" className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
+                </div>
+              </div>
+              {newBannerScheduleMode === 'scheduled' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label>Starts</Label>
+                    <Input type="datetime-local" value={newBannerStartsAt} onChange={(event) => onNewBannerStartsAtChange(event.target.value)} className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Ends</Label>
+                    <Input type="datetime-local" value={newBannerEndsAt} onChange={(event) => onNewBannerEndsAtChange(event.target.value)} className={`h-9 text-xs ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
+                  </div>
+                </div>
+              ) : null}
               <div className="space-y-1">
                 <Label>Sort Order</Label>
                 <Input type="number" min={0} step={1} value={newBannerSortOrder} onChange={(event) => onNewBannerSortOrderChange(event.target.value)} placeholder="0" className={`h-9 text-xs w-[140px] ${isDark ? 'bg-gray-800 border-gray-700' : ''}`} />
@@ -5530,14 +5811,14 @@ export function StoreConfigTab({
         )}
 
         <div className={`text-[11px] ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
-          Only proof-image uploads qualify. OCR must detect a unique reference and exact amount match.
+          OCR runs only while auto approval is enabled. When disabled, requests stay manual and receipt images are not scanned.
         </div>
       </div>
     );
   };
 
   return (
-    <AdminPageScaffold
+      <AdminPageScaffold
       panelClass={panelClass}
       title="Payment and Store Controls"
       description="Configure checkout instructions, payment channels, QR support, automation, and decision emails from one place."
@@ -5553,7 +5834,6 @@ export function StoreConfigTab({
       stats={(
         <AdminStatsStrip
           items={[
-            { label: 'Banner Delay', value: `${storeConfig.banner_rotation_ms || '5000'} ms`, detail: 'Store banner autoplay', toneClass: 'text-blue-500' },
             { label: 'Automation', value: `${runningAutomationCount}/4`, detail: 'Auto-approval flows', toneClass: 'text-emerald-500' },
             { label: 'Checkout Support', value: hasQrImage ? 'QR ready' : 'No QR uploaded', detail: hasMessengerConfig ? 'Messenger ready' : 'Messenger not configured', toneClass: 'text-amber-500' },
           ]}
@@ -5566,7 +5846,7 @@ export function StoreConfigTab({
             <div className="flex flex-col gap-1">
               <div className="text-base font-semibold">Payment Setup</div>
               <div className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
-                Core payment channels, QR, and store banner timing. Account pricing now comes from Tier & Vouchers.
+                Core payment channels and QR support. Account pricing now comes from Tier Config.
               </div>
             </div>
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.95fr)] gap-4">
@@ -5587,15 +5867,6 @@ export function StoreConfigTab({
                 </div>
               </div>
               <div className="space-y-4">
-                <div className="grid grid-cols-1 gap-3">
-                  <div className="space-y-1">
-                    <Label>Banner Rotation (ms)</Label>
-                    <Input type="number" min={3000} max={15000} step={500} value={storeConfig.banner_rotation_ms} onChange={(event) => onStoreConfigChange({ ...storeConfig, banner_rotation_ms: event.target.value })} placeholder="5000" className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''} />
-                    <div className={`text-[11px] ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
-                      Autoplay delay for the store banner slider. Allowed range: 3000 to 15000 ms.
-                    </div>
-                  </div>
-                </div>
                 <div className="space-y-1">
                   <Label>QR Payment Image</Label>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center">

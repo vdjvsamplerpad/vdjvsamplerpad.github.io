@@ -78,6 +78,10 @@ export function OnlineStorePurchasePane({
     const totalLabel = isFreeClaimFlow
         ? 'FREE'
         : `PHP ${cartTotal.toLocaleString()}`;
+    const freeClaimEndsAt = selectedItems
+        .map((item) => item.promotion_ends_at)
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .sort()[0] || null;
 
     const renderPrice = (item: StoreItem) => {
         if (!item.is_paid) return <span>Free</span>;
@@ -192,10 +196,10 @@ export function OnlineStorePurchasePane({
                 <div className={`p-5 rounded-xl border shadow-sm ${isDark ? 'bg-emerald-500/10 border-emerald-700/40' : 'bg-emerald-50 border-emerald-200'}`}>
                     <h3 className={`font-semibold text-lg mb-2 ${isDark ? 'text-emerald-100' : 'text-emerald-800'}`}>Free Claim</h3>
                     <div className={`text-sm leading-relaxed ${isDark ? 'text-emerald-100/90' : 'text-emerald-700'}`}>
-                        This promotion is active for your account. Claiming now will grant access immediately without payment proof.
+                        This promotion is active for your account. Claiming now will grant access without payment proof.
                     </div>
                     <div className={`mt-3 text-xs ${isDark ? 'text-emerald-200/80' : 'text-emerald-700/80'}`}>
-                        Older app versions can still complete through the compatibility fallback, but this updated app can grant the bank directly after claim.
+                        Promo access is time-limited{freeClaimEndsAt ? ` until ${new Date(freeClaimEndsAt).toLocaleString()}` : ''}. Update the app when prompted to keep free promo claims supported.
                     </div>
                 </div>
             ) : (

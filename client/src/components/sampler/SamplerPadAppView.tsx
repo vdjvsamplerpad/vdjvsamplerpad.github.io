@@ -372,8 +372,6 @@ export function SamplerPadAppView({
 
       <div className={`flex-1 min-h-0 ${getMainContentMargin} ${getMainContentPadding}`}>
         <div className="max-w-full mx-auto pt-2 pb-0 relative z-10 h-full min-h-0 flex flex-col">
-          <HeaderControls {...headerControlsProps} guestPlaySummary={guestTrialSummary} />
-
           {isDualMode ? (
             <div className={`relative ${usePortraitDualStack ? 'flex flex-col gap-2' : 'flex gap-1 md:gap-2'} flex-1 min-h-0 min-w-0 ${padInteractionLockClass}`}>
               <div className="flex-1 min-w-0 min-h-0">
@@ -560,6 +558,8 @@ export function SamplerPadAppView({
           )}
         </div>
       </div>
+
+      <HeaderControls {...headerControlsProps} guestPlaySummary={guestTrialSummary} />
 
       <input
         ref={restoreBackupInputRef}

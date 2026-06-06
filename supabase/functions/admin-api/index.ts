@@ -121,6 +121,9 @@ const DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT = readPositiveInt(Deno.env.get("ADMIN_
 const DASHBOARD_MAX_WINDOW_DAYS = Math.max(30, readPositiveInt(Deno.env.get("ADMIN_DASHBOARD_MAX_WINDOW_DAYS"), 730));
 const ASIA_MANILA_UTC_OFFSET_MINUTES = 8 * 60;
 const R2_BUCKET = asString(Deno.env.get("R2_BUCKET"), 200);
+const RESEND_API_KEY = asString(Deno.env.get("RESEND_API_KEY"), 1000);
+const STORE_EMAIL_FROM = asString(Deno.env.get("STORE_EMAIL_FROM"), 500);
+const STORE_EMAIL_REPLY_TO = asString(Deno.env.get("STORE_EMAIL_REPLY_TO"), 500);
 const R2_MAX_ASSET_BYTES = 2 * 1024 * 1024 * 1024 - 1;
 const R2_UPLOAD_URL_TTL_SECONDS = Math.max(
   60,
@@ -152,6 +155,111 @@ const swallowDiscordError = async (task: () => Promise<void>) => {
     await task();
   } catch {
     // Discord is secondary monitoring only.
+  }
+};
+
+const normalizeEmail = (value: unknown): string | null => {
+  const normalized = asString(value, 320)?.trim().toLowerCase() || "";
+  if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return null;
+  return normalized;
+};
+
+const escapeHtml = (value: unknown): string =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+
+const formatPhpCurrency = (value: unknown): string => {
+  const amount = normalizeTierPrice(value);
+  return `PHP ${amount.toLocaleString("en-US", {
+    minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
+};
+
+const buildReceiptStyleEmailHtml = (input: {
+  variant: "approved" | "pending" | "rejected";
+  title: string;
+  subtitle: string;
+  amountLabel?: string;
+  amountValue?: string;
+  details: Array<{ label: string; value: string | number | null | undefined }>;
+  bodyText: string;
+}): string => {
+  const color = input.variant === "approved"
+    ? "#b9ff12"
+    : input.variant === "rejected"
+      ? "#ff4d6d"
+      : "#fbbf24";
+  const detailsHtml = input.details
+    .map((detail) => `
+      <tr>
+        <td style="padding:10px 0;color:#9ca3af;font-size:12px;text-transform:uppercase;font-weight:800;letter-spacing:.08em;">${escapeHtml(detail.label)}</td>
+        <td style="padding:10px 0;color:#f8fafc;font-size:14px;font-weight:800;text-align:right;">${escapeHtml(detail.value || "-")}</td>
+      </tr>
+    `)
+    .join("");
+  const bodyHtml = escapeHtml(input.bodyText).replace(/\n/g, "<br>");
+  const amountHtml = input.amountLabel || input.amountValue
+    ? `
+      <div style="margin:22px 0;padding:16px;border:1px solid rgba(185,255,18,.22);border-radius:12px;background:rgba(185,255,18,.08);">
+        <div style="color:#9ca3af;font-size:11px;text-transform:uppercase;font-weight:900;letter-spacing:.12em;">${escapeHtml(input.amountLabel || "Amount")}</div>
+        <div style="margin-top:6px;color:#f8fafc;font-size:28px;font-weight:900;">${escapeHtml(input.amountValue || "-")}</div>
+      </div>
+    `
+    : "";
+  return `
+    <!doctype html>
+    <html>
+      <body style="margin:0;background:#05070b;padding:24px;font-family:Arial,Helvetica,sans-serif;color:#f8fafc;">
+        <div style="max-width:620px;margin:0 auto;border:1px solid rgba(255,255,255,.12);border-radius:18px;background:#0b0f17;overflow:hidden;">
+          <div style="height:5px;background:${color};"></div>
+          <div style="padding:28px;">
+            <div style="color:#ff2b95;font-size:12px;text-transform:uppercase;font-weight:900;letter-spacing:.18em;">VDJV Sampler Pad</div>
+            <h1 style="margin:10px 0 0;color:#fff;font-size:28px;line-height:1.15;">${escapeHtml(input.title)}</h1>
+            <p style="margin:8px 0 0;color:#cbd5e1;font-size:15px;line-height:1.55;">${escapeHtml(input.subtitle)}</p>
+            ${amountHtml}
+            <table style="width:100%;border-collapse:collapse;border-top:1px solid rgba(255,255,255,.1);border-bottom:1px solid rgba(255,255,255,.1);">
+              ${detailsHtml}
+            </table>
+            <p style="margin:22px 0 0;color:#d1d5db;font-size:14px;line-height:1.65;">${bodyHtml}</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+};
+
+const sendEmailViaResend = async (input: {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+}): Promise<void> => {
+  if (!RESEND_API_KEY || !STORE_EMAIL_FROM) {
+    throw new Error("Email provider is not configured (missing RESEND_API_KEY or STORE_EMAIL_FROM)");
+  }
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: STORE_EMAIL_FROM,
+      to: input.to,
+      subject: asString(input.subject, 240) || "VDJV Sampler Pad",
+      html: input.html,
+      text: input.text,
+      reply_to: STORE_EMAIL_REPLY_TO || undefined,
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Resend email failed (${response.status}): ${body.slice(0, 500)}`);
   }
 };
 
@@ -343,9 +451,101 @@ const randomVoucherCode = (): string => {
   return `VDJV-${text.slice(0, 6)}-${text.slice(6, 12)}-${text.slice(12, 18)}`;
 };
 
+const LEGACY_QUOTA_SYNC_BATCH_SIZE = 500;
+const LEGACY_QUOTA_CUSTOM_TIER_SOURCES = new Set(["admin", "system"]);
+
 const sha256Hex = async (value: string): Promise<string> => {
   const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(value.trim().toUpperCase()));
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+};
+
+const hasLimitOverrideValues = (value: unknown): boolean => (
+  Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value as Record<string, unknown>).length > 0)
+);
+
+const toLegacyProfileQuotaLimits = (limits: { ownedBankQuota: number; ownedBankPadCap: number; deviceTotalBankCap: number }) => ({
+  ownedBankQuota: Math.max(1, Math.min(500, Math.floor(Number(limits.ownedBankQuota) || 1))),
+  ownedBankPadCap: Math.max(1, Math.min(256, Math.floor(Number(limits.ownedBankPadCap) || 1))),
+  deviceTotalBankCap: Math.max(10, Math.min(1000, Math.floor(Number(limits.deviceTotalBankCap) || 10))),
+});
+
+const syncSamplerLegacyQuotaDefaults = async (
+  admin: ReturnType<typeof createServiceClient>,
+  limits: { ownedBankQuota: number; ownedBankPadCap: number; deviceTotalBankCap: number },
+) => {
+  const quotaDefaults = {
+    ownedBankQuota: limits.ownedBankQuota,
+    ownedBankPadCap: limits.ownedBankPadCap,
+    deviceTotalBankCap: limits.deviceTotalBankCap,
+  };
+  const { data: existing, error: existingError } = await admin
+    .from("sampler_app_config")
+    .select("id")
+    .eq("id", "default")
+    .maybeSingle();
+  if (existingError) throw new Error(existingError.message);
+  const writePayload = {
+    quota_defaults: quotaDefaults,
+    updated_at: new Date().toISOString(),
+  };
+  const result = existing?.id
+    ? await admin.from("sampler_app_config").update(writePayload).eq("id", "default")
+    : await admin.from("sampler_app_config").insert({ id: "default", is_active: true, ...writePayload });
+  if (result.error) throw new Error(result.error.message);
+};
+
+const syncLegacyProfileQuotasForTier = async (
+  admin: ReturnType<typeof createServiceClient>,
+  tier: StoredAccountTier,
+  tierConfig: unknown,
+) => {
+  const snapshot = buildAccountCapabilitySnapshot({ role: "user", account_tier: tier }, tierConfig, null);
+  const limits = toLegacyProfileQuotaLimits(snapshot.limits);
+  const { data: profileRows, error: profileError } = await admin
+    .from("profiles")
+    .select("id,tier_source")
+    .eq("account_tier", tier)
+    .neq("role", "admin");
+  if (profileError) throw new Error(profileError.message);
+
+  const rows = (profileRows || []) as Array<{ id?: string | null; tier_source?: string | null }>;
+  const userIds = rows.map((row) => asUuid(row.id)).filter(Boolean) as string[];
+  const overrideUserIds = new Set<string>();
+  for (let index = 0; index < userIds.length; index += LEGACY_QUOTA_SYNC_BATCH_SIZE) {
+    const chunk = userIds.slice(index, index + LEGACY_QUOTA_SYNC_BATCH_SIZE);
+    const { data: overrideRows, error: overrideError } = await admin
+      .from("profile_feature_overrides")
+      .select("user_id,limits")
+      .in("user_id", chunk);
+    if (overrideError) throw new Error(overrideError.message);
+    for (const row of overrideRows || []) {
+      const rowUserId = asUuid((row as any)?.user_id);
+      if (rowUserId && hasLimitOverrideValues((row as any)?.limits)) overrideUserIds.add(rowUserId);
+    }
+  }
+
+  const syncUserIds = rows
+    .map((row) => ({ id: asUuid(row.id), tierSource: asString(row.tier_source, 40) || "" }))
+    .filter((row): row is { id: string; tierSource: string } => Boolean(row.id))
+    .filter((row) => !LEGACY_QUOTA_CUSTOM_TIER_SOURCES.has(row.tierSource))
+    .filter((row) => !overrideUserIds.has(row.id))
+    .map((row) => row.id);
+
+  for (let index = 0; index < syncUserIds.length; index += LEGACY_QUOTA_SYNC_BATCH_SIZE) {
+    const chunk = syncUserIds.slice(index, index + LEGACY_QUOTA_SYNC_BATCH_SIZE);
+    const { error } = await admin
+      .from("profiles")
+      .update({
+        owned_bank_quota: limits.ownedBankQuota,
+        owned_bank_pad_cap: limits.ownedBankPadCap,
+        device_total_bank_cap: limits.deviceTotalBankCap,
+      })
+      .in("id", chunk);
+    if (error) throw new Error(error.message);
+  }
+
+  if (tier === "pro") await syncSamplerLegacyQuotaDefaults(admin, limits);
+  return { profileCount: syncUserIds.length, samplerDefaultsSynced: tier === "pro" };
 };
 
 const applyAccountTierToUser = async (
@@ -361,15 +561,16 @@ const applyAccountTierToUser = async (
     .maybeSingle();
   if (tierConfigError) throw new Error(tierConfigError.message);
   const tierDefaults = buildAccountCapabilitySnapshot({ id: userId, role: "user", account_tier: tier }, tierConfig, null);
+  const legacyProfileLimits = toLegacyProfileQuotaLimits(tierDefaults.limits);
   const { error: tierError } = await admin
     .from("profiles")
     .update({
       account_tier: tier,
       tier_source: source,
       tier_updated_at: new Date().toISOString(),
-      owned_bank_quota: tierDefaults.limits.ownedBankQuota,
-      owned_bank_pad_cap: tierDefaults.limits.ownedBankPadCap,
-      device_total_bank_cap: tierDefaults.limits.deviceTotalBankCap,
+      owned_bank_quota: legacyProfileLimits.ownedBankQuota,
+      owned_bank_pad_cap: legacyProfileLimits.ownedBankPadCap,
+      device_total_bank_cap: legacyProfileLimits.deviceTotalBankCap,
     })
     .eq("id", userId);
   if (tierError) throw new Error(tierError.message);
@@ -450,6 +651,135 @@ const parseDateOnlyParam = (value: string | null): Date | null => {
   const parsed = new Date(`${trimmed}T00:00:00.000Z`);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed;
+};
+
+type AttendanceMetrics = {
+  attendance_date: string | null;
+  first_seen_today_at: string | null;
+  last_seen_at: string | null;
+  today_heartbeat_count: number;
+  attendance_days_7: number;
+  attendance_days_30: number;
+  attendance_days_total: number;
+};
+
+const isMissingAttendanceStorageError = (error: unknown): boolean => {
+  const record = asRecord(error);
+  const code = String(record.code || "");
+  const message = String(record.message || error || "");
+  return code === "42P01"
+    || code === "42883"
+    || code === "PGRST205"
+    || /user_daily_attendance/i.test(message)
+    || /record_user_daily_attendance/i.test(message)
+    || /Could not find the table/i.test(message)
+    || /relation .* does not exist/i.test(message);
+};
+
+const addDaysToDateKey = (dateKey: string, days: number): string => {
+  const parsed = parseDateOnlyParam(dateKey);
+  if (!parsed) return dateKey;
+  return toUtcDateKey(new Date(parsed.getTime() + (days * 24 * 60 * 60 * 1000)));
+};
+
+const emptyAttendanceMetrics = (dateKey: string | null = null): AttendanceMetrics => ({
+  attendance_date: dateKey,
+  first_seen_today_at: null,
+  last_seen_at: null,
+  today_heartbeat_count: 0,
+  attendance_days_7: 0,
+  attendance_days_30: 0,
+  attendance_days_total: 0,
+});
+
+const ATTENDANCE_METRICS_RPC_CHUNK_SIZE = 500;
+const ATTENDANCE_METRICS_FALLBACK_PAGE_SIZE = 1000;
+
+const applyAttendanceAggregateRow = (
+  metricsByUser: Map<string, AttendanceMetrics>,
+  row: unknown,
+  todayDateKey: string,
+) => {
+  const record = asRecord(row);
+  const userId = asUuid(record.user_id);
+  if (!userId) return;
+  const current = metricsByUser.get(userId) || emptyAttendanceMetrics(todayDateKey);
+  current.attendance_date = asString(record.attendance_date, 20) || todayDateKey;
+  current.first_seen_today_at = asString(record.first_seen_today_at, 80) || null;
+  current.last_seen_at = asString(record.last_seen_at, 80) || null;
+  current.today_heartbeat_count = Math.max(0, Math.floor(asFiniteNumber(record.today_heartbeat_count)));
+  current.attendance_days_7 = Math.max(0, Math.floor(asFiniteNumber(record.attendance_days_7)));
+  current.attendance_days_30 = Math.max(0, Math.floor(asFiniteNumber(record.attendance_days_30)));
+  current.attendance_days_total = Math.max(0, Math.floor(asFiniteNumber(record.attendance_days_total)));
+  metricsByUser.set(userId, current);
+};
+
+const loadAttendanceMetricsForUsers = async (
+  admin: ReturnType<typeof createServiceClient>,
+  userIdsInput: string[],
+  todayDateKey: string,
+): Promise<Map<string, AttendanceMetrics>> => {
+  const userIds = Array.from(new Set(userIdsInput.map((id) => asUuid(id)).filter(Boolean) as string[]));
+  const metricsByUser = new Map<string, AttendanceMetrics>();
+  if (userIds.length === 0) return metricsByUser;
+
+  for (const userId of userIds) {
+    metricsByUser.set(userId, emptyAttendanceMetrics(todayDateKey));
+  }
+
+  let useFallbackTableScan = false;
+  for (let index = 0; index < userIds.length; index += ATTENDANCE_METRICS_RPC_CHUNK_SIZE) {
+    const chunk = userIds.slice(index, index + ATTENDANCE_METRICS_RPC_CHUNK_SIZE);
+    const { data, error } = await admin.rpc("get_user_attendance_metrics", {
+      p_user_ids: chunk,
+      p_today_date: todayDateKey,
+    });
+    if (error) {
+      if (isMissingAttendanceStorageError(error)) {
+        useFallbackTableScan = true;
+        break;
+      }
+      throw new Error(error.message || "Failed to load attendance metrics");
+    }
+    for (const row of data || []) applyAttendanceAggregateRow(metricsByUser, row, todayDateKey);
+  }
+  if (!useFallbackTableScan) return metricsByUser;
+
+  const since30DateKey = addDaysToDateKey(todayDateKey, -29);
+  const since7DateKey = addDaysToDateKey(todayDateKey, -6);
+  for (let userIndex = 0; userIndex < userIds.length; userIndex += ATTENDANCE_METRICS_RPC_CHUNK_SIZE) {
+    const chunk = userIds.slice(userIndex, userIndex + ATTENDANCE_METRICS_RPC_CHUNK_SIZE);
+    for (let from = 0; ; from += ATTENDANCE_METRICS_FALLBACK_PAGE_SIZE) {
+      const { data, error } = await admin
+        .from("user_daily_attendance")
+        .select("user_id,attendance_date,first_seen_at,last_seen_at,heartbeat_count")
+        .in("user_id", chunk)
+        .order("attendance_date", { ascending: false })
+        .range(from, from + ATTENDANCE_METRICS_FALLBACK_PAGE_SIZE - 1);
+      if (error) {
+        if (isMissingAttendanceStorageError(error)) return metricsByUser;
+        throw new Error(error.message || "Failed to load attendance metrics");
+      }
+      for (const row of data || []) {
+        const userId = asUuid((row as any)?.user_id);
+        const attendanceDate = asString((row as any)?.attendance_date, 20);
+        if (!userId || !attendanceDate) continue;
+        const current = metricsByUser.get(userId) || emptyAttendanceMetrics(todayDateKey);
+        current.attendance_days_total += 1;
+        if (attendanceDate >= since30DateKey && attendanceDate <= todayDateKey) current.attendance_days_30 += 1;
+        if (attendanceDate >= since7DateKey && attendanceDate <= todayDateKey) current.attendance_days_7 += 1;
+        if (attendanceDate === todayDateKey) {
+          current.attendance_date = attendanceDate;
+          current.first_seen_today_at = asString((row as any)?.first_seen_at, 80) || null;
+          current.last_seen_at = asString((row as any)?.last_seen_at, 80) || null;
+          current.today_heartbeat_count = Math.max(0, Math.floor(asFiniteNumber((row as any)?.heartbeat_count)));
+        }
+        metricsByUser.set(userId, current);
+      }
+      if ((data || []).length < ATTENDANCE_METRICS_FALLBACK_PAGE_SIZE) break;
+    }
+  }
+  return metricsByUser;
 };
 
 const requireAdmin = async (req: Request): Promise<{ ok: true; userId: string } | { ok: false; response: Response }> => {
@@ -733,10 +1063,13 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
   const includeAdmins = String(url.searchParams.get("includeAdmins") || "false").toLowerCase() === "true";
   const sortBy = String(url.searchParams.get("sortBy") || "created_at");
   const sortDir = normalizeSortDir(url.searchParams.get("sortDir"));
+  const todayDateKey = toFixedOffsetDateKey(new Date(), ASIA_MANILA_UTC_OFFSET_MINUTES);
 
-  const samplerConfigResult = await getNormalizedSamplerAppConfig(admin);
-  if (samplerConfigResult.error) return fail(500, samplerConfigResult.error.message);
-  const quotaDefaults = samplerConfigResult.config.quotaDefaults;
+  const { data: tierConfigRows, error: tierConfigError } = await admin
+    .from("account_tier_configs")
+    .select("tier,limits,features,is_active");
+  if (tierConfigError) return fail(500, tierConfigError.message);
+  const tierConfigByTier = new Map((tierConfigRows || []).map((row: any) => [asString(row?.tier, 32), row]));
 
   const authUsers: any[] = [];
   const authBatchSize = 500;
@@ -765,6 +1098,12 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
     const displayName = profileDisplayName || metadataDisplayName || user.email?.split("@")[0] || "User";
     const role = profile?.role === "admin" ? "admin" : "user";
     const accountTier = role === "admin" ? "pro_max" : (normalizeProfileTier(profile?.account_tier) || "free");
+    const tierDefaults = buildAccountCapabilitySnapshot(
+      { id: user.id, role, account_tier: accountTier },
+      tierConfigByTier.get(accountTier),
+      null,
+    );
+    const legacyQuotaDefaults = toLegacyProfileQuotaLimits(tierDefaults.limits);
     const bannedUntil = (user as any).banned_until || null;
     const isBanned = Boolean(bannedUntil && new Date(bannedUntil).getTime() > Date.now());
 
@@ -777,9 +1116,9 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
       tier_source: asString(profile?.tier_source, 40) || null,
       tier_updated_at: parseIsoDateTime(profile?.tier_updated_at),
       display_name: displayName,
-      owned_bank_quota: Number.isFinite(Number(profile?.owned_bank_quota)) ? Number(profile?.owned_bank_quota) : quotaDefaults.ownedBankQuota,
-      owned_bank_pad_cap: Number.isFinite(Number(profile?.owned_bank_pad_cap)) ? Number(profile?.owned_bank_pad_cap) : quotaDefaults.ownedBankPadCap,
-      device_total_bank_cap: Number.isFinite(Number(profile?.device_total_bank_cap)) ? Number(profile?.device_total_bank_cap) : quotaDefaults.deviceTotalBankCap,
+      owned_bank_quota: Number.isFinite(Number(profile?.owned_bank_quota)) ? Number(profile?.owned_bank_quota) : legacyQuotaDefaults.ownedBankQuota,
+      owned_bank_pad_cap: Number.isFinite(Number(profile?.owned_bank_pad_cap)) ? Number(profile?.owned_bank_pad_cap) : legacyQuotaDefaults.ownedBankPadCap,
+      device_total_bank_cap: Number.isFinite(Number(profile?.device_total_bank_cap)) ? Number(profile?.device_total_bank_cap) : legacyQuotaDefaults.deviceTotalBankCap,
       created_at: user.created_at || null,
       last_sign_in_at: user.last_sign_in_at || null,
       banned_until: bannedUntil,
@@ -835,13 +1174,20 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
     }
   }
 
+  const attendanceMetrics = await loadAttendanceMetricsForUsers(admin, filteredUserIds, todayDateKey);
+
   const enriched = filtered.map((row) => {
     const latestSession = latestSessionByUser.get(row.id);
+    const attendance = attendanceMetrics.get(row.id) || emptyAttendanceMetrics(todayDateKey);
     return {
       ...row,
       last_sign_in_device_name: latestSession?.device_name || null,
       last_sign_in_platform: latestSession?.platform || null,
       last_sign_in_app_version: latestLoginVersionByUser.get(row.id) || latestSession?.app_version || null,
+      attendance_days_total: attendance.attendance_days_total,
+      attendance_days_30: attendance.attendance_days_30,
+      attendance_days_7: attendance.attendance_days_7,
+      today_heartbeat_count: attendance.today_heartbeat_count,
     };
   });
 
@@ -853,6 +1199,7 @@ const listUsers = async (req: Request, admin: ReturnType<typeof createServiceCli
     last_sign_in_device_name: (a, b) => compareNullableText(a.last_sign_in_device_name, b.last_sign_in_device_name),
     last_sign_in_platform: (a, b) => compareNullableText(a.last_sign_in_platform, b.last_sign_in_platform),
     last_sign_in_app_version: (a, b) => compareNullableText(a.last_sign_in_app_version, b.last_sign_in_app_version),
+    attendance_days_total: (a, b) => asFiniteNumber(a.attendance_days_total) - asFiniteNumber(b.attendance_days_total),
     ban_status: (a, b) => Number(a.is_banned) - Number(b.is_banned),
   });
   const pagedUsers = paginateRows(sorted, page, perPage);
@@ -877,8 +1224,9 @@ const listActiveSessions = async (req: Request, admin: ReturnType<typeof createS
   const activeTodayPerPage = Math.max(1, Math.min(200, Number(url.searchParams.get("activeTodayPerPage") || 100)));
   const sortBy = normalizeActiveSessionSortBy(url.searchParams.get("sortBy"));
   const sortDir = normalizeSortDir(url.searchParams.get("sortDir"));
-  const startOfTodayUtc = new Date();
-  startOfTodayUtc.setUTCHours(0, 0, 0, 0);
+  const now = new Date();
+  const startOfTodayManila = startOfFixedOffsetDay(now, ASIA_MANILA_UTC_OFFSET_MINUTES);
+  const todayDateKey = toFixedOffsetDateKey(now, ASIA_MANILA_UTC_OFFSET_MINUTES);
 
   const { data: sessions, error: sessionsError } = await admin
     .from("v_active_sessions_now")
@@ -889,18 +1237,53 @@ const listActiveSessions = async (req: Request, admin: ReturnType<typeof createS
 
   const rows = Array.isArray(sessions) ? sessions : [];
   const { data: admins } = await admin.from("profiles").select("id").eq("role", "admin");
-  const adminIds = new Set((admins || []).map((a: any) => a.id));
-  const { data: activeTodayRows, error: activeTodayError } = await admin
-    .from("active_sessions")
-    .select("session_key,user_id,email,device_fingerprint,device_name,platform,browser,os,last_seen_at")
-    .gte("last_seen_at", startOfTodayUtc.toISOString())
+  const adminIds = new Set((admins || []).map((a: any) => String(a.id || "")).filter(Boolean));
+
+  const attendanceTodayResp = await admin
+    .from("user_daily_attendance")
+    .select("user_id,latest_session_key,latest_email,latest_device_fingerprint,latest_device_name,latest_platform,latest_browser,latest_os,attendance_date,first_seen_at,last_seen_at,heartbeat_count")
+    .eq("attendance_date", todayDateKey)
     .order("last_seen_at", { ascending: false })
     .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT * 5);
-  if (activeTodayError) return fail(500, activeTodayError.message);
-  const nonAdminActiveTodayRows = (activeTodayRows || []).filter((row: any) => {
-    const userId = String(row?.user_id || "");
-    return Boolean(userId) && !adminIds.has(userId);
-  });
+
+  let nonAdminActiveTodayRows: any[] = [];
+  if (!attendanceTodayResp.error) {
+    nonAdminActiveTodayRows = (attendanceTodayResp.data || [])
+      .map((row: any) => {
+        const userId = String(row?.user_id || "");
+        if (!userId) return null;
+        return {
+          session_key: asString(row?.latest_session_key, 80) || `attendance:${userId}:${todayDateKey}`,
+          user_id: userId,
+          email: asString(row?.latest_email, 320) || null,
+          device_fingerprint: asString(row?.latest_device_fingerprint, 256) || "unknown",
+          device_name: asString(row?.latest_device_name, 200) || null,
+          platform: asString(row?.latest_platform, 120) || null,
+          browser: asString(row?.latest_browser, 120) || null,
+          os: asString(row?.latest_os, 120) || null,
+          last_seen_at: asString(row?.last_seen_at, 80) || asString(row?.first_seen_at, 80) || null,
+          attendance_date: asString(row?.attendance_date, 20) || todayDateKey,
+          first_seen_today_at: asString(row?.first_seen_at, 80) || null,
+          today_heartbeat_count: Math.max(0, Math.floor(asFiniteNumber(row?.heartbeat_count))),
+        };
+      })
+      .filter(Boolean)
+      .filter((row: any) => !adminIds.has(String(row?.user_id || "")));
+  } else {
+    if (!isMissingAttendanceStorageError(attendanceTodayResp.error)) return fail(500, attendanceTodayResp.error.message);
+    const { data: activeTodayRows, error: activeTodayError } = await admin
+      .from("active_sessions")
+      .select("session_key,user_id,email,device_fingerprint,device_name,platform,browser,os,last_seen_at")
+      .gte("last_seen_at", startOfTodayManila.toISOString())
+      .order("last_seen_at", { ascending: false })
+      .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT * 5);
+    if (activeTodayError) return fail(500, activeTodayError.message);
+    nonAdminActiveTodayRows = (activeTodayRows || []).filter((row: any) => {
+      const userId = String(row?.user_id || "");
+      return Boolean(userId) && !adminIds.has(userId);
+    });
+  }
+
   const activeTodayLatestByUser = new Map<string, any>();
   for (const row of nonAdminActiveTodayRows) {
     const userId = String(row?.user_id || "");
@@ -920,7 +1303,30 @@ const listActiveSessions = async (req: Request, admin: ReturnType<typeof createS
     }
   }
 
-  const dedupedRows = Array.from(latestByUser.values());
+  const attendanceMetrics = await loadAttendanceMetricsForUsers(
+    admin,
+    [
+      ...Array.from(latestByUser.keys()),
+      ...Array.from(activeTodayLatestByUser.keys()),
+    ],
+    todayDateKey,
+  );
+  const enrichWithAttendance = (row: any) => {
+    const userId = String(row?.user_id || "");
+    const metrics = attendanceMetrics.get(userId) || emptyAttendanceMetrics(todayDateKey);
+    return {
+      ...row,
+      attendance_date: metrics.attendance_date || row?.attendance_date || todayDateKey,
+      first_seen_today_at: metrics.first_seen_today_at || row?.first_seen_today_at || null,
+      today_heartbeat_count: metrics.today_heartbeat_count || Number(row?.today_heartbeat_count || 0),
+      attendance_days_7: metrics.attendance_days_7,
+      attendance_days_30: metrics.attendance_days_30,
+      attendance_days_total: metrics.attendance_days_total,
+    };
+  };
+
+  const dedupedRows = Array.from(latestByUser.values()).map(enrichWithAttendance);
+  const activeTodayRowsWithAttendance = Array.from(activeTodayLatestByUser.values()).map(enrichWithAttendance);
   const filtered = q
     ? dedupedRows.filter((row: any) => {
       const text = [
@@ -955,12 +1361,8 @@ const listActiveSessions = async (req: Request, admin: ReturnType<typeof createS
       return filtered.includes(matchedUser);
     }).length
     : rows.length;
-  const activeTodayUsers = new Set(
-    nonAdminActiveTodayRows
-      .map((row: any) => String(row?.user_id || ""))
-      .filter(Boolean),
-  ).size;
-  const sortedActiveTodayRows = Array.from(activeTodayLatestByUser.values()).sort((left, right) =>
+  const activeTodayUsers = activeTodayLatestByUser.size;
+  const sortedActiveTodayRows = activeTodayRowsWithAttendance.sort((left, right) =>
     compareNullableDate(right?.last_seen_at, left?.last_seen_at)
   );
 
@@ -1013,10 +1415,11 @@ const createUser = async (body: any, admin: ReturnType<typeof createServiceClien
       tier_updated_at: new Date().toISOString(),
       owned_bank_quota: 2,
       owned_bank_pad_cap: 25,
-      device_total_bank_cap: 4,
+      device_total_bank_cap: 10,
     }, { onConflict: "id" });
   if (profileErr) return fail(500, `User created, profile setup failed: ${profileErr.message}`);
   const capabilities = await applyAccountTierToUser(admin, userId, "free", "admin");
+  const legacyProfileLimits = toLegacyProfileQuotaLimits(capabilities.limits);
 
   return ok(
     {
@@ -1029,9 +1432,9 @@ const createUser = async (body: any, admin: ReturnType<typeof createServiceClien
         effective_account_tier: "free",
         tier_source: "admin",
         tier_updated_at: capabilities.refreshedAt,
-        owned_bank_quota: capabilities.limits.ownedBankQuota,
-        owned_bank_pad_cap: capabilities.limits.ownedBankPadCap,
-        device_total_bank_cap: capabilities.limits.deviceTotalBankCap,
+        owned_bank_quota: legacyProfileLimits.ownedBankQuota,
+        owned_bank_pad_cap: legacyProfileLimits.ownedBankPadCap,
+        device_total_bank_cap: legacyProfileLimits.deviceTotalBankCap,
       },
     },
     201,
@@ -1056,8 +1459,8 @@ const updateUserProfile = async (
   if (!Number.isFinite(ownedBankPadCap) || ownedBankPadCap < 1 || ownedBankPadCap > 256) {
     return badRequest("ownedBankPadCap must be between 1 and 256");
   }
-  if (!Number.isFinite(deviceTotalBankCap) || deviceTotalBankCap < 1 || deviceTotalBankCap > 1000) {
-    return badRequest("deviceTotalBankCap must be between 1 and 1000");
+  if (!Number.isFinite(deviceTotalBankCap) || deviceTotalBankCap < 10 || deviceTotalBankCap > 1000) {
+    return badRequest("deviceTotalBankCap must be between 10 and 1000");
   }
 
   const { data: existingUser, error: existingUserError } = await admin.auth.admin.getUserById(userId);
@@ -1511,9 +1914,11 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   const [
     activeTodayRowsResp,
     pendingAccountCountResp,
+    pendingAccountUpgradeCountResp,
     pendingStoreCountResp,
     pendingInstallerCountResp,
     todayAccountRequestsResp,
+    todayAccountUpgradeRequestsResp,
     todayStoreRequestsResp,
     todayInstallerRequestsResp,
     publishedCatalogCountResp,
@@ -1525,6 +1930,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     imports24hResp,
     storeRevenue24hResp,
     accountRevenue24hResp,
+    accountUpgradeRevenue24hResp,
     installerRevenue24hResp,
     revenueTotalsResp,
     installerRevenueTotalsResp,
@@ -1540,6 +1946,10 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .select("id", { head: true, count: "exact" })
       .eq("status", "pending"),
     admin
+      .from("account_upgrade_requests")
+      .select("id", { head: true, count: "exact" })
+      .eq("status", "pending"),
+    admin
       .from("bank_purchase_requests")
       .select("id", { head: true, count: "exact" })
       .eq("status", "pending"),
@@ -1549,6 +1959,11 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .eq("status", "pending"),
     admin
       .from("account_registration_requests")
+      .select("id", { head: true, count: "exact" })
+      .gte("created_at", todayStartIso)
+      .lte("created_at", todayEndIso),
+    admin
+      .from("account_upgrade_requests")
       .select("id", { head: true, count: "exact" })
       .gte("created_at", todayStartIso)
       .lte("created_at", todayEndIso),
@@ -1614,6 +2029,14 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .lte("created_at", todayEndIso)
       .limit(5000),
     admin
+      .from("account_upgrade_requests")
+      .select("quote_price_php_snapshot")
+      .eq("status", "approved")
+      .eq("is_refunded", false)
+      .gte("created_at", todayStartIso)
+      .lte("created_at", todayEndIso)
+      .limit(5000),
+    admin
       .from("installer_purchase_requests")
       .select("receipt_reference, price_php_snapshot")
       .eq("status", "approved")
@@ -1636,9 +2059,11 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
 
   if (activeTodayRowsResp.error) return fail(500, activeTodayRowsResp.error.message);
   if (pendingAccountCountResp.error) return fail(500, pendingAccountCountResp.error.message);
+  if (pendingAccountUpgradeCountResp.error) return fail(500, pendingAccountUpgradeCountResp.error.message);
   if (pendingStoreCountResp.error) return fail(500, pendingStoreCountResp.error.message);
   if (pendingInstallerCountResp.error) return fail(500, pendingInstallerCountResp.error.message);
   if (todayAccountRequestsResp.error) return fail(500, todayAccountRequestsResp.error.message);
+  if (todayAccountUpgradeRequestsResp.error) return fail(500, todayAccountUpgradeRequestsResp.error.message);
   if (todayStoreRequestsResp.error) return fail(500, todayStoreRequestsResp.error.message);
   if (todayInstallerRequestsResp.error) return fail(500, todayInstallerRequestsResp.error.message);
   if (publishedCatalogCountResp.error) return fail(500, publishedCatalogCountResp.error.message);
@@ -1650,16 +2075,19 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   if (imports24hResp.error) return fail(500, imports24hResp.error.message);
   if (storeRevenue24hResp.error) return fail(500, storeRevenue24hResp.error.message);
   if (accountRevenue24hResp.error) return fail(500, accountRevenue24hResp.error.message);
+  if (accountUpgradeRevenue24hResp.error) return fail(500, accountUpgradeRevenue24hResp.error.message);
   if (installerRevenue24hResp.error) return fail(500, installerRevenue24hResp.error.message);
   if (revenueTotalsResp.error) return fail(500, revenueTotalsResp.error.message);
   if (installerRevenueTotalsResp.error) return fail(500, installerRevenueTotalsResp.error.message);
 
   const [
     accountQueueResp,
+    accountUpgradeQueueResp,
     storeQueueResp,
     trendRowsResp,
     storeRevenueRangeResp,
     accountRevenueRangeResp,
+    accountUpgradeRevenueRangeResp,
     storeRequestRangeResp,
     revenueDailyResp,
     installerRevenueDailyResp,
@@ -1668,6 +2096,12 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     admin
       .from("account_registration_requests")
       .select("id, display_name, email, payment_channel, created_at")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(5),
+    admin
+      .from("account_upgrade_requests")
+      .select("id, display_name, email, payment_channel, target_tier, created_at")
       .eq("status", "pending")
       .order("created_at", { ascending: false })
       .limit(5),
@@ -1696,6 +2130,15 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     admin
       .from("account_registration_requests")
       .select("created_at, account_price_php_snapshot")
+      .eq("status", "approved")
+      .eq("is_refunded", false)
+      .gte("created_at", windowStartIso)
+      .lte("created_at", windowEndIso)
+      .order("created_at", { ascending: true })
+      .limit(10000),
+    admin
+      .from("account_upgrade_requests")
+      .select("created_at, quote_price_php_snapshot")
       .eq("status", "approved")
       .eq("is_refunded", false)
       .gte("created_at", windowStartIso)
@@ -1735,14 +2178,40 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   ]);
 
   if (accountQueueResp.error) return fail(500, accountQueueResp.error.message);
+  if (accountUpgradeQueueResp.error) return fail(500, accountUpgradeQueueResp.error.message);
   if (storeQueueResp.error) return fail(500, storeQueueResp.error.message);
   if (trendRowsResp.error) return fail(500, trendRowsResp.error.message);
   if (storeRevenueRangeResp.error) return fail(500, storeRevenueRangeResp.error.message);
   if (accountRevenueRangeResp.error) return fail(500, accountRevenueRangeResp.error.message);
+  if (accountUpgradeRevenueRangeResp.error) return fail(500, accountUpgradeRevenueRangeResp.error.message);
   if (storeRequestRangeResp.error) return fail(500, storeRequestRangeResp.error.message);
   if (revenueDailyResp.error) return fail(500, revenueDailyResp.error.message);
   if (installerRevenueDailyResp.error) return fail(500, installerRevenueDailyResp.error.message);
   if (installerRequestDailyResp.error) return fail(500, installerRequestDailyResp.error.message);
+
+  const attendanceTrendResp = await admin
+    .from("user_daily_attendance")
+    .select("user_id,attendance_date,first_seen_at,last_seen_at")
+    .gte("attendance_date", windowStartDate)
+    .lte("attendance_date", windowEndDate)
+    .order("attendance_date", { ascending: true })
+    .limit(Math.max(1000, Math.min(50000, DASHBOARD_SERIES_CAP * 10)));
+  if (attendanceTrendResp.error && !isMissingAttendanceStorageError(attendanceTrendResp.error)) {
+    return fail(500, attendanceTrendResp.error.message);
+  }
+  const attendanceTrendAvailable = !attendanceTrendResp.error;
+  const attendanceTrendRows = attendanceTrendAvailable ? (attendanceTrendResp.data || []) : [];
+  const todayAttendanceDateKey = toFixedOffsetDateKey(now, ASIA_MANILA_UTC_OFFSET_MINUTES);
+  const attendanceTodayResp = await admin
+    .from("user_daily_attendance")
+    .select("user_id,attendance_date")
+    .eq("attendance_date", todayAttendanceDateKey)
+    .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT * 5);
+  if (attendanceTodayResp.error && !isMissingAttendanceStorageError(attendanceTodayResp.error)) {
+    return fail(500, attendanceTodayResp.error.message);
+  }
+  const attendanceTodayAvailable = !attendanceTodayResp.error;
+  const attendanceTodayRowsForCount = attendanceTodayAvailable ? (attendanceTodayResp.data || []) : [];
 
   const storeQueueRows = storeQueueResp.data || [];
   const storeQueueUserIds = Array.from(
@@ -1830,6 +2299,15 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     bucket.accountBuyersApproved += 1;
     bucket.totalRevenueApproved = bucket.storeRevenueApproved + bucket.accountRevenueApproved + bucket.installerRevenueApproved;
   }
+  for (const row of accountUpgradeRevenueRangeResp.data || []) {
+    const createdAt = new Date(String((row as any).created_at || ""));
+    if (Number.isNaN(createdAt.getTime())) continue;
+    const bucket = trendSeed.get(toTrendBucketKey(createdAt));
+    if (!bucket) continue;
+    bucket.accountRevenueApproved += asFiniteNumber((row as any).quote_price_php_snapshot);
+    bucket.accountBuyersApproved += 1;
+    bucket.totalRevenueApproved = bucket.storeRevenueApproved + bucket.accountRevenueApproved + bucket.installerRevenueApproved;
+  }
   for (const row of storeRequestRangeResp.data || []) {
     const createdAt = new Date(String((row as any).created_at || ""));
     if (Number.isNaN(createdAt.getTime())) continue;
@@ -1877,6 +2355,39 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
 
   const trendRows = trendRowsResp.data || [];
   const dailyActiveUserSets = new Map<string, Set<string>>();
+  if (attendanceTrendAvailable) {
+    const nowManilaHour = new Date(now.getTime() + (ASIA_MANILA_UTC_OFFSET_MINUTES * 60 * 1000)).getUTCHours();
+    const maxHourlyBucket = windowStartDate === toFixedOffsetDateKey(now, ASIA_MANILA_UTC_OFFSET_MINUTES)
+      ? nowManilaHour
+      : windowStartDate < toFixedOffsetDateKey(now, ASIA_MANILA_UTC_OFFSET_MINUTES)
+        ? 23
+        : -1;
+    for (const row of attendanceTrendRows) {
+      const userId = String((row as any).user_id || "");
+      if (!userId || adminIds.has(userId)) continue;
+      const attendanceDate = asString((row as any).attendance_date, 20);
+      if (!attendanceDate) continue;
+      if (isHourlyWindow) {
+        if (maxHourlyBucket < 0) continue;
+        const firstSeenAt = new Date(String((row as any).first_seen_at || (row as any).last_seen_at || ""));
+        if (Number.isNaN(firstSeenAt.getTime())) continue;
+        const shifted = new Date(firstSeenAt.getTime() + (ASIA_MANILA_UTC_OFFSET_MINUTES * 60 * 1000));
+        const firstHour = Math.max(0, Math.min(23, shifted.getUTCHours()));
+        for (let hour = firstHour; hour <= maxHourlyBucket; hour += 1) {
+          const key = `${String(hour).padStart(2, "0")}:00`;
+          const activeSet = dailyActiveUserSets.get(key) || new Set<string>();
+          activeSet.add(userId);
+          dailyActiveUserSets.set(key, activeSet);
+        }
+      } else {
+        const bucket = trendSeed.get(attendanceDate);
+        if (!bucket) continue;
+        const activeSet = dailyActiveUserSets.get(attendanceDate) || new Set<string>();
+        activeSet.add(userId);
+        dailyActiveUserSets.set(attendanceDate, activeSet);
+      }
+    }
+  }
   for (const row of trendRows) {
     const createdAt = new Date(String((row as any).created_at || ""));
     if (Number.isNaN(createdAt.getTime())) continue;
@@ -1885,7 +2396,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     if (!bucket) continue;
 
     const userId = String((row as any).user_id || "");
-    if (userId && !adminIds.has(userId)) {
+    if (!attendanceTrendAvailable && userId && !adminIds.has(userId)) {
       const activeSet = dailyActiveUserSets.get(date) || new Set<string>();
       activeSet.add(userId);
       dailyActiveUserSets.set(date, activeSet);
@@ -1914,13 +2425,27 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     bucket.activeUsers = activeSet.size;
   }
 
-  const accountRequests = (accountQueueResp.data || []).map((row: any) => ({
-    id: String(row.id || ""),
-    display_name: String(row.display_name || ""),
-    email: String(row.email || ""),
-    payment_channel: String(row.payment_channel || ""),
-    created_at: row.created_at || null,
-  }));
+  const accountRequests = [
+    ...(accountQueueResp.data || []).map((row: any) => ({
+      id: String(row.id || ""),
+      request_type: "legacy_registration",
+      display_name: String(row.display_name || ""),
+      email: String(row.email || ""),
+      payment_channel: String(row.payment_channel || ""),
+      created_at: row.created_at || null,
+    })),
+    ...(accountUpgradeQueueResp.data || []).map((row: any) => ({
+      id: String(row.id || ""),
+      request_type: "account_upgrade",
+      target_tier: normalizeUpgradeTier((row as any).target_tier),
+      display_name: String(row.display_name || ""),
+      email: String(row.email || ""),
+      payment_channel: String(row.payment_channel || ""),
+      created_at: row.created_at || null,
+    })),
+  ]
+    .sort((a, b) => new Date(String(b.created_at || "")).getTime() - new Date(String(a.created_at || "")).getTime())
+    .slice(0, 5);
 
   const storeRequests = storeQueueRows.map((row: any) => {
     const bankRelation = Array.isArray(row.banks) ? row.banks[0] : row.banks;
@@ -1943,6 +2468,9 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   const accountRevenue24h = (accountRevenue24hResp.data || []).reduce((acc: number, row: any) => {
     return acc + asFiniteNumber(row?.account_price_php_snapshot);
   }, 0);
+  const accountUpgradeRevenue24h = (accountUpgradeRevenue24hResp.data || []).reduce((acc: number, row: any) => {
+    return acc + asFiniteNumber(row?.quote_price_php_snapshot);
+  }, 0);
   const installerRevenue24hSeenReceipts = new Set<string>();
   const installerRevenue24h = (installerRevenue24hResp.data || []).reduce((acc: number, row: any) => {
     const receiptReference = asString((row as any)?.receipt_reference, 160) || "";
@@ -1950,7 +2478,8 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     installerRevenue24hSeenReceipts.add(receiptReference);
     return acc + asFiniteNumber((row as any)?.price_php_snapshot);
   }, 0);
-  const totalRevenue24h = storeRevenue24h + accountRevenue24h + installerRevenue24h;
+  const totalAccountRevenue24h = accountRevenue24h + accountUpgradeRevenue24h;
+  const totalRevenue24h = storeRevenue24h + totalAccountRevenue24h + installerRevenue24h;
 
   const totalRevenueRow = revenueTotalsResp.data || {};
   const storeRevenueApprovedTotal = asFiniteNumber((totalRevenueRow as any).store_revenue_approved_total);
@@ -1972,14 +2501,20 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .filter(Boolean),
   ).size;
   const activeTodayUsers = new Set(
-    (activeTodayRowsResp.data || [])
+    (attendanceTodayAvailable
+      ? attendanceTodayRowsForCount
+      : (activeTodayRowsResp.data || []))
       .map((row: any) => String(row?.user_id || ""))
       .filter((userId) => Boolean(userId) && !adminIds.has(userId)),
   ).size;
   const todayRequestTotal =
     Number(todayAccountRequestsResp.count || 0)
+    + Number(todayAccountUpgradeRequestsResp.count || 0)
     + Number(todayStoreRequestsResp.count || 0)
     + Number(todayInstallerRequestsResp.count || 0);
+  const pendingAccountRequests =
+    Number(pendingAccountCountResp.count || 0)
+    + Number(pendingAccountUpgradeCountResp.count || 0);
 
   return ok({
     refreshedAt: nowIso,
@@ -1988,7 +2523,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       activeUsers: uniqueActiveUsers,
       activeSessions: nonAdminActiveRows.length,
       activeTodayUsers,
-      pendingAccountRequests: Number(pendingAccountCountResp.count || 0),
+      pendingAccountRequests,
       pendingStoreRequests: Number(pendingStoreCountResp.count || 0),
       pendingInstallerRequests: Number(pendingInstallerCountResp.count || 0),
       totalRegisteredUsers: Number(totalRegisteredUsersResp.count || 0),
@@ -2002,7 +2537,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       installerRevenueApprovedTotal,
       totalRevenueApproved,
       storeRevenue24h,
-      accountRevenue24h,
+      accountRevenue24h: totalAccountRevenue24h,
       installerRevenue24h,
       totalRevenue24h,
       storeBuyersApprovedTotal,
@@ -3624,23 +4159,21 @@ const handlePurchaseAction = async (requestId: string, action: string, admin: Re
   if (reqError || !request) return fail(404, "Request not found");
   if (request.status !== "pending") return badRequest("Request is already processed");
 
-  if (action === "reject") {
-    const { error: rejectErr } = await admin.from("bank_purchase_requests").update({ status: "rejected" }).eq("id", requestId);
-    if (rejectErr) return fail(500, rejectErr.message);
-    return ok({ requestId, status: "rejected" });
-  }
-
-  if (action === "approve") {
-    const { error: approveErr } = await admin.from("bank_purchase_requests").update({ status: "approved" }).eq("id", requestId);
-    if (approveErr) return fail(500, approveErr.message);
-
-    const { error: grantErr } = await admin.from("user_bank_access").upsert({
-      user_id: request.user_id,
-      bank_id: request.bank_id
-    }, { onConflict: "user_id,bank_id" });
-    if (grantErr) return fail(500, grantErr.message);
-
-    return ok({ requestId, status: "approved" });
+  if (action === "reject" || action === "approve") {
+    const status = action === "approve" ? "approved" : "rejected";
+    const { data, error } = await admin.rpc("apply_store_request_decision", {
+      p_request_ids: [requestId],
+      p_next_status: status,
+      p_reviewed_by: null,
+      p_reviewed_at: new Date().toISOString(),
+      p_rejection_message: null,
+      p_decision_source: "manual",
+      p_automation_result: null,
+    });
+    if (error) return fail(500, error.message);
+    const applied = Array.isArray(data) && data.some((row: any) => String(row?.id || "") === requestId);
+    if (!applied) return fail(409, "Request could not be updated");
+    return ok({ requestId, status });
   }
   return badRequest("Invalid action");
 };
@@ -3659,6 +4192,8 @@ const TIER_LIMIT_KEY_ALIASES: Record<string, string> = {
   ownedBankQuota: "owned_bank_quota",
   ownedBankPadCap: "owned_bank_pad_cap",
   deviceTotalBankCap: "device_total_bank_cap",
+  deckMinCount: "deck_min_count",
+  deckDefaultCount: "deck_default_count",
   deckCount: "deck_count",
 };
 
@@ -3750,7 +4285,12 @@ const saveAccountTierConfig = async (body: any, admin: ReturnType<typeof createS
     .select("*")
     .single();
   if (error || !data) return fail(500, error?.message || "Tier config could not be saved");
-  return ok({ tier: data });
+  try {
+    const legacyQuotaSync = await syncLegacyProfileQuotasForTier(admin, tier, data);
+    return ok({ tier: data, legacyQuotaSync });
+  } catch (syncError) {
+    return fail(500, syncError instanceof Error ? syncError.message : "Tier config saved, but legacy quota sync failed");
+  }
 };
 
 const ACCOUNT_TIER_VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "m4v"]);
@@ -3885,6 +4425,79 @@ const completeAccountTierVideoUpload = async (
   });
 };
 
+const sendAccountUpgradeDecisionEmail = async (input: {
+  requestRow: any;
+  nextStatus: "approved" | "rejected";
+  reviewedAtIso: string;
+  rejectionMessage?: string | null;
+}): Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }> => {
+  const targetEmail = normalizeEmail(input.requestRow?.email);
+  if (!targetEmail) return { status: "skipped", error: "No valid recipient email" };
+  if (!RESEND_API_KEY || !STORE_EMAIL_FROM) {
+    return {
+      status: "skipped",
+      error: "Email provider is not configured (missing RESEND_API_KEY or STORE_EMAIL_FROM)",
+    };
+  }
+
+  const targetTier = normalizeUpgradeTier(input.requestRow?.target_tier);
+  const targetTierLabel = targetTier === "pro_max" ? "PRO MAX" : targetTier === "pro" ? "PRO" : "Account";
+  const displayName = asString(input.requestRow?.display_name, 160) || "User";
+  const receiptReference = asString(input.requestRow?.receipt_reference, 160) || "-";
+  const paymentReference = asString(input.requestRow?.reference_no, 160) || "-";
+  const paymentChannel = asString(input.requestRow?.payment_channel, 80) || "-";
+  const reviewedAt = new Date(input.reviewedAtIso).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
+  const amountValue = formatPhpCurrency(input.requestRow?.quote_price_php_snapshot);
+  const isApproved = input.nextStatus === "approved";
+  const rejectionReason = asString(input.rejectionMessage ?? input.requestRow?.rejection_message, 1000) || "Please contact support for details.";
+  const textBody = isApproved
+    ? [
+      `Hi ${displayName},`,
+      "",
+      `Your ${targetTierLabel} account upgrade request has been approved.`,
+      "",
+      "Your upgraded tier is now active. Reopen VDJV if it does not appear yet.",
+    ].join("\n")
+    : [
+      `Hi ${displayName},`,
+      "",
+      `Your ${targetTierLabel} account upgrade request was rejected.`,
+      "",
+      `Reason: ${rejectionReason}`,
+      "",
+      "Please submit a new request after correcting the issue.",
+    ].join("\n");
+
+  const htmlBody = buildReceiptStyleEmailHtml({
+    variant: isApproved ? "approved" : "rejected",
+    title: isApproved ? "Account Upgrade Approved" : "Account Upgrade Update",
+    subtitle: isApproved ? `Your ${targetTierLabel} access is now active.` : "Your upgrade request needs correction.",
+    amountLabel: "Total Payment",
+    amountValue,
+    details: [
+      { label: "Upgrade", value: targetTierLabel },
+      { label: "VDJV Receipt No", value: receiptReference },
+      { label: "Payment Reference", value: paymentReference },
+      { label: "Payment Channel", value: paymentChannel },
+      { label: "Reviewed At", value: reviewedAt },
+      ...(isApproved ? [] : [{ label: "Reason", value: rejectionReason }]),
+    ],
+    bodyText: textBody,
+  });
+
+  try {
+    await sendEmailViaResend({
+      to: targetEmail,
+      subject: `${isApproved ? "Account Upgrade Approved" : "Account Upgrade Update"} - ${receiptReference}`,
+      html: htmlBody,
+      text: textBody,
+    });
+    return { status: "sent", error: null };
+  } catch (err) {
+    return { status: "failed", error: err instanceof Error ? err.message : String(err) };
+  }
+};
+
 const listAccountUpgradeRequests = async (req: Request, admin: ReturnType<typeof createServiceClient>) => {
   const url = new URL(req.url);
   const status = asString(url.searchParams.get("status"), 40) || "pending";
@@ -3915,6 +4528,7 @@ const accountUpgradeRequestAction = async (
   adminUserId: string,
 ) => {
   const action = asString(body?.action, 40) || "";
+  if (action !== "approve" && action !== "reject" && action !== "refund") return badRequest("Invalid action");
   const rejectionMessage = asString(body?.rejectionMessage ?? body?.rejection_message, 1000);
   const { data: requestRow, error: requestError } = await admin
     .from("account_upgrade_requests")
@@ -3922,9 +4536,53 @@ const accountUpgradeRequestAction = async (
     .eq("id", requestId)
     .maybeSingle();
   if (requestError || !requestRow) return fail(404, requestError?.message || "Upgrade request not found");
-  if ((requestRow as any).status !== "pending") return badRequest("Request is already processed");
 
   const nowIso = new Date().toISOString();
+
+  if (action === "refund") {
+    if ((requestRow as any).status !== "approved") return badRequest("Only approved upgrade requests can be refunded");
+    if (Boolean((requestRow as any).is_refunded)) return badRequest("Upgrade request is already refunded");
+
+    const { error: refundError } = await admin
+      .from("account_upgrade_requests")
+      .update({
+        is_refunded: true,
+        refunded_at: nowIso,
+        refunded_by: adminUserId,
+        updated_at: nowIso,
+      })
+      .eq("id", requestId)
+      .eq("status", "approved")
+      .eq("is_refunded", false);
+    if (refundError) return fail(500, refundError.message);
+
+    await swallowDiscordError(() =>
+      sendDiscordAdminActionEvent({
+        severity: "warning",
+        title: "Admin Refunded Account Upgrade",
+        description: "An approved account upgrade was marked refunded. Account tier access stays active.",
+        actorUserId: adminUserId,
+        targetUserId: asUuid((requestRow as any).user_id),
+        requestId,
+        extraFields: [
+          { name: "Target Tier", value: (normalizeUpgradeTier((requestRow as any).target_tier) || "unknown").toUpperCase(), inline: true },
+          { name: "Email", value: asString((requestRow as any).email, 320) || "unknown", inline: true },
+          { name: "Amount", value: formatPhpCurrency((requestRow as any).quote_price_php_snapshot), inline: true },
+        ],
+      })
+    );
+
+    return ok({
+      requestId,
+      status: "approved",
+      refunded: true,
+      refunded_at: nowIso,
+      refunded_by: adminUserId,
+    });
+  }
+
+  if ((requestRow as any).status !== "pending") return badRequest("Request is already processed");
+
   if (action === "reject") {
     const { error } = await admin
       .from("account_upgrade_requests")
@@ -3933,11 +4591,39 @@ const accountUpgradeRequestAction = async (
         rejection_message: rejectionMessage,
         reviewed_by: adminUserId,
         reviewed_at: nowIso,
+        decision_source: "manual",
         updated_at: nowIso,
       })
       .eq("id", requestId);
     if (error) return fail(500, error.message);
-    return ok({ requestId, status: "rejected" });
+    const decisionEmail = await sendAccountUpgradeDecisionEmail({
+      requestRow: {
+        ...requestRow,
+        status: "rejected",
+        rejection_message: rejectionMessage,
+        reviewed_by: adminUserId,
+        reviewed_at: nowIso,
+      },
+      nextStatus: "rejected",
+      reviewedAtIso: nowIso,
+      rejectionMessage,
+    });
+    const { error: emailUpdateError } = await admin
+      .from("account_upgrade_requests")
+      .update({
+        decision_email_status: decisionEmail.status,
+        decision_email_error: decisionEmail.error,
+      })
+      .eq("id", requestId);
+    if (emailUpdateError && !/decision_email_status|decision_email_error/i.test(emailUpdateError.message || "")) {
+      return fail(500, emailUpdateError.message);
+    }
+    return ok({
+      requestId,
+      status: "rejected",
+      decision_email_status: decisionEmail.status,
+      decision_email_error: decisionEmail.error,
+    });
   }
 
   if (action === "approve") {
@@ -3951,6 +4637,7 @@ const accountUpgradeRequestAction = async (
         status: "approved",
         reviewed_by: adminUserId,
         reviewed_at: nowIso,
+        decision_source: "manual",
         updated_at: nowIso,
       })
       .eq("id", requestId);
@@ -3969,7 +4656,33 @@ const accountUpgradeRequestAction = async (
         ],
       })
     );
-    return ok({ requestId, status: "approved", capabilities });
+    const decisionEmail = await sendAccountUpgradeDecisionEmail({
+      requestRow: {
+        ...requestRow,
+        status: "approved",
+        reviewed_by: adminUserId,
+        reviewed_at: nowIso,
+      },
+      nextStatus: "approved",
+      reviewedAtIso: nowIso,
+    });
+    const { error: emailUpdateError } = await admin
+      .from("account_upgrade_requests")
+      .update({
+        decision_email_status: decisionEmail.status,
+        decision_email_error: decisionEmail.error,
+      })
+      .eq("id", requestId);
+    if (emailUpdateError && !/decision_email_status|decision_email_error/i.test(emailUpdateError.message || "")) {
+      return fail(500, emailUpdateError.message);
+    }
+    return ok({
+      requestId,
+      status: "approved",
+      capabilities,
+      decision_email_status: decisionEmail.status,
+      decision_email_error: decisionEmail.error,
+    });
   }
 
   return badRequest("Invalid action");

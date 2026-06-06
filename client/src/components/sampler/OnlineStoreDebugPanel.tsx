@@ -8,7 +8,8 @@ type OnlineStoreDebugPanelProps = {
     debugText: string;
     onClear: () => void;
     onCopy: () => void | Promise<void>;
-    onExport: () => void;
+    onExport: () => void | Promise<void>;
+    exportLabel: string;
 };
 
 export function OnlineStoreDebugPanel({
@@ -18,6 +19,7 @@ export function OnlineStoreDebugPanel({
     onClear,
     onCopy,
     onExport,
+    exportLabel,
 }: OnlineStoreDebugPanelProps) {
     const [expanded, setExpanded] = React.useState(false);
 
@@ -37,8 +39,8 @@ export function OnlineStoreDebugPanel({
                     <Button type="button" size="sm" variant="outline" onClick={() => void onCopy()}>
                         Copy Log
                     </Button>
-                    <Button type="button" size="sm" variant="outline" onClick={onExport}>
-                        Export Log
+                    <Button type="button" size="sm" variant="outline" onClick={() => void onExport()}>
+                        {exportLabel}
                     </Button>
                 </div>
             </div>

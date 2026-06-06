@@ -8,6 +8,8 @@ export type AccountLimits = {
   ownedBankPadCap: number;
   deviceTotalBankCap: number;
   defaultBankDailyPlays: number | null;
+  deckMinCount: number;
+  deckDefaultCount: number;
   deckCount: number;
 };
 
@@ -58,13 +60,17 @@ export const DEFAULT_ACCOUNT_LIMITS: Record<AccountTier, AccountLimits> = {
     ownedBankPadCap: 0,
     deviceTotalBankCap: 1,
     defaultBankDailyPlays: 10,
-    deckCount: 2,
+    deckMinCount: 1,
+    deckDefaultCount: 1,
+    deckCount: 1,
   },
   free: {
     ownedBankQuota: 2,
     ownedBankPadCap: 25,
     deviceTotalBankCap: 4,
     defaultBankDailyPlays: 50,
+    deckMinCount: 1,
+    deckDefaultCount: 1,
     deckCount: 1,
   },
   pro: {
@@ -72,6 +78,8 @@ export const DEFAULT_ACCOUNT_LIMITS: Record<AccountTier, AccountLimits> = {
     ownedBankPadCap: 64,
     deviceTotalBankCap: 120,
     defaultBankDailyPlays: null,
+    deckMinCount: 1,
+    deckDefaultCount: 2,
     deckCount: 4,
   },
   pro_max: {
@@ -79,7 +87,9 @@ export const DEFAULT_ACCOUNT_LIMITS: Record<AccountTier, AccountLimits> = {
     ownedBankPadCap: 128,
     deviceTotalBankCap: 150,
     defaultBankDailyPlays: null,
-    deckCount: 4,
+    deckMinCount: 1,
+    deckDefaultCount: 4,
+    deckCount: 8,
   },
 };
 
@@ -192,12 +202,17 @@ const mergeLimits = (base: AccountLimits, raw: unknown): AccountLimits => {
   const defaultBankDailyPlays = defaultBankDailyPlaysRaw === null
     ? null
     : clampInt(defaultBankDailyPlaysRaw, base.defaultBankDailyPlays ?? 0, 0, 100000);
+  const deckCount = clampInt(input.deckCount ?? input.deck_count, base.deckCount, 1, 8);
+  const deckMinCount = clampInt(input.deckMinCount ?? input.deck_min_count, Math.min(base.deckMinCount, deckCount), 1, deckCount);
+  const deckDefaultCount = clampInt(input.deckDefaultCount ?? input.deck_default_count, Math.max(deckMinCount, Math.min(deckCount, base.deckDefaultCount)), deckMinCount, deckCount);
   return {
     ownedBankQuota: clampInt(input.ownedBankQuota ?? input.owned_bank_quota, base.ownedBankQuota, 0, 500),
     ownedBankPadCap: clampInt(input.ownedBankPadCap ?? input.owned_bank_pad_cap, base.ownedBankPadCap, 0, 256),
     deviceTotalBankCap: clampInt(input.deviceTotalBankCap ?? input.device_total_bank_cap, base.deviceTotalBankCap, 1, 1000),
     defaultBankDailyPlays,
-    deckCount: clampInt(input.deckCount ?? input.deck_count, base.deckCount, 1, 8),
+    deckMinCount,
+    deckDefaultCount,
+    deckCount,
   };
 };
 

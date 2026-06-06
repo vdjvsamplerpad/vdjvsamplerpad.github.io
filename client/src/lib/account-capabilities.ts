@@ -6,6 +6,8 @@ export type AccountLimits = {
   ownedBankPadCap: number;
   deviceTotalBankCap: number;
   defaultBankDailyPlays: number | null;
+  deckMinCount: number;
+  deckDefaultCount: number;
   deckCount: number;
 };
 
@@ -48,7 +50,7 @@ export type AccountCapabilitySnapshot = {
   refreshedAt: string;
 };
 
-export const ACCOUNT_CAPABILITIES_CACHE_KEY = 'vdjv-account-capabilities-v4';
+export const ACCOUNT_CAPABILITIES_CACHE_KEY = 'vdjv-account-capabilities-v5';
 
 const proFeatures: AccountFeatures = {
   bankStoreBrowse: true,
@@ -86,7 +88,9 @@ export const DEFAULT_ACCOUNT_CAPABILITIES: Record<AccountTier, AccountCapability
       ownedBankPadCap: 0,
       deviceTotalBankCap: 1,
       defaultBankDailyPlays: 10,
-      deckCount: 2,
+      deckMinCount: 1,
+      deckDefaultCount: 1,
+      deckCount: 1,
     },
     features: {
       ...proFeatures,
@@ -123,6 +127,8 @@ export const DEFAULT_ACCOUNT_CAPABILITIES: Record<AccountTier, AccountCapability
       ownedBankPadCap: 25,
       deviceTotalBankCap: 4,
       defaultBankDailyPlays: 50,
+      deckMinCount: 1,
+      deckDefaultCount: 1,
       deckCount: 1,
     },
     features: {
@@ -160,6 +166,8 @@ export const DEFAULT_ACCOUNT_CAPABILITIES: Record<AccountTier, AccountCapability
       ownedBankPadCap: 64,
       deviceTotalBankCap: 120,
       defaultBankDailyPlays: null,
+      deckMinCount: 1,
+      deckDefaultCount: 2,
       deckCount: 4,
     },
     features: proFeatures,
@@ -176,7 +184,9 @@ export const DEFAULT_ACCOUNT_CAPABILITIES: Record<AccountTier, AccountCapability
       ownedBankPadCap: 128,
       deviceTotalBankCap: 150,
       defaultBankDailyPlays: null,
-      deckCount: 4,
+      deckMinCount: 1,
+      deckDefaultCount: 4,
+      deckCount: 8,
     },
     features: { ...proFeatures, bankStoreAllAccess: true },
     overrideSummary: { hasLimits: false, hasFeatures: false },
@@ -187,6 +197,55 @@ export const DEFAULT_ACCOUNT_CAPABILITIES: Record<AccountTier, AccountCapability
 export const normalizeAccountTier = (value: unknown): AccountTier => {
   if (value === 'free' || value === 'pro' || value === 'pro_max' || value === 'guest') return value;
   return 'free';
+};
+
+const clampInt = (value: unknown, fallback: number, min: number, max: number): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+};
+
+export const normalizeAccountLimits = (
+  limits: Partial<AccountLimits> | Record<string, unknown> | null | undefined,
+  fallback: AccountLimits,
+): AccountLimits => {
+  const input = limits && typeof limits === 'object' ? limits as Record<string, unknown> : {};
+  const deckMax = clampInt(input.deckCount ?? input.deck_count, fallback.deckCount, 1, 8);
+  const deckMin = clampInt(
+    input.deckMinCount ?? input.deck_min_count,
+    Math.min(fallback.deckMinCount ?? 1, deckMax),
+    1,
+    deckMax,
+  );
+  const deckDefault = clampInt(
+    input.deckDefaultCount ?? input.deck_default_count,
+    Math.max(deckMin, Math.min(deckMax, fallback.deckDefaultCount ?? deckMin)),
+    deckMin,
+    deckMax,
+  );
+  return {
+    ownedBankQuota: clampInt(input.ownedBankQuota ?? input.owned_bank_quota, fallback.ownedBankQuota, 0, 500),
+    ownedBankPadCap: clampInt(input.ownedBankPadCap ?? input.owned_bank_pad_cap, fallback.ownedBankPadCap, 0, 256),
+    deviceTotalBankCap: clampInt(input.deviceTotalBankCap ?? input.device_total_bank_cap, fallback.deviceTotalBankCap, 1, 1000),
+    defaultBankDailyPlays: (input.defaultBankDailyPlays ?? input.default_bank_daily_plays) === null
+      ? null
+      : clampInt(input.defaultBankDailyPlays ?? input.default_bank_daily_plays, fallback.defaultBankDailyPlays ?? 0, 0, 100000),
+    deckMinCount: deckMin,
+    deckDefaultCount: deckDefault,
+    deckCount: deckMax,
+  };
+};
+
+export const normalizeAccountCapabilitySnapshot = (
+  snapshot: AccountCapabilitySnapshot,
+  fallback?: AccountCapabilitySnapshot,
+): AccountCapabilitySnapshot => {
+  const fallbackTier = normalizeAccountTier(snapshot.effectiveTier || fallback?.effectiveTier || 'free');
+  const fallbackLimits = fallback?.limits || DEFAULT_ACCOUNT_CAPABILITIES[fallbackTier].limits;
+  return {
+    ...snapshot,
+    limits: normalizeAccountLimits(snapshot.limits, fallbackLimits),
+  };
 };
 
 export const fallbackCapabilitiesForProfile = (profile?: { role?: string | null; account_tier?: string | null } | null): AccountCapabilitySnapshot => {
@@ -206,7 +265,7 @@ export const readCachedCapabilities = (userId: string | null): AccountCapability
     if (!raw) return null;
     const parsed = JSON.parse(raw) as AccountCapabilitySnapshot;
     if (!parsed || typeof parsed !== 'object' || !parsed.effectiveTier || !parsed.features || !parsed.limits) return null;
-    return parsed;
+    return normalizeAccountCapabilitySnapshot(parsed);
   } catch {
     return null;
   }

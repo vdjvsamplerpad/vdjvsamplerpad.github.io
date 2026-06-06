@@ -303,6 +303,8 @@ export class AudioPadV3Runtime {
         if (latestSnapshot.playbackMode === 'stopper') {
           stateRuntime.cancelAllPendingPlays(padId);
           this.stopOtherPads(padId, 'instant');
+        } else if (latestSnapshot.playbackMode === 'bank_stopper') {
+          this.stopOtherPadsInBank(padId, latestSnapshot.bankId, 'instant');
         } else {
           this.enforcePolyphonyCap(padId);
         }
@@ -488,6 +490,8 @@ export class AudioPadV3Runtime {
     if (snapshot?.playbackMode === 'stopper') {
       stateRuntime.cancelAllPendingPlays(padId);
       this.stopOtherPads(padId, 'instant');
+    } else if (snapshot?.playbackMode === 'bank_stopper') {
+      this.stopOtherPadsInBank(padId, snapshot.bankId, 'instant');
     } else {
       this.enforcePolyphonyCap(padId);
     }
@@ -525,6 +529,18 @@ export class AudioPadV3Runtime {
   private stopOtherPads(targetPadId: string, mode: StopMode = 'instant'): void {
     this.getCurrentlyPlayingPads().forEach(({ padId: playingPadId }) => {
       if (playingPadId === targetPadId) return;
+      this.stopPadBasic(playingPadId, mode, {
+        emitAction: null,
+        notify: false,
+      });
+    });
+  }
+
+  private stopOtherPadsInBank(targetPadId: string, targetBankId: string, mode: StopMode = 'instant'): void {
+    this.getCurrentlyPlayingPads().forEach(({ padId: playingPadId }) => {
+      if (playingPadId === targetPadId) return;
+      const snapshot = this.host.getRegisteredPads().get(playingPadId);
+      if (snapshot?.bankId !== targetBankId) return;
       this.stopPadBasic(playingPadId, mode, {
         emitAction: null,
         notify: false,
@@ -591,7 +607,7 @@ export class AudioPadV3Runtime {
   }
 
   private isShortBurstCandidate(snapshot: DeckPadSnapshot): boolean {
-    if (snapshot.playbackMode === 'stopper') return false;
+    if (snapshot.playbackMode === 'stopper' || snapshot.playbackMode === 'bank_stopper') return false;
     const windowMs = this.resolvePadWindowMs(snapshot);
     if (windowMs === null) return false;
     return windowMs > 0 && windowMs <= V3_SHORT_PAD_BURST_MAX_DURATION_MS;

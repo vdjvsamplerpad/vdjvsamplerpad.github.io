@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { BrowserRouter, HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { AuthProvider } from '@/hooks/useAuth';
 import { usePerformanceTier } from '@/hooks/usePerformanceTier';
 import { captureProductEvent } from '@/lib/productAnalytics';
 import {
@@ -28,6 +29,15 @@ function AppFallback() {
     <div className="lp-app-fallback">
       <div className="lp-loader-chip">Loading VDJV</div>
     </div>
+  );
+}
+
+function PricingRouteElement() {
+  if (!PricingPage) return null;
+  return (
+    <AuthProvider>
+      <PricingPage />
+    </AuthProvider>
   );
 }
 
@@ -80,8 +90,8 @@ function RouteContainer() {
           <>
             <Route path={samplerPath} element={<SamplerRouteApp />} />
             {includeLanding && LandingPage ? <Route path={landingPath} element={<LandingPage />} /> : null}
-            {includeLanding && PricingPage ? <Route path={pricingPath} element={<PricingPage />} /> : null}
-            {includeLanding && PricingPage ? <Route path={`${pricingPath}/checkout`} element={<PricingPage />} /> : null}
+            {includeLanding && PricingPage ? <Route path={pricingPath} element={<PricingRouteElement />} /> : null}
+            {includeLanding && PricingPage ? <Route path={`${pricingPath}/checkout`} element={<PricingRouteElement />} /> : null}
             {includeLanding && PricingPage ? <Route path={WEB_LEGACY_BUY_PATH} element={<Navigate to={pricingPath} replace />} /> : null}
             <Route path={privacyPath} element={<PrivacyPage />} />
             <Route path={termsPath} element={<TermsPage />} />
@@ -97,10 +107,10 @@ function RouteContainer() {
               <Route path={landingPath} element={<Navigate to={samplerPath} replace />} />
             )}
             {includeLanding && PricingPage ? (
-              <Route path={pricingPath} element={<PricingPage />} />
+              <Route path={pricingPath} element={<PricingRouteElement />} />
             ) : null}
             {includeLanding && PricingPage ? (
-              <Route path={`${pricingPath}/checkout`} element={<PricingPage />} />
+              <Route path={`${pricingPath}/checkout`} element={<PricingRouteElement />} />
             ) : null}
             {includeLanding && PricingPage ? (
               <Route path={WEB_LEGACY_BUY_PATH} element={<Navigate to={pricingPath} replace />} />

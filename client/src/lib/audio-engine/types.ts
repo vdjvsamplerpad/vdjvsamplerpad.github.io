@@ -29,7 +29,7 @@ export const CONFIGURABLE_STOP_TIMING_MODES: ConfigurableStopTimingMode[] = ['fa
 
 export type TriggerMode = 'toggle' | 'hold' | 'stutter' | 'unmute';
 
-export type PlaybackMode = 'once' | 'loop' | 'stopper';
+export type PlaybackMode = 'once' | 'loop' | 'stopper' | 'bank_stopper';
 
 export type HotcueTuple = [number | null, number | null, number | null, number | null];
 

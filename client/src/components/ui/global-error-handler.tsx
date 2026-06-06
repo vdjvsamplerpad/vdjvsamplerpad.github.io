@@ -8,6 +8,7 @@ import {
   buildSupportLogText,
   copySupportLogText,
   exportSupportLogText,
+  getSupportLogExportActionLabel,
 } from '@/lib/supportDiagnostics';
 import { getAudioTelemetry, type AudioTelemetrySession } from '@/lib/audio-telemetry';
 import { resolveClientCrashReportPlatform, sendClientCrashReport } from '@/lib/client-crash-report';
@@ -166,6 +167,7 @@ export function GlobalErrorHandler({ children }: GlobalErrorHandlerProps) {
   const [sendingRecoveredReport, setSendingRecoveredReport] = React.useState(false);
   const [currentReportFeedback, setCurrentReportFeedback] = React.useState('');
   const [recoveredReportFeedback, setRecoveredReportFeedback] = React.useState('');
+  const reportExportActionLabel = React.useMemo(() => getSupportLogExportActionLabel('Report'), []);
 
   React.useEffect(() => {
     const snapshot = telemetry.getRecoveredSessionSnapshot();
@@ -249,14 +251,14 @@ export function GlobalErrorHandler({ children }: GlobalErrorHandlerProps) {
     }
   }, [errorState.error, errorState.errorId, errorState.errorInfo]);
 
-  const exportCurrentErrorReport = React.useCallback(() => {
+  const exportCurrentErrorReport = React.useCallback(async () => {
     if (!errorState.error) return;
     try {
-      exportSupportLogText(
+      const result = await exportSupportLogText(
         buildCurrentErrorSupportLog(errorState.error, errorState.errorInfo, errorState.errorId),
         'global-runtime-error',
       );
-      setCurrentReportFeedback('Report exported.');
+      setCurrentReportFeedback(result.message);
     } catch {
       setCurrentReportFeedback('Failed to export report.');
     }
@@ -336,14 +338,14 @@ export function GlobalErrorHandler({ children }: GlobalErrorHandlerProps) {
     }
   }, [activeRecoveredNotice]);
 
-  const exportRecoveredReport = React.useCallback(() => {
+  const exportRecoveredReport = React.useCallback(async () => {
     if (!activeRecoveredNotice) return;
     try {
-      exportSupportLogText(
+      const result = await exportSupportLogText(
         activeRecoveredNotice.supportLogText,
         activeRecoveredNotice.key === 'runtime' ? 'recovered-runtime-crash' : 'recovered-playback-crash',
       );
-      setRecoveredReportFeedback('Report exported.');
+      setRecoveredReportFeedback(result.message);
     } catch {
       setRecoveredReportFeedback('Failed to export report.');
     }
@@ -421,9 +423,9 @@ export function GlobalErrorHandler({ children }: GlobalErrorHandlerProps) {
                 <Copy className="mr-2 h-4 w-4" />
                 Copy Report
               </Button>
-              <Button onClick={exportCurrentErrorReport} variant="outline" className="w-full">
+              <Button onClick={() => void exportCurrentErrorReport()} variant="outline" className="w-full">
                 <Download className="mr-2 h-4 w-4" />
-                Export Report
+                {reportExportActionLabel}
               </Button>
             </div>
 
@@ -503,9 +505,9 @@ export function GlobalErrorHandler({ children }: GlobalErrorHandlerProps) {
                   <Copy className="mr-2 h-4 w-4" />
                   Copy
                 </Button>
-                <Button onClick={exportRecoveredReport} variant="outline" disabled={sendingRecoveredReport}>
+                <Button onClick={() => void exportRecoveredReport()} variant="outline" disabled={sendingRecoveredReport}>
                   <Download className="mr-2 h-4 w-4" />
-                  Export
+                  {reportExportActionLabel}
                 </Button>
                 <Button onClick={sendRecoveredReport} variant="secondary" disabled={sendingRecoveredReport}>
                   {sendingRecoveredReport ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Bug className="mr-2 h-4 w-4" />}

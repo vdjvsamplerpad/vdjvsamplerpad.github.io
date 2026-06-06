@@ -406,7 +406,7 @@ export function SideMenu({
   const showProMaxBankLimitCta = showProMaxUpgradeCta
     && Number.isFinite(ownedBankQuotaLimit)
     && ownedBankQuotaLimit > 0
-    && banks.length >= Math.max(1, ownedBankQuotaLimit - 1);
+    && banks.length >= ownedBankQuotaLimit;
   const openProMaxUpgrade = React.useCallback((reason: string) => {
     requestUpgradePrompt(reason);
   }, [requestUpgradePrompt]);
@@ -449,7 +449,7 @@ export function SideMenu({
   const accountIdentityLabel = effectiveUser ? `${accountTierLabel} - ${displayName}` : 'GUEST';
   const isLowestGraphics = graphicsTier === 'lowest';
   const panelClass = cn(
-    'fixed inset-y-0 left-0 z-50 flex h-[100dvh] w-64 flex-col border-r transition-transform duration-200 will-change-transform',
+    'fixed inset-y-0 left-0 z-[35] flex h-[100dvh] w-64 flex-col border-r transition-transform duration-200 will-change-transform',
     theme === 'dark' ? 'border-slate-800 bg-slate-950 text-slate-100' : 'border-slate-200 bg-white text-slate-900',
     open ? 'translate-x-0 pointer-events-auto' : '-translate-x-full pointer-events-none',
     !isLowestGraphics && 'perf-high:shadow-2xl',
@@ -1100,21 +1100,6 @@ export function SideMenu({
             <div className={`text-[11px] truncate ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
               {accountIdentityLabel}
             </div>
-            {showProMaxUpgradeCta && (
-              <button
-                type="button"
-                onClick={() => openProMaxUpgrade('Upgrade to PRO MAX for higher owned-bank limits and expanded Store access.')}
-                className={cn(
-                  'mt-1 inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide transition',
-                  theme === 'dark'
-                    ? 'border-amber-300/30 bg-amber-300/10 text-amber-100 hover:bg-amber-300/15'
-                    : 'border-amber-300 bg-amber-50 text-amber-950 hover:bg-amber-100',
-                )}
-              >
-                <Crown className="h-3 w-3 shrink-0" />
-                <span className="truncate">Upgrade to PRO MAX</span>
-              </button>
-            )}
           </div>
           <Button
             variant="ghost"
@@ -1149,35 +1134,13 @@ export function SideMenu({
         </div>
 
         {renderContent && (
-          <div className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto p-2 pb-6">
-            {showProMaxBankLimitCta && (
-              <button
-                type="button"
-                onClick={() => openProMaxUpgrade('You are near your PRO owned-bank quota. Upgrade to PRO MAX for more room.')}
-                className={cn(
-                  'mb-2 flex w-full items-center gap-2 rounded-lg border p-2 text-left transition',
-                  theme === 'dark'
-                    ? 'border-amber-300/25 bg-amber-300/10 text-amber-50 hover:bg-amber-300/15'
-                    : 'border-amber-200 bg-amber-50 text-amber-950 hover:bg-amber-100',
-                )}
-              >
-                <span className={cn(
-                  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
-                  theme === 'dark' ? 'bg-amber-300/15 text-amber-200' : 'bg-amber-200/70 text-amber-900',
-                )}>
-                  <Crown className="h-4 w-4" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs font-black uppercase tracking-wide">Need more bank room?</span>
-                  <span className={cn(
-                    'block truncate text-[11px]',
-                    theme === 'dark' ? 'text-amber-100/80' : 'text-amber-900/70',
-                  )}>
-                    PRO MAX raises your owned-bank limit.
-                  </span>
-                </span>
-              </button>
-            )}
+          <div
+            className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto p-2"
+            style={{
+              paddingBottom: 'var(--vdjv-bottom-nav-clearance)',
+              scrollPaddingBottom: 'var(--vdjv-bottom-nav-clearance)',
+            }}
+          >
             <div className={`grid gap-2 mb-2 ${canBrowseBankStore ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <Button
                 onClick={() => setShowCreateDialog(true)}
@@ -1222,7 +1185,7 @@ export function SideMenu({
                           ? 'border-rose-300/70 bg-rose-500 text-white'
                           : 'border-rose-200 bg-rose-500 text-white'
                       }`}
-                      title="There are newly published banks in the store."
+                      title="There are new Bank Store updates."
                     >
                       New
                     </span>
@@ -1782,6 +1745,34 @@ export function SideMenu({
                   </div>
                 );
               })}
+              {showProMaxBankLimitCta && (
+                <button
+                  type="button"
+                  onClick={() => openProMaxUpgrade('You reached your PRO owned-bank quota. Upgrade to PRO MAX for more room.')}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-lg border p-2 text-left transition',
+                    theme === 'dark'
+                      ? 'border-amber-300/25 bg-amber-300/10 text-amber-50 hover:bg-amber-300/15'
+                      : 'border-amber-200 bg-amber-50 text-amber-950 hover:bg-amber-100',
+                  )}
+                >
+                  <span className={cn(
+                    'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
+                    theme === 'dark' ? 'bg-amber-300/15 text-amber-200' : 'bg-amber-200/70 text-amber-900',
+                  )}>
+                    <Crown className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-black uppercase tracking-wide">Need more bank room?</span>
+                    <span className={cn(
+                      'block truncate text-[11px]',
+                      theme === 'dark' ? 'text-amber-100/80' : 'text-amber-900/70',
+                    )}>
+                      PRO MAX raises your owned-bank limit.
+                    </span>
+                  </span>
+                </button>
+              )}
             </div>
           </div>
         )}

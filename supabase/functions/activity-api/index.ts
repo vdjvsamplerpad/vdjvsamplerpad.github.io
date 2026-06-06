@@ -91,6 +91,9 @@ const ACTIVITY_HEARTBEAT_RATE_LIMIT = readPositiveInt(Deno.env.get("ACTIVITY_HEA
 const ACTIVITY_HEARTBEAT_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("ACTIVITY_HEARTBEAT_RATE_WINDOW_SECONDS"), 600);
 const ACTIVITY_SESSION_CHECK_RATE_LIMIT = readPositiveInt(Deno.env.get("ACTIVITY_SESSION_CHECK_RATE_LIMIT"), 30);
 const ACTIVITY_SESSION_CHECK_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("ACTIVITY_SESSION_CHECK_RATE_WINDOW_SECONDS"), 600);
+const ACTIVITY_SESSION_CLAIM_RATE_LIMIT = readPositiveInt(Deno.env.get("ACTIVITY_SESSION_CLAIM_RATE_LIMIT"), 24);
+const ACTIVITY_SESSION_CLAIM_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("ACTIVITY_SESSION_CLAIM_RATE_WINDOW_SECONDS"), 600);
+const ACTIVITY_SESSION_CLAIM_STALE_MS = readPositiveInt(Deno.env.get("ACTIVITY_SESSION_CLAIM_STALE_SECONDS"), 6 * 60) * 1000;
 const ACTIVITY_SIGNOUT_RATE_LIMIT = readPositiveInt(Deno.env.get("ACTIVITY_SIGNOUT_RATE_LIMIT"), 15);
 const ACTIVITY_SIGNOUT_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("ACTIVITY_SIGNOUT_RATE_WINDOW_SECONDS"), 600);
 
@@ -210,7 +213,20 @@ const claimSingleActiveSession = async (payload: {
     p_ip: payload.ip || null,
     p_meta: asObject(payload.meta),
   });
-  if (!rpc.error) return;
+  if (!rpc.error) {
+    await recordDailyAttendance({
+      userId: payload.userId,
+      sessionKey: payload.sessionKey,
+      email: payload.email,
+      device: payload.device,
+      lastEvent: "auth.login",
+      meta: {
+        ...(payload.meta || {}),
+        deviceSessionId: payload.deviceSessionId,
+      },
+    });
+    return;
+  }
 
   // Fallback for partial rollout: keep current session row up-to-date.
   await upsertActiveSession({
@@ -258,6 +274,312 @@ const validateSingleSession = async (userId: string, deviceSessionId: string) =>
   };
 };
 
+type SessionClaimState = {
+  currentDeviceSessionId: string | null;
+  sessionKey: string | null;
+  conflict: boolean;
+  sameDevice: boolean;
+  stale: boolean;
+  currentDevice: Record<string, unknown> | null;
+};
+
+const getSessionMetaString = (meta: Record<string, unknown>, key: string, maxLen = 80): string | null =>
+  asString(meta[key], maxLen);
+
+const buildSafeClaimDevice = (row: Record<string, unknown> | null): Record<string, unknown> | null => {
+  if (!row) return null;
+  const meta = asObject(row.meta);
+  return {
+    deviceSessionId: asString(row.device_session_id, 80),
+    deviceName: asString(row.device_name, 200),
+    deviceModel: asString(row.device_model, 200),
+    platform: asString(row.platform, 120),
+    browser: asString(row.browser, 120),
+    os: asString(row.os, 120),
+    appVersion: getSessionMetaString(meta, "appVersion", 80),
+    runtime: getSessionMetaString(meta, "runtime", 80),
+    lastSeenAt: asString(row.last_seen_at, 80),
+    lastEvent: asString(row.last_event, 80),
+    isOnline: row.is_online === true,
+  };
+};
+
+const getSessionClaimMessage = (device: Record<string, unknown> | null): string => {
+  const name = asString(device?.deviceName, 200) || "another device";
+  const platform = asString(device?.platform, 120) || asString(device?.os, 120) || "";
+  const label = platform && !name.toLowerCase().includes(platform.toLowerCase()) ? `${name} (${platform})` : name;
+  return `This account is already active on ${label}. Log it out first to continue here?`;
+};
+
+const buildSafeReplacingDevice = (
+  device: DevicePayload,
+  meta: Record<string, unknown>,
+): Record<string, unknown> => ({
+  deviceName: device.name || "another device",
+  deviceModel: device.model || null,
+  platform: device.platform || null,
+  browser: device.browser || null,
+  os: device.os || null,
+  appVersion: asString(meta.appVersion, 80),
+  runtime: asString(meta.runtime, 80),
+});
+
+const getReplacementNoticeMessage = (replacement: Record<string, unknown> | null): string => {
+  const replacingDevice = asObject(replacement?.replacingDevice);
+  const name = asString(replacingDevice.deviceName, 200) || "another device";
+  const platform = asString(replacingDevice.platform, 120) || asString(replacingDevice.os, 120) || "";
+  const label = platform && !name.toLowerCase().includes(platform.toLowerCase()) ? `${name} (${platform})` : name;
+  const replacedAt = asString(replacement?.replacedAt, 80);
+  const when = replacedAt ? ` at ${new Date(replacedAt).toLocaleString("en-PH", { timeZone: "Asia/Manila" })}` : "";
+  return `You were logged out because this account was continued on ${label}${when}.`;
+};
+
+const markSessionReplaced = async (payload: {
+  sessionKey: string;
+  replacingDevice: DevicePayload;
+  replacingMeta?: Record<string, unknown> | null;
+}) => {
+  const admin = createServiceClient();
+  const now = new Date().toISOString();
+  const existing = await admin
+    .from("active_sessions")
+    .select("meta")
+    .eq("session_key", payload.sessionKey)
+    .maybeSingle();
+  const existingMeta = asObject((existing.data as Record<string, unknown> | null)?.meta);
+  const replacingMeta = asObject(payload.replacingMeta);
+  const replacement = {
+    reason: "session.replaced",
+    replacedAt: now,
+    replacingDevice: buildSafeReplacingDevice(payload.replacingDevice, replacingMeta),
+  };
+  const updatePayload = {
+    is_online: false,
+    last_seen_at: now,
+    last_event: "session.replaced",
+    invalidated_at: now,
+    invalidated_reason: "session.replaced",
+    meta: {
+      ...existingMeta,
+      sessionReplacement: replacement,
+    },
+  };
+  const updated = await admin
+    .from("active_sessions")
+    .update(updatePayload)
+    .eq("session_key", payload.sessionKey);
+  if (!updated.error) return;
+
+  const fallback = await admin
+    .from("active_sessions")
+    .update({
+      is_online: false,
+      last_seen_at: now,
+      last_event: "session.replaced",
+      meta: {
+        ...existingMeta,
+        sessionReplacement: replacement,
+      },
+    })
+    .eq("session_key", payload.sessionKey);
+  if (fallback.error) throw new Error(fallback.error.message || updated.error.message);
+};
+
+const resolveSessionConflictNotice = async (payload: {
+  userId: string;
+  sessionKey?: string | null;
+  deviceSessionId?: string | null;
+  fallbackReason?: string | null;
+}) => {
+  const admin = createServiceClient();
+  let row: Record<string, unknown> | null = null;
+  if (payload.sessionKey) {
+    const bySession = await admin
+      .from("active_sessions")
+      .select("last_event, invalidated_reason, meta")
+      .eq("session_key", payload.sessionKey)
+      .maybeSingle();
+    row = (bySession.data || null) as Record<string, unknown> | null;
+  }
+  if (!row && payload.deviceSessionId) {
+    const byDevice = await admin
+      .from("active_sessions")
+      .select("last_event, invalidated_reason, meta")
+      .eq("user_id", payload.userId)
+      .eq("device_session_id", payload.deviceSessionId)
+      .order("last_seen_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    row = (byDevice.data || null) as Record<string, unknown> | null;
+  }
+
+  const meta = asObject(row?.meta);
+  const replacement = asObject(meta.sessionReplacement);
+  const reason = asString(row?.invalidated_reason, 120) || asString(row?.last_event, 120) || asString(replacement.reason, 120);
+  if (reason === "session.replaced" || replacement.reason === "session.replaced") {
+    return {
+      reason: "session.replaced",
+      message: getReplacementNoticeMessage(replacement),
+      replacedAt: asString(replacement.replacedAt, 80),
+      replacingDevice: asObject(replacement.replacingDevice),
+    };
+  }
+  return {
+    reason: "session.conflict",
+    message: payload.fallbackReason || "This account was used on another device. You were signed out on this device.",
+    replacedAt: null,
+    replacingDevice: null,
+  };
+};
+
+const loadSessionClaimState = async (userId: string, deviceSessionId: string): Promise<SessionClaimState> => {
+  const admin = createServiceClient();
+  const profile = await admin
+    .from("profiles")
+    .select("current_device_session_id")
+    .eq("id", userId)
+    .maybeSingle();
+  const currentDeviceSessionId = asString((profile.data as Record<string, unknown> | null)?.current_device_session_id, 80);
+  if (profile.error || !currentDeviceSessionId) {
+    return {
+      currentDeviceSessionId: null,
+      sessionKey: null,
+      conflict: false,
+      sameDevice: false,
+      stale: false,
+      currentDevice: null,
+    };
+  }
+
+  const sameDevice = currentDeviceSessionId === deviceSessionId;
+  if (sameDevice) {
+    return {
+      currentDeviceSessionId,
+      sessionKey: null,
+      conflict: false,
+      sameDevice: true,
+      stale: false,
+      currentDevice: null,
+    };
+  }
+
+  const active = await admin
+    .from("active_sessions")
+    .select("session_key, device_session_id, device_name, device_model, platform, browser, os, last_seen_at, is_online, last_event, meta, invalidated_at")
+    .eq("user_id", userId)
+    .eq("device_session_id", currentDeviceSessionId)
+    .order("last_seen_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const activeRow = (active.data || null) as Record<string, unknown> | null;
+  if (active.error || !activeRow) {
+    return {
+      currentDeviceSessionId,
+      sessionKey: null,
+      conflict: false,
+      sameDevice: false,
+      stale: true,
+      currentDevice: null,
+    };
+  }
+
+  const lastSeenAt = asString(activeRow.last_seen_at, 80);
+  const lastSeenMs = lastSeenAt ? Date.parse(lastSeenAt) : 0;
+  const stale = !lastSeenMs || (Date.now() - lastSeenMs > ACTIVITY_SESSION_CLAIM_STALE_MS) || Boolean(activeRow.invalidated_at);
+  const currentDevice = buildSafeClaimDevice(activeRow);
+  return {
+    currentDeviceSessionId,
+    sessionKey: asUuid(activeRow.session_key) || asString(activeRow.session_key, 80),
+    conflict: !stale,
+    sameDevice: false,
+    stale,
+    currentDevice,
+  };
+};
+
+const writeLoginClaimActivity = async (payload: {
+  requestId: string;
+  userId: string;
+  sessionKey: string;
+  deviceSessionId: string;
+  email?: string | null;
+  device: DevicePayload;
+  ip?: string | null;
+  meta?: Record<string, unknown> | null;
+}) => {
+  const meta = asObject(payload.meta);
+  const appVersion = asString(meta.appVersion, 80);
+  const runtime = asString(meta.runtime, 80);
+  const result = await writeActivityLog({
+    requestId: payload.requestId,
+    eventType: "auth.login",
+    status: "success",
+    userId: payload.userId,
+    email: payload.email,
+    sessionKey: payload.sessionKey,
+    device: payload.device,
+    meta,
+  });
+  await claimSingleActiveSession({
+    userId: payload.userId,
+    sessionKey: payload.sessionKey,
+    deviceSessionId: payload.deviceSessionId,
+    email: payload.email,
+    device: payload.device,
+    ip: payload.ip,
+    meta,
+  });
+  if (!result.deduped) {
+    await sendDiscordAuthEvent({
+      webhook: Deno.env.get("DISCORD_WEBHOOK_AUTH") || null,
+      eventType: "auth.login",
+      email: payload.email || "unknown",
+      device: payload.device,
+      status: "success",
+      errorMessage: null,
+      clientIp: payload.ip || null,
+      userId: payload.userId,
+      sessionKey: payload.sessionKey,
+      deviceSessionId: payload.deviceSessionId,
+      appVersion,
+      runtime,
+    });
+  }
+  return result;
+};
+
+const recordDailyAttendance = async (payload: {
+  userId: string;
+  sessionKey?: string | null;
+  email?: string | null;
+  device: DevicePayload;
+  lastEvent?: string | null;
+  meta?: Record<string, unknown> | null;
+}) => {
+  try {
+    const admin = createServiceClient();
+    const meta = asObject(payload.meta);
+    const { error } = await admin.rpc("record_user_daily_attendance", {
+      p_user_id: payload.userId,
+      p_email: payload.email || null,
+      p_session_key: payload.sessionKey || null,
+      p_device_fingerprint: payload.device.fingerprint || "unknown",
+      p_device_name: payload.device.name || null,
+      p_platform: payload.device.platform || null,
+      p_browser: payload.device.browser || null,
+      p_os: payload.device.os || null,
+      p_app_version: asString(meta.appVersion, 80),
+      p_runtime: asString(meta.runtime, 80),
+      p_seen_at: new Date().toISOString(),
+      p_increment_heartbeat: payload.lastEvent === "heartbeat",
+    });
+    if (error) console.warn("record_user_daily_attendance failed", error.message);
+  } catch (err) {
+    console.warn("record_user_daily_attendance unavailable", err instanceof Error ? err.message : String(err));
+  }
+};
+
 const upsertActiveSession = async (payload: {
   sessionKey: string;
   userId: string;
@@ -284,7 +606,10 @@ const upsertActiveSession = async (payload: {
     p_meta: asObject(payload.meta),
   });
 
-  if (!rpc.error) return;
+  if (!rpc.error) {
+    await recordDailyAttendance(payload);
+    return;
+  }
 
   const fallback = await admin
     .from("active_sessions")
@@ -314,6 +639,8 @@ const upsertActiveSession = async (payload: {
     }
     throw new Error(fallback.error.message || rpc.error.message);
   }
+
+  await recordDailyAttendance(payload);
 };
 
 const markSessionOffline = async (sessionKey: string, lastEvent = "auth.signout") => {
@@ -527,6 +854,149 @@ Deno.serve(async (req) => {
       return json(200, { ok: true, discordError }, req);
     }
 
+    if (route === "session-claim-preview" || route === "session-claim") {
+      const requestId = asUuid(body.requestId) || crypto.randomUUID();
+      const sessionKey = asUuid(body.sessionKey);
+      const deviceSessionId = asUuid(body.deviceSessionId);
+      const bodyUserId = asUuid(body.userId);
+      if (!sessionKey) return badRequest("Missing or invalid sessionKey", req);
+      if (!deviceSessionId) return badRequest("Missing or invalid deviceSessionId", req);
+      if (!bodyUserId) return badRequest("Missing or invalid userId", req);
+      const actor = await requireAuthenticatedActor(req, bodyUserId);
+      if (!actor.ok) return actor.response;
+      const userId = bodyUserId;
+      if (await isAdminUser(userId)) {
+        if (route === "session-claim") {
+          const claimMeta = asObject(body.meta);
+          const adminUser = await createServiceClient().auth.admin.getUserById(userId);
+          await sendDiscordAuthEvent({
+            webhook: Deno.env.get("DISCORD_WEBHOOK_AUTH") || null,
+            eventType: "auth.login",
+            email: adminUser?.data?.user?.email || asString(body.email, 320) || "unknown",
+            device: normalizeDevice(body.device),
+            status: "success",
+            errorMessage: null,
+            clientIp: parseClientIp(req),
+            userId,
+            sessionKey,
+            deviceSessionId,
+            isAdminLogin: true,
+            appVersion: asString(claimMeta.appVersion, 80),
+            runtime: asString(claimMeta.runtime, 80),
+          });
+        }
+        return json(200, {
+          ok: true,
+          conflict: false,
+          requiresConfirmation: false,
+          skippedAdmin: true,
+        }, req);
+      }
+
+      const claimLimit = await consumeRateLimit({
+        scope: "activity.session_claim",
+        subject: actor.userId,
+        maxHits: ACTIVITY_SESSION_CLAIM_RATE_LIMIT,
+        windowSeconds: ACTIVITY_SESSION_CLAIM_RATE_WINDOW_SECONDS,
+      });
+      if (!claimLimit.allowed) {
+        return json(
+          429,
+          {
+            ok: false,
+            error: "RATE_LIMITED",
+            scope: "activity.session_claim",
+            retry_after_seconds: claimLimit.retryAfterSeconds,
+          },
+          req,
+        );
+      }
+
+      const claimState = await loadSessionClaimState(userId, deviceSessionId);
+      const conflictPayload = {
+        ok: false,
+        code: "SESSION_CLAIM_CONFLICT",
+        conflict: true,
+        requiresConfirmation: true,
+        currentDevice: claimState.currentDevice,
+        message: getSessionClaimMessage(claimState.currentDevice),
+      };
+
+      if (route === "session-claim-preview") {
+        return json(200, {
+          ok: true,
+          conflict: claimState.conflict,
+          requiresConfirmation: claimState.conflict,
+          sameDevice: claimState.sameDevice,
+          stale: claimState.stale,
+          currentDevice: claimState.currentDevice,
+          message: claimState.conflict ? getSessionClaimMessage(claimState.currentDevice) : null,
+        }, req);
+      }
+
+      if (claimState.conflict && body.force !== true) {
+        return json(409, conflictPayload, req);
+      }
+
+      const expectedCurrentDeviceSessionId = asString(body.expectedCurrentDeviceSessionId, 80);
+      if (
+        claimState.conflict &&
+        expectedCurrentDeviceSessionId &&
+        claimState.currentDeviceSessionId &&
+        expectedCurrentDeviceSessionId !== claimState.currentDeviceSessionId
+      ) {
+        return json(409, {
+          ...conflictPayload,
+          message: "The active device changed while you were confirming. Review the device and try again.",
+        }, req);
+      }
+
+      const email = asString(body.email, 320);
+      const device = normalizeDevice(body.device);
+      const meta = {
+        ...asObject(body.meta),
+        forcedSessionReplacement: body.force === true,
+        replacedDeviceSessionId: claimState.currentDeviceSessionId || null,
+      };
+
+      if (body.force === true && claimState.sessionKey) {
+        await markSessionReplaced({
+          sessionKey: claimState.sessionKey,
+          replacingDevice: device,
+          replacingMeta: body.meta,
+        });
+        const claimMeta = asObject(body.meta);
+        await sendDiscordSessionConflictEvent({
+          userId,
+          email,
+          sessionKey: claimState.sessionKey,
+          deviceSessionId: claimState.currentDeviceSessionId || "",
+          clientIp: parseClientIp(req),
+          lastEvent: "session.replaced",
+          appVersion: asString(claimMeta.appVersion, 80),
+          runtime: asString(claimMeta.runtime, 80),
+        });
+      }
+
+      const result = await writeLoginClaimActivity({
+        requestId,
+        userId,
+        sessionKey,
+        deviceSessionId,
+        email,
+        device,
+        ip: parseClientIp(req),
+        meta,
+      });
+      return json(200, {
+        ok: true,
+        conflict: false,
+        requiresConfirmation: false,
+        claimed: true,
+        deduped: result.deduped,
+      }, req);
+    }
+
     if (route === "heartbeat") {
       const sessionKey = asUuid(body.sessionKey);
       const deviceSessionId = asUuid(body.deviceSessionId);
@@ -563,7 +1033,15 @@ Deno.serve(async (req) => {
       const heartbeatAppVersion = asString(heartbeatMeta.appVersion, 80);
       const heartbeatRuntime = asString(heartbeatMeta.runtime, 80);
       if (!validation.valid) {
-        await markSessionOffline(sessionKey, "session.conflict");
+        const conflictNotice = await resolveSessionConflictNotice({
+          userId,
+          sessionKey,
+          deviceSessionId,
+          fallbackReason: validation.reason,
+        });
+        if (conflictNotice.reason !== "session.replaced") {
+          await markSessionOffline(sessionKey, "session.conflict");
+        }
         await sendDiscordSessionConflictEvent({
           userId,
           email: asString(body.email, 320),
@@ -580,7 +1058,9 @@ Deno.serve(async (req) => {
             ok: false,
             code: "SESSION_CONFLICT",
             invalidate: true,
-            message: validation.reason || "Session invalidated by a newer login.",
+            message: conflictNotice.message || validation.reason || "Session invalidated by a newer login.",
+            reason: conflictNotice.reason,
+            conflict: conflictNotice,
           },
           req,
         );
@@ -639,7 +1119,15 @@ Deno.serve(async (req) => {
       const sessionCheckAppVersion = asString(sessionCheckMeta.appVersion, 80);
       const sessionCheckRuntime = asString(sessionCheckMeta.runtime, 80);
       if (!validation.valid) {
-        await markSessionOffline(sessionKey, "session.conflict");
+        const conflictNotice = await resolveSessionConflictNotice({
+          userId,
+          sessionKey,
+          deviceSessionId,
+          fallbackReason: validation.reason,
+        });
+        if (conflictNotice.reason !== "session.replaced") {
+          await markSessionOffline(sessionKey, "session.conflict");
+        }
         await sendDiscordSessionConflictEvent({
           userId,
           email: asString(body.email, 320),
@@ -656,7 +1144,9 @@ Deno.serve(async (req) => {
             ok: false,
             code: "SESSION_CONFLICT",
             invalidate: true,
-            message: validation.reason || "Session invalidated by a newer login.",
+            message: conflictNotice.message || validation.reason || "Session invalidated by a newer login.",
+            reason: conflictNotice.reason,
+            conflict: conflictNotice,
           },
           req,
         );

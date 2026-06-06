@@ -35,6 +35,7 @@ export const edgeFunctionUrl = (functionName: string, route = '') => {
 
 export const getClientCompatibilityHeaders = (): Record<string, string> => ({
   'X-VDJV-Tier-Client': '1',
+  'X-VDJV-Promo-Client': '1',
   'X-VDJV-App-Version': String((import.meta as any).env?.VITE_APP_VERSION || 'unknown').trim() || 'unknown',
 });
 

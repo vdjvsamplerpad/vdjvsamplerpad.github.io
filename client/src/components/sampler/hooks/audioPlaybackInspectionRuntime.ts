@@ -54,7 +54,7 @@ interface AudioPlaybackInspectionRuntimeHost {
     endTimeMs?: number;
     audioDurationMs?: number;
     tempoRate?: number;
-    playbackMode?: 'once' | 'loop' | 'stopper';
+    playbackMode?: 'once' | 'loop' | 'stopper' | 'bank_stopper';
   } | null;
   computeV3EffectiveVolume(snapshot: DeckPadSnapshot, transport?: { softMuted?: boolean } | null): number;
   getRuntimeInfo(): RuntimeInfoSnapshot;
@@ -117,7 +117,7 @@ export class AudioPlaybackInspectionRuntime {
       progress?: number;
       playStartTime?: number | null;
       tempoRate?: number;
-      playbackMode?: 'once' | 'loop' | 'stopper';
+      playbackMode?: 'once' | 'loop' | 'stopper' | 'bank_stopper';
       startTimeMs?: number;
       endTimeMs?: number;
       audioDurationMs?: number;

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { edgeFunctionUrl } from '@/lib/edge-api';
+import { edgeFunctionUrl, getClientCompatibilityHeaders } from '@/lib/edge-api';
 import { isElectronImportBridgeAvailable, isNativeBankImportAvailable } from '@/lib/native-bank-import';
 import {
     OnlineBankStoreImportMeta,
@@ -358,7 +358,7 @@ export function useOnlineStoreDownloadTransfer({
 
                 if (!token) throw new Error('Please sign in to continue.');
 
-                const downloadHeaders = { Authorization: `Bearer ${token}` };
+                const downloadHeaders = { ...getClientCompatibilityHeaders(), Authorization: `Bearer ${token}` };
                 if (item.id) {
                     const keyTicketUrl = edgeFunctionUrl('store-api', `download-key/${item.id}`);
                     pushDownloadDebugLog('info', 'download_key_request', {

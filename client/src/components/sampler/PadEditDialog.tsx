@@ -959,7 +959,7 @@ export function PadEditDialog({
     <>
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
-          className="grid max-h-[88dvh] w-[calc(100vw-1rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-gray-300 bg-white/95 backdrop-blur-md dark:border-gray-600 dark:bg-gray-800/95 sm:max-h-[80vh] sm:w-full sm:max-w-lg"
+          className="grid max-h-[88dvh] w-[calc(100vw-1rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-gray-300 bg-white/95 text-gray-900 backdrop-blur-md dark:border-gray-700 dark:bg-gray-900/95 dark:text-gray-100 sm:max-h-[80vh] sm:w-full sm:max-w-lg"
           aria-describedby={undefined}
           onKeyDown={handleContentKeyDown}
         >
@@ -1218,7 +1218,7 @@ export function PadEditDialog({
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5">
                   <Label>Playback Mode</Label>
-                  <HelpTooltip content="Choose whether the pad plays once, loops continuously, or behaves like a stopper that cuts other pads when started." label="Playback mode help" />
+                  <HelpTooltip content="Choose whether the pad plays once, loops continuously, stops other pads in this bank, or uses the legacy all-bank stopper." label="Playback mode help" />
                 </div>
                 <Select value={playbackMode} onValueChange={(value: any) => setPlaybackMode(value)}>
                   <SelectTrigger>
@@ -1227,7 +1227,8 @@ export function PadEditDialog({
                   <SelectContent>
                     <SelectItem value="once">Play Once</SelectItem>
                     <SelectItem value="loop">Loop</SelectItem>
-                    <SelectItem value="stopper">Stopper - Play and stop all other pads</SelectItem>
+                    <SelectItem value="bank_stopper">Bank Stopper - Stop pads in this bank</SelectItem>
+                    <SelectItem value="stopper">All Stopper - Stop pads in all banks</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1560,7 +1561,7 @@ export function PadEditDialog({
       />
 
       <Dialog open={showUnsavedConfirm} onOpenChange={setShowUnsavedConfirm}>
-        <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+        <DialogContent depth="nested" className="sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Discard changes?</DialogTitle>
           </DialogHeader>

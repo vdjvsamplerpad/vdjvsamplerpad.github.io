@@ -13,7 +13,7 @@ import {
   type LegalDocumentKey,
   type LegalDocumentStatus,
 } from "../_shared/legal-content.ts";
-import { createServiceClient, getUserFromAuthHeader, isAdminUser } from "../_shared/supabase.ts";
+import { createServiceClient, createUserScopedClient, getUserFromAuthHeader, isAdminUser } from "../_shared/supabase.ts";
 import { asNumber, asString, asUuid } from "../_shared/validate.ts";
 import { consumeRateLimit } from "../_shared/rate-limit.ts";
 import {
@@ -165,6 +165,26 @@ const getTierConfig = async (admin: ReturnType<typeof createServiceClient>, tier
   return data;
 };
 
+const toLegacyProfileQuotaLimits = (limits: { ownedBankQuota: number; ownedBankPadCap: number; deviceTotalBankCap: number }) => ({
+  ownedBankQuota: Math.max(1, Math.min(500, Math.floor(Number(limits.ownedBankQuota) || 1))),
+  ownedBankPadCap: Math.max(1, Math.min(256, Math.floor(Number(limits.ownedBankPadCap) || 1))),
+  deviceTotalBankCap: Math.max(10, Math.min(1000, Math.floor(Number(limits.deviceTotalBankCap) || 10))),
+});
+
+const resolveLegacySamplerQuotaDefaults = async (admin: ReturnType<typeof createServiceClient>) => {
+  try {
+    const proTierConfig = await getTierConfig(admin, "pro");
+    const proLimits = buildAccountCapabilitySnapshot(
+      { role: "user", account_tier: "pro" },
+      proTierConfig,
+      null,
+    ).limits;
+    return toLegacyProfileQuotaLimits(proLimits);
+  } catch {
+    return DEFAULT_SAMPLER_APP_CONFIG.quotaDefaults;
+  }
+};
+
 const asPlainObject = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
@@ -250,7 +270,7 @@ const ensureProfileForAccountUser = async (admin: ReturnType<typeof createServic
       tier_updated_at: new Date().toISOString(),
       owned_bank_quota: DEFAULT_ACCOUNT_LIMITS.free.ownedBankQuota,
       owned_bank_pad_cap: DEFAULT_ACCOUNT_LIMITS.free.ownedBankPadCap,
-      device_total_bank_cap: DEFAULT_ACCOUNT_LIMITS.free.deviceTotalBankCap,
+      device_total_bank_cap: Math.max(10, DEFAULT_ACCOUNT_LIMITS.free.deviceTotalBankCap),
     }, { onConflict: "id" })
     .select("id,role,display_name,account_tier,tier_source,tier_updated_at,owned_bank_quota,owned_bank_pad_cap,device_total_bank_cap,welcome_email_sent_at")
     .single();
@@ -266,15 +286,16 @@ const applyAccountTierToUser = async (
 ) => {
   const tierConfig = await getTierConfig(admin, tier);
   const tierDefaults = buildAccountCapabilitySnapshot({ id: userId, role: "user", account_tier: tier }, tierConfig, null);
+  const legacyProfileLimits = toLegacyProfileQuotaLimits(tierDefaults.limits);
   const { error: tierError } = await admin
     .from("profiles")
     .update({
       account_tier: tier,
       tier_source: source,
       tier_updated_at: new Date().toISOString(),
-      owned_bank_quota: tierDefaults.limits.ownedBankQuota,
-      owned_bank_pad_cap: tierDefaults.limits.ownedBankPadCap,
-      device_total_bank_cap: tierDefaults.limits.deviceTotalBankCap,
+      owned_bank_quota: legacyProfileLimits.ownedBankQuota,
+      owned_bank_pad_cap: legacyProfileLimits.ownedBankPadCap,
+      device_total_bank_cap: legacyProfileLimits.deviceTotalBankCap,
     })
     .eq("id", userId);
   if (tierError) throw new Error(tierError.message);
@@ -303,10 +324,22 @@ const grantPublishedStoreBanksToUser = async (
     .map((row: any) => asUuid(row?.bank_id))
     .filter(Boolean) as string[]));
   if (bankIds.length === 0) return;
-  const rows = bankIds.map((bankId) => ({ user_id: userId, bank_id: bankId }));
-  const { error: upsertError } = await admin
+  const rows = bankIds.map((bankId) => ({
+    user_id: userId,
+    bank_id: bankId,
+    access_source: "pro_max",
+    access_expires_at: null,
+  }));
+  let { error: upsertError } = await admin
     .from("user_bank_access")
-    .upsert(rows, { onConflict: "user_id,bank_id", ignoreDuplicates: true });
+    .upsert(rows, { onConflict: "user_id,bank_id" });
+  if (upsertError && isMissingAccessExpiryColumnError(upsertError)) {
+    const fallbackRows = bankIds.map((bankId) => ({ user_id: userId, bank_id: bankId }));
+    const fallback = await admin
+      .from("user_bank_access")
+      .upsert(fallbackRows, { onConflict: "user_id,bank_id", ignoreDuplicates: true });
+    upsertError = fallback.error;
+  }
   if (upsertError) throw new Error(upsertError.message);
 };
 
@@ -321,6 +354,7 @@ const STORE_DOWNLOAD_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("STORE_D
 const STORE_PURCHASE_RATE_LIMIT = readPositiveInt(Deno.env.get("STORE_PURCHASE_RATE_LIMIT"), 12);
 const STORE_PURCHASE_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("STORE_PURCHASE_RATE_WINDOW_SECONDS"), 3600);
 const STORE_MAX_PURCHASE_ITEMS = readPositiveInt(Deno.env.get("STORE_MAX_PURCHASE_ITEMS"), 20);
+const STORE_PENDING_PURCHASE_REQUEST_LIMIT = readPositiveInt(Deno.env.get("STORE_PENDING_PURCHASE_REQUEST_LIMIT"), 5);
 const STORE_MAX_DOWNLOAD_BYTES = readPositiveInt(Deno.env.get("STORE_MAX_DOWNLOAD_BYTES"), 478150656); // 456 MB
 const STORE_MAX_NATIVE_DOWNLOAD_BYTES = readPositiveInt(
   Deno.env.get("STORE_MAX_NATIVE_DOWNLOAD_BYTES"),
@@ -367,6 +401,7 @@ const CLIENT_CRASH_REPORT_RATE_WINDOW_SECONDS = readPositiveInt(Deno.env.get("CL
 const CLIENT_CRASH_REPORT_MAX_BYTES = readPositiveInt(Deno.env.get("CLIENT_CRASH_REPORT_MAX_BYTES"), 256 * 1024);
 const ACCOUNT_REG_PASSWORD_KEY_VERSION = readPositiveInt(Deno.env.get("ACCOUNT_REG_PASSWORD_KEY_VERSION"), 1);
 const TIER_AWARE_CLIENT_VERSION = readPositiveInt(Deno.env.get("TIER_AWARE_CLIENT_VERSION"), 1);
+const PROMO_AWARE_CLIENT_VERSION = readPositiveInt(Deno.env.get("PROMO_AWARE_CLIENT_VERSION"), 1);
 const ACCOUNT_REG_MIN_PASSWORD_LENGTH = 8;
 const OCR_SPACE_API_URL = String(Deno.env.get("OCR_SPACE_API_URL") || "https://api.ocr.space/parse/image");
 const OCR_SPACE_PROVIDER = "ocr.space";
@@ -381,6 +416,51 @@ const ACCOUNT_REG_ALLOWED_MIME_TYPES = new Set([
 const ACCOUNT_REG_ALLOWED_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif", "heic", "heif"]);
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+
+const buildPendingPurchaseLimitMessage = (
+  pendingCount: number,
+  requestedCount: number,
+  maxPending: number,
+): string => {
+  if (pendingCount >= maxPending) {
+    return `You already have ${maxPending} pending Store requests. Wait for admin review or use cart checkout.`;
+  }
+  const availableSlots = Math.max(0, maxPending - pendingCount);
+  const requestLabel = requestedCount === 1 ? "request" : "requests";
+  const slotLabel = availableSlots === 1 ? "slot" : "slots";
+  return `This checkout has ${requestedCount} pending ${requestLabel}, but you only have ${availableSlots} pending Store ${slotLabel} left. Wait for admin review or reduce the cart.`;
+};
+
+const enforcePendingStorePurchaseLimit = async (
+  admin: ReturnType<typeof createServiceClient>,
+  userId: string,
+  requestedCount: number,
+): Promise<{ ok: true } | { ok: false; response: Response }> => {
+  if (requestedCount <= 0) return { ok: true };
+  const { count, error } = await admin
+    .from("bank_purchase_requests")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("status", "pending");
+  if (error) return { ok: false, response: fail(500, error.message) };
+
+  const pendingCount = Math.max(0, Number(count || 0));
+  const availableSlots = Math.max(0, STORE_PENDING_PURCHASE_REQUEST_LIMIT - pendingCount);
+  if (pendingCount + requestedCount <= STORE_PENDING_PURCHASE_REQUEST_LIMIT) {
+    return { ok: true };
+  }
+
+  return {
+    ok: false,
+    response: fail(409, "PENDING_PURCHASE_LIMIT_REACHED", {
+      message: buildPendingPurchaseLimitMessage(pendingCount, requestedCount, STORE_PENDING_PURCHASE_REQUEST_LIMIT),
+      pending_count: pendingCount,
+      requested_count: requestedCount,
+      max_pending: STORE_PENDING_PURCHASE_REQUEST_LIMIT,
+      available_slots: availableSlots,
+    }),
+  };
+};
 
 let cachedRegistrationPasswordKey: CryptoKey | null = null;
 
@@ -445,6 +525,153 @@ const callInstallerAdmin = async <T>(method: "GET" | "POST", pathWithQuery: stri
   return payload as T;
 };
 
+const parseInstallerJsonObject = (value: unknown): Record<string, unknown> => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+};
+
+const normalizeInstallerArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((item) => asString(item, 120)?.trim()).filter(Boolean) as string[];
+  }
+  if (typeof value !== "string") return [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) return normalizeInstallerArray(parsed);
+  } catch {
+    // Fall through to comma-separated parsing.
+  }
+  return trimmed.split(",").map((item) => item.trim()).filter(Boolean);
+};
+
+const normalizeInstallerInstallMode = (value: unknown, portableMode?: unknown): "integrated" | "portable" | null => {
+  const normalized = asString(value, 40)?.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (normalized === "integrated" || normalized === "virtualdj" || normalized === "vdj") return "integrated";
+  if (normalized === "portable") return "portable";
+  if (typeof portableMode === "boolean") return portableMode ? "portable" : "integrated";
+  if (typeof portableMode === "string") {
+    const portableText = portableMode.trim().toLowerCase();
+    if (["true", "1", "yes", "portable"].includes(portableText)) return "portable";
+    if (["false", "0", "no", "integrated"].includes(portableText)) return "integrated";
+  }
+  return null;
+};
+
+const normalizeInstallerBoolean = (value: unknown): boolean | null => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "portable"].includes(normalized)) return true;
+    if (["false", "0", "no", "integrated"].includes(normalized)) return false;
+  }
+  return null;
+};
+
+const normalizeInstallerCompletionDetail = (value: unknown): Record<string, unknown> | null => {
+  const row = parseInstallerJsonObject(value);
+  const payload = parseInstallerJsonObject(row.payload ?? row.payload_json);
+  const productCode =
+    asString(row.productCode ?? row.product_code ?? payload.productCode ?? payload.product_code, 120)?.trim()
+    || "";
+  if (!productCode) return null;
+  const portableMode = normalizeInstallerBoolean(row.portableMode ?? row.portable_mode ?? payload.portableMode ?? payload.portable_mode);
+  const installMode = normalizeInstallerInstallMode(
+    row.installMode ?? row.install_mode ?? payload.installMode ?? payload.install_mode,
+    portableMode,
+  );
+  return {
+    productCode,
+    installMode,
+    portableMode,
+    targetPath: asString(row.targetPath ?? row.target_path ?? payload.targetPath ?? payload.target_path, 2000)?.trim() || null,
+    completedAt: asString(row.completedAt ?? row.completed_at ?? row.createdAt ?? row.created_at ?? payload.completedAt ?? payload.completed_at, 80)?.trim() || null,
+    machineId: asString(row.machineId ?? row.machine_id ?? payload.machineId ?? payload.machine_id, 320)?.trim() || null,
+    installId: asString(row.installId ?? row.install_id ?? payload.installId ?? payload.install_id, 320)?.trim() || null,
+  };
+};
+
+const normalizeInstallerLicensePayload = (payload: Record<string, unknown>): Record<string, unknown> => {
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  const items = rawItems.map((item) => {
+    const row = parseInstallerJsonObject(item);
+    const completedProducts = normalizeInstallerArray(row.completedProducts ?? row.completed_products);
+    const detailSource =
+      row.completedProductDetails
+      ?? row.completed_product_details
+      ?? row.productCompletions
+      ?? row.product_completions
+      ?? row.licenseProductCompletions
+      ?? row.license_product_completions
+      ?? row.completions;
+    const detailRows = Array.isArray(detailSource) ? detailSource : [];
+    let completedProductDetails = detailRows
+      .map((detail) => normalizeInstallerCompletionDetail(detail))
+      .filter(Boolean) as Record<string, unknown>[];
+    if (completedProductDetails.length === 0 && completedProducts.length > 0) {
+      const mode = normalizeInstallerInstallMode(row.installMode ?? row.install_mode, row.portableMode ?? row.portable_mode);
+      const portableMode = normalizeInstallerBoolean(row.portableMode ?? row.portable_mode);
+      const targetPath = asString(row.targetPath ?? row.target_path, 2000)?.trim() || null;
+      if (mode || portableMode !== null || targetPath) {
+        completedProductDetails = completedProducts.map((productCode) => ({
+          productCode,
+          installMode: mode,
+          portableMode,
+          targetPath,
+          completedAt: asString(row.usedAt ?? row.used_at ?? row.updatedAt ?? row.updated_at, 80)?.trim() || null,
+          machineId: asString(row.machineId ?? row.machine_id, 320)?.trim() || null,
+          installId: asString(row.installId ?? row.install_id, 320)?.trim() || null,
+        }));
+      }
+    }
+    return {
+      ...row,
+      completedProducts: completedProducts.length > 0 ? completedProducts : row.completedProducts,
+      completedProductDetails,
+    };
+  });
+  return { ...payload, items };
+};
+
+const normalizeInstallerEventPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  const items = rawItems.map((item) => {
+    const row = parseInstallerJsonObject(item);
+    const eventPayload = parseInstallerJsonObject(row.payload ?? row.payload_json);
+    const portableMode = normalizeInstallerBoolean(row.portableMode ?? row.portable_mode ?? eventPayload.portableMode ?? eventPayload.portable_mode);
+    const installMode = normalizeInstallerInstallMode(
+      row.installMode ?? row.install_mode ?? eventPayload.installMode ?? eventPayload.install_mode,
+      portableMode,
+    );
+    const completedProducts = normalizeInstallerArray(
+      row.completedProducts ?? row.completed_products ?? eventPayload.completedProducts ?? eventPayload.completed_products,
+    );
+    const productCode =
+      asString(row.productCode ?? row.product_code ?? eventPayload.productCode ?? eventPayload.product_code, 120)?.trim()
+      || null;
+    return {
+      ...row,
+      payload: eventPayload,
+      productCode,
+      completedProducts,
+      installMode,
+      portableMode,
+      targetPath: asString(row.targetPath ?? row.target_path ?? eventPayload.targetPath ?? eventPayload.target_path, 2000)?.trim() || null,
+      machineId: asString(row.machineId ?? row.machine_id ?? eventPayload.machineId ?? eventPayload.machine_id, 320)?.trim() || null,
+      installId: asString(row.installId ?? row.install_id ?? eventPayload.installId ?? eventPayload.install_id, 320)?.trim() || null,
+    };
+  });
+  return { ...payload, items };
+};
+
 const escapeHtml = (value: string): string =>
   value
     .replace(/&/g, "&amp;")
@@ -488,6 +715,7 @@ type AutomationReason =
   | "manual_review_disabled"
   | "outside_window"
   | "missing_reference"
+  | "reference_mismatch"
   | "missing_amount"
   | "missing_recipient_number"
   | "duplicate_reference"
@@ -755,6 +983,15 @@ const normalizePaymentReferenceRegistryKey = (value: unknown): string | null => 
     .toUpperCase()
     .replace(/\s+/g, "");
   return normalized || null;
+};
+
+const shouldUsePaymentProofOcr = (paymentChannel: string | null | undefined, proofPath: string | null | undefined): boolean =>
+  PAYMENT_CHANNEL_VALUES.has(String(paymentChannel || "")) && Boolean(proofPath);
+
+const hasSubmittedReferenceMismatch = (submittedReference: string | null | undefined, ocrReference: string | null | undefined): boolean => {
+  const submitted = normalizePaymentReferenceRegistryKey(submittedReference);
+  const detected = normalizePaymentReferenceRegistryKey(ocrReference);
+  return Boolean(submitted && detected && submitted !== detected);
 };
 
 const buildReceiptStyleEmailHtml = (input: {
@@ -2299,7 +2536,7 @@ const isPromotionAudienceEligible = (
 const resolvePromotionsForCatalogItems = async (
   admin: ReturnType<typeof createServiceClient>,
   items: any[],
-  options?: { nowIso?: string; includeInactive?: boolean; userId?: string | null },
+  options?: { nowIso?: string; includeInactive?: boolean; userId?: string | null; allowFreePromotions?: boolean },
 ): Promise<Map<string, ResolvedPromotion>> => {
   const resolved = new Map<string, ResolvedPromotion>();
   if (!Array.isArray(items) || items.length === 0) return resolved;
@@ -2315,7 +2552,9 @@ const resolvePromotionsForCatalogItems = async (
     if (/store_promotions/i.test(error.message || "")) return resolved;
     throw new Error(error.message);
   }
-  const promotions = (data || []).map(mapPromotionRow);
+  const promotions = (data || [])
+    .map(mapPromotionRow)
+    .filter((promotion) => options?.allowFreePromotions !== false || promotion.discount_type !== "free");
   if (promotions.length === 0) return resolved;
   const targetsByPromotionId = await loadPromotionTargetsByPromotionId(admin, promotions.map((promotion) => promotion.id));
   const targetUsersByPromotionId = await loadPromotionTargetUsersByPromotionId(admin, promotions.map((promotion) => promotion.id));
@@ -2586,12 +2825,64 @@ const toNonNegativeSortOrder = (value: unknown, fallback = 0): number => {
   return Math.floor(parsed);
 };
 
+type MarketingBannerScheduleMode = "always" | "scheduled";
+type MarketingBannerStatus = "inactive" | "permanent" | "scheduled" | "active" | "expired";
+
+const normalizeMarketingBannerScheduleMode = (value: unknown): MarketingBannerScheduleMode | null => {
+  const normalized = asString(value, 32).toLowerCase();
+  if (!normalized || normalized === "always" || normalized === "permanent") return "always";
+  if (normalized === "scheduled" || normalized === "schedule") return "scheduled";
+  return null;
+};
+
+const normalizeMarketingBannerTimezone = (value: unknown): string => (
+  asString(value, 80) || "Asia/Manila"
+);
+
+const getMarketingBannerStatus = (row: any, nowIso = new Date().toISOString()): MarketingBannerStatus => {
+  if (!row?.is_active) return "inactive";
+  const scheduleMode = normalizeMarketingBannerScheduleMode(row?.schedule_mode) || "always";
+  if (scheduleMode === "always") return "permanent";
+  const startsAt = parseIsoDateTime(row?.starts_at);
+  const endsAt = parseIsoDateTime(row?.ends_at);
+  if (!startsAt || !endsAt) return "scheduled";
+  if (startsAt > nowIso) return "scheduled";
+  if (endsAt <= nowIso) return "expired";
+  return "active";
+};
+
+const normalizeMarketingBannerScheduleInput = (
+  body: any,
+  existing?: any,
+): { ok: true; values: { schedule_mode: MarketingBannerScheduleMode; starts_at: string | null; ends_at: string | null; timezone: string } } | { ok: false; response: Response } => {
+  const hasMode = Object.prototype.hasOwnProperty.call(body || {}, "schedule_mode");
+  const hasStartsAt = Object.prototype.hasOwnProperty.call(body || {}, "starts_at");
+  const hasEndsAt = Object.prototype.hasOwnProperty.call(body || {}, "ends_at");
+  const hasTimezone = Object.prototype.hasOwnProperty.call(body || {}, "timezone");
+  const scheduleMode = normalizeMarketingBannerScheduleMode(hasMode ? body?.schedule_mode : existing?.schedule_mode);
+  if (!scheduleMode) return { ok: false, response: badRequest("schedule_mode must be always or scheduled") };
+  const timezone = normalizeMarketingBannerTimezone(hasTimezone ? body?.timezone : existing?.timezone);
+  if (scheduleMode === "always") {
+    return { ok: true, values: { schedule_mode: "always", starts_at: null, ends_at: null, timezone } };
+  }
+  const startsAt = parseIsoDateTime(hasStartsAt ? body?.starts_at : existing?.starts_at);
+  const endsAt = parseIsoDateTime(hasEndsAt ? body?.ends_at : existing?.ends_at);
+  if (!startsAt || !endsAt) return { ok: false, response: badRequest("Scheduled banners require starts_at and ends_at") };
+  if (startsAt >= endsAt) return { ok: false, response: badRequest("Banner starts_at must be before ends_at") };
+  return { ok: true, values: { schedule_mode: "scheduled", starts_at: startsAt, ends_at: endsAt, timezone } };
+};
+
 const normalizeMarketingBannerRow = (row: any) => ({
   id: String(row?.id || ""),
   image_url: String(row?.image_url || ""),
   link_url: row?.link_url ? String(row.link_url) : null,
   sort_order: toNonNegativeSortOrder(row?.sort_order, 0),
   is_active: Boolean(row?.is_active),
+  schedule_mode: normalizeMarketingBannerScheduleMode(row?.schedule_mode) || "always",
+  starts_at: parseIsoDateTime(row?.starts_at),
+  ends_at: parseIsoDateTime(row?.ends_at),
+  timezone: normalizeMarketingBannerTimezone(row?.timezone),
+  status: getMarketingBannerStatus(row),
   created_at: String(row?.created_at || ""),
   updated_at: String(row?.updated_at || ""),
 });
@@ -2604,13 +2895,63 @@ const listMarketingBanners = async (
   const cap = Math.max(1, Math.min(100, Number(input.cap || STORE_MARKETING_BANNER_MAX_ACTIVE)));
   let query = admin
     .from("store_marketing_banners")
-    .select("id,image_url,link_url,sort_order,is_active,created_at,updated_at")
+    .select("id,image_url,link_url,sort_order,is_active,schedule_mode,starts_at,ends_at,timezone,created_at,updated_at")
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: false });
-  if (!includeInactive) query = query.eq("is_active", true).limit(cap);
+  if (!includeInactive) query = query.eq("is_active", true);
   const { data, error } = await query;
   if (error) return { ok: false, response: fail(500, error.message) };
-  return { ok: true, banners: (data || []).map(normalizeMarketingBannerRow) };
+  const normalized = (data || []).map(normalizeMarketingBannerRow);
+  const banners = includeInactive
+    ? normalized
+    : normalized
+      .filter((banner) => banner.status === "permanent" || banner.status === "active")
+      .slice(0, cap);
+  return { ok: true, banners };
+};
+
+const buildStoreUpdatesSummary = (items: any[], banners: any[]) => {
+  const bankMarkers = (items || [])
+    .slice(0, 10)
+    .map((item) => [
+      "bank",
+      asString(item?.id, 80),
+      asString(item?.bank_id, 80),
+      item?.is_pinned ? "1" : "0",
+      item?.coming_soon ? "1" : "0",
+      asString(item?.status, 40),
+    ].join(":"))
+    .filter(Boolean);
+  const promotionIds = new Set<string>();
+  const promotionMarkers = (items || [])
+    .filter((item) => item?.has_active_promotion)
+    .map((item) => {
+      const promotionId = asString(item?.promotion_id, 80) || "";
+      if (promotionId) promotionIds.add(promotionId);
+      return [
+        "promo",
+        promotionId,
+        asString(item?.id, 80),
+        asString(item?.promotion_badge, 120),
+        asString(item?.promotion_type, 40),
+        asString(item?.promotion_discount_type, 40),
+        parseIsoDateTime(item?.promotion_ends_at) || "",
+      ].join(":");
+    });
+  const bannerMarkers = (banners || []).map((banner) => [
+    "banner",
+    asString(banner?.id, 80),
+    toNonNegativeSortOrder(banner?.sort_order, 0),
+    asString(banner?.status, 40),
+    parseIsoDateTime(banner?.updated_at) || parseIsoDateTime(banner?.created_at) || "",
+  ].join(":"));
+  const markers = [...bankMarkers, ...promotionMarkers, ...bannerMarkers].filter(Boolean);
+  return {
+    signature: markers.join("|"),
+    banks: bankMarkers.length,
+    promotions: promotionIds.size,
+    banners: bannerMarkers.length,
+  };
 };
 
 const buildUserIdentityMap = async (
@@ -2670,6 +3011,7 @@ const getStoreCatalog = async (req: Request) => {
   const to = from + perPage - 1;
   const q = asString(url.searchParams.get("q"), 120);
   const includeBanners = url.searchParams.get("includeBanners") !== "0";
+  const includeStoreUpdates = url.searchParams.get("includeStoreUpdates") === "1";
   const includeCount = url.searchParams.get("includeCount") !== "0";
   const selectOptions = includeCount ? ({ count: "exact" } as const) : undefined;
   const requestedSort = String(url.searchParams.get("sort") || "default").toLowerCase();
@@ -2707,6 +3049,7 @@ const getStoreCatalog = async (req: Request) => {
         enabled: true,
         message: maintenanceState.message,
       },
+      ...(includeStoreUpdates ? { store_updates: buildStoreUpdatesSummary([], []) } : {}),
       meta: {
         durationMs: Date.now() - catalogStartedAt,
         strategy: "maintenance_mode",
@@ -2716,11 +3059,13 @@ const getStoreCatalog = async (req: Request) => {
     });
   }
   let banners: any[] = [];
+  let storeUpdateBanners: any[] = [];
   let strategy = "standard";
-  if (includeBanners) {
+  if (includeBanners || includeStoreUpdates) {
     const bannersResult = await listMarketingBanners(admin, { includeInactive: false, cap: STORE_MARKETING_BANNER_MAX_ACTIVE });
     if (!bannersResult.ok) return bannersResult.response;
-    banners = bannersResult.banners;
+    storeUpdateBanners = bannersResult.banners;
+    if (includeBanners) banners = storeUpdateBanners;
   }
 
   let purchasedBankIds: string[] = [];
@@ -2735,19 +3080,20 @@ const getStoreCatalog = async (req: Request) => {
         totalPages: 1,
         sort,
         q: q || "",
+        ...(includeStoreUpdates ? { store_updates: buildStoreUpdatesSummary([], storeUpdateBanners) } : {}),
       });
     }
     if (userId && !userIsAdmin) {
-      const [accessResult, approvedResult] = await Promise.all([
-        admin.from("user_bank_access").select("bank_id").eq("user_id", userId),
-        admin.from("bank_purchase_requests").select("bank_id").eq("user_id", userId).eq("status", "approved"),
+      const nowIso = new Date().toISOString();
+      const [accessBankIds, approvedResult] = await Promise.all([
+        selectActiveUserBankAccess(admin, userId),
+        admin.from("bank_purchase_requests").select("bank_id,status,promotion_snapshot").eq("user_id", userId).eq("status", "approved"),
       ]);
       const purchasedSet = new Set<string>();
-      (accessResult.data || []).forEach((row: any) => {
-        const bankId = asString(row?.bank_id, 80);
-        if (bankId) purchasedSet.add(bankId);
-      });
+      accessBankIds.forEach((bankId) => purchasedSet.add(bankId));
       (approvedResult.data || []).forEach((row: any) => {
+        if (!isStorePurchaseRequestAccessRow(row)) return;
+        if (!isApprovedStoreRequestAccessActive(row, nowIso)) return;
         const bankId = asString(row?.bank_id, 80);
         if (bankId) purchasedSet.add(bankId);
       });
@@ -2763,6 +3109,7 @@ const getStoreCatalog = async (req: Request) => {
         totalPages: 1,
         sort,
         q: q || "",
+        ...(includeStoreUpdates ? { store_updates: buildStoreUpdatesSummary([], storeUpdateBanners) } : {}),
       });
     }
   }
@@ -2821,28 +3168,33 @@ const getStoreCatalog = async (req: Request) => {
   const catalogBankIds = Array.from(new Set((catalogItems || []).map((item: any) => asString(item?.bank_id, 80)).filter(Boolean) as string[]));
   const catalogItemIds = Array.from(new Set((catalogItems || []).map((item: any) => asString(item?.id, 80)).filter(Boolean) as string[]));
   if (userId && catalogBankIds.length > 0) {
-    const [accessDataResult, requestDataResult] = await Promise.all([
-      admin.from("user_bank_access").select("bank_id").eq("user_id", userId).in("bank_id", catalogBankIds),
+    const nowIso = new Date().toISOString();
+    const [activeAccessBankIds, requestDataResult] = await Promise.all([
+      selectActiveUserBankAccess(admin, userId, catalogBankIds),
       admin
         .from("bank_purchase_requests")
-        .select("bank_id,catalog_item_id,status,rejection_message")
+        .select("bank_id,catalog_item_id,status,rejection_message,promotion_snapshot")
         .eq("user_id", userId)
         .in("catalog_item_id", catalogItemIds),
     ]);
-    if (accessDataResult.data) userGrants = new Set(accessDataResult.data.map((row: any) => row.bank_id));
+    userGrants = activeAccessBankIds;
     (requestDataResult.data || []).forEach((row: any) => {
+      if (!isStorePurchaseRequestAccessRow(row)) return;
       if (row.status === "pending") pendingRequests.add(row.bank_id);
-      if (row.status === "approved") approvedRequests.add(row.bank_id);
+      if (row.status === "approved" && isApprovedStoreRequestAccessActive(row, nowIso)) approvedRequests.add(row.bank_id);
       if (row.status === "rejected") rejectedRequests.set(row.bank_id, row.rejection_message || "");
       const catalogItemId = asString(row?.catalog_item_id, 80) || "";
       if (!catalogItemId) return;
       if (row.status === "pending") pendingCatalogItems.add(catalogItemId);
-      if (row.status === "approved") approvedCatalogItems.add(catalogItemId);
+      if (row.status === "approved" && isApprovedStoreRequestAccessActive(row, nowIso)) approvedCatalogItems.add(catalogItemId);
       if (row.status === "rejected") rejectedCatalogItems.set(catalogItemId, row.rejection_message || "");
     });
   }
 
-  const promotionMap = await resolvePromotionsForCatalogItems(admin, catalogItems || [], { userId });
+  const promotionMap = await resolvePromotionsForCatalogItems(admin, catalogItems || [], {
+    userId,
+    allowFreePromotions: isPromoAwareClient(req),
+  });
   let items = (catalogItems || [])
     .map((item: any) => {
       const itemId = asString(item?.id, 80) || "";
@@ -2944,6 +3296,7 @@ const getStoreCatalog = async (req: Request) => {
   return ok({
     items: pagedItems,
     banners,
+    ...(includeStoreUpdates ? { store_updates: buildStoreUpdatesSummary(items, storeUpdateBanners) } : {}),
     page,
     perPage,
     total,
@@ -3008,6 +3361,115 @@ const getTierAwareClientVersion = (req: Request): number => {
   return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
 };
 
+const getPromoAwareClientVersion = (req: Request): number => {
+  const raw =
+    req.headers.get("x-vdjv-promo-client")
+    || req.headers.get("x-vdjv-store-promo-client")
+    || "";
+  const marker = raw.trim().toLowerCase();
+  if (!marker) return 0;
+  if (marker === "true" || marker === "yes" || marker === "store_promos_v1") return 1;
+  const parsed = Number(marker.replace(/^v/i, ""));
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+};
+
+const isPromoAwareClient = (req: Request): boolean =>
+  getPromoAwareClientVersion(req) >= PROMO_AWARE_CLIENT_VERSION;
+
+const isMissingAccessExpiryColumnError = (error: unknown): boolean =>
+  /access_expires_at|access_source|source_promotion_id|source_purchase_request_id/i.test(String((error as any)?.message || error || ""));
+
+const isFreePromotionSnapshot = (value: unknown): boolean => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  return String(snapshot.discount_type || "").toLowerCase() === "free";
+};
+
+const isStorePurchaseRequestAccessRow = (row: any): boolean => !isFreePromotionSnapshot(row?.promotion_snapshot);
+
+const isApprovedStoreRequestAccessActive = (row: any, _nowIso = new Date().toISOString()): boolean => {
+  if (String(row?.status || "") !== "approved") return false;
+  if (!isStorePurchaseRequestAccessRow(row)) return false;
+  return true;
+};
+
+const selectActiveUserBankAccess = async (
+  admin: ReturnType<typeof createServiceClient>,
+  userId: string,
+  bankIds?: string[],
+): Promise<Set<string>> => {
+  const normalizedUserId = asUuid(userId);
+  if (!normalizedUserId) return new Set();
+  const normalizedBankIds = Array.isArray(bankIds)
+    ? Array.from(new Set(bankIds.map((id) => asUuid(id)).filter(Boolean) as string[]))
+    : [];
+  if (Array.isArray(bankIds) && normalizedBankIds.length === 0) return new Set();
+  const nowIso = new Date().toISOString();
+  let query: any = admin
+    .from("user_bank_access")
+    .select("bank_id,access_expires_at,access_source")
+    .eq("user_id", normalizedUserId)
+    .neq("access_source", "promotion")
+    .or(`access_expires_at.is.null,access_expires_at.gt.${nowIso}`);
+  if (normalizedBankIds.length > 0) query = query.in("bank_id", normalizedBankIds);
+  const { data, error } = await query;
+  if (error && isMissingAccessExpiryColumnError(error)) {
+    let fallback: any = admin
+      .from("user_bank_access")
+      .select("bank_id")
+      .eq("user_id", normalizedUserId);
+    if (normalizedBankIds.length > 0) fallback = fallback.in("bank_id", normalizedBankIds);
+    const fallbackResult = await fallback;
+    if (fallbackResult.error) throw new Error(fallbackResult.error.message);
+    return new Set((fallbackResult.data || []).map((row: any) => asString(row?.bank_id, 80) || "").filter(Boolean));
+  }
+  if (error) throw new Error(error.message);
+  return new Set((data || []).map((row: any) => asString(row?.bank_id, 80) || "").filter(Boolean));
+};
+
+const resolveFreePromotionDownloadAccess = async (input: {
+  admin: ReturnType<typeof createServiceClient>;
+  req: Request;
+  catalogItem: any;
+  userId: string;
+  accountCapabilities: AccountCapabilitySnapshot;
+}): Promise<{ allowed: true } | { allowed: false; response?: Response }> => {
+  const catalogItemId = asString(input.catalogItem?.id, 80) || "";
+  if (!catalogItemId) return { allowed: false };
+  const promotionMap = await resolvePromotionsForCatalogItems(input.admin, [input.catalogItem], {
+    userId: input.userId,
+    allowFreePromotions: true,
+  });
+  const resolved = promotionMap.get(catalogItemId) || null;
+  const isFreeAccessPromotion = Boolean(
+    resolved
+    && resolved.promotion.discount_type === "free"
+    && resolved.effectivePricePhp === 0,
+  );
+  if (!isFreeAccessPromotion) return { allowed: false };
+  if (!isPromoAwareClient(input.req)) {
+    return {
+      allowed: false,
+      response: fail(426, "UPDATE_REQUIRED", {
+        reason: "free_promotion_download_requires_promo_aware_client",
+        required_client_capability: PROMO_AWARE_CLIENT_VERSION,
+        received_client_capability: getPromoAwareClientVersion(input.req),
+        message: "Update the app to use free download promos.",
+      }),
+    };
+  }
+  if (!input.accountCapabilities.features.bankStoreFreeClaim) {
+    return {
+      allowed: false,
+      response: fail(403, "UPGRADE_REQUIRED", {
+        tier: input.accountCapabilities.effectiveTier,
+        reason: "bank_store_free_claim_disabled",
+      }),
+    };
+  }
+  return { allowed: true };
+};
+
 const validateAccountClientCompatibility = (req: Request, capabilities: AccountCapabilitySnapshot): Response | null => {
   if (capabilities.effectiveTier !== "free") return null;
   const clientVersion = getTierAwareClientVersion(req);
@@ -3064,17 +3526,20 @@ const getAccountMe = async (req: Request) => {
     !profile?.welcome_email_sent_at &&
     user.email
   ) {
-    const welcomeResult = await sendFreeAccountWelcomeEmail({
-      email: user.email,
-      displayName: asString(profile?.display_name, 120) || user.email.split("@")[0] || "User",
-      tier: capabilities.effectiveTier,
-    });
-    if (welcomeResult.status === "sent") {
-      await admin
-        .from("profiles")
-        .update({ welcome_email_sent_at: new Date().toISOString() })
-        .eq("id", user.id)
-        .is("welcome_email_sent_at", null);
+    const claimedAt = new Date().toISOString();
+    const { data: welcomeClaimRows, error: welcomeClaimError } = await admin
+      .from("profiles")
+      .update({ welcome_email_sent_at: claimedAt })
+      .eq("id", user.id)
+      .is("welcome_email_sent_at", null)
+      .select("id");
+    if (!welcomeClaimError && (welcomeClaimRows || []).length > 0) {
+      (profile as any).welcome_email_sent_at = claimedAt;
+      await sendFreeAccountWelcomeEmail({
+        email: user.email,
+        displayName: asString(profile?.display_name, 120) || user.email.split("@")[0] || "User",
+        tier: capabilities.effectiveTier,
+      });
     }
   }
   return ok({
@@ -3087,14 +3552,147 @@ const getAccountMe = async (req: Request) => {
   });
 };
 
+const ACCOUNT_DELETE_OTP_WINDOW_SECONDS = 10 * 60;
+const ACCOUNT_DELETE_OTP_RATE_LIMIT = 3;
+const ACCOUNT_DELETE_OTP_RATE_WINDOW_SECONDS = 10 * 60;
+
+const getAccountAuthProviders = (user: any): Set<string> => {
+  const providers = new Set<string>();
+  const metadata = user?.app_metadata || {};
+  const provider = asString(metadata.provider, 40).toLowerCase();
+  if (provider) providers.add(provider);
+  if (Array.isArray(metadata.providers)) {
+    for (const entry of metadata.providers) {
+      const value = asString(entry, 40).toLowerCase();
+      if (value) providers.add(value);
+    }
+  }
+  if (Array.isArray(user?.identities)) {
+    for (const identity of user.identities) {
+      const value = asString(identity?.provider, 40).toLowerCase();
+      if (value) providers.add(value);
+    }
+  }
+  return providers;
+};
+
+const accountUsesPasswordProvider = (user: any): boolean => {
+  const providers = getAccountAuthProviders(user);
+  return providers.has("email") || (providers.size === 0 && Boolean(user?.email));
+};
+
+const getAccountDeleteOtpSecret = (): string =>
+  Deno.env.get("ACCOUNT_DELETE_OTP_SECRET") ||
+  Deno.env.get("APP_SUPABASE_SERVICE_ROLE_KEY") ||
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
+  "";
+
+const accountDeleteOtpForSlot = async (userId: string, email: string, slot: number): Promise<string> => {
+  const secret = getAccountDeleteOtpSecret();
+  if (!secret) throw new Error("Account deletion OTP secret is not configured");
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = new Uint8Array(await crypto.subtle.sign(
+    "HMAC",
+    key,
+    encoder.encode(`${userId}:${normalizeEmail(email)}:${slot}`),
+  ));
+  const value = ((signature[0] << 24) | (signature[1] << 16) | (signature[2] << 8) | signature[3]) >>> 0;
+  return String(value % 1_000_000).padStart(6, "0");
+};
+
+const createAccountDeleteOtp = async (userId: string, email: string): Promise<string> => {
+  const slot = Math.floor(Date.now() / (ACCOUNT_DELETE_OTP_WINDOW_SECONDS * 1000));
+  return await accountDeleteOtpForSlot(userId, email, slot);
+};
+
+const verifyAccountDeleteOtp = async (userId: string, email: string, otp: string): Promise<boolean> => {
+  const normalized = String(otp || "").replace(/\D/g, "");
+  if (!/^\d{6}$/.test(normalized)) return false;
+  const slot = Math.floor(Date.now() / (ACCOUNT_DELETE_OTP_WINDOW_SECONDS * 1000));
+  const candidates = await Promise.all([
+    accountDeleteOtpForSlot(userId, email, slot),
+    accountDeleteOtpForSlot(userId, email, slot - 1),
+  ]);
+  return candidates.includes(normalized);
+};
+
+const sendAccountDeleteOtp = async (req: Request) => {
+  const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
+  if (!user?.id) return fail(401, "NOT_AUTHENTICATED");
+  const email = normalizeEmail(user.email);
+  if (!email) return fail(400, "EMAIL_REQUIRED");
+
+  const rateLimit = await consumeRateLimit({
+    scope: "account.delete_otp",
+    subject: `${getRequestIp(req)}:${user.id}`,
+    maxHits: ACCOUNT_DELETE_OTP_RATE_LIMIT,
+    windowSeconds: ACCOUNT_DELETE_OTP_RATE_WINDOW_SECONDS,
+  });
+  if (!rateLimit.allowed) {
+    return fail(429, "RATE_LIMITED", {
+      retry_after_seconds: rateLimit.retryAfterSeconds,
+    });
+  }
+
+  const code = await createAccountDeleteOtp(user.id, email);
+  const html = `
+    <div style="font-family:Inter,Arial,sans-serif;background:#111827;color:#f9fafb;padding:24px;">
+      <div style="max-width:560px;margin:0 auto;border:1px solid #374151;border-radius:18px;background:#020617;padding:24px;">
+        <div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#f87171;">VDJV account deletion</div>
+        <h1 style="margin:10px 0 8px;font-size:26px;line-height:1.1;">Confirm account deletion</h1>
+        <p style="margin:0 0 16px;color:#d1d5db;line-height:1.5;">Use this code only if you are deleting your VDJV account.</p>
+        <div style="border:1px solid #7f1d1d;border-radius:14px;padding:18px;background:#1f0303;color:#fecaca;font-size:28px;font-weight:800;letter-spacing:.2em;text-align:center;">${escapeHtml(code)}</div>
+        <p style="margin:16px 0 0;color:#9ca3af;font-size:12px;">This code expires in 10 minutes. If you did not request deletion, ignore this email and keep your account signed in.</p>
+      </div>
+    </div>
+  `;
+  await sendEmailViaResend({
+    to: email,
+    subject: "VDJV account deletion code",
+    html,
+    text: `Your VDJV account deletion code is ${code}. It expires in 10 minutes. Ignore this email if you did not request deletion.`,
+  });
+  return ok({ sent: true, expiresInSeconds: ACCOUNT_DELETE_OTP_WINDOW_SECONDS });
+};
+
+const verifyAccountPassword = async (email: string, password: string, expectedUserId: string): Promise<boolean> => {
+  const verifier = createUserScopedClient(null);
+  const { data, error } = await verifier.auth.signInWithPassword({ email, password });
+  if (error || data.user?.id !== expectedUserId) return false;
+  await verifier.auth.signOut().catch(() => {});
+  return true;
+};
+
 const deleteOwnAccount = async (req: Request, body: any) => {
   const admin = createServiceClient();
   const user = await getUserFromAuthHeader(req.headers.get("Authorization"));
   if (!user?.id) return fail(401, "NOT_AUTHENTICATED");
   if (body?.confirm !== true) return badRequest("Deletion confirmation is required");
+  if (asString(body?.phrase, 32).trim().toUpperCase() !== "DELETE") return fail(400, "DELETE_PHRASE_REQUIRED");
+  if (body?.acknowledge !== true) return fail(400, "DELETION_ACKNOWLEDGEMENT_REQUIRED");
+
+  const usesPasswordProvider = accountUsesPasswordProvider(user);
+  const targetEmail = normalizeEmail(user.email);
+  if (usesPasswordProvider) {
+    const password = asString(body?.password, 300);
+    if (!targetEmail || !password) return fail(400, "PASSWORD_REQUIRED");
+    const passwordOk = await verifyAccountPassword(targetEmail, password, user.id);
+    if (!passwordOk) return fail(403, "PASSWORD_VERIFICATION_FAILED");
+  } else {
+    if (!targetEmail) return fail(400, "EMAIL_REQUIRED");
+    const otpOk = await verifyAccountDeleteOtp(user.id, targetEmail, asString(body?.otp, 20));
+    if (!otpOk) return fail(403, "DELETE_CODE_INVALID");
+  }
 
   const userId = user.id;
-  const targetEmail = user.email || null;
+  const deletedEmail = user.email || null;
 
   const { error: authDeleteError } = await admin.auth.admin.deleteUser(userId);
   if (authDeleteError) return fail(500, authDeleteError.message);
@@ -3109,7 +3707,7 @@ const deleteOwnAccount = async (req: Request, body: any) => {
       description: "A signed-in user deleted their account from app settings.",
       actorUserId: userId,
       targetUserId: userId,
-      extraFields: targetEmail ? [{ name: "Email", value: targetEmail, inline: true }] : [],
+      extraFields: deletedEmail ? [{ name: "Email", value: deletedEmail, inline: true }] : [],
     })
   );
 
@@ -3123,6 +3721,7 @@ const getAccountUpgradeOptions = async (req: Request) => {
   const profile = userId ? await ensureProfileForAccountUser(admin, user) : null;
   const capabilities = await loadAccountCapabilitySnapshot(admin, userId || null);
   const targets: StoredAccountTier[] = ["pro", "pro_max"];
+  const userEmail = normalizeEmail(user?.email);
   const { data: pendingRows, error: pendingError } = userId
     ? await admin
       .from("account_upgrade_requests")
@@ -3130,12 +3729,48 @@ const getAccountUpgradeOptions = async (req: Request) => {
       .eq("user_id", userId)
       .eq("status", "pending")
       .in("target_tier", targets)
+      .order("created_at", { ascending: false })
     : { data: [], error: null };
   if (pendingError) return fail(500, pendingError.message);
+  const { data: pendingRegistrationRows, error: pendingRegistrationError } = userEmail
+    ? await admin
+      .from("account_registration_requests")
+      .select("id,target_tier,status,receipt_reference,created_at,account_price_php_snapshot")
+      .eq("email_normalized", userEmail)
+      .eq("status", "pending")
+      .in("target_tier", targets)
+      .order("created_at", { ascending: false })
+    : { data: [], error: null };
+  if (pendingRegistrationError) return fail(500, pendingRegistrationError.message);
   const pendingByTier = new Map<string, any>();
-  for (const row of pendingRows || []) {
+  const addPendingRow = (row: any, source: "upgrade_request" | "registration_request") => {
     const target = normalizeUpgradeTier((row as any)?.target_tier);
-    if (target && !pendingByTier.has(target)) pendingByTier.set(target, row);
+    if (!target) return;
+    const rawPrice = row?.quote_price_php_snapshot ?? row?.account_price_php_snapshot;
+    const normalizedRow = {
+      id: String(row?.id || `${target}-pending`),
+      target_tier: target,
+      status: "pending",
+      receipt_reference: row?.receipt_reference || null,
+      created_at: row?.created_at || null,
+      quote_price_php_snapshot: Number.isFinite(Number(rawPrice)) ? Number(rawPrice) : null,
+      source,
+      request_source: source,
+    };
+    const existing = pendingByTier.get(target);
+    const existingTime = Number.isFinite(Date.parse(String(existing?.created_at || "")))
+      ? Date.parse(String(existing.created_at))
+      : 0;
+    const nextTime = Number.isFinite(Date.parse(String(normalizedRow.created_at || "")))
+      ? Date.parse(String(normalizedRow.created_at))
+      : 0;
+    if (!existing || nextTime >= existingTime) pendingByTier.set(target, normalizedRow);
+  };
+  for (const row of pendingRows || []) {
+    addPendingRow(row, "upgrade_request");
+  }
+  for (const row of pendingRegistrationRows || []) {
+    addPendingRow(row, "registration_request");
   }
   const freeConfig = await getTierConfig(admin, "free");
   const freeUiContent = await resolveTierUiContent(freeConfig);
@@ -3239,11 +3874,11 @@ const createAccountUpgradeRequest = async (req: Request, body: any) => {
   const targetTier = normalizeUpgradeTier(body?.targetTier ?? body?.target_tier);
   if (!targetTier || targetTier === "free") return badRequest("targetTier must be pro or pro_max");
   const currentCapabilities = await loadAccountCapabilitySnapshot(admin, user.id);
-  if (currentCapabilities.effectiveTier === "pro_max" || currentCapabilities.effectiveTier === targetTier) {
-    return fail(409, "ALREADY_ON_TIER", { capabilities: currentCapabilities });
-  }
   if (targetTier === "pro" && currentCapabilities.effectiveTier === "pro_max") {
     return fail(409, "ALREADY_ABOVE_TIER", { capabilities: currentCapabilities });
+  }
+  if (currentCapabilities.effectiveTier === targetTier) {
+    return fail(409, "ALREADY_ON_TIER", { capabilities: currentCapabilities });
   }
   const { data: existingPending, error: existingPendingError } = await admin
     .from("account_upgrade_requests")
@@ -3262,11 +3897,55 @@ const createAccountUpgradeRequest = async (req: Request, body: any) => {
   const proofPath = asString(body?.proofPath ?? body?.proof_path, 500);
   if (proofPath && !proofPath.startsWith(`${user.id}/`)) return badRequest("proofPath must be inside your own folder");
   if (proofPath && !/\.(png|jpg|jpeg|webp|gif|heic|heif)$/i.test(proofPath)) return badRequest("proofPath must be an image file");
+  let payerName = asString(body?.payerName ?? body?.payer_name, 120);
+  let referenceNo = asString(body?.referenceNo ?? body?.reference_no, 120);
+  const notes = asString(body?.notes, 1000);
 
   const quote = await quoteUpgradeRequest(admin, user.id, targetTier);
+  if (quote.quotePrice > 0 && !paymentChannel) {
+    return badRequest("paymentChannel is required for paid upgrades");
+  }
   if (quote.quotePrice > 0 && paymentChannel === "image_proof" && !proofPath) {
     return badRequest("proofPath is required for image_proof");
   }
+  if (proofPath) {
+    const { error: signedError } = await admin.storage.from("payment-proof").createSignedUrl(proofPath, 60);
+    if (signedError) return fail(400, "INVALID_PROOF_PATH");
+  }
+
+  const automationSettings = await getStoreAutomationSettings(admin);
+  const { data: paymentSettings, error: paymentSettingsError } = await admin
+    .from("store_payment_settings")
+    .select("gcash_number,maya_number")
+    .eq("id", "default")
+    .maybeSingle();
+  if (paymentSettingsError) return fail(500, paymentSettingsError.message);
+
+  let ocrDetected: ReceiptOcrDetection | null = null;
+  let ocrErrorCode: string | null = null;
+  let ocrProvider: string | null = null;
+  const hasOcrProof = quote.quotePrice > 0 && shouldUsePaymentProofOcr(paymentChannel, proofPath);
+  const shouldRunServerOcr = hasOcrProof && automationSettings.account.enabled;
+  if (shouldRunServerOcr && proofPath) {
+    const attempt = await extractReceiptFieldsFromStoragePath(
+      admin,
+      "payment-proof",
+      proofPath,
+      "account_registration",
+    ).catch(() => ({ detected: null, errorCode: "OCR_FAILED", provider: OCR_SPACE_PROVIDER, elapsedMs: 0 } satisfies ReceiptOcrAttempt));
+    if (attempt.detected) {
+      ocrDetected = attempt.detected;
+      ocrProvider = attempt.detected.provider;
+      if (!payerName && attempt.detected.payerName) payerName = attempt.detected.payerName;
+      if (!referenceNo && attempt.detected.referenceNo) referenceNo = attempt.detected.referenceNo;
+    } else {
+      ocrErrorCode = attempt.errorCode || (String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE");
+      ocrProvider = attempt.provider;
+    }
+  } else if (hasOcrProof) {
+    ocrErrorCode = "MANUAL_REVIEW_MODE";
+  }
+  const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode, ocrProvider);
 
   const requestId = crypto.randomUUID();
   const receiptReference = buildUpgradeReceiptReference(requestId);
@@ -3280,24 +3959,115 @@ const createAccountUpgradeRequest = async (req: Request, body: any) => {
       target_tier: targetTier,
       status: quote.quotePrice <= 0 ? "approved" : "pending",
       payment_channel: quote.quotePrice <= 0 ? "voucher" : paymentChannel || null,
-      payer_name: quote.quotePrice <= 0 ? null : asString(body?.payerName ?? body?.payer_name, 120),
-      reference_no: quote.quotePrice <= 0 ? null : asString(body?.referenceNo ?? body?.reference_no, 120),
+      payer_name: quote.quotePrice <= 0 ? null : payerName || null,
+      reference_no: quote.quotePrice <= 0 ? null : referenceNo || null,
       proof_path: quote.quotePrice <= 0 ? null : proofPath,
-      notes: asString(body?.notes, 1000),
+      notes,
       base_price_php_snapshot: quote.basePrice,
       store_credit_php_snapshot: quote.creditPhp,
       quote_price_php_snapshot: quote.quotePrice,
       purchase_credit_snapshot: quote.purchaseCreditSnapshot,
       receipt_reference: receiptReference,
       reviewed_at: quote.quotePrice <= 0 ? new Date().toISOString() : null,
+      ocr_reference_no: ocrMetadata.referenceNo,
+      ocr_payer_name: ocrMetadata.payerName,
+      ocr_amount_php: ocrMetadata.amountPhp,
+      ocr_recipient_number: ocrMetadata.recipientNumber,
+      ocr_provider: ocrMetadata.provider,
+      ocr_scanned_at: ocrMetadata.scannedAt,
+      ocr_status: ocrMetadata.status,
+      ocr_error_code: ocrMetadata.errorCode,
     })
     .select("*")
     .single();
   if (insertError || !inserted) return fail(500, insertError?.message || "Upgrade request could not be created");
 
   let capabilities: AccountCapabilitySnapshot | null = null;
+  let responseRequest: any = inserted;
   if (quote.quotePrice <= 0) {
     capabilities = await applyAccountTierToUser(admin, user.id, targetTier, "upgrade_request");
+  } else {
+    let automationResult: AutomationReason = "not_image_proof";
+    let autoApproved = false;
+    if (hasOcrProof) {
+      if (!automationSettings.account.enabled) {
+        automationResult = "manual_review_disabled";
+      } else if (!ocrDetected) {
+        automationResult = "ocr_failed";
+      } else if (!ocrMetadata.referenceNo) {
+        automationResult = "missing_reference";
+      } else if (hasSubmittedReferenceMismatch(referenceNo, ocrMetadata.referenceNo)) {
+        automationResult = "reference_mismatch";
+      } else if (ocrMetadata.amountPhp === null) {
+        automationResult = "missing_amount";
+      } else if (!ocrMetadata.recipientNumber) {
+        automationResult = "missing_recipient_number";
+      } else {
+        const reserved = await tryReservePaymentReference({
+          admin,
+          sourceReference: ocrMetadata.referenceNo,
+          sourceTable: "account_upgrade_requests",
+          sourceRequestId: requestId,
+        });
+        if (reserved.errorMessage) {
+          automationResult = "approval_error";
+        } else if (!reserved.reserved) {
+          automationResult = "duplicate_reference";
+        } else if (!isWithinAutoApprovalWindow(automationSettings.account)) {
+          automationResult = "outside_window";
+        } else if (!matchesConfiguredWalletRecipient({
+          paymentChannel,
+          detectedRecipientNumber: ocrMetadata.recipientNumber,
+          paymentConfig: paymentSettings,
+        })) {
+          automationResult = "wallet_number_mismatch";
+        } else {
+          const expectedAmount = roundMoney(quote.quotePrice);
+          const detectedAmount = roundMoney(ocrMetadata.amountPhp);
+          if (!matchesAutoApprovalAmount(expectedAmount, detectedAmount)) {
+            automationResult = "amount_mismatch";
+          } else {
+            automationResult = "approved";
+            autoApproved = true;
+          }
+        }
+      }
+    }
+
+    if (autoApproved) {
+      const reviewedAtIso = new Date().toISOString();
+      capabilities = await applyAccountTierToUser(admin, user.id, targetTier, "upgrade_request");
+      const { error: updateError } = await admin
+        .from("account_upgrade_requests")
+        .update({
+          status: "approved",
+          reviewed_by: null,
+          reviewed_at: reviewedAtIso,
+          updated_at: reviewedAtIso,
+          decision_source: "automation",
+          automation_result: automationResult,
+        })
+        .eq("id", requestId)
+        .eq("status", "pending");
+      if (updateError) return fail(500, updateError.message);
+      responseRequest = {
+        ...inserted,
+        status: "approved",
+        reviewed_by: null,
+        reviewed_at: reviewedAtIso,
+        decision_source: "automation",
+        automation_result: automationResult,
+      };
+    } else {
+      await admin
+        .from("account_upgrade_requests")
+        .update({ automation_result: automationResult })
+        .eq("id", requestId);
+      responseRequest = {
+        ...inserted,
+        automation_result: automationResult,
+      };
+    }
   }
 
   await swallowDiscordError(() =>
@@ -3317,8 +4087,46 @@ const createAccountUpgradeRequest = async (req: Request, body: any) => {
     })
   );
 
+  const emailStatusUpdate: Record<string, unknown> = {};
+  let upgradeEmailResult: { status: "sent" | "failed" | "skipped"; error: string | null } = {
+    status: "skipped",
+    error: null,
+  };
+  if (String(responseRequest?.status || "") === "approved") {
+    upgradeEmailResult = await sendAccountApprovalDecisionEmail({
+      admin,
+      requestRow: responseRequest,
+      reviewedAtIso: asString(responseRequest?.reviewed_at, 80) || new Date().toISOString(),
+      loginHint: "Your upgraded tier is now active. Reopen VDJV if it does not appear yet.",
+    });
+    emailStatusUpdate.decision_email_status = upgradeEmailResult.status;
+    emailStatusUpdate.decision_email_error = upgradeEmailResult.error;
+  } else {
+    upgradeEmailResult = await sendAccountPendingSubmissionEmail({
+      admin,
+      requestRow: responseRequest,
+    });
+    emailStatusUpdate.pending_email_status = upgradeEmailResult.status;
+    emailStatusUpdate.pending_email_error = upgradeEmailResult.error;
+    emailStatusUpdate.decision_email_status = upgradeEmailResult.status;
+    emailStatusUpdate.decision_email_error = upgradeEmailResult.error;
+  }
+  if (Object.keys(emailStatusUpdate).length > 0) {
+    const { error: emailUpdateError } = await admin
+      .from("account_upgrade_requests")
+      .update(emailStatusUpdate)
+      .eq("id", requestId);
+    if (emailUpdateError && !/decision_email_status|decision_email_error|pending_email_status|pending_email_error/i.test(emailUpdateError.message || "")) {
+      return fail(500, emailUpdateError.message);
+    }
+    responseRequest = {
+      ...responseRequest,
+      ...emailStatusUpdate,
+    };
+  }
+
   return ok({
-    request: inserted,
+    request: responseRequest,
     capabilities,
   }, 201);
 };
@@ -4689,7 +5497,8 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
   let ocrErrorCode: string | null = null;
   let ocrProvider: string | null = null;
   const automationConfig = getInstallerAutomationConfigForVersion(automationSettings, version);
-  const shouldRunServerOcr = paymentChannel === "image_proof" && Boolean(proofPath) && automationConfig.enabled;
+  const hasOcrProof = shouldUsePaymentProofOcr(paymentChannel, proofPath);
+  const shouldRunServerOcr = hasOcrProof && automationConfig.enabled;
   if (shouldRunServerOcr && proofPath) {
     const attempt = await extractReceiptFieldsFromStoragePath(
       admin,
@@ -4706,7 +5515,7 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
       ocrErrorCode = attempt.errorCode || (String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE");
       ocrProvider = attempt.provider;
     }
-  } else if (paymentChannel === "image_proof" && proofPath) {
+  } else if (hasOcrProof) {
     ocrErrorCode = "MANUAL_REVIEW_MODE";
   }
 
@@ -4777,13 +5586,15 @@ const createInstallerPurchaseRequest = async (req: Request, body: any) => {
 
   let automationResult: AutomationReason = "not_image_proof";
   let autoApproved = false;
-  if (paymentChannel === "image_proof") {
+  if (hasOcrProof) {
     if (!automationConfig.enabled) {
       automationResult = "manual_review_disabled";
     } else if (!ocrDetected) {
       automationResult = "ocr_failed";
     } else if (!ocrMetadata.referenceNo) {
       automationResult = "missing_reference";
+    } else if (hasSubmittedReferenceMismatch(referenceNo, ocrMetadata.referenceNo)) {
+      automationResult = "reference_mismatch";
     } else if (ocrMetadata.amountPhp === null) {
       automationResult = "missing_amount";
     } else if (!ocrMetadata.recipientNumber) {
@@ -5424,7 +6235,8 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
   let ocrDetected: ReceiptOcrDetection | null = null;
   let ocrErrorCode: string | null = null;
   let ocrProvider: string | null = null;
-  const shouldRunServerOcr = paymentChannel === "image_proof" && Boolean(proofPath) && automationSettings.account.enabled;
+  const hasOcrProof = shouldUsePaymentProofOcr(paymentChannel, proofPath);
+  const shouldRunServerOcr = hasOcrProof && automationSettings.account.enabled;
   if (shouldRunServerOcr && proofPath) {
     const attempt = await extractReceiptFieldsFromStoragePath(
       admin,
@@ -5441,7 +6253,7 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
       ocrErrorCode = attempt.errorCode || (String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE");
       ocrProvider = attempt.provider;
     }
-  } else if (paymentChannel === "image_proof" && proofPath) {
+  } else if (hasOcrProof) {
     ocrErrorCode = "MANUAL_REVIEW_MODE";
   }
   const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode, ocrProvider);
@@ -5581,13 +6393,15 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
   let automationResult: AutomationReason = "not_image_proof";
   let autoApproved = false;
 
-  if (paymentChannel === "image_proof") {
+  if (hasOcrProof) {
     if (!automationSettings.account.enabled) {
       automationResult = "manual_review_disabled";
     } else if (!ocrDetected) {
       automationResult = "ocr_failed";
     } else if (!ocrMetadata.referenceNo) {
       automationResult = "missing_reference";
+    } else if (hasSubmittedReferenceMismatch(referenceNo, ocrMetadata.referenceNo)) {
+      automationResult = "reference_mismatch";
     } else if (ocrMetadata.amountPhp === null) {
       automationResult = "missing_amount";
     } else if (!ocrMetadata.recipientNumber) {
@@ -5663,10 +6477,14 @@ const createAccountRegistrationSubmit = async (req: Request, body: any) => {
   return ok({
     requestId: data.id,
     status: "pending",
+    target_tier: targetTier,
     auto_approved: false,
     payer_name: payerName || null,
     reference_no: ocrMetadata.referenceNo || referenceNo || null,
     receipt_reference: (data as any)?.receipt_reference || receiptReference,
+    created_at: requestRow.created_at,
+    account_price_php_snapshot: accountRegistrationPrice,
+    quote_price_php_snapshot: accountRegistrationPrice,
     decision_email_status: pendingEmailResult.status,
     decision_email_error: pendingEmailResult.error,
     pending_email_status: pendingEmailResult.status,
@@ -5701,7 +6519,7 @@ const getAccountRegistrationLoginHint = async (req: Request, body: any) => {
 
   const { data: latest, error } = await admin
     .from("account_registration_requests")
-    .select("id,status,rejection_message,created_at")
+    .select("id,status,target_tier,rejection_message,receipt_reference,created_at,account_price_php_snapshot")
     .eq("email_normalized", email)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -5709,12 +6527,25 @@ const getAccountRegistrationLoginHint = async (req: Request, body: any) => {
   if (error) return fail(500, error.message);
   if (!latest) return ok({ status: "none" });
   if (latest.status === "pending") {
-    return ok({ status: "pending", request_id: latest.id, created_at: latest.created_at });
+    return ok({
+      status: "pending",
+      request_id: latest.id,
+      target_tier: normalizeUpgradeTier(latest.target_tier) || "pro",
+      receipt_reference: latest.receipt_reference || null,
+      created_at: latest.created_at,
+      account_price_php_snapshot: Number.isFinite(Number(latest.account_price_php_snapshot))
+        ? Number(latest.account_price_php_snapshot)
+        : null,
+      quote_price_php_snapshot: Number.isFinite(Number(latest.account_price_php_snapshot))
+        ? Number(latest.account_price_php_snapshot)
+        : null,
+    });
   }
   if (latest.status === "rejected") {
     return ok({
       status: "rejected",
       request_id: latest.id,
+      target_tier: normalizeUpgradeTier(latest.target_tier) || "pro",
       created_at: latest.created_at,
       rejection_message: latest.rejection_message || null,
     });
@@ -5878,7 +6709,7 @@ const getStoreAutomationSettings = async (admin: ReturnType<typeof createService
 const reservePaymentReference = async (input: {
   admin: ReturnType<typeof createServiceClient>;
   sourceReference: string;
-  sourceTable: "account_registration_requests" | "bank_purchase_requests" | "installer_purchase_requests";
+  sourceTable: "account_registration_requests" | "account_upgrade_requests" | "bank_purchase_requests" | "installer_purchase_requests";
   sourceRequestId: string | null;
 }): Promise<{ reserved: boolean; normalizedReference: string | null }> => {
   const normalizedReference = normalizePaymentReferenceRegistryKey(input.sourceReference);
@@ -5918,7 +6749,7 @@ const tryReservePaymentReference = async (input: Parameters<typeof reservePaymen
 const ensurePaymentReferenceClaimed = async (input: {
   admin: ReturnType<typeof createServiceClient>;
   sourceReference: string | null;
-  sourceTable: "account_registration_requests" | "bank_purchase_requests" | "installer_purchase_requests";
+  sourceTable: "account_registration_requests" | "account_upgrade_requests" | "bank_purchase_requests" | "installer_purchase_requests";
   sourceRequestId: string | null;
 }): Promise<{ ok: true; normalizedReference: string | null } | { ok: false; response: Response }> => {
   const normalizedReference = normalizePaymentReferenceRegistryKey(input.sourceReference);
@@ -6060,6 +6891,7 @@ const executeAccountApproval = async (input: {
     if (createdNewAuthUser) await cleanupCreatedAuthUser(input.admin, authUserId);
     return fail(500, error instanceof Error ? error.message : String(error));
   }
+  const legacyProfileLimits = toLegacyProfileQuotaLimits(proTierDefaults.limits);
 
   const { error: profileUpsertError } = await input.admin
     .from("profiles")
@@ -6071,9 +6903,9 @@ const executeAccountApproval = async (input: {
         account_tier: targetTier,
         tier_source: "registration",
         tier_updated_at: input.reviewedAtIso,
-        owned_bank_quota: proTierDefaults.limits.ownedBankQuota,
-        owned_bank_pad_cap: proTierDefaults.limits.ownedBankPadCap,
-        device_total_bank_cap: proTierDefaults.limits.deviceTotalBankCap,
+        owned_bank_quota: legacyProfileLimits.ownedBankQuota,
+        owned_bank_pad_cap: legacyProfileLimits.ownedBankPadCap,
+        device_total_bank_cap: legacyProfileLimits.deviceTotalBankCap,
         updated_at: input.reviewedAtIso,
       },
       { onConflict: "id" },
@@ -6263,6 +7095,9 @@ const executeStoreDecision = async (input: {
     decision_email_error: emailResults.aggregate.error,
     auto_approved: input.decisionSource === "automation",
     free_claim: Boolean(input.freeClaim),
+    promo_expires_at: input.freeClaim
+      ? (parseIsoDateTime(input.batchRows[0]?.promotion_snapshot?.ends_at) || null)
+      : null,
     payer_name: asString(input.batchRows[0]?.payer_name, 160) || null,
     reference_no: asString(input.batchRows[0]?.ocr_reference_no, 160) || asString(input.batchRows[0]?.reference_no, 160) || null,
     receipt_reference: asString(input.batchRows[0]?.receipt_reference, 160) || null,
@@ -6309,6 +7144,7 @@ const listAdminAccountRegistrationRequests = async (req: Request) => {
     || automationResult === "manual_review_disabled"
     || automationResult === "outside_window"
     || automationResult === "missing_reference"
+    || automationResult === "reference_mismatch"
     || automationResult === "missing_amount"
     || automationResult === "missing_recipient_number"
     || automationResult === "duplicate_reference"
@@ -6650,7 +7486,10 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
 
   const catalogById = new Map<string, any>();
   for (const row of catalogRows || []) catalogById.set(row.id, row);
-  const promotionMap = await resolvePromotionsForCatalogItems(admin, catalogRows || [], { userId });
+  const promotionMap = await resolvePromotionsForCatalogItems(admin, catalogRows || [], {
+    userId,
+    allowFreePromotions: isPromoAwareClient(req),
+  });
   const enrichedCatalogById = new Map<string, any>();
   for (const row of catalogRows || []) {
     const rowId = asString(row?.id, 80) || "";
@@ -6678,10 +7517,18 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       && asPriceNumber(catalogRow?.price_php) === 0,
     );
   });
-  if (allFreePromotionClaim && !accountCapabilities.features.bankStoreFreeClaim) {
-    return fail(403, "UPGRADE_REQUIRED", {
-      tier: accountCapabilities.effectiveTier,
-      reason: "bank_store_free_claim_disabled",
+  if (allFreePromotionClaim && !isPromoAwareClient(req)) {
+    return fail(426, "UPDATE_REQUIRED", {
+      reason: "free_promotion_claim_requires_promo_aware_client",
+      required_client_capability: PROMO_AWARE_CLIENT_VERSION,
+      received_client_capability: getPromoAwareClientVersion(req),
+      message: "Update the app to claim free download promos.",
+    });
+  }
+  if (allFreePromotionClaim) {
+    return fail(409, "FREE_PROMO_DIRECT_DOWNLOAD_REQUIRED", {
+      reason: "free_promotion_downloads_do_not_create_store_requests",
+      message: "Free access promos download directly while the promotion is active.",
     });
   }
   if (!allFreePromotionClaim && !accountCapabilities.features.bankStoreCheckout) {
@@ -6696,26 +7543,23 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
     const freeClaimCatalogItemIds = [...new Set(normalizedItems.map((item) => item.catalogItemId))];
     const freeClaimBankIds = [...new Set(normalizedItems.map((item) => item.bankId))];
     const [existingAccessResult, existingRequestResult] = await Promise.all([
-      admin
-        .from("user_bank_access")
-        .select("bank_id, granted_at")
-        .eq("user_id", userId)
-        .in("bank_id", freeClaimBankIds),
+      selectActiveUserBankAccess(admin, userId, freeClaimBankIds),
       admin
         .from("bank_purchase_requests")
-        .select("id, bank_id, catalog_item_id, status, batch_id, receipt_reference, created_at")
+        .select("id, bank_id, catalog_item_id, status, batch_id, receipt_reference, created_at, promotion_snapshot")
         .eq("user_id", userId)
         .in("catalog_item_id", freeClaimCatalogItemIds)
         .in("status", ["pending", "approved"])
         .order("created_at", { ascending: false }),
     ]);
-    if (existingAccessResult.error) return fail(500, existingAccessResult.error.message);
     if (existingRequestResult.error) return fail(500, existingRequestResult.error.message);
 
-    const grantedBankIds = new Set((existingAccessResult.data || []).map((row: any) => asString(row?.bank_id, 80) || "").filter(Boolean));
+    const grantedBankIds = existingAccessResult;
     const pendingCatalogItemIds = new Set<string>();
     const approvedCatalogItemIds = new Set<string>();
+    const nowIso = new Date().toISOString();
     for (const row of existingRequestResult.data || []) {
+      if (row.status === "approved" && !isApprovedStoreRequestAccessActive(row, nowIso)) continue;
       const catalogItemId = asString(row?.catalog_item_id, 80) || "";
       if (!catalogItemId || existingFreeClaimRowsByCatalogItemId.has(catalogItemId)) continue;
       existingFreeClaimRowsByCatalogItemId.set(catalogItemId, row);
@@ -6751,6 +7595,9 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       });
     }
   }
+  const pendingLimit = await enforcePendingStorePurchaseLimit(admin, userId, itemsToProcess.length);
+  if (pendingLimit.ok === false) return pendingLimit.response;
+
   if (!allFreePromotionClaim && normalizedPaymentChannel === "image_proof" && !normalizedProofPath) {
     return badRequest("proofPath is required for image_proof");
   }
@@ -6765,10 +7612,8 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
   let ocrDetected: ReceiptOcrDetection | null = null;
   let ocrErrorCode: string | null = allFreePromotionClaim ? "FREE_PROMOTION_CLAIM" : null;
   let ocrProvider: string | null = null;
-  const shouldRunServerOcr = !allFreePromotionClaim
-    && normalizedPaymentChannel === "image_proof"
-    && Boolean(normalizedProofPath)
-    && automationSettings.store.enabled;
+  const hasOcrProof = !allFreePromotionClaim && shouldUsePaymentProofOcr(normalizedPaymentChannel, normalizedProofPath);
+  const shouldRunServerOcr = hasOcrProof && automationSettings.store.enabled;
   if (shouldRunServerOcr && normalizedProofPath) {
     const attempt = await extractReceiptFieldsFromStoragePath(
       admin,
@@ -6785,7 +7630,7 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
       ocrErrorCode = attempt.errorCode || (String(Deno.env.get("OCR_SPACE_API_KEY") || "").trim() ? "OCR_FAILED" : "OCR_UNAVAILABLE");
       ocrProvider = attempt.provider;
     }
-  } else if (!allFreePromotionClaim && normalizedPaymentChannel === "image_proof" && normalizedProofPath) {
+  } else if (hasOcrProof) {
     ocrErrorCode = "MANUAL_REVIEW_MODE";
   }
   const ocrMetadata = buildReceiptOcrMetadata(ocrDetected, ocrErrorCode, ocrProvider);
@@ -6908,13 +7753,15 @@ const createStorePurchaseRequest = async (req: Request, body: any) => {
   if (allFreePromotionClaim) {
     automationResult = "approved";
     autoApproved = true;
-  } else if (normalizedPaymentChannel === "image_proof") {
+  } else if (hasOcrProof) {
     if (!automationSettings.store.enabled) {
       automationResult = "manual_review_disabled";
     } else if (!ocrDetected) {
       automationResult = "ocr_failed";
     } else if (!ocrMetadata.referenceNo) {
       automationResult = "missing_reference";
+    } else if (hasSubmittedReferenceMismatch(normalizedReferenceNo, ocrMetadata.referenceNo)) {
+      automationResult = "reference_mismatch";
     } else if (ocrMetadata.amountPhp === null) {
       automationResult = "missing_amount";
     } else if (!ocrMetadata.recipientNumber) {
@@ -7271,15 +8118,6 @@ const resolveStoreDownloadContext = async (
   const userId = user?.id || null;
   if (!userId) return { ok: false, response: fail(401, "NOT_AUTHENTICATED") };
   const accountCapabilities = await loadAccountCapabilitySnapshot(admin, userId);
-  if (!accountCapabilities.features.bankStoreDownload) {
-    return {
-      ok: false,
-      response: fail(403, "UPGRADE_REQUIRED", {
-        tier: accountCapabilities.effectiveTier,
-        reason: "bank_store_download_disabled",
-      }),
-    };
-  }
   const maintenanceState = await getStoreMaintenanceState(req, admin);
   if ("response" in maintenanceState) return { ok: false, response: maintenanceState.response };
   if (maintenanceState.enabled && !maintenanceState.isAdmin) {
@@ -7342,17 +8180,37 @@ const resolveStoreDownloadContext = async (
   if (bankError) return { ok: false, response: fail(500, bankError.message) };
   if (!bankRow || bankRow.deleted_at) return { ok: false, response: fail(410, "BANK_ARCHIVED") };
 
+  let hasGrantedAccess = false;
+  let hasFreePromotionAccess = false;
+  const adminRole = await isAdminUser(userId);
+  const hasAllStoreAccess = adminRole || accountCapabilities.features.bankStoreAllAccess;
   if (catalogItem.requires_grant) {
-    const { data: accessData } = await admin
-      .from("user_bank_access")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("bank_id", catalogItem.bank_id)
-      .maybeSingle();
-    if (!accessData) {
-      const adminRole = await isAdminUser(userId);
-      if (!adminRole) return { ok: false, response: fail(403, "NOT_GRANTED") };
+    const accessBankIds = await selectActiveUserBankAccess(admin, userId, [catalogItem.bank_id]);
+    hasGrantedAccess = accessBankIds.has(asString(catalogItem.bank_id, 80) || "");
+    if (!hasGrantedAccess) {
+      if (!hasAllStoreAccess) {
+        const freePromotionAccess = await resolveFreePromotionDownloadAccess({
+          admin,
+          req,
+          catalogItem,
+          userId,
+          accountCapabilities,
+        });
+        if (freePromotionAccess.response) return { ok: false, response: freePromotionAccess.response };
+        hasFreePromotionAccess = freePromotionAccess.allowed;
+        if (!hasFreePromotionAccess) return { ok: false, response: fail(403, "NOT_GRANTED") };
+      }
     }
+  }
+  const hasEntitledDownload = !catalogItem.requires_grant || hasGrantedAccess || hasAllStoreAccess || hasFreePromotionAccess;
+  if (!hasEntitledDownload && !accountCapabilities.features.bankStoreDownload) {
+    return {
+      ok: false,
+      response: fail(403, "UPGRADE_REQUIRED", {
+        tier: accountCapabilities.effectiveTier,
+        reason: "bank_store_download_disabled",
+      }),
+    };
   }
 
   return {
@@ -7522,12 +8380,17 @@ const sendAccountPendingSubmissionEmail = async (input: {
   }
 
   const displayName = asString(input.requestRow?.display_name, 160) || "User";
+  const isUpgradeRequest = Boolean(asUuid(input.requestRow?.user_id));
+  const targetTier = normalizeUpgradeTier(input.requestRow?.target_tier);
+  const targetTierLabel = targetTier === "pro_max" ? "PRO MAX" : targetTier === "pro" ? "PRO" : "Account";
   const submittedAt = new Date(asString(input.requestRow?.created_at, 80) || new Date().toISOString()).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
-  const amount = asPriceNumber(input.requestRow?.account_price_php_snapshot);
+  const amount = asPriceNumber(input.requestRow?.account_price_php_snapshot ?? input.requestRow?.quote_price_php_snapshot);
   const textBody = [
     `Hi ${displayName},`,
     "",
-    "We received your VDJV account payment submission.",
+    isUpgradeRequest
+      ? `We received your VDJV ${targetTierLabel} upgrade payment submission.`
+      : "We received your VDJV account payment submission.",
     "",
     "Status: PENDING APPROVAL",
     "Your request is now waiting for admin review. Please wait up to 24 hours and check your email for the final approval result.",
@@ -7536,11 +8399,13 @@ const sendAccountPendingSubmissionEmail = async (input: {
   const htmlBody = buildReceiptStyleEmailHtml({
     variant: "pending",
     title: "Pending Approval",
-    subtitle: "Your VDJV account payment was received and is waiting for review.",
+    subtitle: isUpgradeRequest
+      ? `Your VDJV ${targetTierLabel} upgrade is waiting for review.`
+      : "Your VDJV account payment was received and is waiting for review.",
     amountLabel: "Total Payment",
     amountValue: amount !== null ? formatPhpCurrency(amount) : "To be confirmed",
     details: [
-      { label: "Payment For", value: "VDJV Account" },
+      { label: "Payment For", value: isUpgradeRequest ? `VDJV Account Upgrade - ${targetTierLabel}` : "VDJV Account" },
       { label: "VDJV Receipt No", value: asString(input.requestRow?.receipt_reference, 160) || "-" },
       { label: "Payment Reference", value: asString(input.requestRow?.reference_no, 160) || "-" },
       { label: "Payment Channel", value: asString(input.requestRow?.payment_channel, 80) || "-" },
@@ -7553,7 +8418,7 @@ const sendAccountPendingSubmissionEmail = async (input: {
   try {
     await sendEmailViaResend({
       to: targetEmail,
-      subject: `Payment Received - Pending Approval - ${asString(input.requestRow?.receipt_reference, 120) || "VDJV"}`,
+      subject: `${isUpgradeRequest ? "Upgrade Payment Received" : "Payment Received"} - Pending Approval - ${asString(input.requestRow?.receipt_reference, 120) || "VDJV"}`,
       html: htmlBody,
       text: textBody,
     });
@@ -7580,11 +8445,17 @@ const sendAccountApprovalDecisionEmail = async (input: {
   }
 
   const displayName = asString(input.requestRow?.display_name, 160) || "User";
+  const isUpgradeRequest = Boolean(asUuid(input.requestRow?.user_id));
+  const targetTier = normalizeUpgradeTier(input.requestRow?.target_tier);
+  const targetTierLabel = targetTier === "pro_max" ? "PRO MAX" : targetTier === "pro" ? "PRO" : "Account";
   const reviewTime = new Date(input.reviewedAtIso).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
-  const loginHint = asString(input.loginHint, 500) || "You can now sign in using the password you registered.";
+  const loginHint = asString(input.loginHint, 500) || (isUpgradeRequest
+    ? "Your upgraded tier is now active. Reopen VDJV if it does not appear yet."
+    : "You can now sign in using the password you registered.");
   let actionLinks: Array<{ label: string; url: string }> = [];
   let platformGuideText = "";
   try {
+    if (isUpgradeRequest) throw new Error("Upgrade request does not need download links");
     const landingConfig = await getNormalizedLandingConfigRecord(input.admin);
     const v1Links = landingConfig.downloadLinks.V1;
     const v1AndroidUrl = buildLandingEmailRedirectUrl("V1", "android", asString(v1Links.android, 2000) || "");
@@ -7607,20 +8478,23 @@ const sendAccountApprovalDecisionEmail = async (input: {
   } catch {
     // Best-effort extra guidance only.
   }
-  const subject = `Account Approved - ${asString(input.requestRow?.receipt_reference, 120) || "VDJV"}`;
+  const subject = `${isUpgradeRequest ? "Account Upgrade Approved" : "Account Approved"} - ${asString(input.requestRow?.receipt_reference, 120) || "VDJV"}`;
   const bodyLines = [
     `Hi ${displayName},`,
     "",
-    "Your account registration request has been approved.",
+    isUpgradeRequest
+      ? `Your ${targetTierLabel} account upgrade request has been approved.`
+      : "Your account registration request has been approved.",
     "",
     loginHint,
   ];
   const textBody = bodyLines.join("\n");
   const htmlBody = buildReceiptStyleEmailHtml({
     variant: "approved",
-    title: "Account Approved",
-    subtitle: "Your account access is now active.",
+    title: isUpgradeRequest ? "Account Upgrade Approved" : "Account Approved",
+    subtitle: isUpgradeRequest ? `Your ${targetTierLabel} access is now active.` : "Your account access is now active.",
     details: [
+      ...(isUpgradeRequest ? [{ label: "Upgrade", value: targetTierLabel }] : []),
       { label: "VDJV Receipt No", value: asString(input.requestRow?.receipt_reference, 160) || "-" },
       { label: "Payment Reference", value: asString(input.requestRow?.reference_no, 160) || "-" },
       { label: "Payment Channel", value: asString(input.requestRow?.payment_channel, 80) || "-" },
@@ -8262,6 +9136,7 @@ const listAdminStoreRequests = async (req: Request) => {
     || automationResult === "manual_review_disabled"
     || automationResult === "outside_window"
     || automationResult === "missing_reference"
+    || automationResult === "reference_mismatch"
     || automationResult === "missing_amount"
     || automationResult === "missing_recipient_number"
     || automationResult === "duplicate_reference"
@@ -8314,6 +9189,7 @@ const listAdminStoreRequests = async (req: Request) => {
       || automationResult === "manual_review_disabled"
       || automationResult === "outside_window"
       || automationResult === "missing_reference"
+      || automationResult === "reference_mismatch"
       || automationResult === "missing_amount"
       || automationResult === "missing_recipient_number"
       || automationResult === "duplicate_reference"
@@ -9285,6 +10161,8 @@ const createAdminStoreBanner = async (body: any, adminUserId: string) => {
   const isActive = Object.prototype.hasOwnProperty.call(body || {}, "is_active")
     ? Boolean(body?.is_active)
     : true;
+  const schedule = normalizeMarketingBannerScheduleInput(body);
+  if (!schedule.ok) return schedule.response;
   const nowIso = new Date().toISOString();
 
   const { data, error } = await admin
@@ -9294,12 +10172,13 @@ const createAdminStoreBanner = async (body: any, adminUserId: string) => {
       link_url: linkUrl,
       sort_order: sortOrder,
       is_active: isActive,
+      ...schedule.values,
       created_by: adminUserId,
       created_at: nowIso,
       updated_by: adminUserId,
       updated_at: nowIso,
     })
-    .select("id,image_url,link_url,sort_order,is_active,created_at,updated_at")
+    .select("id,image_url,link_url,sort_order,is_active,schedule_mode,starts_at,ends_at,timezone,created_at,updated_at")
     .single();
   if (error) return fail(500, error.message);
   return ok({ banner: normalizeMarketingBannerRow(data) }, 201);
@@ -9309,7 +10188,7 @@ const patchAdminStoreBanner = async (bannerId: string, body: any, adminUserId: s
   const admin = createServiceClient();
   const { data: existing, error: existingError } = await admin
     .from("store_marketing_banners")
-    .select("id,image_url,is_active")
+    .select("id,image_url,is_active,schedule_mode,starts_at,ends_at,timezone")
     .eq("id", bannerId)
     .maybeSingle();
   if (existingError) return fail(500, existingError.message);
@@ -9338,6 +10217,17 @@ const patchAdminStoreBanner = async (bannerId: string, body: any, adminUserId: s
     if (typeof body?.is_active !== "boolean") return badRequest("is_active must be boolean");
     updates.is_active = body.is_active;
   }
+  const hasScheduleUpdate = ["schedule_mode", "starts_at", "ends_at", "timezone"].some((key) =>
+    Object.prototype.hasOwnProperty.call(body || {}, key)
+  );
+  if (hasScheduleUpdate) {
+    const schedule = normalizeMarketingBannerScheduleInput(body, existing);
+    if (!schedule.ok) return schedule.response;
+    updates.schedule_mode = schedule.values.schedule_mode;
+    updates.starts_at = schedule.values.starts_at;
+    updates.ends_at = schedule.values.ends_at;
+    updates.timezone = schedule.values.timezone;
+  }
   if (Object.keys(updates).length === 0) return badRequest("No valid fields to update");
   updates.updated_by = adminUserId;
   updates.updated_at = new Date().toISOString();
@@ -9346,7 +10236,7 @@ const patchAdminStoreBanner = async (bannerId: string, body: any, adminUserId: s
     .from("store_marketing_banners")
     .update(updates)
     .eq("id", bannerId)
-    .select("id,image_url,link_url,sort_order,is_active,created_at,updated_at")
+    .select("id,image_url,link_url,sort_order,is_active,schedule_mode,starts_at,ends_at,timezone,created_at,updated_at")
     .maybeSingle();
   if (error) return fail(500, error.message);
   if (!data) return fail(404, "Banner not found");
@@ -9619,13 +10509,14 @@ const saveAdminLandingDownloadConfig = async (body: any, adminUserId: string) =>
 const saveAdminSamplerAppConfig = async (body: any, adminUserId: string) => {
   const payload = normalizeSamplerAppConfig(body || {});
   const admin = createServiceClient();
+  const legacyQuotaDefaults = await resolveLegacySamplerQuotaDefaults(admin);
   const row = {
     id: "default",
     is_active: true,
     ui_defaults: payload.uiDefaults,
     bank_defaults: payload.bankDefaults,
     pad_defaults: payload.padDefaults,
-    quota_defaults: payload.quotaDefaults,
+    quota_defaults: legacyQuotaDefaults,
     audio_limits: payload.audioLimits,
     shortcut_defaults: payload.shortcutDefaults,
     updated_by: adminUserId,
@@ -9880,6 +10771,9 @@ Deno.serve(async (req) => {
       const body = await req.json().catch(() => ({}));
       return await deleteOwnAccount(req, body);
     }
+    if (req.method === "POST" && scoped[0] === "account" && scoped[1] === "delete-code" && scoped.length === 2) {
+      return await sendAccountDeleteOtp(req);
+    }
     if (req.method === "GET" && scoped[0] === "account" && scoped[1] === "upgrade-options" && scoped.length === 2) {
       return await getAccountUpgradeOptions(req);
     }
@@ -10023,7 +10917,7 @@ Deno.serve(async (req) => {
       if (page) params.set("page", page);
       if (perPage) params.set("perPage", perPage);
       const payload = await callInstallerAdmin<Record<string, unknown>>("GET", `/admin/licenses?${params.toString()}`);
-      return ok(payload);
+      return ok(normalizeInstallerLicensePayload(payload));
     }
     if (req.method === "GET" && scoped[2] === "installer" && scoped[3] === "events" && scoped.length === 4) {
       const version = asString(url.searchParams.get("version"), 10)?.trim().toUpperCase();
@@ -10041,7 +10935,7 @@ Deno.serve(async (req) => {
       if (perPage) params.set("perPage", perPage);
       if (licenseId) params.set("licenseId", licenseId);
       const payload = await callInstallerAdmin<Record<string, unknown>>("GET", `/admin/events?${params.toString()}`);
-      return ok(payload);
+      return ok(normalizeInstallerEventPayload(payload));
     }
     if (req.method === "POST" && scoped[2] === "installer" && scoped[3] === "licenses" && scoped[4] === "create" && scoped.length === 5) {
       const body = await req.json().catch(() => ({}));

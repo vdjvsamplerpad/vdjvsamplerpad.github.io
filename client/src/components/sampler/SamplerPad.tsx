@@ -904,7 +904,7 @@ export const SamplerPad = React.memo(function SamplerPad({
   const playTextClass = playTextColor === '#111827' ? 'text-gray-900' : 'text-white';
   const isUnmutePlayingMuted = pad.triggerMode === 'unmute' && isPlaying && isSoftMuted;
   const isUnmutePlayingAudible = pad.triggerMode === 'unmute' && isPlaying && !isSoftMuted;
-  const isStopperPad = pad.playbackMode === 'stopper';
+  const isStopperPad = pad.playbackMode === 'stopper' || pad.playbackMode === 'bank_stopper';
   const isLoopPad = pad.playbackMode === 'loop';
   const hasPadGroupBadge = typeof pad.padGroup === 'number' && Number.isFinite(pad.padGroup) && Math.trunc(pad.padGroup) > 0;
   const padGroupLabel = hasPadGroupBadge ? `G${Math.trunc(pad.padGroup as number)}` : null;

@@ -984,6 +984,7 @@ const STORE_DOWNLOAD_RATE_WINDOW_SECONDS = readPositiveInt(process.env.STORE_DOW
 const STORE_PURCHASE_RATE_LIMIT = readPositiveInt(process.env.STORE_PURCHASE_RATE_LIMIT, 12, 1, 10000);
 const STORE_PURCHASE_RATE_WINDOW_SECONDS = readPositiveInt(process.env.STORE_PURCHASE_RATE_WINDOW_SECONDS, 3600, 1, 86400);
 const STORE_MAX_PURCHASE_ITEMS = readPositiveInt(process.env.STORE_MAX_PURCHASE_ITEMS, 20, 1, 200);
+const STORE_PENDING_PURCHASE_REQUEST_LIMIT = readPositiveInt(process.env.STORE_PENDING_PURCHASE_REQUEST_LIMIT, 5, 1, 1000);
 const STORE_MAX_DOWNLOAD_BYTES = readPositiveInt(process.env.STORE_MAX_DOWNLOAD_BYTES, 268435456, 1, 2147483647);
 const ADMIN_STORE_PAGE_SIZE_DEFAULT = readPositiveInt(process.env.ADMIN_STORE_PAGE_SIZE_DEFAULT, 100, 1, 250);
 const ADMIN_STORE_PAGE_SIZE_MAX = readPositiveInt(process.env.ADMIN_STORE_PAGE_SIZE_MAX, 250, 1, 500);
@@ -1083,6 +1084,76 @@ const consumeRateLimit = async (
     }
   }
   return consumeInMemoryRateLimit(scope, subject, maxHits, windowSeconds);
+};
+
+const buildPendingPurchaseLimitMessage = (
+  pendingCount: number,
+  requestedCount: number,
+  maxPending: number
+): string => {
+  if (pendingCount >= maxPending) {
+    return `You already have ${maxPending} pending Store requests. Wait for admin review or use cart checkout.`;
+  }
+  const availableSlots = Math.max(0, maxPending - pendingCount);
+  const requestLabel = requestedCount === 1 ? 'request' : 'requests';
+  const slotLabel = availableSlots === 1 ? 'slot' : 'slots';
+  return `This checkout has ${requestedCount} pending ${requestLabel}, but you only have ${availableSlots} pending Store ${slotLabel} left. Wait for admin review or reduce the cart.`;
+};
+
+const checkPendingStorePurchaseLimit = async (
+  userId: string,
+  requestedCount: number
+): Promise<{ ok: true } | {
+  ok: false;
+  status: number;
+  body: {
+    error: string;
+    message: string;
+    pending_count: number;
+    requested_count: number;
+    max_pending: number;
+    available_slots: number;
+  };
+}> => {
+  if (!adminSupabase || requestedCount <= 0) return { ok: true };
+  const { count, error } = await adminSupabase
+    .from('bank_purchase_requests')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('status', 'pending');
+  if (error) {
+    return {
+      ok: false,
+      status: 500,
+      body: {
+        error: error.message,
+        message: error.message,
+        pending_count: 0,
+        requested_count: requestedCount,
+        max_pending: STORE_PENDING_PURCHASE_REQUEST_LIMIT,
+        available_slots: 0,
+      },
+    };
+  }
+
+  const pendingCount = Math.max(0, Number(count || 0));
+  const availableSlots = Math.max(0, STORE_PENDING_PURCHASE_REQUEST_LIMIT - pendingCount);
+  if (pendingCount + requestedCount <= STORE_PENDING_PURCHASE_REQUEST_LIMIT) {
+    return { ok: true };
+  }
+
+  return {
+    ok: false,
+    status: 409,
+    body: {
+      error: 'PENDING_PURCHASE_LIMIT_REACHED',
+      message: buildPendingPurchaseLimitMessage(pendingCount, requestedCount, STORE_PENDING_PURCHASE_REQUEST_LIMIT),
+      pending_count: pendingCount,
+      requested_count: requestedCount,
+      max_pending: STORE_PENDING_PURCHASE_REQUEST_LIMIT,
+      available_slots: availableSlots,
+    },
+  };
 };
 
 const normalizeWebhookSignature = (value: string | null): string | null => {
@@ -1919,6 +1990,11 @@ app.post('/api/store/purchase-request', async (req: any, res: any) => {
       if (deletedBankIds.has(item.bankId)) {
         return res.status(400).json({ error: `Bank is archived: ${item.bankId}` });
       }
+    }
+
+    const pendingLimit = await checkPendingStorePurchaseLimit(userId, normalizedItems.length);
+    if (pendingLimit.ok === false) {
+      return res.status(pendingLimit.status).json(pendingLimit.body);
     }
 
     // Generate a batch_id for this checkout

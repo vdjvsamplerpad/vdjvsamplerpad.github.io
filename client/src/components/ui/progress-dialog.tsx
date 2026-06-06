@@ -3,7 +3,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { Download, Upload, CheckCircle, AlertCircle, Clock, ShieldCheck, Check, Copy } from 'lucide-react';
-import { buildSupportLogText, copySupportLogText, exportSupportLogText } from '@/lib/supportDiagnostics';
+import {
+  buildSupportLogText,
+  copySupportLogText,
+  exportSupportLogText,
+  getSupportLogExportActionLabel,
+  getSupportLogExportDoneLabel,
+} from '@/lib/supportDiagnostics';
 
 interface ProgressDialogProps {
   open: boolean;
@@ -51,7 +57,7 @@ export function ProgressDialog({
   useHistory = true
 }: ProgressDialogProps) {
   const [copiedLogs, setCopiedLogs] = React.useState(false);
-  const [exportedLogs, setExportedLogs] = React.useState(false);
+  const [exportedLogs, setExportedLogs] = React.useState('');
 
   React.useEffect(() => {
     if (!copiedLogs) return;
@@ -61,7 +67,7 @@ export function ProgressDialog({
 
   React.useEffect(() => {
     if (!exportedLogs) return;
-    const timer = window.setTimeout(() => setExportedLogs(false), 1400);
+    const timer = window.setTimeout(() => setExportedLogs(''), 1800);
     return () => window.clearTimeout(timer);
   }, [exportedLogs]);
 
@@ -79,6 +85,7 @@ export function ProgressDialog({
   }), [debugOperations, errorMessage, logLines, title]);
 
   const hasSupportLog = React.useMemo(() => Boolean(supportLogText.trim()), [supportLogText]);
+  const exportLogActionLabel = React.useMemo(() => getSupportLogExportActionLabel('Error Log'), []);
 
   const handleCopyLogs = React.useCallback(async () => {
     if (!hasSupportLog) return;
@@ -86,10 +93,14 @@ export function ProgressDialog({
     setCopiedLogs(true);
   }, [hasSupportLog, supportLogText]);
 
-  const handleExportLogs = React.useCallback(() => {
+  const handleExportLogs = React.useCallback(async () => {
     if (!hasSupportLog) return;
-    exportSupportLogText(supportLogText, supportLogFilePrefix || 'vdjv-operation-log');
-    setExportedLogs(true);
+    try {
+      const result = await exportSupportLogText(supportLogText, supportLogFilePrefix || 'vdjv-operation-log');
+      setExportedLogs(getSupportLogExportDoneLabel(result, 'Error Log'));
+    } catch {
+      setExportedLogs('Export Failed');
+    }
   }, [hasSupportLog, supportLogFilePrefix, supportLogText]);
   
   // Check if error message indicates login is required
@@ -137,9 +148,11 @@ export function ProgressDialog({
       `}</style>
 
       <DialogContent
+        depth="nested"
+        overlayClassName="bg-black/70 backdrop-blur-sm"
         hideCloseButton={hideCloseButton}
         className={`sm:max-w-md backdrop-blur-md transition-colors duration-200 ${
-        theme === 'dark' ? 'bg-gray-800/95 border-gray-600' : 'bg-white/95 border-gray-300'
+        theme === 'dark' ? 'bg-gray-900/95 border-gray-700 text-gray-100' : 'bg-white/95 border-gray-300 text-gray-900'
       }`}
         onEscapeKeyDown={(event) => {
           if (status === 'loading') event.preventDefault();
@@ -292,10 +305,16 @@ export function ProgressDialog({
                     size="sm"
                     variant="outline"
                     className="h-8 gap-1.5 px-3 text-[11px]"
-                    onClick={handleExportLogs}
+                    onClick={() => void handleExportLogs()}
                   >
-                    {exportedLogs ? <Check className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
-                    {exportedLogs ? 'Exported Log' : 'Export Error Log'}
+                    {exportedLogs ? (
+                      exportedLogs === 'Export Failed'
+                        ? <AlertCircle className="h-3.5 w-3.5" />
+                        : <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5" />
+                    )}
+                    {exportedLogs || exportLogActionLabel}
                   </Button>
                 </div>
               )}

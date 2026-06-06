@@ -52,6 +52,54 @@ type HeartbeatInput = {
   lastEvent?: string
 }
 
+export type SessionClaimDeviceInfo = {
+  deviceSessionId: string | null
+  deviceName: string | null
+  deviceModel: string | null
+  platform: string | null
+  browser: string | null
+  os: string | null
+  appVersion: string | null
+  runtime: string | null
+  lastSeenAt: string | null
+  lastEvent: string | null
+  isOnline: boolean
+}
+
+export type SessionClaimResult = {
+  ok: boolean
+  conflict: boolean
+  requiresConfirmation: boolean
+  message: string | null
+  currentDevice: SessionClaimDeviceInfo | null
+  sameDevice?: boolean
+  stale?: boolean
+  claimed?: boolean
+  skippedAdmin?: boolean
+}
+
+export type SessionConflictDetails = {
+  reason?: string | null
+  replacedAt?: string | null
+  replacingDevice?: {
+    deviceName?: string | null
+    deviceModel?: string | null
+    platform?: string | null
+    browser?: string | null
+    os?: string | null
+    appVersion?: string | null
+    runtime?: string | null
+  } | null
+}
+
+type SessionClaimInput = {
+  userId: string
+  email?: string | null
+  force?: boolean
+  expectedCurrentDeviceSessionId?: string | null
+  meta?: Record<string, unknown>
+}
+
 const ACTIVITY_QUEUE_KEY = 'vdjv-activity-queue'
 const SESSION_KEY_STORAGE_KEY = 'vdjv-session-key'
 const DEVICE_SESSION_STORAGE_KEY = 'vdjv-device-session-id'
@@ -467,7 +515,9 @@ const postJson = async (
       payload = {}
     }
     if (payload?.code === 'SESSION_CONFLICT' || payload?.invalidate === true) {
-      throw new SessionConflictError(payload?.message || 'Session conflict detected.')
+      throw new SessionConflictError(payload?.message || 'Session conflict detected.', payload?.conflict || {
+        reason: payload?.reason || null,
+      })
     }
   }
 
@@ -496,11 +546,120 @@ const postJson = async (
   }
 }
 
+const parseSessionClaimPayload = (payload: any): SessionClaimResult => ({
+  ok: payload?.ok !== false,
+  conflict: payload?.conflict === true,
+  requiresConfirmation: payload?.requiresConfirmation === true,
+  message: typeof payload?.message === 'string' ? payload.message : null,
+  currentDevice: payload?.currentDevice && typeof payload.currentDevice === 'object'
+    ? payload.currentDevice as SessionClaimDeviceInfo
+    : null,
+  sameDevice: payload?.sameDevice === true,
+  stale: payload?.stale === true,
+  claimed: payload?.claimed === true,
+  skippedAdmin: payload?.skippedAdmin === true,
+})
+
+const postSessionClaimJson = async (
+  route: 'session-claim-preview' | 'session-claim',
+  input: SessionClaimInput,
+): Promise<SessionClaimResult> => {
+  if (!isBrowser || !input.userId || !navigator.onLine) {
+    return {
+      ok: false,
+      conflict: false,
+      requiresConfirmation: false,
+      message: 'Session claim needs an internet connection.',
+      currentDevice: null,
+    }
+  }
+
+  const endpointRoute = route
+  const cooldownSeconds = getRemainingCooldownSeconds(endpointRoute)
+  if (cooldownSeconds > 0) {
+    throw new RateLimitError({
+      endpointRoute,
+      retryAfterSeconds: cooldownSeconds,
+      message: `Rate limited. Retry in ${cooldownSeconds}s.`,
+    })
+  }
+
+  const authHeaders = await getAuthHeaders(false)
+  if (!hasAuthorizationHeader(authHeaders)) {
+    return {
+      ok: false,
+      conflict: false,
+      requiresConfirmation: false,
+      message: 'Sign in session is not ready yet.',
+      currentDevice: null,
+    }
+  }
+
+  const device = await buildDevice()
+  const payload = {
+    requestId: generateUuid(),
+    sessionKey: getSessionKey(),
+    deviceSessionId: getDeviceSessionId(),
+    userId: input.userId,
+    email: input.email || null,
+    device,
+    force: input.force === true,
+    expectedCurrentDeviceSessionId: input.expectedCurrentDeviceSessionId || null,
+    meta: mergeActivityMeta(input.meta),
+  }
+
+  const resp = await fetch(edgeFunctionUrl('activity-api', route), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify(payload),
+    credentials: 'omit',
+  })
+  const responsePayload = await resp.json().catch(() => ({}))
+
+  if (resp.status === 409 && responsePayload?.code === 'SESSION_CLAIM_CONFLICT') {
+    return {
+      ...parseSessionClaimPayload(responsePayload),
+      ok: false,
+      conflict: true,
+      requiresConfirmation: true,
+    }
+  }
+
+  if (resp.status === 429) {
+    const retryAfterHeader = Number(resp.headers.get('retry-after') || 0)
+    const retryAfterSeconds = Number(responsePayload?.retry_after_seconds || retryAfterHeader || DEFAULT_RATE_LIMIT_RETRY_SECONDS)
+    const scope = typeof responsePayload?.scope === 'string' ? responsePayload.scope : null
+    setEndpointCooldown(endpointRoute, retryAfterSeconds)
+    throw new RateLimitError({
+      endpointRoute,
+      retryAfterSeconds,
+      scope,
+      message: `Rate limited (${scope || endpointRoute}). Retry in ${Math.max(1, Math.floor(retryAfterSeconds || DEFAULT_RATE_LIMIT_RETRY_SECONDS))}s.`,
+    })
+  }
+
+  if (!resp.ok) {
+    const message = typeof responsePayload?.error === 'string'
+      ? responsePayload.error
+      : typeof responsePayload?.message === 'string'
+        ? responsePayload.message
+        : `HTTP ${resp.status}: session claim failed`
+    throw new Error(message)
+  }
+
+  return parseSessionClaimPayload(responsePayload)
+}
+
 export class SessionConflictError extends Error {
   readonly code = 'SESSION_CONFLICT'
-  constructor(message = 'Session conflict detected.') {
+  readonly details: SessionConflictDetails | null
+  constructor(message = 'Session conflict detected.', details?: SessionConflictDetails | null) {
     super(message)
     this.name = 'SessionConflictError'
+    this.details = details || null
   }
 }
 
@@ -641,6 +800,16 @@ export const logSignoutActivity = async (input: SignoutInput) => {
     meta: input.meta,
   })
   await sendOrQueue('signout', payload)
+}
+
+export const previewSessionClaim = async (input: Omit<SessionClaimInput, 'force' | 'expectedCurrentDeviceSessionId'>) => {
+  ensureActivityRuntime()
+  return postSessionClaimJson('session-claim-preview', input)
+}
+
+export const claimCurrentSession = async (input: SessionClaimInput) => {
+  ensureActivityRuntime()
+  return postSessionClaimJson('session-claim', input)
 }
 
 export const sendActivityHeartbeat = async (input: HeartbeatInput) => {

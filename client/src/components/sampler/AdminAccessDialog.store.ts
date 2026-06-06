@@ -72,11 +72,82 @@ interface BatchedRequest {
   hasTbdAmount: boolean;
 }
 
+type StoreBannerScheduleMode = NonNullable<StoreMarketingBanner['schedule_mode']>;
+
+const normalizeBannerScheduleMode = (value: unknown): StoreBannerScheduleMode => (
+  String(value || '').trim().toLowerCase() === 'scheduled' ? 'scheduled' : 'always'
+);
+
+const normalizeBannerDateValue = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = new Date(trimmed);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed.toISOString();
+};
+
+const normalizeBannerStatus = (banner: Partial<StoreMarketingBanner>): NonNullable<StoreMarketingBanner['status']> => {
+  if (!banner.is_active) return 'inactive';
+  const scheduleMode = normalizeBannerScheduleMode(banner.schedule_mode);
+  if (scheduleMode === 'always') return 'permanent';
+  const startsAt = normalizeBannerDateValue(banner.starts_at);
+  const endsAt = normalizeBannerDateValue(banner.ends_at);
+  const nowIso = new Date().toISOString();
+  if (!startsAt || !endsAt || startsAt > nowIso) return 'scheduled';
+  if (endsAt <= nowIso) return 'expired';
+  return 'active';
+};
+
+const normalizeStoreBannerRow = (row: any): StoreMarketingBanner => {
+  const scheduleMode = normalizeBannerScheduleMode(row?.schedule_mode);
+  const banner: StoreMarketingBanner = {
+    id: String(row?.id || ''),
+    image_url: String(row?.image_url || ''),
+    link_url: row?.link_url ? String(row.link_url) : null,
+    sort_order: Number.isFinite(Number(row?.sort_order)) ? Math.max(0, Math.floor(Number(row.sort_order))) : 0,
+    is_active: Boolean(row?.is_active),
+    schedule_mode: scheduleMode,
+    starts_at: scheduleMode === 'scheduled' ? normalizeBannerDateValue(row?.starts_at) : null,
+    ends_at: scheduleMode === 'scheduled' ? normalizeBannerDateValue(row?.ends_at) : null,
+    timezone: String(row?.timezone || '').trim() || 'Asia/Manila',
+    created_at: row?.created_at ? String(row.created_at) : undefined,
+    updated_at: row?.updated_at ? String(row.updated_at) : undefined,
+  };
+  return { ...banner, status: normalizeBannerStatus(banner) };
+};
+
+const buildBannerSchedulePayload = (
+  modeValue: unknown,
+  startsAtValue: unknown,
+  endsAtValue: unknown,
+  timezoneValue: unknown,
+): { ok: true; payload: { schedule_mode: StoreBannerScheduleMode; starts_at: string | null; ends_at: string | null; timezone: string } } | { ok: false; message: string } => {
+  const scheduleMode = normalizeBannerScheduleMode(modeValue);
+  const timezone = String(timezoneValue || '').trim() || 'Asia/Manila';
+  if (scheduleMode === 'always') {
+    return { ok: true, payload: { schedule_mode: 'always', starts_at: null, ends_at: null, timezone } };
+  }
+  const startsAt = normalizeBannerDateValue(startsAtValue);
+  const endsAt = normalizeBannerDateValue(endsAtValue);
+  if (!startsAt || !endsAt) {
+    return { ok: false, message: 'Scheduled banners require start and end date/time.' };
+  }
+  if (startsAt >= endsAt) {
+    return { ok: false, message: 'Scheduled banner start must be before the end date/time.' };
+  }
+  return { ok: true, payload: { schedule_mode: 'scheduled', starts_at: startsAt, ends_at: endsAt, timezone } };
+};
+
 const normalizeBannerForCompare = (banner: StoreMarketingBanner) => ({
   image_url: String(banner.image_url || '').trim(),
   link_url: banner.link_url ? String(banner.link_url).trim() : null,
   sort_order: Math.max(0, Math.floor(Number(banner.sort_order || 0))),
   is_active: Boolean(banner.is_active),
+  schedule_mode: normalizeBannerScheduleMode(banner.schedule_mode),
+  starts_at: normalizeBannerScheduleMode(banner.schedule_mode) === 'scheduled' ? normalizeBannerDateValue(banner.starts_at) : null,
+  ends_at: normalizeBannerScheduleMode(banner.schedule_mode) === 'scheduled' ? normalizeBannerDateValue(banner.ends_at) : null,
+  timezone: String(banner.timezone || '').trim() || 'Asia/Manila',
 });
 
 const areBannersEquivalent = (left: StoreMarketingBanner | null | undefined, right: StoreMarketingBanner | null | undefined): boolean => {
@@ -86,7 +157,11 @@ const areBannersEquivalent = (left: StoreMarketingBanner | null | undefined, rig
   return leftNormalized.image_url === rightNormalized.image_url
     && leftNormalized.link_url === rightNormalized.link_url
     && leftNormalized.sort_order === rightNormalized.sort_order
-    && leftNormalized.is_active === rightNormalized.is_active;
+    && leftNormalized.is_active === rightNormalized.is_active
+    && leftNormalized.schedule_mode === rightNormalized.schedule_mode
+    && leftNormalized.starts_at === rightNormalized.starts_at
+    && leftNormalized.ends_at === rightNormalized.ends_at
+    && leftNormalized.timezone === rightNormalized.timezone;
 };
 
 const EMPTY_STORE_CONFIG: StoreConfigDraft = {
@@ -215,6 +290,10 @@ export function useAdminAccessStoreManager({
   const [newBannerImageUrl, setNewBannerImageUrl] = React.useState('');
   const [newBannerLinkUrl, setNewBannerLinkUrl] = React.useState('');
   const [newBannerSortOrder, setNewBannerSortOrder] = React.useState('0');
+  const [newBannerScheduleMode, setNewBannerScheduleMode] = React.useState<StoreBannerScheduleMode>('always');
+  const [newBannerStartsAt, setNewBannerStartsAt] = React.useState('');
+  const [newBannerEndsAt, setNewBannerEndsAt] = React.useState('');
+  const [newBannerTimezone, setNewBannerTimezone] = React.useState('Asia/Manila');
   const [showInactiveBanners, setShowInactiveBanners] = React.useState(false);
   const [bannerUploadingIds, setBannerUploadingIds] = React.useState<Set<string>>(new Set());
   const [newBannerPreviewUrl, setNewBannerPreviewUrl] = React.useState<string | null>(null);
@@ -320,15 +399,7 @@ export function useAdminAccessStoreManager({
         const data = await res.json();
         setStoreDrafts(Array.isArray(data.items) ? data.items : []);
         const nextBanners = Array.isArray(data.banners)
-          ? data.banners.map((row: any) => ({
-            id: String(row?.id || ''),
-            image_url: String(row?.image_url || ''),
-            link_url: row?.link_url ? String(row.link_url) : null,
-            sort_order: Number.isFinite(Number(row?.sort_order)) ? Math.max(0, Math.floor(Number(row.sort_order))) : 0,
-            is_active: Boolean(row?.is_active),
-            created_at: row?.created_at ? String(row.created_at) : undefined,
-            updated_at: row?.updated_at ? String(row.updated_at) : undefined,
-          }))
+          ? data.banners.map(normalizeStoreBannerRow)
           : [];
         setStoreBanners(nextBanners);
         setLoadedStoreBanners(nextBanners);
@@ -777,7 +848,11 @@ export function useAdminAccessStoreManager({
   }, [pushNotice]);
 
   const updateBannerDraft = React.useCallback((id: string, updates: Partial<StoreMarketingBanner>) => {
-    setStoreBanners((prev) => prev.map((banner) => (banner.id === id ? { ...banner, ...updates } : banner)));
+    setStoreBanners((prev) => prev.map((banner) => {
+      if (banner.id !== id) return banner;
+      const next = { ...banner, ...updates };
+      return { ...next, status: normalizeBannerStatus(next) };
+    }));
   }, []);
 
   const resetBannerDraft = React.useCallback((id: string) => {
@@ -841,6 +916,11 @@ export function useAdminAccessStoreManager({
       pushNotice({ variant: 'error', message: 'Provide a valid banner image URL or upload an image file.' });
       return;
     }
+    const schedule = buildBannerSchedulePayload(newBannerScheduleMode, newBannerStartsAt, newBannerEndsAt, newBannerTimezone);
+    if (schedule.ok === false) {
+      pushNotice({ variant: 'error', message: schedule.message });
+      return;
+    }
     setBannerLoading(true);
     let uploadedBannerCleanup: (() => Promise<void>) | null = null;
     try {
@@ -857,6 +937,7 @@ export function useAdminAccessStoreManager({
           link_url: linkTrimmed || null,
           sort_order: sortOrderValue,
           is_active: true,
+          ...schedule.payload,
         }),
       });
       if (!res.ok) {
@@ -868,6 +949,10 @@ export function useAdminAccessStoreManager({
       setNewBannerImageUrl('');
       setNewBannerLinkUrl('');
       setNewBannerSortOrder('0');
+      setNewBannerScheduleMode('always');
+      setNewBannerStartsAt('');
+      setNewBannerEndsAt('');
+      setNewBannerTimezone('Asia/Manila');
       uploadedBannerCleanup = null;
       await loadStoreCatalog();
     } catch (err: any) {
@@ -880,7 +965,7 @@ export function useAdminAccessStoreManager({
     } finally {
       setBannerLoading(false);
     }
-  }, [loadStoreCatalog, newBannerImageFile, newBannerImageUrl, newBannerLinkUrl, newBannerSortOrder, pushNotice, storeAuthFetch, uploadStoreBannerImage]);
+  }, [loadStoreCatalog, newBannerEndsAt, newBannerImageFile, newBannerImageUrl, newBannerLinkUrl, newBannerScheduleMode, newBannerSortOrder, newBannerStartsAt, newBannerTimezone, pushNotice, storeAuthFetch, uploadStoreBannerImage]);
 
   const handleSaveStoreBanner = React.useCallback(async (banner: StoreMarketingBanner) => {
     const linkTrimmed = String(banner.link_url || '').trim();
@@ -893,6 +978,11 @@ export function useAdminAccessStoreManager({
       pushNotice({ variant: 'error', message: 'Banner image URL must be a valid http(s) URL.' });
       return;
     }
+    const schedule = buildBannerSchedulePayload(banner.schedule_mode, banner.starts_at, banner.ends_at, banner.timezone);
+    if (schedule.ok === false) {
+      pushNotice({ variant: 'error', message: schedule.message });
+      return;
+    }
     setBannerLoading(true);
     try {
       const res = await storeAuthFetch(`/api/admin/store/banners/${banner.id}`, {
@@ -903,6 +993,7 @@ export function useAdminAccessStoreManager({
           link_url: linkTrimmed || null,
           sort_order: sortOrder,
           is_active: Boolean(banner.is_active),
+          ...schedule.payload,
         }),
       });
       if (!res.ok) {
@@ -1663,10 +1754,12 @@ export function useAdminAccessStoreManager({
 
   const storeBannerStats = React.useMemo(() => {
     const total = storeBanners.length;
-    const active = storeBanners.filter((banner) => banner.is_active).length;
-    const inactive = total - active;
+    const active = storeBanners.filter((banner) => banner.status === 'active' || banner.status === 'permanent').length;
+    const inactive = storeBanners.filter((banner) => !banner.is_active).length;
+    const scheduled = storeBanners.filter((banner) => banner.status === 'scheduled').length;
+    const expired = storeBanners.filter((banner) => banner.status === 'expired').length;
     const dirty = dirtyStoreBannerIds.size;
-    return { total, active, inactive, dirty };
+    return { total, active, inactive, scheduled, expired, dirty };
   }, [dirtyStoreBannerIds, storeBanners]);
 
   const storePromotionStats = React.useMemo(() => {
@@ -1743,6 +1836,10 @@ export function useAdminAccessStoreManager({
     newBannerImageFile,
     newBannerImageUrl,
     newBannerLinkUrl,
+    newBannerScheduleMode,
+    newBannerStartsAt,
+    newBannerEndsAt,
+    newBannerTimezone,
     newBannerPreviewUrl,
     newBannerSortOrder,
     pagedDrafts,
@@ -1758,6 +1855,10 @@ export function useAdminAccessStoreManager({
     setNewBannerImageFile,
     setNewBannerImageUrl,
     setNewBannerLinkUrl,
+    setNewBannerScheduleMode,
+    setNewBannerStartsAt,
+    setNewBannerEndsAt,
+    setNewBannerTimezone,
     setNewBannerSortOrder,
     setShowInactiveBanners,
     setStoreCatalogBankFilter,

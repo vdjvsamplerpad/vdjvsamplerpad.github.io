@@ -1,6 +1,6 @@
 ﻿import * as React from 'react';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2, ArrowUpCircle } from 'lucide-react';
@@ -264,6 +264,7 @@ interface HeaderControlsProps {
 }
 
 const LOGIN_GREETING_STORAGE_PREFIX = 'vdjv-login-greeting';
+const OFFLINE_READY_INFO_STORAGE_PREFIX = 'vdjv-offline-ready-info';
 const DISPLAY_NAME_PROMPT_SNOOZE_PREFIX = 'vdjv-display-name-prompt-snooze';
 const DISPLAY_NAME_PROMPT_SNOOZE_MS = 24 * 60 * 60 * 1000;
 
@@ -496,7 +497,7 @@ export function HeaderControls({
   onPublishDefaultBankRelease,
 }: HeaderControlsProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const { user, profile, loading, authTransition, capabilities } = useAuthState();
+  const { user, profile, loading, authTransition, capabilities, offlineTrustedSession, pendingSessionClaim, sessionConflictReason } = useAuthState();
   const { signOut, updateDisplayName } = useAuthActions();
   const isAdmin = profile?.role === 'admin';
   const [adminDialogOpen, setAdminDialogOpen] = React.useState(false);
@@ -508,6 +509,8 @@ export function HeaderControls({
   const [showAllPadColors, setShowAllPadColors] = React.useState(false);
   const [pendingPadColor, setPendingPadColor] = React.useState<string>(adminPadColorPaintColor || PRIMARY_PAD_COLORS[0]?.value || '#f59e0b');
   const [showDisplayNamePrompt, setShowDisplayNamePrompt] = React.useState(false);
+  const [showOfflineReadyDialog, setShowOfflineReadyDialog] = React.useState(false);
+  const [isOnline, setIsOnline] = React.useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
   const [displayNamePromptValue, setDisplayNamePromptValue] = React.useState('');
   const [savingDisplayNamePrompt, setSavingDisplayNamePrompt] = React.useState(false);
   const [stopAnimation, setStopAnimation] = React.useState<StopAnimationState | null>(null);
@@ -516,6 +519,7 @@ export function HeaderControls({
   const stopModeHoldTimeoutRef = React.useRef<number | null>(null);
   const stopClickSuppressTimeoutRef = React.useRef<number | null>(null);
   const stopGestureRef = React.useRef<StopGestureState | null>(null);
+  const offlineNoticeShownRef = React.useRef(false);
   const appVersion = (import.meta as any).env?.VITE_APP_VERSION || 'unknown';
   const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.onFullscreenChange);
   const { state: appUpdateState, checkForUpdates, installUpdate } = useAppUpdate();
@@ -540,12 +544,60 @@ export function HeaderControls({
   // Slide notices
   const { notices, pushNotice, dismiss } = useNotices()
 
+  React.useEffect(() => {
+    if (pendingSessionClaim || sessionConflictReason) {
+      setShowLoginModal(true);
+    }
+  }, [pendingSessionClaim, sessionConflictReason]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const showOfflineNotice = () => {
+      if (offlineNoticeShownRef.current) return;
+      offlineNoticeShownRef.current = true;
+      pushNotice({
+        variant: 'info',
+        message: 'Offline mode active. Local and prepared banks are available; Store, sync, and account changes need internet.',
+      });
+    };
+    const updateOnlineState = () => {
+      const nextOnline = navigator.onLine;
+      setIsOnline(nextOnline);
+      if (nextOnline) {
+        offlineNoticeShownRef.current = false;
+      } else {
+        showOfflineNotice();
+      }
+    };
+    updateOnlineState();
+    window.addEventListener('online', updateOnlineState);
+    window.addEventListener('offline', updateOnlineState);
+    return () => {
+      window.removeEventListener('online', updateOnlineState);
+      window.removeEventListener('offline', updateOnlineState);
+    };
+  }, [pushNotice]);
+
+  React.useEffect(() => {
+    if (loading || isOnline) return;
+    const activeUser = user || getCachedUser();
+    if (!activeUser?.id) return;
+    if (!offlineTrustedSession && !user?.id) return;
+    const storageKey = `${OFFLINE_READY_INFO_STORAGE_PREFIX}:${activeUser.id}`;
+    try {
+      if (localStorage.getItem(storageKey) === '1') return;
+      localStorage.setItem(storageKey, '1');
+    } catch {
+    }
+    setShowOfflineReadyDialog(true);
+  }, [isOnline, loading, offlineTrustedSession, user]);
+
   const openUpgradeDialog = React.useCallback((reason?: string | null) => {
     const message = reason || 'Choose a PRO or PRO MAX plan to unlock this feature.';
     const activeUser = user || getCachedUser();
     if (!activeUser) {
-      setShowLoginModal(true);
       pushNotice({ variant: 'info', message });
+      setUpgradeOpen(true);
       return;
     }
     pushNotice({ variant: 'info', message });
@@ -1973,6 +2025,36 @@ export function HeaderControls({
           />
         </React.Suspense>
       )}
+
+      <Dialog open={showOfflineReadyDialog} onOpenChange={setShowOfflineReadyDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>
+              Offline Mode Is Ready
+            </DialogTitle>
+            <DialogDescription>
+              Your last trusted account is saved on this device for offline use.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className={`rounded-2xl border p-4 text-sm leading-relaxed ${
+              theme === 'dark'
+                ? 'border-emerald-300/25 bg-emerald-400/10 text-emerald-50'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+            }`}>
+              You can keep playing local banks and banks prepared for offline use without internet. Store downloads, account changes, sync, upgrades, and new online checks will resume when the connection returns.
+            </div>
+            <Button
+              type="button"
+              variant="success"
+              className="w-full"
+              onClick={() => setShowOfflineReadyDialog(false)}
+            >
+              Got It
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={showDisplayNamePrompt}

@@ -19,6 +19,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import {
   adminApi,
   type AdminInstallerPurchaseRequest,
+  type AdminInstallerCompletionDetail,
   type AdminInstallerEvent,
   type AdminInstallerLicense,
   type InstallerBuyProduct,
@@ -165,7 +166,7 @@ const defaultInstallerTierConfig = (version: InstallerVersionKey, tier: Installe
   description: tier === 'standard'
     ? `Core ${version} installer package.`
     : tier === 'pro'
-      ? `Standard plus selected ${version} updates, or Update Only for existing Standard users.`
+      ? `${version} standard package plus selected update access, or Update Only for users who already installed the base package.`
       : `Maximum ${version} installer package.`,
   uiContent: {
     ...normalizeInstallerTierUiContent(null, tier),
@@ -232,6 +233,188 @@ const eventBadgeClass = (theme: 'light' | 'dark', eventType: string) => {
   return theme === 'dark' ? 'bg-gray-500/15 text-gray-200 border-gray-500/30' : 'bg-gray-50 text-gray-700 border-gray-200';
 };
 
+const installerPackageKindMeta = (kind: InstallerPackage['packageKind']) => {
+  if (kind === 'standard') {
+    return {
+      label: 'Standard Package',
+      shortLabel: 'Standard',
+      description: 'Base package entitlement. Actual integrated or portable mode is recorded after install completion.',
+    };
+  }
+  return {
+    label: 'Update Package',
+    shortLabel: 'Update',
+    description: 'Update package entitlement. Actual integrated or portable mode is recorded after install completion.',
+  };
+};
+
+const installerProductTypeMeta = (type: InstallerBuyProduct['productType']) => {
+  if (type === 'standard') {
+    return {
+      label: 'Standard',
+      shortLabel: 'Standard',
+      description: 'Buyer receives the standard/base installer entitlement. Install mode is recorded after completion.',
+    };
+  }
+  if (type === 'update') {
+    return {
+      label: 'Update Only',
+      shortLabel: 'Update',
+      description: 'Buyer receives update-only package access. Install mode is recorded after completion.',
+    };
+  }
+  return {
+    label: 'PRO MAX Bundle',
+    shortLabel: 'PRO MAX',
+    description: 'Buyer receives all installer entitlements configured for PRO MAX.',
+  };
+};
+
+const installerKindBadgeClass = (theme: 'light' | 'dark', kind: InstallerPackage['packageKind'] | InstallerBuyProduct['productType']) => {
+  if (kind === 'standard') {
+    return theme === 'dark'
+      ? 'border-emerald-400/35 bg-emerald-500/15 text-emerald-100'
+      : 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  }
+  if (kind === 'update') {
+    return theme === 'dark'
+      ? 'border-sky-400/35 bg-sky-500/15 text-sky-100'
+      : 'border-sky-200 bg-sky-50 text-sky-700';
+  }
+  return theme === 'dark'
+    ? 'border-fuchsia-400/35 bg-fuchsia-500/15 text-fuchsia-100'
+    : 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700';
+};
+
+const InstallerKindBadge = ({
+  theme,
+  kind,
+  compact = false,
+}: {
+  theme: 'light' | 'dark';
+  kind: InstallerPackage['packageKind'];
+  compact?: boolean;
+}) => {
+  const meta = installerPackageKindMeta(kind);
+  return (
+    <span
+      title={meta.description}
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${installerKindBadgeClass(theme, kind)}`}
+    >
+      {compact ? meta.shortLabel : meta.label}
+    </span>
+  );
+};
+
+const InstallerProductTypeBadge = ({
+  theme,
+  type,
+  compact = false,
+}: {
+  theme: 'light' | 'dark';
+  type: InstallerBuyProduct['productType'];
+  compact?: boolean;
+}) => {
+  const meta = installerProductTypeMeta(type);
+  return (
+    <span
+      title={meta.description}
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${installerKindBadgeClass(theme, type)}`}
+    >
+      {compact ? meta.shortLabel : meta.label}
+    </span>
+  );
+};
+
+type CompletionModeSummary = 'integrated' | 'portable' | 'mixed' | 'unknown';
+
+const installModeBadgeClass = (theme: 'light' | 'dark', mode: CompletionModeSummary) => {
+  if (mode === 'integrated') {
+    return theme === 'dark'
+      ? 'border-emerald-400/35 bg-emerald-500/15 text-emerald-100'
+      : 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  }
+  if (mode === 'portable') {
+    return theme === 'dark'
+      ? 'border-sky-400/35 bg-sky-500/15 text-sky-100'
+      : 'border-sky-200 bg-sky-50 text-sky-700';
+  }
+  if (mode === 'mixed') {
+    return theme === 'dark'
+      ? 'border-amber-400/35 bg-amber-500/15 text-amber-100'
+      : 'border-amber-200 bg-amber-50 text-amber-700';
+  }
+  return theme === 'dark'
+    ? 'border-gray-500/30 bg-gray-500/10 text-gray-200'
+    : 'border-gray-200 bg-gray-50 text-gray-700';
+};
+
+const installModeLabel = (mode: CompletionModeSummary) => {
+  if (mode === 'integrated') return 'Integrated';
+  if (mode === 'portable') return 'Portable';
+  if (mode === 'mixed') return 'Mixed';
+  return 'Mode not recorded';
+};
+
+const InstallModeBadge = ({ theme, mode }: { theme: 'light' | 'dark'; mode: CompletionModeSummary }) => (
+  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${installModeBadgeClass(theme, mode)}`}>
+    {installModeLabel(mode)}
+  </span>
+);
+
+const asInstallerRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+const normalizeBooleanLike = (value: unknown): boolean | null => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'portable'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'integrated'].includes(normalized)) return false;
+  }
+  return null;
+};
+
+const normalizeInstallMode = (value: unknown, portableMode?: unknown): Exclude<CompletionModeSummary, 'mixed' | 'unknown'> | null => {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (normalized === 'integrated' || normalized === 'virtualdj' || normalized === 'vdj') return 'integrated';
+  if (normalized === 'portable') return 'portable';
+  const portable = normalizeBooleanLike(portableMode);
+  if (portable !== null) return portable ? 'portable' : 'integrated';
+  return null;
+};
+
+const getCompletionMode = (detail: AdminInstallerCompletionDetail | Record<string, unknown>): 'integrated' | 'portable' | null => {
+  const row = asInstallerRecord(detail);
+  return normalizeInstallMode(row.installMode ?? row.install_mode, row.portableMode ?? row.portable_mode);
+};
+
+const getCompletionProductCode = (detail: AdminInstallerCompletionDetail | Record<string, unknown>): string => {
+  const row = asInstallerRecord(detail);
+  return String(row.productCode ?? row.product_code ?? '').trim();
+};
+
+const summarizeCompletionMode = (
+  details: Array<AdminInstallerCompletionDetail | Record<string, unknown>> | undefined,
+  completedProducts: string[] = [],
+) => {
+  const rows = Array.isArray(details) ? details : [];
+  const modes = Array.from(new Set(rows.map(getCompletionMode).filter(Boolean))) as Array<'integrated' | 'portable'>;
+  const productCodes = Array.from(new Set([
+    ...completedProducts,
+    ...rows.map(getCompletionProductCode),
+  ].map((value) => String(value || '').trim()).filter(Boolean)));
+  const targetPaths = Array.from(new Set(rows
+    .map((detail) => {
+      const row = asInstallerRecord(detail);
+      return String(row.targetPath ?? row.target_path ?? '').trim();
+    })
+    .filter(Boolean)));
+  const mode: CompletionModeSummary = modes.length > 1 ? 'mixed' : modes[0] || 'unknown';
+  return { mode, productCodes, targetPaths };
+};
+
 const toggleValue = (values: string[], value: string, enabled: boolean) => {
   const next = new Set(values);
   if (enabled) next.add(value);
@@ -284,9 +467,13 @@ const formatDateTime = (value: string | null | undefined): string => {
   return parsed.toLocaleString();
 };
 
-const packageNameList = (productCodes: string[], packageMap: Map<string, InstallerPackage>) => {
+const packageNameList = (productCodes: string[], packageMap: Map<string, InstallerPackage>, includeKind = false) => {
   if (productCodes.length === 0) return '-';
-  return productCodes.map((productCode) => packageMap.get(productCode)?.displayName || productCode).join(', ');
+  return productCodes.map((productCode) => {
+    const item = packageMap.get(productCode);
+    if (!item) return productCode;
+    return includeKind ? `${item.displayName} (${installerPackageKindMeta(item.packageKind).shortLabel})` : item.displayName;
+  }).join(', ');
 };
 
 const totalPages = (total: number, perPage: number) => Math.max(1, Math.ceil(total / perPage));
@@ -980,7 +1167,7 @@ export function AdminAccessInstallerTab({
             <TableRow>
               <TableHead>Code</TableHead>
               <TableHead>Name</TableHead>
-              <TableHead>Kind</TableHead>
+              <TableHead>Package Type</TableHead>
               <TableHead>Order</TableHead>
               <TableHead>Size</TableHead>
               <TableHead>PRO MAX</TableHead>
@@ -999,7 +1186,7 @@ export function AdminAccessInstallerTab({
                     {item.partCount && item.partCount > 1 ? `${item.partCount} parts` : item.archiveName}
                   </div>
                 </TableCell>
-                <TableCell>{item.packageKind}</TableCell>
+                <TableCell><InstallerKindBadge theme={theme} kind={item.packageKind} /></TableCell>
                 <TableCell>{item.installOrder}</TableCell>
                 <TableCell>{item.parts.reduce((total, part) => total + (part.downloadSize || 0), 0).toLocaleString()}</TableCell>
                 <TableCell>{item.includeInProMax ? 'Yes' : 'No'}</TableCell>
@@ -1031,6 +1218,23 @@ export function AdminAccessInstallerTab({
           </TableBody>
         </Table>
       </section>
+    );
+  };
+
+  const renderCompletedInstallCell = (item: AdminInstallerLicense) => {
+    const summary = summarizeCompletionMode(item.completedProductDetails, item.completedProducts);
+    if (summary.productCodes.length === 0) return <span className="text-xs opacity-60">-</span>;
+    return (
+      <div className="space-y-1 text-xs">
+        <InstallModeBadge theme={theme} mode={summary.mode} />
+        <div className="opacity-80">{packageNameList(summary.productCodes, packageMap)}</div>
+        {summary.targetPaths[0] ? (
+          <div className="truncate opacity-60" title={summary.targetPaths[0]}>Target: {summary.targetPaths[0]}</div>
+        ) : null}
+        {summary.mode === 'unknown' ? (
+          <div className="text-[11px] opacity-60">Completion exists but install mode was not recorded.</div>
+        ) : null}
+      </div>
     );
   };
 
@@ -1066,8 +1270,8 @@ export function AdminAccessInstallerTab({
                 <TableCell><div className="font-medium">{item.customerName || 'Unnamed User'}</div><div className="text-xs opacity-60">#{item.id} | {item.redemptionCount} redemption(s)</div></TableCell>
                 <TableCell>{item.rawCode ? <CopyableValue value={item.rawCode} label="license code" wrap /> : <span className="text-xs opacity-60">{item.codeHint || 'Legacy license'}</span>}</TableCell>
                 <TableCell><span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${statusBadgeClass(theme, item.status)}`}>{item.status}</span></TableCell>
-                <TableCell className="max-w-[260px] text-xs">{packageNameList(item.entitlements, packageMap)}</TableCell>
-                <TableCell className="max-w-[260px] text-xs">{packageNameList(item.completedProducts, packageMap)}</TableCell>
+                <TableCell className="max-w-[260px] text-xs">{packageNameList(item.entitlements, packageMap, true)}</TableCell>
+                <TableCell className="max-w-[260px] text-xs">{renderCompletedInstallCell(item)}</TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-2">
                     <Button type="button" size="sm" variant="outline" onClick={() => openEditLicenseDialog(item)}>Edit</Button>
@@ -1147,9 +1351,9 @@ export function AdminAccessInstallerTab({
         <Table containerClassName={`rounded-xl border ${cardShell(theme)}`}>
           <TableHeader>
             <TableRow>
-              <TableHead>SKU</TableHead>
+              <TableHead>Product</TableHead>
               <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
+              <TableHead>Product Type</TableHead>
               <TableHead>Price</TableHead>
               <TableHead>Entitlements</TableHead>
               <TableHead>Auto</TableHead>
@@ -1166,9 +1370,9 @@ export function AdminAccessInstallerTab({
                   <div className="text-xs opacity-60">{isAutoManagedCatalogProduct(item) ? 'Auto from Packages' : 'Custom SKU'}</div>
                 </TableCell>
                 <TableCell><div>{item.displayName}</div><div className="text-xs opacity-60">{item.description || '-'}</div></TableCell>
-                <TableCell>{item.productType}</TableCell>
+                <TableCell><InstallerProductTypeBadge theme={theme} type={item.productType} /></TableCell>
                 <TableCell>{item.pricePhp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</TableCell>
-                <TableCell className="max-w-[260px] text-xs">{packageNameList(item.grantedEntitlements, packageMap)}</TableCell>
+                <TableCell className="max-w-[260px] text-xs">{packageNameList(item.grantedEntitlements, packageMap, true)}</TableCell>
                 <TableCell>{item.allowAutoApprove ? 'Yes' : 'No'}</TableCell>
                 <TableCell>{item.enabled ? 'Yes' : 'No'}</TableCell>
                 <TableCell>
@@ -1510,7 +1714,13 @@ export function AdminAccessInstallerTab({
             {items.map((item) => (
               <TableRow key={item.id}>
                 <TableCell><div className="font-medium">{item.email}</div><div className="text-xs opacity-60">{formatDateTime(item.createdAt)}</div></TableCell>
-                <TableCell><div>{item.displayNameSnapshot}</div><div className="text-xs opacity-60">{item.skuCode}</div></TableCell>
+                <TableCell>
+                  <div>{item.displayNameSnapshot}</div>
+                  <div className="text-xs opacity-60">{item.skuCode}</div>
+                  <div className="mt-1">
+                    <InstallerProductTypeBadge theme={theme} type={item.productType} compact />
+                  </div>
+                </TableCell>
                 <TableCell><span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${statusBadgeClass(theme, item.status)}`}>{item.status}</span></TableCell>
                 <TableCell>{item.receiptReference ? <CopyableValue value={item.receiptReference} label="receipt reference" wrap /> : '-'}</TableCell>
                 <TableCell>{item.issuedLicenseCode ? <CopyableValue value={item.issuedLicenseCode} label="license code" wrap /> : <span className="text-xs opacity-60">Not issued</span>}</TableCell>
@@ -1550,6 +1760,34 @@ export function AdminAccessInstallerTab({
 
   const renderEventsTable = (version: InstallerVersionKey) => {
     const items = eventsByVersion[version] || [];
+    const eventProductCode = (event: AdminInstallerEvent) => {
+      const payload = asInstallerRecord(event.payload);
+      return String(event.productCode ?? payload.productCode ?? payload.product_code ?? '').trim();
+    };
+    const eventCompletedProducts = (event: AdminInstallerEvent) => {
+      const payload = asInstallerRecord(event.payload);
+      if (Array.isArray(event.completedProducts) && event.completedProducts.length > 0) return event.completedProducts;
+      return Array.isArray(payload.completedProducts) ? payload.completedProducts.map((item) => String(item || '').trim()).filter(Boolean) : [];
+    };
+    const eventRequestedProducts = (event: AdminInstallerEvent) => {
+      const payload = asInstallerRecord(event.payload);
+      return Array.isArray(payload.requestedProducts) ? payload.requestedProducts.map((item) => String(item || '').trim()).filter(Boolean) : [];
+    };
+    const eventInstallMode = (event: AdminInstallerEvent): CompletionModeSummary => {
+      const payload = asInstallerRecord(event.payload);
+      return normalizeInstallMode(
+        event.installMode ?? payload.installMode ?? payload.install_mode,
+        event.portableMode ?? payload.portableMode ?? payload.portable_mode,
+      ) || 'unknown';
+    };
+    const eventTargetPath = (event: AdminInstallerEvent) => {
+      const payload = asInstallerRecord(event.payload);
+      return String(event.targetPath ?? payload.targetPath ?? payload.target_path ?? '').trim();
+    };
+    const eventMachineId = (event: AdminInstallerEvent) => {
+      const payload = asInstallerRecord(event.payload);
+      return String(event.machineId ?? payload.machineId ?? payload.machine_id ?? '').trim();
+    };
     return (
       <section className={`rounded-2xl border p-4 space-y-4 ${cardShell(theme)}`}>
         <div>
@@ -1575,10 +1813,13 @@ export function AdminAccessInstallerTab({
                 <TableCell><span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${eventBadgeClass(theme, event.eventType)}`}>{event.eventType}</span></TableCell>
                 <TableCell>{event.customerName || 'Unnamed User'}</TableCell>
                 <TableCell>{event.codeHint || `#${event.licenseId}`}</TableCell>
-                <TableCell className="text-xs">{String(event.payload?.productCode || '-')}</TableCell>
+                <TableCell className="text-xs">{packageNameList([eventProductCode(event)].filter(Boolean), packageMap, true)}</TableCell>
                 <TableCell className="max-w-[320px] text-xs">
-                  <div>Requested: {Array.isArray(event.payload?.requestedProducts) ? (event.payload.requestedProducts as string[]).join(', ') : '-'}</div>
-                  <div>Completed: {Array.isArray(event.payload?.completedProducts) ? (event.payload.completedProducts as string[]).join(', ') : '-'}</div>
+                  <div className="mb-1"><InstallModeBadge theme={theme} mode={eventInstallMode(event)} /></div>
+                  <div>Requested: {packageNameList(eventRequestedProducts(event), packageMap, true)}</div>
+                  <div>Completed: {packageNameList(eventCompletedProducts(event), packageMap)}</div>
+                  {eventTargetPath(event) ? <div className="truncate opacity-70" title={eventTargetPath(event)}>Target: {eventTargetPath(event)}</div> : null}
+                  {eventMachineId(event) ? <div className="truncate opacity-70" title={eventMachineId(event)}>Machine: {eventMachineId(event)}</div> : null}
                 </TableCell>
               </TableRow>
             ))}
@@ -1727,9 +1968,9 @@ export function AdminAccessInstallerTab({
             primaryFilters={(
               <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
                 <select className={selectClass(theme)} value={packageKindFilter} onChange={(event) => setPackageKindFilter(event.target.value as typeof packageKindFilter)}>
-                  <option value="all">All package kinds</option>
-                  <option value="standard">Standard</option>
-                  <option value="update">Update</option>
+                  <option value="all">All package types</option>
+                  <option value="standard">Standard packages</option>
+                  <option value="update">Update packages</option>
                 </select>
                 <select className={selectClass(theme)} value={packageStatusFilter} onChange={(event) => setPackageStatusFilter(event.target.value as typeof packageStatusFilter)}>
                   <option value="all">All package statuses</option>
@@ -1798,7 +2039,7 @@ export function AdminAccessInstallerTab({
             search={{
               value: catalogQuery,
               onChange: setCatalogQuery,
-              placeholder: 'Search SKU, name, description, or type...',
+              placeholder: 'Search SKU, name, description, or product type...',
             }}
             resultLabel={`${(catalogByVersion.V2.length + catalogByVersion.V3.length).toLocaleString()} SKUs`}
             activeFilterCount={Number(Boolean(catalogQuery.trim())) + Number(catalogTypeFilter !== 'all') + Number(catalogStatusFilter !== 'all')}
@@ -1810,10 +2051,10 @@ export function AdminAccessInstallerTab({
             primaryFilters={(
               <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
                 <select className={selectClass(theme)} value={catalogTypeFilter} onChange={(event) => setCatalogTypeFilter(event.target.value as typeof catalogTypeFilter)}>
-                  <option value="all">All SKU types</option>
-                  <option value="standard">Standard</option>
-                  <option value="update">Update</option>
-                  <option value="promax">PRO MAX</option>
+                <option value="all">All product types</option>
+                <option value="standard">Standard</option>
+                <option value="update">Update only</option>
+                <option value="promax">PRO MAX bundle</option>
                 </select>
                 <select className={selectClass(theme)} value={catalogStatusFilter} onChange={(event) => setCatalogStatusFilter(event.target.value as typeof catalogStatusFilter)}>
                   <option value="all">All SKU statuses</option>
@@ -1944,7 +2185,14 @@ export function AdminAccessInstallerTab({
             <div className="space-y-1"><Label className="text-xs">Product Code</Label><Input className={inputClass(theme)} value={packageDialog.draft.productCode} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, productCode: event.target.value.toUpperCase() } }))} /></div>
             <div className="space-y-1"><Label className="text-xs">Display Name</Label><Input className={inputClass(theme)} value={packageDialog.draft.displayName} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, displayName: event.target.value } }))} /></div>
             <div className="space-y-1"><Label className="text-xs">Install Order</Label><Input className={inputClass(theme)} type="number" value={packageDialog.draft.installOrder} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, installOrder: Number(event.target.value || 0) } }))} /></div>
-            <div className="space-y-1"><Label className="text-xs">Package Kind</Label><select className={selectClass(theme)} value={packageDialog.draft.packageKind} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, packageKind: event.target.value as InstallerPackage['packageKind'] } }))}><option value="standard">Standard</option><option value="update">Update</option></select></div>
+            <div className="space-y-1">
+              <Label className="text-xs">Package Type</Label>
+              <select className={selectClass(theme)} value={packageDialog.draft.packageKind} onChange={(event) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, packageKind: event.target.value as InstallerPackage['packageKind'] } }))}>
+                <option value="standard">Standard package</option>
+                <option value="update">Update package</option>
+              </select>
+              <div className="text-[11px] leading-snug opacity-60">{installerPackageKindMeta(packageDialog.draft.packageKind).description}</div>
+            </div>
           </div>
           <div className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 text-sm"><Checkbox checked={packageDialog.draft.includeInProMax} onCheckedChange={(checked) => setPackageDialog((current) => ({ ...current, draft: { ...current.draft, includeInProMax: Boolean(checked) } }))} /><span>Include in PRO MAX</span></label>
@@ -2001,7 +2249,15 @@ export function AdminAccessInstallerTab({
             <div className="space-y-1"><Label className="text-xs">Version</Label><select value={catalogDialog.draft.version} disabled={catalogDialog.mode === 'edit'} className={selectClass(theme)} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, version: event.target.value as InstallerVersionKey, skuCode: `${event.target.value}_STANDARD`, grantedEntitlements: [] } }))}>{VERSIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
             <div className="space-y-1"><Label className="text-xs">SKU Code</Label><Input className={inputClass(theme)} value={catalogDialog.draft.skuCode} disabled={catalogDraftAutoManaged} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, skuCode: event.target.value.toUpperCase() } }))} /></div>
             <div className="space-y-1"><Label className="text-xs">Display Name</Label><Input className={inputClass(theme)} value={catalogDialog.draft.displayName} disabled={catalogDraftAutoManaged} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, displayName: event.target.value } }))} /></div>
-            <div className="space-y-1"><Label className="text-xs">Product Type</Label><select className={selectClass(theme)} value={catalogDialog.draft.productType} disabled={catalogDraftAutoManaged} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, productType: event.target.value as InstallerBuyProduct['productType'] } }))}><option value="standard">Standard</option><option value="update">Update</option><option value="promax">PRO MAX</option></select></div>
+            <div className="space-y-1">
+              <Label className="text-xs">Product Type</Label>
+              <select className={selectClass(theme)} value={catalogDialog.draft.productType} disabled={catalogDraftAutoManaged} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, productType: event.target.value as InstallerBuyProduct['productType'] } }))}>
+                <option value="standard">Standard</option>
+                <option value="update">Update only</option>
+                <option value="promax">PRO MAX bundle</option>
+              </select>
+              <div className="text-[11px] leading-snug opacity-60">{installerProductTypeMeta(catalogDialog.draft.productType).description}</div>
+            </div>
             <div className="space-y-1"><Label className="text-xs">Price (PHP)</Label><Input className={inputClass(theme)} type="number" min="0" step="0.01" value={catalogDialog.draft.pricePhp} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, pricePhp: Number(event.target.value || 0) } }))} /></div>
             <div className="space-y-1"><Label className="text-xs">Sort Order</Label><Input className={inputClass(theme)} type="number" min="0" value={catalogDialog.draft.sortOrder} disabled={catalogDraftAutoManaged} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, sortOrder: Number(event.target.value || 0) } }))} /></div>
             <div className="space-y-1 md:col-span-2"><Label className="text-xs">Description</Label><Input className={inputClass(theme)} value={catalogDialog.draft.description} onChange={(event) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, description: event.target.value } }))} /></div>
@@ -2024,6 +2280,7 @@ export function AdminAccessInstallerTab({
                 <label key={pkg.productCode} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${cardShell(theme)}`}>
                   <Checkbox disabled={catalogDraftAutoManaged} checked={catalogDialog.draft.grantedEntitlements.includes(pkg.productCode)} onCheckedChange={(checked) => setCatalogDialog((current) => ({ ...current, draft: { ...current.draft, grantedEntitlements: toggleValue(current.draft.grantedEntitlements, pkg.productCode, Boolean(checked)) } }))} />
                   <span>{pkg.displayName}</span>
+                  <InstallerKindBadge theme={theme} kind={pkg.packageKind} compact />
                   <span className="opacity-60">{pkg.productCode}</span>
                 </label>
               ))}
@@ -2053,15 +2310,15 @@ export function AdminAccessInstallerTab({
           </div>
           <div className="space-y-3">
             <div>
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">Standard</div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">Standard Packages</div>
               <div className="flex flex-wrap gap-2">
-                {entitlementGroups.standard.map((pkg) => <label key={pkg.productCode} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${cardShell(theme)}`}><Checkbox checked={licenseDialog.draft.entitlements.includes(pkg.productCode)} onCheckedChange={(checked) => setLicenseDialog((current) => ({ ...current, draft: { ...current.draft, entitlements: toggleValue(current.draft.entitlements, pkg.productCode, Boolean(checked)) } }))} /><span>{pkg.displayName}</span><span className="opacity-60">{pkg.productCode}</span></label>)}
+                {entitlementGroups.standard.map((pkg) => <label key={pkg.productCode} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${cardShell(theme)}`}><Checkbox checked={licenseDialog.draft.entitlements.includes(pkg.productCode)} onCheckedChange={(checked) => setLicenseDialog((current) => ({ ...current, draft: { ...current.draft, entitlements: toggleValue(current.draft.entitlements, pkg.productCode, Boolean(checked)) } }))} /><span>{pkg.displayName}</span><InstallerKindBadge theme={theme} kind={pkg.packageKind} compact /><span className="opacity-60">{pkg.productCode}</span></label>)}
               </div>
             </div>
             <div>
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">Updates</div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">Update Packages</div>
               <div className="flex flex-wrap gap-2">
-                {entitlementGroups.update.map((pkg) => <label key={pkg.productCode} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${cardShell(theme)}`}><Checkbox checked={licenseDialog.draft.entitlements.includes(pkg.productCode)} onCheckedChange={(checked) => setLicenseDialog((current) => ({ ...current, draft: { ...current.draft, entitlements: toggleValue(current.draft.entitlements, pkg.productCode, Boolean(checked)) } }))} /><span>{pkg.displayName}</span><span className="opacity-60">{pkg.productCode}</span></label>)}
+                {entitlementGroups.update.map((pkg) => <label key={pkg.productCode} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${cardShell(theme)}`}><Checkbox checked={licenseDialog.draft.entitlements.includes(pkg.productCode)} onCheckedChange={(checked) => setLicenseDialog((current) => ({ ...current, draft: { ...current.draft, entitlements: toggleValue(current.draft.entitlements, pkg.productCode, Boolean(checked)) } }))} /><span>{pkg.displayName}</span><InstallerKindBadge theme={theme} kind={pkg.packageKind} compact /><span className="opacity-60">{pkg.productCode}</span></label>)}
               </div>
             </div>
           </div>
@@ -2083,13 +2340,17 @@ export function AdminAccessInstallerTab({
               <div className="grid gap-3 md:grid-cols-2">
                 <div><div className="text-xs opacity-70">Buyer Email</div><div className="font-medium">{requestDialog.item.email}</div></div>
                 <div><div className="text-xs opacity-70">Status</div><div>{requestDialog.item.status}</div></div>
-                <div><div className="text-xs opacity-70">SKU</div><div>{requestDialog.item.displayNameSnapshot} ({requestDialog.item.skuCode})</div></div>
+                <div>
+                  <div className="text-xs opacity-70">Product</div>
+                  <div>{requestDialog.item.displayNameSnapshot} ({requestDialog.item.skuCode})</div>
+                  <div className="mt-1"><InstallerProductTypeBadge theme={theme} type={requestDialog.item.productType} /></div>
+                </div>
                 <div><div className="text-xs opacity-70">Price</div><div>{requestDialog.item.pricePhpSnapshot !== null ? requestDialog.item.pricePhpSnapshot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}</div></div>
                 <div><div className="text-xs opacity-70">Receipt Reference</div>{requestDialog.item.receiptReference ? <CopyableValue value={requestDialog.item.receiptReference} label="receipt reference" wrap /> : '-'}</div>
                 <div><div className="text-xs opacity-70">Payment Reference</div><div>{requestDialog.item.referenceNo || requestDialog.item.ocrReferenceNo || '-'}</div></div>
                 <div><div className="text-xs opacity-70">Payment Channel</div><div>{requestDialog.item.paymentChannel}</div></div>
                 <div><div className="text-xs opacity-70">OCR Status</div><div>{requestDialog.item.ocrStatus || '-'}</div></div>
-                <div className="md:col-span-2"><div className="text-xs opacity-70">Granted Entitlements</div><div>{packageNameList(requestDialog.item.grantedEntitlementsSnapshot, packageMap)}</div></div>
+                <div className="md:col-span-2"><div className="text-xs opacity-70">Granted Entitlements</div><div>{packageNameList(requestDialog.item.grantedEntitlementsSnapshot, packageMap, true)}</div></div>
                 <div className="md:col-span-2"><div className="text-xs opacity-70">Issued License</div>{requestDialog.item.issuedLicenseCode ? <CopyableValue value={requestDialog.item.issuedLicenseCode} label="license code" wrap /> : <span>Not issued</span>}</div>
               </div>
               {requestDialog.item.status === 'pending' && (

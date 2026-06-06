@@ -5,13 +5,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { CopyableValue } from '@/components/ui/copyable-value';
+import { PaymentReceiptCard } from '@/components/ui/payment-receipt-card';
 import { edgeFunctionUrl, getClientCompatibilityHeaders } from '@/lib/edge-api';
 import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links';
 import { supabase } from '@/lib/supabase';
 import { useAuthActions, useAuthState } from '@/hooks/useAuth';
 import {
   type AccountTierUiContent,
+  accentRgb,
   DEFAULT_TIER_UI_CONTENT,
+  getReadableTextColor,
   normalizeTierUiContent,
   resolveTierVideoSrc,
 } from '@/lib/account-tier-content';
@@ -25,6 +28,17 @@ type PlanView = {
   id: UpgradePlanTier;
   kind: 'free' | 'tier';
   tier?: UpgradeTierOption;
+};
+
+type UpgradeReceiptResult = {
+  status: 'approved' | 'pending';
+  planName: string;
+  amountText: string;
+  receiptReference: string;
+  paymentReference: string;
+  paymentChannel: string;
+  submittedAt: string;
+  message: string;
 };
 
 type UpgradeTierOption = {
@@ -41,6 +55,7 @@ type UpgradeTierOption = {
     receipt_reference?: string | null;
     created_at?: string | null;
     quote_price_php_snapshot?: number | null;
+    source?: string | null;
   } | null;
   quote: {
     basePrice: number;
@@ -159,7 +174,7 @@ const mapUpgradeError = (value: unknown): string => {
   const code = String(value || '').trim();
   switch (code) {
     case 'NOT_AUTHENTICATED':
-      return 'Sign in before requesting an upgrade.';
+      return 'Account session is still syncing. Please reopen upgrade pricing and submit again.';
     case 'ALREADY_ON_TIER':
       return 'Your account is already on this tier.';
     case 'ALREADY_ABOVE_TIER':
@@ -208,26 +223,9 @@ const getBeforePromoPrice = (price: number, discountPercent: number): number => 
   return Math.max(price, Math.round(price / (1 - discountPercent / 100)));
 };
 
-const hexToRgb = (hex: string): { r: number; g: number; b: number } | null => {
-  const match = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
-  if (!match) return null;
-  const value = match[1];
-  return {
-    r: Number.parseInt(value.slice(0, 2), 16),
-    g: Number.parseInt(value.slice(2, 4), 16),
-    b: Number.parseInt(value.slice(4, 6), 16),
-  };
-};
-
-const accentRgb = (hex: string, alpha: number, fallback = 'rgba(242,25,132,0.35)'): string => {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return fallback;
-  return `rgba(${rgb.r},${rgb.g},${rgb.b},${Math.max(0, Math.min(1, alpha))})`;
-};
-
 export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: AccountUpgradeDialogProps) {
-  const { user, profile, capabilities, loading: authLoading } = useAuthState();
-  const { refreshAccountCapabilities } = useAuthActions();
+  const { user, profile, capabilities, loading: authLoading, authTransition } = useAuthState();
+  const { getAuthenticatedAccessToken, refreshAccountCapabilities } = useAuthActions();
   const [loading, setLoading] = React.useState(false);
   const [optionsLoadMessage, setOptionsLoadMessage] = React.useState<string | null>(null);
   const [online, setOnline] = React.useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
@@ -245,7 +243,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   const [notes, setNotes] = React.useState('');
   const [proofFile, setProofFile] = React.useState<File | null>(null);
   const [proofPreviewUrl, setProofPreviewUrl] = React.useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
+  const [upgradeReceipt, setUpgradeReceipt] = React.useState<UpgradeReceiptResult | null>(null);
   const [optionsReloadKey, setOptionsReloadKey] = React.useState(0);
   const dialogBodyRef = React.useRef<HTMLDivElement | null>(null);
   const planRailShellRef = React.useRef<HTMLDivElement | null>(null);
@@ -340,7 +338,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     setLoading(!hasCachedOptions);
     setOptionsLoadMessage(null);
     setStep('plans');
-    setSuccessMessage(null);
+    setUpgradeReceipt(null);
 
     if (cached?.tiers?.length) {
       applyOptions(cached.freeTier || null, cached.tiers, cached.paymentConfig);
@@ -407,6 +405,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
 
   const selected = tiers.find((tier) => tier.tier === selectedTier) || tiers[0] || null;
   const selectedIsProMax = selected?.tier === 'pro_max';
+  const authSessionSyncing = authLoading || authTransition.status !== 'idle';
   const planViews = React.useMemo<PlanView[]>(() => [
     { id: 'free', kind: 'free' },
     ...tiers.map((tier) => ({ id: tier.tier, kind: 'tier' as const, tier })),
@@ -463,8 +462,9 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
 
     setSubmitting(true);
     try {
-      const token = await resolveCurrentAccessToken();
-      if (!token) throw new Error('Please sign in again before submitting an upgrade request.');
+      const tokenResult = await getAuthenticatedAccessToken();
+      const token = tokenResult.token;
+      if (!token) throw new Error(tokenResult.message || 'Account session is still syncing. Please reopen upgrade pricing and submit again.');
       let proofPath: string | null = null;
       if (quotePrice > 0 && proofFile) {
         const uploadReq = await fetch(edgeFunctionUrl('store-api', 'account/upgrade-proof-upload-url'), {
@@ -472,6 +472,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
           cache: 'no-store',
           credentials: 'omit',
           headers: {
+            ...getClientCompatibilityHeaders(),
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
@@ -499,6 +500,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
         cache: 'no-store',
         credentials: 'omit',
         headers: {
+          ...getClientCompatibilityHeaders(),
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
@@ -515,26 +517,54 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
       const requestData = requestPayload?.data && typeof requestPayload.data === 'object' ? requestPayload.data : requestPayload;
       if (!requestRes.ok) throw new Error(mapUpgradeError(requestPayload?.error || requestData?.error));
       await refreshAccountCapabilities();
-      const status = String((requestData?.request as any)?.status || 'pending');
+      const requestRow = ((requestData?.request && typeof requestData.request === 'object') ? requestData.request : {}) as Record<string, unknown>;
+      const status = String((requestRow as any)?.status || 'pending');
+      if (status !== 'approved' && selected?.tier) {
+        setTiers((current) => current.map((tier) => (
+          tier.tier === selected.tier
+            ? {
+              ...tier,
+              available: false,
+              pendingRequest: {
+                id: String(requestRow.id || `${tier.tier}-pending`),
+                receipt_reference: requestRow.receipt_reference ? String(requestRow.receipt_reference) : null,
+                created_at: requestRow.created_at ? String(requestRow.created_at) : new Date().toISOString(),
+                quote_price_php_snapshot: Number.isFinite(Number(requestRow.quote_price_php_snapshot))
+                  ? Number(requestRow.quote_price_php_snapshot)
+                  : null,
+              },
+            }
+            : tier
+        )));
+      }
       setProofFile(null);
       setPayerName('');
       setReferenceNo('');
       setNotes('');
-      setSuccessMessage(status === 'approved'
-        ? 'Upgrade applied. Your account tier has been updated.'
-        : 'Upgrade request submitted. Admin will review your payment proof.');
+      setUpgradeReceipt({
+        status: status === 'approved' ? 'approved' : 'pending',
+        planName: selected.displayName || tierLabel(selected.tier),
+        amountText: formatPhp(quotePrice),
+        receiptReference: String(requestRow.receipt_reference || requestRow.id || 'Pending verification'),
+        paymentReference: String(requestRow.reference_no || referenceNo.trim() || 'Not provided'),
+        paymentChannel: String(requestRow.payment_channel || paymentChannel || 'upgrade'),
+        submittedAt: requestRow.created_at ? String(requestRow.created_at) : new Date().toISOString(),
+        message: status === 'approved'
+          ? 'Your account tier is active.'
+          : 'Your upgrade request is waiting for admin review for 24 hours. Message us on Facebook to follow up your request.',
+      });
       pushNotice?.({ variant: 'success', message: status === 'approved' ? 'Upgrade applied.' : 'Upgrade request submitted.' });
     } catch (error) {
       pushNotice?.({ variant: 'error', message: error instanceof Error ? error.message : 'Upgrade request failed.' });
     } finally {
       setSubmitting(false);
     }
-  }, [notes, online, payerName, paymentChannel, proofFile, pushNotice, quotePrice, refreshAccountCapabilities, referenceNo, selected, submitting]);
+  }, [getAuthenticatedAccessToken, notes, online, payerName, paymentChannel, proofFile, pushNotice, quotePrice, refreshAccountCapabilities, referenceNo, selected, submitting]);
 
   const selectPlan = React.useCallback((tier: UpgradeTierOption) => {
     setSelectedTier(tier.tier);
     if (!tier.available || tier.pendingRequest) return;
-    setSuccessMessage(null);
+    setUpgradeReceipt(null);
     setStep('request');
   }, []);
 
@@ -785,8 +815,9 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     const previousPrice = !isFree && displayPrice > 0 && promoPercent > 0
       ? formatPhp(getBeforePromoPrice(displayPrice, promoPercent))
       : null;
-    const cta = isFree ? (isCurrentFree ? 'Current Plan' : 'Base Access') : isCurrentPaidTier ? 'Current Plan' : pending ? 'Pending Review' : `Get ${title}`;
+    const cta = isFree ? (isCurrentFree ? 'Current Plan' : 'Base Access') : pending ? 'Pending Review' : isCurrentPaidTier ? 'Current Plan' : `Get ${title}`;
     const accentColor = uiContent.color;
+    const accentTextColor = getReadableTextColor(accentColor);
     const paidCardStyle: React.CSSProperties = isFree ? {} : {
       borderColor: accentRgb(accentColor, isDark ? 0.28 : 0.22),
       background: isDark
@@ -801,11 +832,12 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     };
     const paidButtonStyle: React.CSSProperties = !isFree && !disabled ? {
       backgroundColor: accentColor,
+      color: accentTextColor,
       boxShadow: `0 14px 36px ${accentRgb(accentColor, 0.38)}`,
     } : {};
     const ctaClass = isFree
       ? isDark ? 'bg-white text-slate-950' : 'bg-slate-950 text-white shadow-[0_12px_30px_rgba(15,23,42,0.18)]'
-      : 'text-white';
+      : '';
     const shellClass = isFree
       ? isDark
         ? 'border-white/10 bg-[#15171a] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_38px_rgba(255,255,255,0.035)]'
@@ -831,7 +863,11 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     const currentPlanBadgeClass = isDark
       ? 'bg-[#b9ff12] text-slate-950 shadow-[0_0_18px_rgba(185,255,18,0.24)]'
       : 'bg-slate-950 text-white shadow-[0_0_18px_rgba(15,23,42,0.22)]';
-    const disabledCtaClass = isDark ? 'bg-white/10 text-white/55' : 'bg-slate-950/8 text-slate-500';
+    const disabledCtaClass = isDark ? 'bg-white/10 text-white/55' : 'border border-slate-300 bg-slate-100 text-slate-700 shadow-sm';
+    const pendingNoticeClass = isDark
+      ? 'border-amber-300/30 bg-amber-300/12 text-amber-100'
+      : 'border-amber-300 bg-amber-50 text-amber-900 shadow-sm';
+    const pendingNoticeLinkClass = isDark ? 'text-amber-50' : 'text-amber-950';
 
     return (
       <div
@@ -842,7 +878,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
         } ${disabled ? 'cursor-default' : 'hover:-translate-y-1 hover:brightness-110'}`}
       >
         {uiContent.cardHeader.enabled ? (
-          <div className="flex h-9 items-center justify-center text-[11px] font-black uppercase tracking-wide" style={{ backgroundColor: accentColor }}>
+          <div className="flex h-9 items-center justify-center text-[11px] font-black uppercase tracking-wide" style={{ backgroundColor: accentColor, color: accentTextColor }}>
             {isFree ? '' : isProMax ? '* ' : '+ '}{headerLabel}
           </div>
         ) : (
@@ -873,8 +909,8 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
               <span className={`shrink-0 whitespace-nowrap rounded-[4px] px-2 py-1 text-[10px] font-black uppercase ${
                 isCurrentPaidTier
                   ? currentPlanBadgeClass
-                  : 'text-white'
-              }`} style={!isCurrentPaidTier ? { backgroundColor: accentColor, boxShadow: `0 0 18px ${accentRgb(accentColor, 0.45)}` } : undefined}>
+                  : ''
+              }`} style={!isCurrentPaidTier ? { backgroundColor: accentColor, color: accentTextColor, boxShadow: `0 0 18px ${accentRgb(accentColor, 0.45)}` } : undefined}>
                 {isCurrentPaidTier ? 'Current Plan' : `${promoPercent}% OFF`}
               </span>
             )}
@@ -925,14 +961,23 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
               disabled && !isFree ? disabledCtaClass : ctaClass
             }`}
           >
+            {pending && !isFree ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {cta}
             {!disabled && <ArrowRight className="ml-2 h-4 w-4" />}
           </button>
         </div>
 
         {pending && (
-          <div className="relative mx-4 mt-4 rounded-xl border border-amber-300/30 bg-amber-300/12 px-3 py-2 text-xs text-amber-100">
-            Already submitted{tier!.pendingRequest?.receipt_reference ? `: ${tier!.pendingRequest.receipt_reference}` : ''}. Wait for admin review.
+          <div className={`relative mx-4 mt-4 rounded-xl border px-3 py-2 text-xs leading-5 ${pendingNoticeClass}`}>
+            Already submitted{tier!.pendingRequest?.receipt_reference ? `: ${tier!.pendingRequest.receipt_reference}` : ''}. Wait for admin review for 24 hours, or message us on{' '}
+            {paymentConfig?.messenger_url ? (
+              <a className={`font-black underline underline-offset-4 ${pendingNoticeLinkClass}`} href={paymentConfig.messenger_url} target="_blank" rel="noreferrer">
+                Facebook
+              </a>
+            ) : (
+              <span className={`font-black ${pendingNoticeLinkClass}`}>Facebook</span>
+            )}{' '}
+            to follow up your request.
           </div>
         )}
 
@@ -1105,11 +1150,39 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
               </div>
             </div>
 
-            {successMessage && (
-              <div className="rounded-xl border border-[#b9ff12]/40 bg-[#b9ff12]/10 px-3 py-2 text-sm font-semibold text-lime-400">
-                {successMessage}
-              </div>
-            )}
+          </div>
+        ) : selected && upgradeReceipt ? (
+          <div className="mx-auto max-w-xl py-4">
+            <PaymentReceiptCard
+              theme={theme}
+              title={upgradeReceipt.status === 'approved' ? 'Approved' : 'Pending Approval'}
+              status={upgradeReceipt.status === 'approved' ? 'success' : 'pending'}
+              statusLabel={upgradeReceipt.status === 'approved' ? 'Approved' : 'Pending Approval'}
+              subtitle={upgradeReceipt.message}
+              amountLabel="Upgrade"
+              amountValue={upgradeReceipt.amountText}
+              lineItems={[
+                { label: 'Plan', value: upgradeReceipt.planName },
+                { label: 'VDJV Receipt No', value: upgradeReceipt.receiptReference, copyValue: upgradeReceipt.receiptReference },
+                { label: 'Payment Reference', value: upgradeReceipt.paymentReference, copyValue: upgradeReceipt.paymentReference },
+                { label: 'Payment Channel', value: upgradeReceipt.paymentChannel },
+                { label: 'Submitted', value: new Date(upgradeReceipt.submittedAt).toLocaleString() },
+              ]}
+              receiptFileName={`account-upgrade-receipt-${new Date(upgradeReceipt.submittedAt).toISOString().replace(/[:.]/g, '-')}.png`}
+              primaryAction={{
+                label: 'Done',
+                onClick: () => {
+                  setUpgradeReceipt(null);
+                  onOpenChange(false);
+                },
+              }}
+              secondaryAction={paymentConfig?.messenger_url
+                ? {
+                  label: 'Message Us On Facebook',
+                  onClick: () => window.open(paymentConfig.messenger_url, '_blank', 'noopener,noreferrer'),
+                }
+                : undefined}
+            />
           </div>
         ) : selected ? (
           <div className="mx-auto max-w-2xl space-y-5">
@@ -1290,20 +1363,14 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
               </div>
             )}
 
-            {successMessage && (
-              <div className="rounded-xl border border-[#b9ff12]/40 bg-[#b9ff12]/10 px-3 py-2 text-sm font-semibold text-lime-400">
-                {successMessage}
-              </div>
-            )}
-
             <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row">
               <Button type="button" variant="outline" onClick={() => setStep('plans')} disabled={submitting} className="flex-1">
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back to Plans
               </Button>
-              <Button type="button" onClick={() => void submitUpgrade()} disabled={submitting || !selected.available || !online} className={`flex-1 ${requestSubmitButtonClass}`}>
+              <Button type="button" onClick={() => void submitUpgrade()} disabled={submitting || authSessionSyncing || !selected.available || !online} className={`flex-1 ${requestSubmitButtonClass}`}>
                 {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : quotePrice > 0 ? <Upload className="mr-2 h-4 w-4" /> : <ArrowRight className="mr-2 h-4 w-4" />}
-                {submitting ? 'Submitting...' : quotePrice > 0 ? 'Submit Upgrade Request' : 'Apply Upgrade'}
+                {submitting ? 'Submitting...' : authSessionSyncing ? 'Syncing Session...' : quotePrice > 0 ? 'Submit Upgrade Request' : 'Apply Upgrade'}
               </Button>
             </div>
           </div>

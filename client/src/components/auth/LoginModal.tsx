@@ -4,22 +4,24 @@ import { Button } from '@/components/ui/button'
 import { CopyableValue } from '@/components/ui/copyable-value'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { LoadingSpinner } from '@/components/ui/loading'
+import { ModalBusyOverlay } from '@/components/ui/modal-busy-overlay'
 import { PaymentReceiptCard } from '@/components/ui/payment-receipt-card'
-import { isPasswordRecoveryMode, setPasswordRecoveryMode, useAuthActions, useAuthState } from '@/hooks/useAuth'
+import { getCachedUser, hasTrustedCachedOfflineUser, isPasswordRecoveryMode, setPasswordRecoveryMode, useAuthActions, useAuthState } from '@/hooks/useAuth'
 import { ensureActivityRuntime, logActivityEvent } from '@/lib/activityLogger'
 import { edgeFunctionUrl, markAuthClientCompatibility } from '@/lib/edge-api'
 import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links'
 import { optimizeReceiptProofFile, runReceiptOcr } from '@/lib/receipt-ocr'
 import { getPrivacyPagePath, getTermsPagePath } from '@/lib/runtime-routes'
 import { supabase } from '@/lib/supabase'
-import { ArrowLeft, ArrowRight, Download, Eye, EyeOff, ExternalLink, Loader2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Download, Eye, EyeOff, ExternalLink, Loader2, WifiOff, X } from 'lucide-react'
 
 interface LoginModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   theme?: 'light' | 'dark'
   appReturnUrl?: string
+  modePreset?: 'default' | 'signup-only'
+  onAuthSuccess?: () => void
   pushNotice?: (opts: { variant: 'success' | 'error' | 'info'; message: string }) => void
 }
 
@@ -235,7 +237,8 @@ function resolveAuthAppRedirectUrl(appReturnUrl?: string): string | undefined {
   }
 }
 
-export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, pushNotice }: LoginModalProps) {
+export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, modePreset = 'default', onAuthSuccess, pushNotice }: LoginModalProps) {
+  const signupOnly = modePreset === 'signup-only'
   const [signInError, setSignInError] = React.useState<string | null>(null)
   const [signInCooldownSeconds, setSignInCooldownSeconds] = React.useState(0)
   const [failedSignInAttempts, setFailedSignInAttempts] = React.useState(0)
@@ -246,8 +249,10 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [loading, setLoading] = React.useState(false)
   const [googleLoading, setGoogleLoading] = React.useState(false)
   const [awaitingSignInSync, setAwaitingSignInSync] = React.useState(false)
+  const [sessionClaimLoading, setSessionClaimLoading] = React.useState(false)
   const [resetCooldown, setResetCooldown] = React.useState<number>(0)
   const [allowLoginWhileBanned, setAllowLoginWhileBanned] = React.useState(false)
+  const [isOnline, setIsOnline] = React.useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine))
 
   const [showPassword, setShowPassword] = React.useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = React.useState(false)
@@ -275,16 +280,22 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const [resetCodeBlockedSeconds, setResetCodeBlockedSeconds] = React.useState(0)
   const [resetCodeVerified, setResetCodeVerified] = React.useState(false)
   const proofOcrSeqRef = React.useRef(0)
+  const authSuccessNotifiedRef = React.useRef(false)
 
   const {
     user,
     authTransition,
     sessionConflictReason,
+    sessionConflictDetails,
+    pendingSessionClaim,
     banned,
   } = useAuthState()
   const {
     signIn,
+    continueOffline,
     signInWithGoogle,
+    confirmSessionClaim,
+    cancelSessionClaim,
     requestPasswordReset,
     verifyPasswordResetCode,
     updatePassword,
@@ -298,12 +309,14 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const panelClass = [
     'max-sm:left-0 max-sm:top-0 max-sm:h-[100dvh] max-sm:max-h-[100dvh] max-sm:w-screen max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none',
     'sm:max-w-[34rem] overflow-hidden border p-0 shadow-[0_30px_90px_rgba(0,0,0,0.45)]',
+    signupOnly ? 'max-h-[92vh] sm:max-h-[92vh]' : '',
     isDark
       ? 'border-white/10 bg-[#101113] text-white'
       : 'border-slate-200 bg-[#f6f7f2] text-slate-950',
   ].join(' ')
   const authShellClass = [
-    'relative flex min-h-[100dvh] flex-col overflow-y-auto px-7 pb-8 pt-7 sm:block sm:max-h-[85vh] sm:min-h-0 sm:overflow-y-auto sm:px-10 sm:pb-10 sm:pt-8',
+    'relative flex min-h-[100dvh] flex-col overflow-y-auto px-7 pb-8 pt-7 sm:block sm:min-h-0 sm:overflow-y-auto',
+    signupOnly ? 'sm:max-h-[92vh] sm:px-9 sm:pb-8 sm:pt-7' : 'sm:max-h-[85vh] sm:px-10 sm:pb-10 sm:pt-8',
     isDark
       ? 'bg-[radial-gradient(circle_at_50%_-18%,rgba(239,68,68,0.28),transparent_36%),radial-gradient(circle_at_12%_18%,rgba(185,28,28,0.22),transparent_34%),linear-gradient(180deg,#171010_0%,#101113_58%,#090909_100%)]'
       : 'bg-[radial-gradient(circle_at_50%_-18%,rgba(239,68,68,0.20),transparent_38%),radial-gradient(circle_at_12%_18%,rgba(220,38,38,0.16),transparent_34%),linear-gradient(180deg,#fff7f5_0%,#f7f1ee_100%)]',
@@ -329,9 +342,67 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const authMutedTextClass = isDark ? 'text-white/60' : 'text-slate-500'
   const authLinkClass = isDark ? 'text-white underline decoration-white/40 underline-offset-4 hover:text-red-300' : 'text-slate-950 underline decoration-slate-500/50 underline-offset-4 hover:text-red-700'
   const isSignInSyncing = authTransition.status === 'signing_in'
-  const isSignInBusy = loading || googleLoading || awaitingSignInSync || isSignInSyncing
+  const showSessionConflictNotice = Boolean(sessionConflictReason && !pendingSessionClaim && mode !== 'reset')
+  const isSignInBusy = loading || googleLoading || awaitingSignInSync || isSignInSyncing || sessionClaimLoading
   const isLoginSubmitting = mode === 'signin' && isSignInBusy
   const isBuySubmitting = mode === 'buy' && loading
+  const authBusyOverlay = isLoginSubmitting
+    ? {
+        title: 'Signing you in...',
+        description: 'Please wait while we check your account and sync your access.',
+      }
+    : isBuySubmitting
+      ? {
+          title: 'Creating your free account...',
+          description: 'Please wait while we create your account and prepare your profile.',
+        }
+      : null
+  const cachedOfflineUser = !isOnline && hasTrustedCachedOfflineUser() ? getCachedUser() : null
+  const cachedOfflineLabel = cachedOfflineUser?.email || cachedOfflineUser?.user_metadata?.display_name || 'saved account'
+  const pendingClaimDeviceLabel = React.useMemo(() => {
+    const device = pendingSessionClaim?.currentDevice
+    const name = String(device?.deviceName || '').trim() || 'Another device'
+    const platform = String(device?.platform || device?.os || '').trim()
+    return platform && !name.toLowerCase().includes(platform.toLowerCase()) ? `${name} (${platform})` : name
+  }, [pendingSessionClaim?.currentDevice])
+  const pendingClaimLastSeen = React.useMemo(() => {
+    const raw = pendingSessionClaim?.currentDevice?.lastSeenAt
+    if (!raw) return 'Recently active'
+    const date = new Date(raw)
+    if (Number.isNaN(date.getTime())) return 'Recently active'
+    return `Last seen ${date.toLocaleString()}`
+  }, [pendingSessionClaim?.currentDevice?.lastSeenAt])
+  const sessionConflictDeviceLabel = React.useMemo(() => {
+    const device = sessionConflictDetails?.replacingDevice
+    const name = String(device?.deviceName || '').trim() || 'another device'
+    const platform = String(device?.platform || device?.os || '').trim()
+    return platform && !name.toLowerCase().includes(platform.toLowerCase()) ? `${name} (${platform})` : name
+  }, [sessionConflictDetails?.replacingDevice])
+  const sessionConflictWhen = React.useMemo(() => {
+    const raw = sessionConflictDetails?.replacedAt
+    if (!raw) return null
+    const date = new Date(raw)
+    if (Number.isNaN(date.getTime())) return null
+    return date.toLocaleString()
+  }, [sessionConflictDetails?.replacedAt])
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return
+    const updateOnline = () => setIsOnline(navigator.onLine)
+    updateOnline()
+    window.addEventListener('online', updateOnline)
+    window.addEventListener('offline', updateOnline)
+    return () => {
+      window.removeEventListener('online', updateOnline)
+      window.removeEventListener('offline', updateOnline)
+    }
+  }, [])
+
+  const notifyAuthSuccess = React.useCallback(() => {
+    if (authSuccessNotifiedRef.current) return
+    authSuccessNotifiedRef.current = true
+    onAuthSuccess?.()
+  }, [onAuthSuccess])
 
   const logLoginAttempt = React.useCallback((input: {
     status: 'success' | 'failed'
@@ -348,6 +419,25 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       meta: { source: 'LoginModal' },
     }).catch(() => {})
   }, [])
+
+  const handleContinueOffline = React.useCallback(async () => {
+    setLoading(true)
+    setSignInError(null)
+    try {
+      const result = await continueOffline()
+      if (result.error || !result.data?.user) {
+        const message = result.error?.message || 'Offline access is not available on this device.'
+        setSignInError(message)
+        pushNotice?.({ variant: 'error', message })
+        return
+      }
+      pushNotice?.({ variant: 'success', message: 'Offline mode active. Local and prepared banks are available.' })
+      notifyAuthSuccess()
+      onOpenChange(false)
+    } finally {
+      setLoading(false)
+    }
+  }, [continueOffline, notifyAuthSuccess, onOpenChange, pushNotice])
 
   const postPublicStoreApi = React.useCallback(async (route: string, body: Record<string, unknown>) => {
     const res = await fetch(edgeFunctionUrl('store-api', route), {
@@ -402,7 +492,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setEmail('')
       setPassword('')
       setConfirmPassword('')
-      setMode('signin')
+      setMode(signupOnly ? 'buy' : 'signin')
       setResetCooldown(0)
       setShowPassword(false)
       setShowConfirmPassword(false)
@@ -427,16 +517,35 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setResetCodeBlockedSeconds(0)
       setResetCodeVerified(false)
       if (banned) setAllowLoginWhileBanned(false)
+      authSuccessNotifiedRef.current = false
     }
-  }, [open, banned])
+  }, [open, banned, signupOnly])
+
+  React.useEffect(() => {
+    if (!open || !signupOnly) return
+    if (mode === 'signin' || mode === 'forgot' || mode === 'reset') {
+      setMode('buy')
+      setBuyStep('account')
+      setSignInError(null)
+      setSignInPendingState(null)
+    }
+  }, [mode, open, signupOnly])
 
   React.useEffect(() => {
     if (!awaitingSignInSync) return
+    if (pendingSessionClaim) {
+      setLoading(false)
+      setGoogleLoading(false)
+      setAwaitingSignInSync(false)
+      return
+    }
     if (authTransition.status !== 'idle') return
 
     if (user) {
       setLoading(false)
+      setSessionClaimLoading(false)
       setAwaitingSignInSync(false)
+      notifyAuthSuccess()
       pushNotice?.({ variant: 'success', message: 'Logged in successfully.' })
       onOpenChange(false)
       return
@@ -445,7 +554,16 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     setLoading(false)
     setAwaitingSignInSync(false)
     pushNotice?.({ variant: 'error', message: 'Sign-in sync did not finish. Please try again.' })
-  }, [authTransition.status, awaitingSignInSync, onOpenChange, pushNotice, user])
+  }, [authTransition.status, awaitingSignInSync, notifyAuthSuccess, onOpenChange, pendingSessionClaim, pushNotice, user])
+
+  React.useEffect(() => {
+    if (!open || !signupOnly || !user || awaitingSignInSync) return
+    setLoading(false)
+    setGoogleLoading(false)
+    notifyAuthSuccess()
+    pushNotice?.({ variant: 'success', message: 'Account ready. Choose your V1 download.' })
+    onOpenChange(false)
+  }, [awaitingSignInSync, notifyAuthSuccess, onOpenChange, open, pushNotice, signupOnly, user])
 
   React.useEffect(() => {
     if (open && email) {
@@ -520,9 +638,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       return
     }
     if (!open) onOpenChange(true)
-    pushNotice?.({ variant: 'error', message: sessionConflictReason })
-    clearSessionConflictReason()
-  }, [sessionConflictReason, onOpenChange, open, pushNotice, clearSessionConflictReason, mode])
+  }, [sessionConflictReason, onOpenChange, open, clearSessionConflictReason, mode])
 
   React.useEffect(() => {
     if (!banned) setAllowLoginWhileBanned(false)
@@ -628,6 +744,48 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       }
       setLoading(true)
       try {
+        if (signupOnly) {
+          const signInResult = await signIn(normalizedEmail, password)
+          if (!signInResult.error && signInResult.data?.user) {
+            setFailedSignInAttempts(0)
+            setSignInCooldownSeconds(0)
+            setAwaitingSignInSync(true)
+            return
+          }
+
+          if (signInResult.error && !isInvalidCredentialErrorMessage(signInResult.error.message)) {
+            pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(signInResult.error.message) })
+            return
+          }
+
+          const hint = await postPublicStoreApi('account-registration/login-hint', { email: normalizedEmail })
+          const status = String(hint.data?.status || '')
+          if (status === 'approved_or_registered') {
+            pushNotice?.({
+              variant: 'error',
+              message: 'This email is already registered but the password does not match. Use the correct password or reset it in the app.',
+            })
+            return
+          }
+          if (status === 'pending') {
+            pushNotice?.({
+              variant: 'error',
+              message: 'This email already has a pending registration. Please wait for review or check your email.',
+            })
+            return
+          }
+          if (status === 'rejected') {
+            const reason = String(hint.data?.rejection_message || '').trim()
+            pushNotice?.({
+              variant: 'error',
+              message: reason
+                ? `Your previous registration was not approved: ${reason}. Message support before trying again.`
+                : 'Your previous registration was not approved. Message support before trying again.',
+            })
+            return
+          }
+        }
+
         const { data, error } = await supabase.auth.signUp({
           email: normalizedEmail,
           password,
@@ -643,13 +801,15 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
           pushNotice?.({ variant: 'error', message: normalizeAuthErrorMessage(error.message) })
           return
         }
-        setEmail('')
-        setPassword('')
-        setConfirmPassword('')
+        if (!signupOnly) {
+          setEmail('')
+          setPassword('')
+          setConfirmPassword('')
+        }
         setSignupOtp('')
         if (data.session) {
           pushNotice?.({ variant: 'success', message: 'Free account created.' })
-          onOpenChange(false)
+          setAwaitingSignInSync(true)
           return
         }
         setEmail(normalizedEmail)
@@ -663,7 +823,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
         setLoading(false)
       }
     },
-    [appReturnUrl, confirmPassword, email, onOpenChange, password, pushNotice],
+    [appReturnUrl, confirmPassword, email, password, postPublicStoreApi, pushNotice, signIn, signupOnly],
   )
 
   const handleVerifySignupOtp = async (event: React.FormEvent) => {
@@ -695,10 +855,10 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setEmail('')
       pushNotice?.({ variant: 'success', message: data.session ? 'Email verified. Your account is ready.' : 'Email verified. You can sign in now.' })
       if (data.session) {
-        onOpenChange(false)
+        setAwaitingSignInSync(true)
         return
       }
-      setMode('signin')
+      setMode(signupOnly ? 'buy' : 'signin')
     } catch {
       pushNotice?.({ variant: 'error', message: 'We could not verify that code. Please try again.' })
     } finally {
@@ -785,7 +945,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     setLoading(true)
     let waitForAuthSync = false
     try {
-      const { error, data } = await signIn(normalizedEmail, password)
+      const { error } = await signIn(normalizedEmail, password)
       if (error) {
         logLoginAttempt({ status: 'failed', email: normalizedEmail, errorMessage: error.message })
 
@@ -852,7 +1012,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
       setSignInError(null)
       setFailedSignInAttempts(0)
       setSignInCooldownSeconds(0)
-      logLoginAttempt({ status: 'success', email: normalizedEmail, userId: data?.user?.id || undefined })
       waitForAuthSync = true
       setAwaitingSignInSync(true)
     } catch {
@@ -1019,8 +1178,62 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     }
   }, [discardRecoverySession, email, pushNotice, requestPasswordReset, resetCooldown])
 
+  const handleConfirmPendingSessionClaim = React.useCallback(async () => {
+    setSessionClaimLoading(true)
+    setSignInError(null)
+    try {
+      const result = await confirmSessionClaim()
+      if (result.error) {
+        pushNotice?.({ variant: 'error', message: result.error.message || 'Could not continue this login.' })
+        return
+      }
+      setAwaitingSignInSync(true)
+      pushNotice?.({ variant: 'success', message: 'Previous device was logged out. Continuing here.' })
+    } finally {
+      setSessionClaimLoading(false)
+    }
+  }, [confirmSessionClaim, pushNotice])
+
+  const handleCancelPendingSessionClaim = React.useCallback(async () => {
+    setSessionClaimLoading(true)
+    try {
+      await cancelSessionClaim()
+      setAwaitingSignInSync(false)
+      setGoogleLoading(false)
+      setLoading(false)
+      pushNotice?.({ variant: 'info', message: 'Login cancelled. Your other device remains active.' })
+    } finally {
+      setSessionClaimLoading(false)
+    }
+  }, [cancelSessionClaim, pushNotice])
+
+  const handleLoginAfterSessionConflict = React.useCallback(() => {
+    clearSessionConflictReason()
+    setSignInError(null)
+    setSignInPendingState(null)
+    setAwaitingSignInSync(false)
+    setGoogleLoading(false)
+    setLoading(false)
+    setPassword('')
+    setConfirmPassword('')
+    setMode(signupOnly ? 'buy' : 'signin')
+    setBuyStep('account')
+  }, [clearSessionConflictReason, signupOnly])
+
+  const handleCloseSessionConflictNotice = React.useCallback(() => {
+    clearSessionConflictReason()
+    onOpenChange(false)
+  }, [clearSessionConflictReason, onOpenChange])
+
   const handleDialogOpenChange = React.useCallback((nextOpen: boolean) => {
     if (!nextOpen && isSignInBusy) {
+      return
+    }
+    if (!nextOpen && pendingSessionClaim) {
+      void handleCancelPendingSessionClaim()
+    }
+    if (!nextOpen && showSessionConflictNotice) {
+      handleCloseSessionConflictNotice()
       return
     }
     if (!nextOpen && (mode === 'reset' || resetCodeVerified || isPasswordRecoveryMode())) {
@@ -1028,7 +1241,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     }
     if (!nextOpen && banned) setAllowLoginWhileBanned(false)
     onOpenChange(nextOpen)
-  }, [banned, discardRecoverySession, isSignInBusy, mode, onOpenChange, resetCodeVerified])
+  }, [banned, discardRecoverySession, handleCancelPendingSessionClaim, handleCloseSessionConflictNotice, isSignInBusy, mode, onOpenChange, pendingSessionClaim, resetCodeVerified, showSessionConflictNotice])
 
   const handleBuySubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -1164,6 +1377,16 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   }
 
   const Title = () => {
+    if (pendingSessionClaim) {
+      return <>Account active elsewhere</>
+    }
+    if (showSessionConflictNotice) {
+      return <>Account moved to another device</>
+    }
+    if (signupOnly) {
+      if (mode === 'verify-signup') return <>Verify your email</>
+      return <>Create your FREE account</>
+    }
     switch (mode) {
       case 'buy':
         return <>Create an account</>
@@ -1178,7 +1401,15 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     }
   }
 
-  const authSubtitle = mode === 'signin'
+  const authSubtitle = pendingSessionClaim
+    ? 'Choose whether to log out the other device before continuing here'
+    : showSessionConflictNotice
+      ? 'This device was signed out to protect your account session'
+    : signupOnly
+    ? mode === 'verify-signup'
+      ? 'Enter the OTP code sent to your email'
+      : 'Register free and choose your V1 download after sign-up'
+    : mode === 'signin'
     ? 'Sign in and keep your sampler ready for events'
     : mode === 'buy'
       ? 'Create a free account and upgrade when ready'
@@ -1202,10 +1433,14 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     </p>
   )
 
-  const showBackButton = mode === 'buy' || mode === 'verify-signup' || mode === 'forgot' || mode === 'reset'
-  const centerAuthContentOnMobile = mode === 'signin' || mode === 'verify-signup' || (mode === 'buy' && buyStep === 'account' && !buyReceipt)
+  const showBackButton = pendingSessionClaim || showSessionConflictNotice ? false : signupOnly ? mode === 'verify-signup' : mode === 'buy' || mode === 'verify-signup' || mode === 'forgot' || mode === 'reset'
+  const centerAuthContentOnMobile = pendingSessionClaim || showSessionConflictNotice || mode === 'signin' || mode === 'verify-signup' || (mode === 'buy' && buyStep === 'account' && !buyReceipt)
 
   const handleAuthBack = () => {
+    if (signupOnly) {
+      if (mode === 'verify-signup') setMode('buy')
+      return
+    }
     if (mode === 'buy') {
       if (buyStep === 'payment') {
         setBuyStep('account')
@@ -1323,16 +1558,99 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
           </DialogHeader>
 
         <DialogDescription className="sr-only">
-          {mode === 'signin' && 'Sign in to your account.'}
-          {mode === 'buy' && 'Create a free account.'}
-          {mode === 'verify-signup' && 'Verify your email using the OTP code sent by email.'}
-          {mode === 'forgot' && 'Request a password reset code via email.'}
-          {mode === 'reset' && 'Enter your reset code and choose a new password for your account.'}
+          {pendingSessionClaim && 'Confirm whether to log out the active device before continuing this login.'}
+          {showSessionConflictNotice && 'Your account was logged out on this device because it continued on another device.'}
+          {!pendingSessionClaim && !showSessionConflictNotice && mode === 'signin' && 'Sign in to your account.'}
+          {!pendingSessionClaim && !showSessionConflictNotice && mode === 'buy' && 'Create a free account.'}
+          {!pendingSessionClaim && !showSessionConflictNotice && mode === 'verify-signup' && 'Verify your email using the OTP code sent by email.'}
+          {!pendingSessionClaim && !showSessionConflictNotice && mode === 'forgot' && 'Request a password reset code via email.'}
+          {!pendingSessionClaim && !showSessionConflictNotice && mode === 'reset' && 'Enter your reset code and choose a new password for your account.'}
         </DialogDescription>
 
         <RecoveryLandingHelper />
 
-        {mode === 'verify-signup' && (
+        {showSessionConflictNotice && (
+          <div className="mx-auto mt-8 max-w-sm space-y-4 sm:mt-9 max-sm:mb-auto">
+            <div className={`rounded-[22px] border p-4 shadow-[0_20px_54px_rgba(0,0,0,0.22)] ${
+              isDark
+                ? 'border-rose-300/25 bg-rose-400/10 text-rose-50'
+                : 'border-rose-200 bg-rose-50 text-rose-950'
+            }`}>
+              <div className="text-xs font-black uppercase tracking-[0.16em] opacity-70">Session ended</div>
+              <div className="mt-2 text-lg font-black">{sessionConflictDeviceLabel}</div>
+              {sessionConflictWhen ? (
+                <div className={`mt-1 text-sm font-semibold ${isDark ? 'text-rose-50/75' : 'text-rose-900/75'}`}>
+                  Continued {sessionConflictWhen}
+                </div>
+              ) : null}
+              <p className={`mt-4 text-sm font-semibold leading-relaxed ${isDark ? 'text-rose-50/82' : 'text-rose-950/78'}`}>
+                {sessionConflictReason || 'You were logged out because this account was continued on another device.'}
+              </p>
+            </div>
+
+            <Button
+              type="button"
+              className={`w-full ${authPrimaryButtonClass}`}
+              onClick={handleLoginAfterSessionConflict}
+            >
+              Log in again
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className={`w-full ${authGhostButtonClass}`}
+              onClick={handleCloseSessionConflictNotice}
+            >
+              Close
+            </Button>
+          </div>
+        )}
+
+        {pendingSessionClaim && (
+          <div className="mx-auto mt-8 max-w-sm space-y-4 sm:mt-9 max-sm:mb-auto">
+            <div className={`rounded-[22px] border p-4 shadow-[0_20px_54px_rgba(0,0,0,0.22)] ${
+              isDark
+                ? 'border-amber-300/25 bg-amber-300/10 text-amber-50'
+                : 'border-amber-200 bg-amber-50 text-amber-950'
+            }`}>
+              <div className="text-xs font-black uppercase tracking-[0.16em] opacity-70">Conflict detected</div>
+              <div className="mt-2 text-lg font-black">{pendingClaimDeviceLabel}</div>
+              <div className={`mt-1 text-sm font-semibold ${isDark ? 'text-amber-50/75' : 'text-amber-900/75'}`}>
+                {pendingClaimLastSeen}
+              </div>
+              <p className={`mt-4 text-sm font-semibold leading-relaxed ${isDark ? 'text-amber-50/82' : 'text-amber-950/78'}`}>
+                {pendingSessionClaim.message || 'This account is already active on another device. Log it out first to continue here?'}
+              </p>
+            </div>
+
+            <Button
+              type="button"
+              className={`w-full ${authPrimaryButtonClass}`}
+              disabled={sessionClaimLoading}
+              onClick={() => void handleConfirmPendingSessionClaim()}
+            >
+              {sessionClaimLoading ? (
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Continuing...
+                </span>
+              ) : (
+                'Log out other device and continue'
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className={`w-full ${authGhostButtonClass}`}
+              disabled={sessionClaimLoading}
+              onClick={() => void handleCancelPendingSessionClaim()}
+            >
+              Keep other device active
+            </Button>
+          </div>
+        )}
+
+        {!pendingSessionClaim && !showSessionConflictNotice && mode === 'verify-signup' && (
           <form onSubmit={handleVerifySignupOtp} className="mx-auto mt-8 max-w-sm space-y-4 sm:mt-9 max-sm:mb-auto">
             <div className={`rounded-[18px] border px-4 py-3 text-sm font-semibold ${
               isDark ? 'border-red-300/20 bg-red-500/10 text-red-50' : 'border-red-200 bg-red-50 text-red-900'
@@ -1400,20 +1718,33 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
             </Button>
 
             <div className={`text-center text-sm font-semibold ${authMutedTextClass}`}>
-              Already verified?{' '}
-              <button
-                type="button"
-                className={authLinkClass}
-                onClick={() => setMode('signin')}
-                disabled={loading}
-              >
-                Log in
-              </button>
+              {signupOnly ? (
+                <button
+                  type="button"
+                  className={authLinkClass}
+                  onClick={() => setMode('buy')}
+                  disabled={loading}
+                >
+                  Back to sign up
+                </button>
+              ) : (
+                <>
+                  Already verified?{' '}
+                  <button
+                    type="button"
+                    className={authLinkClass}
+                    onClick={() => setMode('signin')}
+                    disabled={loading}
+                  >
+                    Log in
+                  </button>
+                </>
+              )}
             </div>
           </form>
         )}
 
-        {mode === 'reset' && (
+        {!pendingSessionClaim && !showSessionConflictNotice && mode === 'reset' && (
           <form onSubmit={handleResetPassword} className="space-y-4">
             <div className={`rounded-lg border p-3 text-sm ${isDark ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-100' : 'border-indigo-200 bg-indigo-50 text-indigo-800'}`}>
               {resetCodeVerified
@@ -1548,7 +1879,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
           </form>
         )}
 
-        {mode === 'forgot' && (
+        {!pendingSessionClaim && !showSessionConflictNotice && mode === 'forgot' && (
           <form onSubmit={handleForgot} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="forgotEmail" className={colorText}>
@@ -1592,7 +1923,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
           </form>
         )}
 
-        {mode === 'signin' && (
+        {!pendingSessionClaim && !showSessionConflictNotice && mode === 'signin' && (
           signInPendingState ? (
             <PaymentReceiptCard
               theme={theme}
@@ -1626,6 +1957,44 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
               onSubmit={handleSignIn}
               className="relative mx-auto mt-8 max-w-sm space-y-4 sm:mt-9 max-sm:mb-auto"
             >
+              {cachedOfflineUser ? (
+                <div className={`rounded-[18px] border p-3 shadow-[0_18px_42px_rgba(16,185,129,0.12)] ${
+                  isDark
+                    ? 'border-emerald-300/25 bg-emerald-400/10 text-emerald-50'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                }`}>
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+                      isDark ? 'bg-emerald-300/15 text-emerald-200' : 'bg-emerald-100 text-emerald-700'
+                    }`}>
+                      <WifiOff className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-black">Offline account saved</div>
+                      <div className={`mt-1 truncate text-xs font-semibold ${isDark ? 'text-emerald-100/75' : 'text-emerald-800/75'}`}>
+                        {cachedOfflineLabel}
+                      </div>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    className={`mt-3 w-full ${authPrimaryButtonClass}`}
+                    onClick={() => void handleContinueOffline()}
+                    disabled={isSignInBusy}
+                  >
+                    Continue Offline
+                  </Button>
+                </div>
+              ) : !isOnline ? (
+                <div className={`rounded-[18px] border p-3 text-sm font-semibold ${
+                  isDark
+                    ? 'border-amber-300/25 bg-amber-400/10 text-amber-100'
+                    : 'border-amber-200 bg-amber-50 text-amber-800'
+                }`}>
+                  Connect to the internet once to sign in and prepare this device for offline use.
+                </div>
+              ) : null}
+
               <Button
                 type="button"
                 variant="outline"
@@ -1745,29 +2114,12 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
 
               <AuthLegalFootnote />
 
-              {isLoginSubmitting && (
-                <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-[#100909]/82' : 'bg-white/82'}`}>
-                  <div className={`mx-4 w-full max-w-sm rounded-[24px] border px-6 py-7 text-center shadow-[0_26px_80px_rgba(239,68,68,0.24)] ${
-                    isDark
-                      ? 'border-red-300/20 bg-[linear-gradient(180deg,#1b1010_0%,#0f1115_100%)] text-white'
-                      : 'border-red-200 bg-[linear-gradient(180deg,#fff7f5_0%,#ffffff_100%)] text-slate-950'
-                  }`}>
-                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[18px] border border-red-300/25 bg-red-500/12 shadow-[0_0_42px_rgba(239,68,68,0.25)]">
-                      <LoadingSpinner size="lg" className="h-10 w-10 border-4 border-red-200/40 border-t-red-500" />
-                    </div>
-                    <div className="mt-4 text-base font-black">Signing you in...</div>
-                    <div className={`mt-2 text-sm leading-relaxed ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
-                      Please wait while we check your account and sync your access.
-                    </div>
-                  </div>
-                </div>
-              )}
             </form>
           )
         )}
 
-        {mode === 'buy' && (
-          <div className={buyStep === 'account' ? 'mx-auto mt-8 max-w-sm space-y-4 sm:mt-9 max-sm:mb-auto' : 'mt-6 space-y-4 max-h-[68vh] overflow-y-auto pr-1'}>
+        {!pendingSessionClaim && !showSessionConflictNotice && mode === 'buy' && (
+          <div className={buyStep === 'account' ? `${signupOnly ? 'mx-auto mt-6 max-w-sm space-y-3 sm:mt-7' : 'mx-auto mt-8 max-w-sm space-y-4 sm:mt-9'} max-sm:mb-auto` : 'mt-6 space-y-4 max-h-[68vh] overflow-y-auto pr-1'}>
             {buyReceipt ? (
               <PaymentReceiptCard
                 theme={theme}
@@ -1804,6 +2156,25 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                 <form onSubmit={handleBuyNext} className="relative space-y-3">
                   {buyStep === 'account' && (
                     <>
+                      {signupOnly && (
+                        <>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className={`w-full justify-center gap-2 ${authGhostButtonClass}`}
+                            onClick={handleGoogleSignIn}
+                            disabled={isSignInBusy}
+                          >
+                            <GoogleMark />
+                            {googleLoading ? 'Opening Google...' : 'Continue with Google'}
+                          </Button>
+
+                          <div className="py-1 text-center">
+                            <span className={`text-[11px] font-bold uppercase tracking-[0.16em] ${authMutedTextClass}`}>or</span>
+                          </div>
+                        </>
+                      )}
+
                       <div>
                         <Label htmlFor="buyEmail" className="sr-only">Email</Label>
                         <Input
@@ -1880,17 +2251,19 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                         {loading ? 'Creating account...' : 'Continue with Email'}
                       </Button>
 
-                      <div className={`pt-1 text-center text-sm font-semibold ${authMutedTextClass}`}>
-                        <span>Already have an account? </span>
-                        <button
-                          type="button"
-                          className={authLinkClass}
-                          onClick={() => setMode('signin')}
-                          disabled={loading}
-                        >
-                          Log in
-                        </button>
-                      </div>
+                      {!signupOnly && (
+                        <div className={`pt-1 text-center text-sm font-semibold ${authMutedTextClass}`}>
+                          <span>Already have an account? </span>
+                          <button
+                            type="button"
+                            className={authLinkClass}
+                            onClick={() => setMode('signin')}
+                            disabled={loading}
+                          >
+                            Log in
+                          </button>
+                        </div>
+                      )}
 
                       <AuthLegalFootnote />
                       {paymentConfig?.messenger_url && (
@@ -2117,23 +2490,6 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
                     </Button>
                   </div>
                   )}
-                  {isBuySubmitting && (
-                    <div className={`absolute inset-0 z-20 flex items-center justify-center rounded-2xl backdrop-blur-sm ${isDark ? 'bg-[#100909]/82' : 'bg-white/82'}`}>
-                      <div className={`mx-4 w-full max-w-sm rounded-[24px] border px-6 py-7 text-center shadow-[0_26px_80px_rgba(239,68,68,0.24)] ${
-                        isDark
-                          ? 'border-red-300/20 bg-[linear-gradient(180deg,#1b1010_0%,#0f1115_100%)] text-white'
-                          : 'border-red-200 bg-[linear-gradient(180deg,#fff7f5_0%,#ffffff_100%)] text-slate-950'
-                      }`}>
-                        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[18px] border border-red-300/25 bg-red-500/12 shadow-[0_0_42px_rgba(239,68,68,0.25)]">
-                          <LoadingSpinner size="lg" className="h-10 w-10 border-4 border-red-200/40 border-t-red-500" />
-                        </div>
-                        <div className="mt-4 text-base font-black">Creating your free account...</div>
-                        <div className={`mt-2 text-sm leading-relaxed ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
-                          Please wait while we create your account and prepare your profile.
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </form>
               </>
             )}
@@ -2167,6 +2523,12 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
             )}
           </div>
         )}
+        <ModalBusyOverlay
+          show={Boolean(authBusyOverlay)}
+          title={authBusyOverlay?.title || ''}
+          description={authBusyOverlay?.description}
+          theme={theme}
+        />
         </div>
       </DialogContent>
     </Dialog>

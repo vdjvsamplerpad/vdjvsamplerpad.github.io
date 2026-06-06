@@ -27,7 +27,7 @@ export interface SamplerAppConfig {
   };
   padDefaults: {
     defaultTriggerMode: 'toggle' | 'hold' | 'stutter' | 'unmute';
-    defaultPlaybackMode: 'once' | 'loop' | 'stopper';
+    defaultPlaybackMode: 'once' | 'loop' | 'stopper' | 'bank_stopper';
     defaultVolume: number;
     defaultGainDb: number;
     defaultFadeInMs: number;

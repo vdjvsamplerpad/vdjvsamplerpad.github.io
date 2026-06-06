@@ -91,10 +91,11 @@ const RECOVERY_PLAYBACK_EVENT_TYPES = new Set([
   'warmup_item_start',
   'warmup_item_result',
 ]);
-const RECOVERY_ACTIVE_PLAYBACK_EVENT_TYPES = new Set([
-  'pad_play_request',
-  'pad_play_started',
-  'channel_play_diag',
+const NON_CRASH_TERMINAL_EVENT_TYPES = new Set([
+  'session_end',
+  'session_resume',
+  'network_online',
+  'network_offline',
 ]);
 
 const DEFAULT_COUNTERS = (): AudioTelemetryCounters => ({
@@ -347,10 +348,15 @@ export class AudioTelemetryStore {
     if (ageMs < -60_000 || ageMs > RECOVERABLE_SESSION_MAX_AGE_MS) return false;
     const events = Array.isArray(session.events) ? session.events : [];
     if (events.length === 0) return false;
+    const latestEvent = events[events.length - 1] || null;
 
     const hasErrorSignal = Number(session.counters?.errors || 0) > 0
       || events.some((event) => event.level === 'error' || RECOVERY_ERROR_EVENT_TYPES.has(event.type));
     if (hasErrorSignal) return true;
+
+    if (latestEvent && NON_CRASH_TERMINAL_EVENT_TYPES.has(latestEvent.type)) {
+      return false;
+    }
 
     const hasPlaybackSignal = Number(session.counters?.playRequested || 0) > 0
       || Number(session.counters?.playStarted || 0) > 0
@@ -361,12 +367,10 @@ export class AudioTelemetryStore {
     if (latestHeartbeat && updatedAt - latestHeartbeat.at <= ACTIVE_PLAYBACK_RECOVERY_WINDOW_MS) {
       const data = latestHeartbeat.data || {};
       const activeCount = Number(data.playingCount || 0);
-      const loadedTransports = Number(data.loadedTransports || 0);
-      if (activeCount > 0 || loadedTransports > 0) return true;
+      if (activeCount > 0) return true;
     }
 
-    const latestActivePlayback = [...events].reverse().find((event) => RECOVERY_ACTIVE_PLAYBACK_EVENT_TYPES.has(event.type));
-    return Boolean(latestActivePlayback && updatedAt - latestActivePlayback.at <= ACTIVE_PLAYBACK_RECOVERY_WINDOW_MS);
+    return false;
   }
 
   private bumpCounters(event: AudioTelemetryEvent): void {

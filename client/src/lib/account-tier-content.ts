@@ -46,6 +46,38 @@ export type AccountTierUiContent = {
 
 export const DEFAULT_TIER_VIDEO_SRC = '/assets/v1-preview.mp4';
 
+export const hexToRgb = (hex: string): { r: number; g: number; b: number } | null => {
+  const match = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+  if (!match) return null;
+  const value = match[1];
+  return {
+    r: Number.parseInt(value.slice(0, 2), 16),
+    g: Number.parseInt(value.slice(2, 4), 16),
+    b: Number.parseInt(value.slice(4, 6), 16),
+  };
+};
+
+export const accentRgb = (hex: string, alpha: number, fallback = 'rgba(242,25,132,0.35)'): string => {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return fallback;
+  return `rgba(${rgb.r},${rgb.g},${rgb.b},${Math.max(0, Math.min(1, alpha))})`;
+};
+
+export const getReadableTextColor = (
+  hex: string,
+  darkText = '#0f172a',
+  lightText = '#ffffff',
+): string => {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return lightText;
+  const normalize = (value: number) => {
+    const channel = value / 255;
+    return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = (0.2126 * normalize(rgb.r)) + (0.7152 * normalize(rgb.g)) + (0.0722 * normalize(rgb.b));
+  return luminance > 0.52 ? darkText : lightText;
+};
+
 export const DEFAULT_TIER_UI_CONTENT: Record<EditableAccountTier, AccountTierUiContent> = {
   free: {
     version: 1,

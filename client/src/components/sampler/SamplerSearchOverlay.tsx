@@ -116,6 +116,7 @@ export function SamplerSearchOverlay({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-describedby={undefined}
+        mobileFullscreen
         className={`left-0 right-0 top-0 bottom-0 h-[100svh] w-auto max-w-none max-h-[100svh] translate-x-0 translate-y-0 flex flex-col gap-0 rounded-none border-x-0 border-b-0 p-0 overflow-hidden sm:left-[50%] sm:right-auto sm:top-[50%] sm:bottom-auto sm:h-auto sm:w-full sm:max-w-3xl sm:max-h-[85vh] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-lg sm:border ${isDark ? 'bg-gray-900 border-gray-700 text-gray-100' : 'bg-white border-gray-200 text-gray-900'}`}
       >
         <DialogHeader className={`px-4 pt-4 pb-3 border-b ${isDark ? 'border-gray-800' : 'border-gray-200'}`}>

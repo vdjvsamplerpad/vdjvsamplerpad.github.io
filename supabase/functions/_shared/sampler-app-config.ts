@@ -22,7 +22,7 @@ export type SamplerStopMode = "instant" | "fadeout" | "brake" | "backspin" | "fi
 export type SamplerStopTimingOverridesMs = Partial<Record<SamplerStopMode, number>>;
 type ConfigurableSamplerStopTimingMode = Exclude<SamplerStopMode, "instant">;
 export type SamplerTriggerMode = "toggle" | "hold" | "stutter" | "unmute";
-export type SamplerPlaybackMode = "once" | "loop" | "stopper";
+export type SamplerPlaybackMode = "once" | "loop" | "stopper" | "bank_stopper";
 
 const STOP_TIMING_RANGES: Record<SamplerStopMode, { minMs: number; maxMs: number }> = {
   instant: { minMs: 10, maxMs: 40 },
@@ -138,7 +138,7 @@ const normalizeTriggerMode = (value: unknown): SamplerTriggerMode => {
 };
 
 const normalizePlaybackMode = (value: unknown): SamplerPlaybackMode => {
-  if (value === "loop" || value === "stopper") return value;
+  if (value === "loop" || value === "stopper" || value === "bank_stopper") return value;
   return "once";
 };
 

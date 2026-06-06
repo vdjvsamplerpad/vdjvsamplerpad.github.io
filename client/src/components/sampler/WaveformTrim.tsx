@@ -7,6 +7,88 @@ import { getIOSAudioService } from '@/lib/ios-audio-service';
 import type { PerformanceTier } from '@/lib/performance-monitor';
 
 const MIN_TRIM_GAP_MS = 10;
+const SILENCE_ACTIVE_RATIO = 0.62;
+const SILENCE_MIN_ACTIVE_MS = 70;
+const SILENCE_MARKER_PAD_MS = 12;
+const SILENCE_MIN_DETECTED_MS = 45;
+
+type SilenceScanDirection = 'in' | 'out';
+
+interface SilenceAnalysisResult {
+  key: string;
+  threshold: number;
+  leadingCutMs: number | null;
+  trailingCutMs: number | null;
+}
+
+const percentile = (sortedValues: number[], ratio: number): number => {
+  if (sortedValues.length === 0) return 0;
+  const index = Math.max(0, Math.min(sortedValues.length - 1, Math.floor((sortedValues.length - 1) * ratio)));
+  return sortedValues[index] ?? 0;
+};
+
+const computeSilenceAnalysis = (
+  key: string,
+  peaks: number[],
+  durationMs: number
+): SilenceAnalysisResult | null => {
+  const safePeaks = peaks
+    .map((value) => (Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0))
+    .filter((value) => Number.isFinite(value));
+  if (safePeaks.length < 8 || !Number.isFinite(durationMs) || durationMs <= MIN_TRIM_GAP_MS) return null;
+
+  const sorted = [...safePeaks].sort((left, right) => left - right);
+  const lowFloor = percentile(sorted, 0.12);
+  const bodyLevel = percentile(sorted, 0.72);
+  const highLevel = percentile(sorted, 0.9);
+  const dynamicRange = Math.max(0.001, highLevel - lowFloor);
+  const threshold = Math.max(0.012, Math.min(0.085, lowFloor + Math.max(dynamicRange * 0.09, bodyLevel * 0.04)));
+  const msPerPeak = durationMs / safePeaks.length;
+  const activeWindow = Math.max(3, Math.min(24, Math.ceil(SILENCE_MIN_ACTIVE_MS / Math.max(1, msPerPeak))));
+
+  const isActiveWindow = (startIndex: number): boolean => {
+    const endIndex = Math.min(safePeaks.length, startIndex + activeWindow);
+    if (endIndex <= startIndex) return false;
+    let activeCount = 0;
+    let maxPeak = 0;
+    for (let index = startIndex; index < endIndex; index += 1) {
+      const peak = safePeaks[index] ?? 0;
+      if (peak > threshold) activeCount += 1;
+      if (peak > maxPeak) maxPeak = peak;
+    }
+    const ratio = activeCount / (endIndex - startIndex);
+    return ratio >= SILENCE_ACTIVE_RATIO || maxPeak >= threshold * 2.15;
+  };
+
+  let firstActiveIndex = 0;
+  for (; firstActiveIndex < safePeaks.length; firstActiveIndex += 1) {
+    if (isActiveWindow(firstActiveIndex)) break;
+  }
+
+  let lastActiveIndex = safePeaks.length - 1;
+  for (; lastActiveIndex >= 0; lastActiveIndex -= 1) {
+    const windowStart = Math.max(0, lastActiveIndex - activeWindow + 1);
+    if (isActiveWindow(windowStart)) break;
+  }
+
+  const firstActiveMs = Math.max(0, firstActiveIndex * msPerPeak);
+  const lastActiveMs = Math.min(durationMs, (lastActiveIndex + 1) * msPerPeak);
+  const leadingCutMs = firstActiveMs >= SILENCE_MIN_DETECTED_MS
+    ? Math.max(0, Math.floor(firstActiveMs - SILENCE_MARKER_PAD_MS))
+    : null;
+  const trailingSilenceMs = Math.max(0, durationMs - lastActiveMs);
+  const trailingCutMs = trailingSilenceMs >= SILENCE_MIN_DETECTED_MS
+    ? Math.min(durationMs, Math.ceil(lastActiveMs + SILENCE_MARKER_PAD_MS))
+    : null;
+
+  return {
+    key,
+    threshold,
+    leadingCutMs,
+    trailingCutMs,
+  };
+};
+
 interface WaveformTrimProps {
   audioUrl: string;
   startTimeMs: number;
@@ -71,6 +153,8 @@ export function WaveformTrim({
   const [previewMode, setPreviewMode] = React.useState<PreviewMode>('trim');
   const [trimInInput, setTrimInInput] = React.useState('0:00.000');
   const [trimOutInput, setTrimOutInput] = React.useState('0:00.000');
+  const [detectingSilence, setDetectingSilence] = React.useState<SilenceScanDirection | null>(null);
+  const [silenceScanMessage, setSilenceScanMessage] = React.useState('');
   const [pendingDragState, setPendingDragState] = React.useState<{
     start: number;
     end: number;
@@ -89,6 +173,7 @@ export function WaveformTrim({
   const previewSourceRef = React.useRef<AudioBufferSourceNode | null>(null);
   const previewGainRef = React.useRef<GainNode | null>(null);
   const previewPlayTokenRef = React.useRef(0);
+  const silenceAnalysisRef = React.useRef<SilenceAnalysisResult | null>(null);
   const lastTouchDistance = React.useRef<number | null>(null);
   const pendingDragStateRef = React.useRef<{
     start: number;
@@ -190,6 +275,12 @@ export function WaveformTrim({
   React.useEffect(() => {
     onDurationMeasuredRef.current = onDurationMeasured;
   }, [onDurationMeasured]);
+
+  React.useEffect(() => {
+    silenceAnalysisRef.current = null;
+    setSilenceScanMessage('');
+    setDetectingSilence(null);
+  }, [audioUrl, durationMs]);
 
   const emitTrimPreviewDiag = React.useCallback((state: string, extra: Record<string, unknown> = {}) => {
     if (typeof window === 'undefined') return;
@@ -924,6 +1015,77 @@ export function WaveformTrim({
     setTrimOutInput(formatTrimClock(nextOutMs));
   }, [durationMs, endTimeMs, formatTrimClock, onEndTimeChange, parseTrimInputToMs, startTimeMs, trimMarkersLocked]);
 
+  const getSilenceAnalysis = React.useCallback((): SilenceAnalysisResult | null => {
+    if (!waveformData || waveformData.peaks.length === 0) return null;
+    const analysisDurationMs = Math.max(
+      MIN_TRIM_GAP_MS,
+      Number.isFinite(durationMs) && durationMs > 0
+        ? durationMs
+        : Math.round((waveformData.duration || 0) * 1000)
+    );
+    const analysisKey = `${audioUrl}:${Math.round(analysisDurationMs)}:${waveformData.peaks.length}`;
+    if (silenceAnalysisRef.current?.key === analysisKey) return silenceAnalysisRef.current;
+    const nextAnalysis = computeSilenceAnalysis(analysisKey, waveformData.peaks, analysisDurationMs);
+    silenceAnalysisRef.current = nextAnalysis;
+    return nextAnalysis;
+  }, [audioUrl, durationMs, waveformData]);
+
+  const handleAutoSilenceTrim = React.useCallback((direction: SilenceScanDirection) => {
+    if (trimMarkersLocked) {
+      setSilenceScanMessage('Unlock trim markers before auto-detecting silence.');
+      return;
+    }
+    if (isLoading || !waveformData) {
+      setSilenceScanMessage('Waveform is still loading.');
+      return;
+    }
+    setDetectingSilence(direction);
+    window.setTimeout(() => {
+      try {
+        const analysis = getSilenceAnalysis();
+        if (!analysis) {
+          setSilenceScanMessage('Silence detection is unavailable for this audio.');
+          return;
+        }
+        const currentOutMs = endTimeMs > startTimeMs ? endTimeMs : Math.max(durationMs, startTimeMs + MIN_TRIM_GAP_MS);
+        if (direction === 'in') {
+          if (analysis.leadingCutMs === null) {
+            setSilenceScanMessage('No leading silence detected.');
+            return;
+          }
+          const maxStart = Math.max(0, currentOutMs - MIN_TRIM_GAP_MS);
+          const nextStart = Math.max(0, Math.min(analysis.leadingCutMs, maxStart));
+          onStartTimeChange(nextStart);
+          setTrimInInput(formatTrimClock(nextStart));
+          setSilenceScanMessage(`Auto IN set to ${formatTrimClock(nextStart)}.`);
+          return;
+        }
+        if (analysis.trailingCutMs === null) {
+          setSilenceScanMessage('No ending silence detected.');
+          return;
+        }
+        const minEnd = Math.max(0, startTimeMs + MIN_TRIM_GAP_MS);
+        const nextEnd = Math.max(minEnd, Math.min(durationMs, analysis.trailingCutMs));
+        onEndTimeChange(nextEnd);
+        setTrimOutInput(formatTrimClock(nextEnd));
+        setSilenceScanMessage(`Auto OUT set to ${formatTrimClock(nextEnd)}.`);
+      } finally {
+        setDetectingSilence(null);
+      }
+    }, 0);
+  }, [
+    durationMs,
+    endTimeMs,
+    formatTrimClock,
+    getSilenceAnalysis,
+    isLoading,
+    onEndTimeChange,
+    onStartTimeChange,
+    startTimeMs,
+    trimMarkersLocked,
+    waveformData,
+  ]);
+
   const handleTrimKeyDown = React.useCallback((
     event: React.KeyboardEvent<HTMLInputElement>,
     apply: (value: string) => void
@@ -1180,7 +1342,15 @@ export function WaveformTrim({
           </Button>
 
           <div className="flex items-center flex-1 min-w-[220px] h-8 rounded-md border border-gray-700 bg-gray-950 overflow-hidden">
-            <span className="pl-3 pr-2 text-[10px] font-bold uppercase tracking-wider text-green-500 bg-gray-900/50 h-full flex items-center border-r border-gray-800">IN</span>
+            <button
+              type="button"
+              className="pl-3 pr-2 text-[10px] font-bold uppercase tracking-wider text-green-500 bg-gray-900/50 h-full flex items-center border-r border-gray-800 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={trimMarkersLocked || isLoading || detectingSilence !== null}
+              onClick={() => handleAutoSilenceTrim('in')}
+              title="Auto-detect leading silence and set Trim In"
+            >
+              {detectingSilence === 'in' ? '...' : 'IN'}
+            </button>
             <input
               id="trim-row-in"
               type="text"
@@ -1217,7 +1387,15 @@ export function WaveformTrim({
               onBlur={(event) => applyTrimOutInput(event.target.value)}
               onKeyDown={(event) => handleTrimKeyDown(event, applyTrimOutInput)}
             />
-            <span className="pr-3 pl-2 text-[10px] font-bold uppercase tracking-wider text-red-500 bg-gray-900/50 h-full flex items-center border-l border-gray-800">OUT</span>
+            <button
+              type="button"
+              className="pr-3 pl-2 text-[10px] font-bold uppercase tracking-wider text-red-500 bg-gray-900/50 h-full flex items-center border-l border-gray-800 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={trimMarkersLocked || isLoading || detectingSilence !== null}
+              onClick={() => handleAutoSilenceTrim('out')}
+              title="Auto-detect ending silence and set Trim Out"
+            >
+              {detectingSilence === 'out' ? '...' : 'OUT'}
+            </button>
           </div>
 
           <Button
@@ -1232,6 +1410,11 @@ export function WaveformTrim({
             Reset
           </Button>
         </div>
+        {silenceScanMessage ? (
+          <div className="rounded border border-gray-800 bg-gray-950/70 px-2 py-1 text-[11px] text-gray-300">
+            {silenceScanMessage}
+          </div>
+        ) : null}
 
         {/* Bottom Row: View Mode, Zoom */}
         <div className="flex flex-wrap items-center justify-between gap-4 border-t border-gray-800/60 pt-2">

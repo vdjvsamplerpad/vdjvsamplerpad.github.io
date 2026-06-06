@@ -158,6 +158,11 @@ export function AdminAccessDialogModals({
     }
     return `${next.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
   };
+  const attendanceTotal = Math.max(0, Number(details.user?.attendance_days_total || 0));
+  const attendance30 = Math.max(0, Number(details.user?.attendance_days_30 || 0));
+  const attendance7 = Math.max(0, Number(details.user?.attendance_days_7 || 0));
+  const todayHeartbeats = Math.max(0, Number(details.user?.today_heartbeat_count || 0));
+  const attendanceStatClass = `rounded border p-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-900/35' : 'border-gray-200 bg-white'}`;
   return (
     <>
       <Dialog open={create.open} onOpenChange={create.onOpenChange} useHistory={false}>
@@ -248,12 +253,15 @@ export function AdminAccessDialogModals({
                 <Label>Bank Cap</Label>
                 <Input
                   type="number"
-                  min={1}
+                  min={10}
                   max={1000}
                   value={details.deviceTotalBankCap}
                   onChange={(event) => details.onDeviceTotalBankCapChange(event.target.value)}
                 />
               </div>
+            </div>
+            <div className={`rounded-md border px-3 py-2 text-xs ${theme === 'dark' ? 'border-amber-500/25 bg-amber-500/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+              Standard account limits come from Tier Config. Change these only for per-user paid exceptions; they are also mirrored for old public builds.
             </div>
             <div className={`rounded border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50/70'}`}>
               <div>
@@ -304,6 +312,30 @@ export function AdminAccessDialogModals({
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <div><Label>Last Version Login</Label><div>{details.user?.last_sign_in_app_version || '-'}</div></div>
+            </div>
+            <div className={`rounded border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50/70'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs uppercase tracking-wide opacity-80">Attendance</Label>
+                <span className="text-[11px] opacity-70">Manila daily count</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                <div className={attendanceStatClass}>
+                  <div className="text-[11px] opacity-60">Total Days</div>
+                  <div className="text-lg font-semibold leading-tight">{attendanceTotal}</div>
+                </div>
+                <div className={attendanceStatClass}>
+                  <div className="text-[11px] opacity-60">Last 30 Days</div>
+                  <div className="text-lg font-semibold leading-tight">{attendance30}</div>
+                </div>
+                <div className={attendanceStatClass}>
+                  <div className="text-[11px] opacity-60">Last 7 Days</div>
+                  <div className="text-lg font-semibold leading-tight">{attendance7}</div>
+                </div>
+                <div className={attendanceStatClass}>
+                  <div className="text-[11px] opacity-60">Today Heartbeats</div>
+                  <div className="text-lg font-semibold leading-tight">{todayHeartbeats}</div>
+                </div>
+              </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <div className={`rounded border p-2.5 space-y-2 ${theme === 'dark' ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50/70'}`}>

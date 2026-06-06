@@ -1,9 +1,12 @@
 import * as React from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Info, Loader2, Upload } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, Download, ExternalLink, Info, Loader2, LogOut, Upload } from 'lucide-react';
 
+import { LoginModal } from '@/components/auth/LoginModal';
 import { Button } from '@/components/ui/button';
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { CopyableValue } from '@/components/ui/copyable-value';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PaymentReceiptCard } from '@/components/ui/payment-receipt-card';
@@ -15,27 +18,39 @@ import {
   type VersionKey,
 } from '@/components/landing/download-config';
 import { VersionSelector } from '@/components/landing/VersionSelector';
-import { edgeFunctionUrl } from '@/lib/edge-api';
+import { edgeFunctionUrl, getClientCompatibilityHeaders } from '@/lib/edge-api';
 import {
   type AccountTierUiContent,
+  accentRgb,
   DEFAULT_TIER_VIDEO_SRC,
   DEFAULT_TIER_UI_CONTENT,
+  getReadableTextColor,
   normalizeInstallerTierUiContent,
   normalizeTierUiContent,
   resolveTierVideoSrc,
 } from '@/lib/account-tier-content';
 import { openWalletAppAfterCopy } from '@/lib/mobile-wallet-links';
+import { logActivityEvent } from '@/lib/activityLogger';
 import { captureProductEvent } from '@/lib/productAnalytics';
-import { getInstallerRedirectPath, getLandingPagePath, getPricingPagePath, getPrivacyPagePath, getTermsPagePath } from '@/lib/runtime-routes';
+import { getInstallerRedirectPath, getLandingPagePath, getPricingPagePath, getPrivacyPagePath, getSamplerAppPath, getTermsPagePath } from '@/lib/runtime-routes';
 import { supabase } from '@/lib/supabase';
+import { useAuthActions, useAuthState } from '@/hooks/useAuth';
 
 type PaymentChannel = 'image_proof' | 'gcash_manual' | 'maya_manual';
 type InstallerVersion = 'V2' | 'V3';
 type V1Plan = 'free' | 'pro' | 'pro_max';
+type TargetTier = Exclude<V1Plan, 'free'>;
 type ProPurchaseMode = '' | 'standard_update' | 'update_only';
 type PricingCardTier = 'free' | 'pro' | 'pro_max' | 'standard';
 type InstallerPricingTier = 'standard' | 'pro' | 'pro_max';
 type MobileSlideDirection = 'next' | 'prev';
+type V1CheckoutAuthMode = 'email' | 'session';
+type PricingAuthSessionUser = {
+  id: string;
+  email?: string | null;
+  app_metadata?: Record<string, unknown> | null;
+  user_metadata?: Record<string, unknown> | null;
+};
 
 type PublicAccountTierOption = {
   tier: V1Plan;
@@ -52,6 +67,14 @@ type PublicAccountTierOption = {
     quotePrice: number;
     creditPhp?: number;
   };
+  available?: boolean;
+  pendingRequest?: {
+    id: string;
+    receipt_reference?: string | null;
+    created_at?: string | null;
+    quote_price_php_snapshot?: number | null;
+    source?: string | null;
+  } | null;
 };
 
 type InstallerProduct = {
@@ -141,11 +164,27 @@ const VERSION_PREVIEW_VIDEO: Record<VersionKey, string> = {
 };
 
 const platformButtonLabel: Record<PlatformKey, string> = {
-  android: 'Android',
-  ios: 'iOS',
-  windows: 'Desktop',
-  macos: 'macOS',
+  android: 'Android APK',
+  ios: 'iOS Add to Home Screen',
+  windows: 'Windows Electron',
+  macos: 'macOS Web App',
 };
+
+const V1_PLATFORM_OPTIONS: Array<{ key: PlatformKey; title: string; subtitle: string }> = [
+  { key: 'android', title: 'Android APK', subtitle: 'Default mobile installer' },
+  { key: 'ios', title: 'iOS Add to Home Screen', subtitle: 'Home screen install guide' },
+  { key: 'windows', title: 'Windows Electron', subtitle: 'Desktop app installer' },
+  { key: 'macos', title: 'macOS Web App', subtitle: 'Open VDJV in browser' },
+];
+
+const GoogleMark = ({ className = 'h-5 w-5' }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+    <path fill="#FBBC05" d="M5.84 14.1c-.22-.66-.35-1.36-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.84z" />
+    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06L5.84 9.9C6.71 7.31 9.14 5.38 12 5.38z" />
+  </svg>
+);
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -175,6 +214,10 @@ function mapRegistrationError(code: string, payload: Record<string, unknown>): s
   if (code === 'EMAIL_ALREADY_REGISTERED') return 'This email is already registered and approved. Please log in instead.';
   if (code === 'ACCOUNT_REGISTRATION_PENDING') return 'This email already has a pending registration. Please wait for review or check your email.';
   if (code === 'INSTALLER_PURCHASE_PENDING') return 'This purchase already has a pending request. Please check your email or message us on Facebook with the receipt reference.';
+  if (code === 'ALREADY_ON_TIER') return 'This account already has this V1 tier.';
+  if (code === 'ALREADY_ABOVE_TIER') return 'This account already has a higher V1 tier.';
+  if (code === 'UPGRADE_REQUEST_PENDING') return 'This account already has a pending upgrade request. Wait for admin review before submitting another one.';
+  if (code === 'NOT_AUTHENTICATED') return 'Sign in with Google or enter the correct email and password before checkout.';
   if (code === 'WEAK_PASSWORD') {
     const minLength = Number(payload?.min_length || 8);
     return `Password must be at least ${minLength} characters.`;
@@ -185,6 +228,51 @@ function mapRegistrationError(code: string, payload: Record<string, unknown>): s
   if (code === 'RATE_LIMITED') return 'Too many requests right now. Please try again later.';
   if (code === 'INSTALLER_BUY_PRODUCT_NOT_FOUND') return 'This item is not available right now.';
   return code || 'We could not submit your request. Please try again.';
+}
+
+function normalizeAuthErrorMessage(msg: string): string {
+  const m = String(msg || '').toLowerCase();
+  if (m.includes('invalid login') || m.includes('invalid email or password') || m.includes('invalid credentials')) {
+    return 'Incorrect email or password. Please try again.';
+  }
+  if (m.includes('already registered') || m.includes('already exists')) return 'This email is already registered.';
+  if (m.includes('email') && m.includes('invalid')) return 'Email address is invalid.';
+  if (m.includes('rate limit')) return 'Too many attempts. Please try again later.';
+  return msg || 'We could not complete that right now. Please try again.';
+}
+
+function isInvalidCredentialErrorMessage(msg: string): boolean {
+  const m = String(msg || '').toLowerCase();
+  return m.includes('invalid login') || m.includes('invalid email or password') || m.includes('invalid credentials');
+}
+
+function resolvePricingAuthRedirectUrl(options?: { registerFree?: boolean }): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const url = new URL(window.location.href);
+    url.hash = '';
+    if (options?.registerFree) {
+      url.pathname = getPricingPagePath();
+      url.searchParams.set('version', 'V1');
+      url.searchParams.set('register', 'free');
+      url.searchParams.delete('plan');
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveV1PlatformTarget(platform: PlatformKey): string {
+  if (platform === 'macos') return getSamplerAppPath();
+  return getInstallerRedirectPath('V1', platform);
+}
+
+function getSessionProviderLabel(user: PricingAuthSessionUser | null): string {
+  const provider = String(user?.app_metadata?.provider || '').trim();
+  if (provider.toLowerCase() === 'google') return 'Google';
+  if (provider) return provider;
+  return 'signed-in account';
 }
 
 function formatPhp(value: number | null | undefined): string {
@@ -213,23 +301,6 @@ function getBeforePromoPrice(price: number, discountPercent: number): number {
   return Math.max(price, Math.round(price / (1 - discountPercent / 100)));
 }
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const match = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
-  if (!match) return null;
-  const value = match[1];
-  return {
-    r: Number.parseInt(value.slice(0, 2), 16),
-    g: Number.parseInt(value.slice(2, 4), 16),
-    b: Number.parseInt(value.slice(4, 6), 16),
-  };
-}
-
-function accentRgb(hex: string, alpha: number, fallback = 'rgba(242,25,132,0.35)'): string {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return fallback;
-  return `rgba(${rgb.r},${rgb.g},${rgb.b},${Math.max(0, Math.min(1, alpha))})`;
-}
-
 function normalizePricingCardTier(value: unknown): PricingCardTier {
   if (value === 'free' || value === 'pro' || value === 'pro_max' || value === 'standard') return value;
   return 'pro';
@@ -249,6 +320,8 @@ export default function PricingPage() {
   const pricingPath = React.useMemo(() => getPricingPagePath(), []);
   const checkoutPath = React.useMemo(() => `${getPricingPagePath()}/checkout`, []);
   const isCheckoutPage = location.pathname.replace(/\/$/, '') === checkoutPath;
+  const { user: authUser, loading: authLoading, authTransition, pendingSessionClaim, sessionConflictReason } = useAuthState();
+  const { signIn, signInWithGoogle, signOut, getAuthenticatedAccessToken } = useAuthActions();
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = React.useState(true);
   const [submitting, setSubmitting] = React.useState(false);
@@ -259,6 +332,12 @@ export default function PricingPage() {
   const [mobileSlideDirection, setMobileSlideDirection] = React.useState<MobileSlideDirection>('next');
   const [showMobilePreview, setShowMobilePreview] = React.useState(false);
   const [checkoutStarted, setCheckoutStarted] = React.useState(false);
+  const [v1CheckoutAuthMode, setV1CheckoutAuthMode] = React.useState<V1CheckoutAuthMode>('email');
+  const [checkoutSessionUser, setCheckoutSessionUser] = React.useState<PricingAuthSessionUser | null>(null);
+  const [googleAuthLoading, setGoogleAuthLoading] = React.useState(false);
+  const [freeAuthDialogOpen, setFreeAuthDialogOpen] = React.useState(false);
+  const [downloadTargetOpen, setDownloadTargetOpen] = React.useState(false);
+  const [signOutConfirmTarget, setSignOutConfirmTarget] = React.useState<'free' | 'checkout' | null>(null);
   const [config, setConfig] = React.useState<BuyConfigResponse>({
     config: normalizeLandingDownloadConfig(DEFAULT_LANDING_DOWNLOAD_CONFIG),
     paymentConfig: {},
@@ -267,6 +346,12 @@ export default function PricingPage() {
     v2v3Products: [],
     installerTierConfigs: [],
   });
+
+  React.useEffect(() => {
+    if (pendingSessionClaim || sessionConflictReason) {
+      setFreeAuthDialogOpen(true);
+    }
+  }, [pendingSessionClaim, sessionConflictReason]);
 
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
@@ -292,6 +377,12 @@ export default function PricingPage() {
   const planRailAnimationRef = React.useRef<number | null>(null);
   const planRailProgrammaticScrollUntilRef = React.useRef(0);
   const installerBuyStartedRef = React.useRef<Record<InstallerVersion, boolean>>({ V2: false, V3: false });
+  const freeRegistrationPromptedRef = React.useRef(false);
+  const requestedVersionParam = String(searchParams.get('version') || '').toUpperCase();
+  const requestedPlanParam = String(searchParams.get('plan') || '').toLowerCase();
+  const requestedRegisterParam = String(searchParams.get('register') || '').toLowerCase();
+  const isLegacyV1FreeCheckout = isCheckoutPage && requestedVersionParam === 'V1' && requestedPlanParam === 'free';
+  const isV1FreeRegistrationFlow = !isCheckoutPage && selectedVersion === 'V1' && requestedRegisterParam === 'free';
 
   React.useEffect(() => {
     const requestedVersion = String(searchParams.get('version') || '').toUpperCase();
@@ -303,7 +394,7 @@ export default function PricingPage() {
   React.useEffect(() => {
     if (!isCheckoutPage) return;
     const requestedPlan = String(searchParams.get('plan') || '').toLowerCase();
-    if (requestedPlan === 'free' || requestedPlan === 'pro' || requestedPlan === 'pro_max') {
+    if (requestedPlan === 'pro' || requestedPlan === 'pro_max') {
       setSelectedV1Plan(requestedPlan as V1Plan);
     }
     const mode = String(searchParams.get('mode') || '');
@@ -317,6 +408,57 @@ export default function PricingPage() {
     if (skus.length) setSelectedSkus(skus);
     setCheckoutStarted(true);
   }, [isCheckoutPage, searchParams, selectedVersion]);
+
+  React.useEffect(() => {
+    if (!isLegacyV1FreeCheckout) return;
+    setSelectedV1Plan('free');
+    setCheckoutStarted(false);
+    setError('');
+    setResult(null);
+    navigate(`${pricingPath}?version=V1&register=free`, { replace: true });
+  }, [isLegacyV1FreeCheckout, navigate, pricingPath]);
+
+  React.useEffect(() => {
+    if (!isV1FreeRegistrationFlow) return;
+    setSelectedV1Plan('free');
+    setCheckoutStarted(false);
+    setError('');
+    setResult(null);
+  }, [isV1FreeRegistrationFlow]);
+
+  React.useEffect(() => {
+    const user = (authUser || null) as PricingAuthSessionUser | null;
+    setCheckoutSessionUser(user);
+    if (user?.email && isCheckoutPage && selectedVersion === 'V1') {
+      setEmail(user.email);
+      setV1CheckoutAuthMode('session');
+    } else if (!user) {
+      setV1CheckoutAuthMode('email');
+    }
+    if (authTransition.status !== 'signing_in') {
+      setGoogleAuthLoading(false);
+    }
+  }, [authTransition.status, authUser, isCheckoutPage, selectedVersion]);
+
+  React.useEffect(() => {
+    if (!isV1FreeRegistrationFlow) {
+      freeRegistrationPromptedRef.current = false;
+      setFreeAuthDialogOpen(false);
+      setDownloadTargetOpen(false);
+      return;
+    }
+    if (authLoading || authTransition.status === 'signing_in') return;
+    if (authUser) {
+      setFreeAuthDialogOpen(false);
+      setDownloadTargetOpen(true);
+      freeRegistrationPromptedRef.current = true;
+      return;
+    }
+    if (!freeRegistrationPromptedRef.current) {
+      setFreeAuthDialogOpen(true);
+      freeRegistrationPromptedRef.current = true;
+    }
+  }, [authLoading, authTransition.status, authUser, isV1FreeRegistrationFlow]);
 
   React.useEffect(() => {
     if (!proofFile) {
@@ -366,9 +508,23 @@ export default function PricingPage() {
     let active = true;
     void (async () => {
       try {
+        const accountHeaders: Record<string, string> = { ...getClientCompatibilityHeaders() };
+        try {
+          const tokenResult = authUser?.id ? await getAuthenticatedAccessToken() : { token: null };
+          const { data: sessionData } = await supabase.auth.getSession();
+          const token = tokenResult.token || sessionData.session?.access_token || '';
+          if (token) {
+            accountHeaders.Authorization = `Bearer ${token}`;
+          }
+        } catch {
+        }
         const [buyResponse, accountResponse] = await Promise.all([
           fetch(edgeFunctionUrl('store-api', 'buy-config'), { cache: 'no-store' }),
-          fetch(edgeFunctionUrl('store-api', 'account/upgrade-options'), { cache: 'no-store' }).catch(() => null),
+          fetch(edgeFunctionUrl('store-api', 'account/upgrade-options'), {
+            cache: 'no-store',
+            credentials: 'omit',
+            headers: accountHeaders,
+          }).catch(() => null),
         ]);
         const payload = await buyResponse.json().catch(() => ({}));
         const data = payload?.data ?? payload;
@@ -403,6 +559,27 @@ export default function PricingPage() {
     return () => {
       active = false;
     };
+  }, [authLoading, authUser?.id, getAuthenticatedAccessToken]);
+
+  const applyPendingV1UpgradeRequest = React.useCallback((targetTier: TargetTier, request: Record<string, unknown>) => {
+    const rawQuotePrice = request.quote_price_php_snapshot ?? request.account_price_php_snapshot;
+    const pendingRequest = {
+      id: String(request.id || request.request_id || request.requestId || `${targetTier}-pending`),
+      receipt_reference: request.receipt_reference ? String(request.receipt_reference) : null,
+      created_at: request.created_at ? String(request.created_at) : new Date().toISOString(),
+      quote_price_php_snapshot: Number.isFinite(Number(rawQuotePrice))
+        ? Number(rawQuotePrice)
+        : null,
+      source: request.source || request.request_source ? String(request.source || request.request_source) : null,
+    };
+    setConfig((current) => ({
+      ...current,
+      accountTiers: (current.accountTiers || []).map((tier) => (
+        tier.tier === targetTier
+          ? { ...tier, available: false, pendingRequest }
+          : tier
+      )),
+    }));
   }, []);
 
   const versionProducts = React.useMemo(
@@ -425,7 +602,6 @@ export default function PricingPage() {
   const activeBuySection = config.config.buySections[selectedVersion];
   const activeVersionDescription = config.config.versionDescriptions[selectedVersion];
   const messengerUrl = String(config.paymentConfig.messenger_url || '').trim();
-  const v1Links = config.config.downloadLinks.V1;
   const proMode = selectedVersion === 'V1' ? '' : proModeByVersion[selectedVersion as InstallerVersion];
   const proUpdateSkus = selectedVersion === 'V1' ? [] : proUpdateSkusByVersion[selectedVersion as InstallerVersion];
   const proSelectedUpdates = updateProducts.filter((product) => proUpdateSkus.includes(product.skuCode));
@@ -556,13 +732,43 @@ export default function PricingPage() {
     setProofFile(null);
   };
 
-  const uploadProof = async () => {
+  const uploadProof = async (mode: 'registration' | 'upgrade' | 'installer', accessToken?: string | null) => {
     if (!proofFile) return null;
     const validationError = validateProofFile(proofFile);
     if (validationError) throw new Error(validationError);
 
+    if (mode === 'upgrade') {
+      if (!accessToken) throw new Error('Sign in before uploading payment proof.');
+      const uploadRes = await fetch(edgeFunctionUrl('store-api', 'account/upgrade-proof-upload-url'), {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'omit',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          fileName: proofFile.name,
+          contentType: proofFile.type || 'application/octet-stream',
+          paymentChannel,
+          sizeBytes: proofFile.size,
+        }),
+      });
+      const uploadPayload = await uploadRes.json().catch(() => ({}));
+      const uploadData = uploadPayload?.data ?? uploadPayload;
+      const code = String(uploadPayload?.error || uploadData?.error || '');
+      if (!uploadRes.ok || code) throw new Error(mapRegistrationError(code, uploadPayload));
+      const bucket = String(uploadData?.bucket || 'payment-proof');
+      const path = String(uploadData?.path || '');
+      const token = String(uploadData?.token || '');
+      if (!path || !token) throw new Error('We could not prepare your proof upload. Please try again.');
+      const upload = await supabase.storage.from(bucket).uploadToSignedUrl(path, token, proofFile);
+      if (upload.error) throw new Error('Your proof upload did not complete. Please try again.');
+      return path;
+    }
+
     const uploadReq = await postPublicStoreApi(
-      selectedVersion === 'V1' ? 'account-registration/proof-upload-url' : 'installer-request/proof-upload-url',
+      mode === 'registration' ? 'account-registration/proof-upload-url' : 'installer-request/proof-upload-url',
       {
         email: email.trim().toLowerCase(),
         fileName: proofFile.name,
@@ -586,17 +792,85 @@ export default function PricingPage() {
     return path;
   };
 
+  const navigateToV1Platform = React.useCallback((platform: PlatformKey) => {
+    window.location.assign(resolveV1PlatformTarget(platform));
+  }, []);
+
+  const handleFreeAuthSuccess = React.useCallback(() => {
+    setFreeAuthDialogOpen(false);
+    setDownloadTargetOpen(true);
+  }, []);
+
+  const handleFreeSignOut = React.useCallback(async () => {
+    setDownloadTargetOpen(false);
+    const { error: signOutError } = await signOut();
+    if (signOutError) {
+      pushPricingNotice('error', normalizeAuthErrorMessage(signOutError.message));
+      return;
+    }
+    setCheckoutSessionUser(null);
+    setV1CheckoutAuthMode('email');
+    setEmail('');
+    freeRegistrationPromptedRef.current = true;
+    setFreeAuthDialogOpen(true);
+    pushPricingNotice('success', 'Signed out. You can register free again.');
+  }, [pushPricingNotice, signOut]);
+
+  const handleCheckoutSignOut = React.useCallback(async () => {
+    const { error: signOutError } = await signOut();
+    if (signOutError) {
+      pushPricingNotice('error', normalizeAuthErrorMessage(signOutError.message));
+      return;
+    }
+    setCheckoutSessionUser(null);
+    setV1CheckoutAuthMode('email');
+    setEmail('');
+    setPassword('');
+    setConfirmPassword('');
+    setGoogleAuthLoading(false);
+    pushPricingNotice('success', 'Signed out. Enter the account you want to use for checkout.');
+  }, [pushPricingNotice, signOut]);
+
+  const handleConfirmSignOut = React.useCallback(() => {
+    const target = signOutConfirmTarget;
+    setSignOutConfirmTarget(null);
+    if (target === 'free') {
+      void handleFreeSignOut();
+      return;
+    }
+    if (target === 'checkout') {
+      void handleCheckoutSignOut();
+    }
+  }, [handleCheckoutSignOut, handleFreeSignOut, signOutConfirmTarget]);
+
   const selectFreeV1 = React.useCallback(() => {
     setSelectedV1Plan('free');
     setCheckoutStarted(false);
     setError('');
-    const firstConfiguredPlatform = (['android', 'ios', 'windows'] as PlatformKey[])
-      .find((platform) => Boolean(String(v1Links[platform] || '').trim()));
-    const target = firstConfiguredPlatform
-      ? getInstallerRedirectPath('V1', firstConfiguredPlatform)
-      : getLandingPagePath();
-    window.open(target, '_blank', 'noopener,noreferrer');
-  }, [v1Links.android, v1Links.ios, v1Links.windows]);
+    setResult(null);
+    navigate(`${pricingPath}?version=V1&register=free`, { replace: false });
+    if (checkoutSessionUser || authUser) {
+      setDownloadTargetOpen(true);
+    } else {
+      setFreeAuthDialogOpen(true);
+      freeRegistrationPromptedRef.current = true;
+    }
+  }, [authUser, checkoutSessionUser, navigate, pricingPath]);
+
+  const handlePricingGoogleAuth = React.useCallback(async () => {
+    setError('');
+    setGoogleAuthLoading(true);
+    try {
+      const { error: oauthError } = await signInWithGoogle(resolvePricingAuthRedirectUrl());
+      if (oauthError) {
+        setGoogleAuthLoading(false);
+        setError(normalizeAuthErrorMessage(oauthError.message));
+      }
+    } catch {
+      setGoogleAuthLoading(false);
+      setError('We could not open Google sign-in. Please try again.');
+    }
+  }, [signInWithGoogle]);
 
   const startV1Checkout = React.useCallback((plan: V1Plan) => {
     setSelectedV1Plan(plan);
@@ -710,13 +984,19 @@ export default function PricingPage() {
       return;
     }
     if (selectedVersion === 'V1') {
-      if (password.length < 8) {
-        setError('Password must be at least 8 characters.');
+      if (selectedV1Plan === 'free') {
+        setError('Use Register Free to create a free account.');
         return;
       }
-      if (password !== confirmPassword) {
-        setError('Passwords do not match.');
-        return;
+      if (v1CheckoutAuthMode !== 'session') {
+        if (password.length < 8) {
+          setError('Password must be at least 8 characters.');
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError('Passwords do not match.');
+          return;
+        }
       }
     } else if (selectedProducts.length === 0) {
       setError('Select what you want to buy first.');
@@ -725,41 +1005,159 @@ export default function PricingPage() {
 
     setSubmitting(true);
     try {
-      const proofPath = await uploadProof();
       if (selectedVersion === 'V1') {
-        const submitRes = await postPublicStoreApi('account-registration/submit', {
-          email: normalizedEmail,
-          password,
-          confirmPassword,
-          paymentChannel,
-          payerName: normalizedPayerName || null,
-          referenceNo: normalizedReferenceNo || null,
-          notes: normalizedNotes || null,
-          proofPath,
-          targetTier: selectedV1Plan === 'pro_max' ? 'pro_max' : 'pro',
-        });
-        if (!submitRes.res.ok || submitRes.code) {
-          throw new Error(mapRegistrationError(submitRes.code, submitRes.payload));
+        let accessToken = '';
+        let useUpgradeRequest = v1CheckoutAuthMode === 'session';
+        let checkoutEmail = normalizedEmail;
+
+        if (useUpgradeRequest) {
+          const tokenResult = await getAuthenticatedAccessToken();
+          const { data: sessionData } = await supabase.auth.getSession();
+          accessToken = tokenResult.token || sessionData.session?.access_token || '';
+          const activeSessionUser = sessionData.session?.user || authUser || null;
+          checkoutEmail = String(activeSessionUser?.email || checkoutEmail).toLowerCase();
+          if (!accessToken) throw new Error(tokenResult.message || 'Google/session sign-in did not finish. Please continue with Google again.');
+          setCheckoutSessionUser((activeSessionUser || null) as PricingAuthSessionUser | null);
+        } else {
+          const { data: signInData, error: signInError } = await signIn(normalizedEmail, password);
+          const tokenResult = !signInError
+            ? await getAuthenticatedAccessToken()
+            : { token: null, message: null };
+          const { data: signedInSessionData } = !signInError
+            ? await supabase.auth.getSession()
+            : { data: { session: null } };
+          if (!signInError && (tokenResult.token || signedInSessionData.session?.access_token)) {
+            useUpgradeRequest = true;
+            accessToken = tokenResult.token || signedInSessionData.session?.access_token || '';
+            const signedInUser = signedInSessionData.session?.user || signInData?.user || null;
+            checkoutEmail = String(signedInUser?.email || normalizedEmail).toLowerCase();
+            setCheckoutSessionUser((signedInUser || null) as PricingAuthSessionUser | null);
+            setV1CheckoutAuthMode('session');
+            void logActivityEvent({
+              eventType: 'auth.login',
+              status: 'success',
+              userId: signInData?.user?.id || signedInUser?.id || null,
+              email: checkoutEmail,
+              meta: { source: 'PricingPage.checkout' },
+            }).catch(() => {});
+          } else if (!signInError) {
+            throw new Error(tokenResult.message || 'Sign in sync did not finish. Please try again.');
+          } else if (signInError && isInvalidCredentialErrorMessage(signInError.message)) {
+            const hint = await postPublicStoreApi('account-registration/login-hint', { email: normalizedEmail });
+            const hintStatus = String(hint.data?.status || '');
+            if (hintStatus === 'approved_or_registered') {
+              throw new Error('This email is already registered but the password does not match. Use the correct password, reset it, or continue with Google.');
+            }
+            if (hintStatus === 'pending') {
+              const hintTier = hint.data?.target_tier === 'pro_max' ? 'pro_max' : 'pro';
+              applyPendingV1UpgradeRequest(hintTier, {
+                ...hint.data,
+                id: hint.data?.request_id || hint.data?.id,
+                source: 'registration_request',
+              });
+              throw new Error('This email already has a pending registration. Please wait for review or check your email.');
+            }
+            if (hintStatus === 'rejected') {
+              throw new Error(String(hint.data?.rejection_message || 'This email has a rejected registration. Please message support before submitting again.'));
+            }
+          } else if (signInError) {
+            throw new Error(normalizeAuthErrorMessage(signInError.message));
+          }
         }
-        const isApproved = String(submitRes.data?.status || 'pending') === 'approved';
-        captureProductEvent('payment_proof_submitted', {
-          request_type: 'account',
-          payment_channel: paymentChannel,
-          status: isApproved ? 'approved' : 'pending',
-          version: 'V1',
-          plan: selectedV1Plan,
-        });
-        setResult({
-          version: 'V1',
-          status: isApproved ? 'approved' : 'pending',
-          email: normalizedEmail,
-          receiptReference: String(submitRes.data?.receipt_reference || submitRes.data?.requestId || 'Pending verification'),
-          paymentReference: String(submitRes.data?.reference_no || normalizedReferenceNo || 'Not provided'),
-          message: isApproved
-            ? 'Your payment passed verification and your V1 account is ready. You can log in now and use the platform links below.'
-            : `${String(submitRes.data?.wait_message || 'Your account request is waiting for admin review.')} If needed, send the receipt reference to Facebook Messenger for status.`,
-        });
+
+        const proofPath = await uploadProof(useUpgradeRequest ? 'upgrade' : 'registration', accessToken);
+        if (useUpgradeRequest) {
+          const upgradeRes = await fetch(edgeFunctionUrl('store-api', 'account/upgrade-request'), {
+            method: 'POST',
+            cache: 'no-store',
+            credentials: 'omit',
+            headers: {
+              ...getClientCompatibilityHeaders(),
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              targetTier: selectedV1Plan === 'pro_max' ? 'pro_max' : 'pro',
+              paymentChannel,
+              payerName: normalizedPayerName || null,
+              referenceNo: normalizedReferenceNo || null,
+              notes: normalizedNotes || null,
+              proofPath,
+            }),
+          });
+          const upgradePayload = await upgradeRes.json().catch(() => ({}));
+          const upgradeData = upgradePayload?.data ?? upgradePayload;
+          const upgradeCode = String(upgradePayload?.error || upgradeData?.error || '');
+          if (!upgradeRes.ok || upgradeCode) {
+            throw new Error(mapRegistrationError(upgradeCode, upgradePayload));
+          }
+          const request = (upgradeData?.request && typeof upgradeData.request === 'object' ? upgradeData.request : {}) as Record<string, unknown>;
+          const status = String(request.status || 'pending');
+          const isApproved = status === 'approved';
+          if (!isApproved) {
+            applyPendingV1UpgradeRequest(selectedV1Plan === 'pro_max' ? 'pro_max' : 'pro', request);
+          }
+          captureProductEvent('payment_proof_submitted', {
+            request_type: 'account_upgrade',
+            payment_channel: paymentChannel,
+            status: isApproved ? 'approved' : 'pending',
+            version: 'V1',
+            plan: selectedV1Plan,
+          });
+          setResult({
+            version: 'V1',
+            status: isApproved ? 'approved' : 'pending',
+            email: checkoutEmail,
+            receiptReference: String(request.receipt_reference || request.id || 'Pending verification'),
+            paymentReference: String(request.reference_no || normalizedReferenceNo || 'Not provided'),
+            message: isApproved
+              ? 'Your V1 account tier is ready. Choose a platform link below.'
+              : 'Your upgrade request is waiting for admin review for 24 hours. Message us on Facebook to follow up your request.',
+          });
+        } else {
+          const submitRes = await postPublicStoreApi('account-registration/submit', {
+            email: normalizedEmail,
+            password,
+            confirmPassword,
+            paymentChannel,
+            payerName: normalizedPayerName || null,
+            referenceNo: normalizedReferenceNo || null,
+            notes: normalizedNotes || null,
+            proofPath,
+            targetTier: selectedV1Plan === 'pro_max' ? 'pro_max' : 'pro',
+          });
+          if (!submitRes.res.ok || submitRes.code) {
+            throw new Error(mapRegistrationError(submitRes.code, submitRes.payload));
+          }
+          const isApproved = String(submitRes.data?.status || 'pending') === 'approved';
+          if (!isApproved) {
+            applyPendingV1UpgradeRequest(selectedV1Plan === 'pro_max' ? 'pro_max' : 'pro', {
+              ...submitRes.data,
+              id: submitRes.data?.requestId || submitRes.data?.request_id,
+              target_tier: submitRes.data?.target_tier || (selectedV1Plan === 'pro_max' ? 'pro_max' : 'pro'),
+              source: 'registration_request',
+            });
+          }
+          captureProductEvent('payment_proof_submitted', {
+            request_type: 'account',
+            payment_channel: paymentChannel,
+            status: isApproved ? 'approved' : 'pending',
+            version: 'V1',
+            plan: selectedV1Plan,
+          });
+          setResult({
+            version: 'V1',
+            status: isApproved ? 'approved' : 'pending',
+            email: normalizedEmail,
+            receiptReference: String(submitRes.data?.receipt_reference || submitRes.data?.requestId || 'Pending verification'),
+            paymentReference: String(submitRes.data?.reference_no || normalizedReferenceNo || 'Not provided'),
+            message: isApproved
+              ? 'Your payment passed verification and your V1 account is ready. Choose a platform link below.'
+              : `${String(submitRes.data?.wait_message || 'Your account request is waiting for admin review for 24 hours.')} Message us on Facebook to follow up your request.`,
+          });
+        }
       } else {
+        const proofPath = await uploadProof('installer');
         const submitRes = await postPublicStoreApi('installer-request/submit', {
           email: normalizedEmail,
           version: selectedVersion,
@@ -799,7 +1197,7 @@ export default function PricingPage() {
           paymentReference: String(submitRes.data?.reference_no || normalizedReferenceNo || 'Not provided'),
           message: isApproved
             ? 'Your payment passed verification and your license is ready below. A copy was also sent to your email.'
-            : `${String(submitRes.data?.wait_message || 'Your purchase request is waiting for admin review.')} If needed, send the receipt reference to Facebook Messenger for status.`,
+            : `${String(submitRes.data?.wait_message || 'Your purchase request is waiting for admin review for 24 hours.')} Message us on Facebook to follow up your request.`,
           purchaseLabel: String(
             submitRes.data?.purchase_label
             || (selectedProducts.length === 1
@@ -836,12 +1234,14 @@ export default function PricingPage() {
   };
 
   const selectedPriceText = selectedVersion === 'V1'
-    ? formatPhp(selectedV1Plan === 'pro_max'
+    ? selectedV1Plan === 'free'
+      ? 'Free'
+      : formatPhp(selectedV1Plan === 'pro_max'
       ? (v1ProMaxTier.quote?.quotePrice ?? v1ProMaxTier.pricePhp)
       : (v1ProTier.quote?.quotePrice ?? v1ProTier.pricePhp))
     : formatPhp(sumProducts(selectedProducts) || null);
   const selectedCheckoutTitle = selectedVersion === 'V1'
-    ? `V1 ${selectedV1Plan === 'pro_max' ? (v1ProMaxTier.displayName || 'PRO MAX') : (v1ProTier.displayName || 'PRO')}`
+    ? `V1 ${selectedV1Plan === 'free' ? (v1FreeTier.displayName || 'FREE') : selectedV1Plan === 'pro_max' ? (v1ProMaxTier.displayName || 'PRO MAX') : (v1ProTier.displayName || 'PRO')}`
     : selectedProducts.length === 1
       ? selectedProducts[0].displayName
       : `${selectedVersion} ${selectedProducts.length} items`;
@@ -908,12 +1308,15 @@ export default function PricingPage() {
     selected?: boolean;
     onClick: () => void;
     children?: React.ReactNode;
+    pendingRequest?: { receipt_reference?: string | null } | null;
+    pendingMessengerUrl?: string;
   }) => {
     const normalizedVariant = normalizePricingCardTier(props.variant);
     const isProMax = normalizedVariant === 'pro_max';
     const isPro = props.variant === 'pro';
     const isFree = props.variant === 'free';
     const accentColor = props.accentColor || (isProMax ? '#2155ff' : isPro ? '#f21984' : props.variant === 'standard' ? '#f59e0b' : '#64748b');
+    const accentTextColor = getReadableTextColor(accentColor);
     const meterPercent = Math.max(0, Math.min(100, Math.round(props.meterPercent ?? (isProMax ? 100 : isPro ? 66 : props.variant === 'standard' ? 50 : 33))));
     const inclusions = props.inclusions?.length
       ? props.inclusions
@@ -927,8 +1330,10 @@ export default function PricingPage() {
       background: `radial-gradient(120% 95% at 88% 0%, ${accentRgb(accentColor, 0.58)}, transparent 55%), radial-gradient(100% 90% at 12% 0%, rgba(255,255,255,0.18), transparent 42%), linear-gradient(180deg, ${accentRgb(accentColor, 0.32)}, rgba(23,22,30,0.98))`,
     };
     const disabledButtonClass = 'bg-white/10 text-white/55';
+    const isPendingReview = Boolean(props.pendingRequest);
     const buttonStyle: React.CSSProperties = !isFree && !props.disabled ? {
       backgroundColor: accentColor,
+      color: accentTextColor,
       boxShadow: `0 14px 36px ${accentRgb(accentColor, 0.38)}`,
     } : {};
 
@@ -940,7 +1345,7 @@ export default function PricingPage() {
         } ${props.selected ? 'brightness-110 ring-2 ring-white/10' : ''} ${props.disabled ? 'opacity-72' : 'hover:-translate-y-1 hover:brightness-110'}`}
       >
         {props.badge ? (
-          <div className="flex h-9 items-center justify-center text-[11px] font-black uppercase tracking-wide text-white" style={{ backgroundColor: accentColor }}>
+          <div className="flex h-9 items-center justify-center text-[11px] font-black uppercase tracking-wide" style={{ backgroundColor: accentColor, color: accentTextColor }}>
             {props.badge}
           </div>
         ) : (
@@ -961,7 +1366,7 @@ export default function PricingPage() {
               <p className="mt-3 min-h-[42px] line-clamp-2 text-sm leading-5 text-white/58">{props.subtitle}</p>
             </div>
             {!isFree ? (
-              <span className="shrink-0 whitespace-nowrap rounded-[4px] px-2 py-1 text-[10px] font-black uppercase text-white" style={{ backgroundColor: accentColor, boxShadow: `0 0 18px ${accentRgb(accentColor, 0.45)}` }}>
+              <span className="shrink-0 whitespace-nowrap rounded-[4px] px-2 py-1 text-[10px] font-black uppercase" style={{ backgroundColor: accentColor, color: accentTextColor, boxShadow: `0 0 18px ${accentRgb(accentColor, 0.45)}` }}>
                 {selectedVersion}
               </span>
             ) : null}
@@ -997,12 +1402,26 @@ export default function PricingPage() {
             onClick={props.onClick}
             disabled={props.disabled}
             style={buttonStyle}
-            className={`mt-4 flex h-12 w-full items-center justify-center rounded-[10px] text-sm font-black uppercase transition disabled:cursor-not-allowed ${props.disabled ? disabledButtonClass : isFree ? 'bg-white text-slate-950' : 'text-white'}`}
+            className={`mt-4 flex h-12 w-full items-center justify-center rounded-[10px] text-sm font-black uppercase transition disabled:cursor-not-allowed ${props.disabled ? disabledButtonClass : isFree ? 'bg-white text-slate-950' : ''}`}
           >
+            {isPendingReview ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {props.cta}
             {!props.disabled ? <ArrowRight className="ml-2 h-4 w-4" /> : null}
           </button>
         </div>
+        {isPendingReview ? (
+          <div className="relative mx-4 mt-4 rounded-xl border border-amber-300/30 bg-amber-300/12 px-3 py-2 text-xs leading-5 text-amber-100">
+            Already submitted{props.pendingRequest?.receipt_reference ? `: ${props.pendingRequest.receipt_reference}` : ''}. Wait for admin review for 24 hours, or message us on{' '}
+            {props.pendingMessengerUrl ? (
+              <a className="font-black text-amber-50 underline underline-offset-4" href={props.pendingMessengerUrl} target="_blank" rel="noreferrer">
+                Facebook
+              </a>
+            ) : (
+              <span className="font-black text-amber-50">Facebook</span>
+            )}{' '}
+            to follow up your request.
+          </div>
+        ) : null}
         {props.children}
         <div className="relative mt-5 space-y-2 px-4">
           {props.features.map((item) => (
@@ -1166,6 +1585,9 @@ export default function PricingPage() {
     const proPromo = getPromoDiscountPercent(v1ProTier);
     const proMaxPrice = Number(v1ProMaxTier.quote?.quotePrice ?? v1ProMaxTier.pricePhp);
     const proMaxPromo = getPromoDiscountPercent(v1ProMaxTier);
+    const freeIsRegistered = Boolean(authUser || checkoutSessionUser);
+    const proPendingRequest = v1ProTier.pendingRequest || null;
+    const proMaxPendingRequest = v1ProMaxTier.pendingRequest || null;
     return renderPlanCarousel([
       renderPlanShell({
         id: 'v1-free',
@@ -1181,7 +1603,7 @@ export default function PricingPage() {
         features: freeContent.checklist,
         inclusionTitle: freeContent.inclusionTitle,
         inclusions: freeContent.inclusions,
-        cta: 'Register Free',
+        cta: freeIsRegistered ? 'Choose Download' : 'Register Free',
         selected: selectedV1Plan === 'free',
         onClick: selectFreeV1,
       }),
@@ -1201,8 +1623,11 @@ export default function PricingPage() {
         features: proContent.checklist,
         inclusionTitle: proContent.inclusionTitle,
         inclusions: proContent.inclusions,
-        cta: `Get V1 ${v1ProTier.displayName || 'PRO'}`,
+        cta: proPendingRequest ? 'Pending Review' : `Get V1 ${v1ProTier.displayName || 'PRO'}`,
         selected: selectedV1Plan === 'pro' && checkoutStarted,
+        disabled: proPendingRequest ? true : v1ProTier.available === false,
+        pendingRequest: proPendingRequest,
+        pendingMessengerUrl: messengerUrl,
         onClick: () => startV1Checkout('pro'),
       }),
       renderPlanShell({
@@ -1221,8 +1646,11 @@ export default function PricingPage() {
         features: proMaxContent.checklist,
         inclusionTitle: proMaxContent.inclusionTitle,
         inclusions: proMaxContent.inclusions,
-        cta: `Get V1 ${v1ProMaxTier.displayName || 'PRO MAX'}`,
+        cta: proMaxPendingRequest ? 'Pending Review' : `Get V1 ${v1ProMaxTier.displayName || 'PRO MAX'}`,
         selected: selectedV1Plan === 'pro_max' && checkoutStarted,
+        disabled: proMaxPendingRequest ? true : v1ProMaxTier.available === false,
+        pendingRequest: proMaxPendingRequest,
+        pendingMessengerUrl: messengerUrl,
         onClick: () => startV1Checkout('pro_max'),
       }),
     ]);
@@ -1403,7 +1831,9 @@ export default function PricingPage() {
                 : []),
             ]}
             primaryAction={{
-              label: result.status === 'approved' ? 'Start New Purchase' : 'Submit Another Receipt',
+              label: result.status === 'approved' ? 'Start New Purchase' : 'Pending Review',
+              disabled: result.status !== 'approved',
+              loading: result.status !== 'approved',
               onClick: () => {
                 setResult(null);
                 setCheckoutStarted(false);
@@ -1426,7 +1856,7 @@ export default function PricingPage() {
                     type="button"
                     variant="outline"
                     className="justify-between border-white/10 bg-white/10 text-white hover:bg-white/16 hover:text-white"
-                    onClick={() => window.open(getInstallerRedirectPath('V1', platform), '_blank', 'noopener,noreferrer')}
+                    onClick={() => navigateToV1Platform(platform)}
                   >
                     <span>{platformButtonLabel[platform]}</span>
                     <ExternalLink className="h-4 w-4" />
@@ -1476,12 +1906,57 @@ export default function PricingPage() {
 
           {error ? <div className="rounded-xl border border-rose-400/30 bg-rose-500/12 px-3 py-2 text-sm text-rose-100">{error}</div> : null}
 
-          <div className="space-y-1">
-            <Label className="text-white/72">Email</Label>
-            <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" className={darkInputClass} />
-          </div>
+          {!(selectedVersion === 'V1' && v1CheckoutAuthMode === 'session' && Boolean(checkoutSessionUser)) ? (
+            <div className="space-y-1">
+              <Label className="text-white/72">Email</Label>
+              <Input
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="you@example.com"
+                className={darkInputClass}
+              />
+            </div>
+          ) : null}
 
-          {selectedVersion === 'V1' && (
+          {selectedVersion === 'V1' && selectedV1Plan !== 'free' && (
+            checkoutSessionUser ? (
+              <div className="rounded-2xl border border-emerald-300/20 bg-emerald-500/10 p-4 text-sm text-emerald-50">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-black">Using {getSessionProviderLabel(checkoutSessionUser)}</div>
+                    <div className="mt-1 truncate text-emerald-50/70">{checkoutSessionUser.email || email}</div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-9 shrink-0 border-emerald-200/20 bg-black/15 px-3 text-xs font-black text-emerald-50 hover:bg-white/10 hover:text-white"
+                    onClick={() => setSignOutConfirmTarget('checkout')}
+                    disabled={submitting}
+                  >
+                    <LogOut className="mr-1.5 h-3.5 w-3.5" />
+                    Sign out
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-12 w-full justify-center gap-2 border-white/15 bg-white/[0.02] font-black text-white hover:bg-white/[0.08] hover:text-white"
+                  onClick={handlePricingGoogleAuth}
+                  disabled={submitting || googleAuthLoading}
+                >
+                  <GoogleMark />
+                  {googleAuthLoading ? 'Opening Google...' : 'Register / Continue with Google'}
+                </Button>
+                <div className="pt-3 text-center text-[11px] font-bold uppercase tracking-[0.16em] text-white/40">or use email and password</div>
+              </div>
+            )
+          )}
+
+          {selectedVersion === 'V1' && v1CheckoutAuthMode !== 'session' && (
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-1">
                 <Label className="text-white/72">Password</Label>
@@ -1813,6 +2288,82 @@ export default function PricingPage() {
           </div>
         </div>
       )}
+
+      <LoginModal
+        open={freeAuthDialogOpen}
+        onOpenChange={setFreeAuthDialogOpen}
+        theme="dark"
+        modePreset="signup-only"
+        appReturnUrl={resolvePricingAuthRedirectUrl({ registerFree: true })}
+        onAuthSuccess={handleFreeAuthSuccess}
+        pushNotice={(notice) => pushPricingNotice(notice.variant, notice.message)}
+      />
+
+      <Dialog open={downloadTargetOpen && isV1FreeRegistrationFlow && Boolean(checkoutSessionUser)} onOpenChange={setDownloadTargetOpen}>
+        <DialogContent
+          className="max-w-[28rem] overflow-hidden border-white/10 bg-[#101113] p-0 text-white shadow-[0_30px_90px_rgba(0,0,0,0.55)]"
+          aria-describedby={undefined}
+          onOpenAutoFocus={(event) => event.preventDefault()}
+        >
+          <div className="relative px-5 pb-5 pt-6">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_-18%,rgba(239,68,68,0.28),transparent_36%),linear-gradient(180deg,#171010_0%,#101113_68%,#090909_100%)]" />
+            <div className="relative">
+              <DialogHeader className="space-y-2 text-left">
+                <div className="text-xs font-black uppercase tracking-[0.22em] text-[#f21984]">Download Target</div>
+                <DialogTitle className="text-2xl font-black text-white">Choose your platform</DialogTitle>
+                <DialogDescription className="text-sm leading-6 text-white/58">
+                  Signed in as {checkoutSessionUser?.email || 'your VDJV account'}. Choose a platform to continue.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="mt-5 grid gap-2">
+                {V1_PLATFORM_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => navigateToV1Platform(option.key)}
+                    className="rounded-[14px] border border-white/10 bg-white/[0.045] p-4 text-left text-white/72 transition hover:border-[#f21984]/55 hover:bg-[#f21984]/14 hover:text-white"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-black uppercase">{option.title}</span>
+                      <ExternalLink className="h-4 w-4 opacity-70" />
+                    </div>
+                    <div className="mt-1 text-xs opacity-75">{option.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-4 h-11 w-full border-white/10 bg-white/[0.035] text-white/78 hover:bg-white/10 hover:text-white"
+                onClick={() => setSignOutConfirmTarget('free')}
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                Sign out
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmationDialog
+        open={signOutConfirmTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setSignOutConfirmTarget(null);
+        }}
+        title="Sign out"
+        description={
+          signOutConfirmTarget === 'free'
+            ? 'Sign out from this pricing session? You will need to sign in again before choosing a download target.'
+            : 'Sign out from this pricing checkout? The payment form will switch back to email and password entry.'
+        }
+        confirmText="Sign out"
+        cancelText="Stay signed in"
+        onConfirm={handleConfirmSignOut}
+        theme="dark"
+        icon={<LogOut className="h-5 w-5 text-indigo-500 dark:text-indigo-300" />}
+      />
 
       {pricingNotice ? (
         <div className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+1rem)] z-[230] flex justify-center pointer-events-none">

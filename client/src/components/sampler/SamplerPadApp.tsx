@@ -554,6 +554,8 @@ export function SamplerPadApp() {
     }
     return defaultSettings;
   });
+  const previousDeckTierRef = React.useRef<string | null>(null);
+  const previousDeckDefaultRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     let active = true;
@@ -838,19 +840,50 @@ export function SamplerPadApp() {
   }, [settings.channelCount, settings.systemMappings.channelCount]);
 
   React.useEffect(() => {
-    const configuredLimit = Number(capabilities.limits.deckCount);
-    if (!Number.isFinite(configuredLimit) || configuredLimit <= 0) return;
-    const allowedCount = Math.max(1, Math.min(8, Math.floor(configuredLimit)));
-    if (settings.channelCount <= allowedCount) return;
+    const configuredMax = Number(capabilities.limits.deckCount);
+    if (!Number.isFinite(configuredMax) || configuredMax <= 0) return;
+    const allowedMax = Math.max(1, Math.min(8, Math.floor(configuredMax)));
+    const configuredMin = Number(capabilities.limits.deckMinCount);
+    const allowedMin = Number.isFinite(configuredMin)
+      ? Math.max(1, Math.min(allowedMax, Math.floor(configuredMin)))
+      : 1;
+    const configuredDefault = Number(capabilities.limits.deckDefaultCount);
+    const defaultCount = Number.isFinite(configuredDefault)
+      ? Math.max(allowedMin, Math.min(allowedMax, Math.floor(configuredDefault)))
+      : allowedMin;
+    const currentCount = Math.max(1, Math.min(8, Math.floor(settings.channelCount || defaultCount)));
+    const previousTier = previousDeckTierRef.current;
+    const previousDefault = previousDeckDefaultRef.current;
+    const currentTier = capabilities.effectiveTier;
+    previousDeckTierRef.current = currentTier;
+    previousDeckDefaultRef.current = defaultCount;
+    const tierDefaultIncreased = previousTier !== null
+      && previousTier !== currentTier
+      && previousDefault !== null
+      && defaultCount > previousDefault;
+    const nextCount = currentCount > allowedMax
+      ? allowedMax
+      : currentCount < allowedMin
+        ? allowedMin
+        : tierDefaultIncreased && currentCount < defaultCount
+          ? defaultCount
+          : currentCount;
+    if (nextCount === settings.channelCount) return;
     setSettings((prev) => ({
       ...prev,
-      channelCount: allowedCount,
+      channelCount: nextCount,
       systemMappings: {
         ...prev.systemMappings,
-        channelCount: allowedCount,
+        channelCount: nextCount,
       },
     }));
-  }, [capabilities.limits.deckCount, settings.channelCount]);
+  }, [
+    capabilities.effectiveTier,
+    capabilities.limits.deckCount,
+    capabilities.limits.deckDefaultCount,
+    capabilities.limits.deckMinCount,
+    settings.channelCount,
+  ]);
 
   React.useEffect(() => {
     if (!settings.midiEnabled) return;

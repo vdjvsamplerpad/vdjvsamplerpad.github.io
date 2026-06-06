@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { edgeFunctionUrl } from '@/lib/edge-api';
+import { edgeFunctionUrl, getClientCompatibilityHeaders } from '@/lib/edge-api';
 import {
     PaymentConfig,
     StoreBanner,
@@ -9,7 +9,7 @@ import {
     StoreSnapshot,
 } from '@/components/sampler/onlineStore.types';
 
-const STORE_SNAPSHOT_VERSION = 6;
+const STORE_SNAPSHOT_VERSION = 8;
 const STORE_SNAPSHOT_FRESH_TTL_MS = 30 * 60 * 1000;
 const STORE_VIEW_FETCH_COOLDOWN_MS = 2 * 60 * 1000;
 const STORE_PAYMENT_CONFIG_FETCH_COOLDOWN_MS = 15 * 60 * 1000;
@@ -32,6 +32,19 @@ type StorePaymentConfigCacheEntry = {
 
 const storeViewResponseCache = new Map<string, StoreViewResponseCacheEntry>();
 const storePaymentConfigCache = new Map<string, StorePaymentConfigCacheEntry>();
+
+const preloadStoreThumbnails = (items: StoreItem[], limit = 3) => {
+    if (typeof Image === 'undefined') return;
+    items
+        .map((item) => typeof item.thumbnail_path === 'string' ? item.thumbnail_path.trim() : '')
+        .filter(Boolean)
+        .slice(0, limit)
+        .forEach((src) => {
+            const image = new Image();
+            image.decoding = 'async';
+            image.src = src;
+        });
+};
 
 type UseOnlineStoreCatalogDataArgs = {
     STORE_PAGE_SIZE: number;
@@ -120,7 +133,7 @@ export function useOnlineStoreCatalogData({
         const parseSnapshot = (raw: string | null): StoreSnapshot | null => {
             if (!raw) return null;
             const snapshot: StoreSnapshot = JSON.parse(raw);
-            if (![1, 2, 3, 4, 5, 6].includes(snapshot.version)) return null;
+            if (![1, 2, 3, 4, 5, 6, 7, 8].includes(snapshot.version)) return null;
             if (snapshot.userKey !== userKey) return null;
             return snapshot;
         };
@@ -161,8 +174,11 @@ export function useOnlineStoreCatalogData({
             if (exactSnapshot && (exactSnapshot.version < 4 || exactSnapshot.queryKey === viewQueryKey)) {
                 return applySnapshot(exactSnapshot, 'exact');
             }
-            const baseSnapshot = parseSnapshot(localStorage.getItem(baseCacheKey));
-            if (baseSnapshot) return applySnapshot(baseSnapshot, 'base');
+            const canUseBaseSnapshot = requestPage === 1 && storeSort === 'default' && !trimmedSearch;
+            if (canUseBaseSnapshot) {
+                const baseSnapshot = parseSnapshot(localStorage.getItem(baseCacheKey));
+                if (baseSnapshot) return applySnapshot(baseSnapshot, 'base');
+            }
         } catch {
             // no-op
         }
@@ -180,6 +196,9 @@ export function useOnlineStoreCatalogData({
         setStoreTotalItems,
         setStoreTotalPages,
         pushDownloadDebugLog,
+        requestPage,
+        storeSort,
+        trimmedSearch,
         userKey,
         viewQueryKey,
     ]);
@@ -231,7 +250,7 @@ export function useOnlineStoreCatalogData({
         setLoading(!loadedSnapshot);
         try {
             const requestStartedAt = Date.now();
-            const headers: Record<string, string> = {};
+            const headers: Record<string, string> = { ...getClientCompatibilityHeaders() };
             if (effectiveUserId) {
                 const { supabase } = await import('@/lib/supabase');
                 const session = await supabase.auth.getSession();
@@ -242,10 +261,15 @@ export function useOnlineStoreCatalogData({
 
             const cachedView = storeViewResponseCache.get(sessionViewCacheKey);
             if (cachedView && (Date.now() - cachedView.savedAt) <= STORE_VIEW_FETCH_COOLDOWN_MS) {
+                const cachedBanners = Array.isArray(cachedView.banners) && cachedView.banners.length > 0
+                    ? cachedView.banners
+                    : bannersRef.current;
                 setItems(cachedView.items);
                 setStoreMaintenance(cachedView.maintenance);
-                setBanners(cachedView.banners);
-                setBannerIndex(0);
+                if (cachedBanners.length > 0 || cachedView.banners.length > 0) {
+                    setBanners(cachedBanners);
+                    setBannerIndex(0);
+                }
                 setStoreTotalItems(cachedView.total);
                 setStoreTotalPages(Math.max(1, cachedView.totalPages));
                 if (storeSort !== 'downloaded' && cachedView.requestPage !== storePage) {
@@ -307,7 +331,7 @@ export function useOnlineStoreCatalogData({
                             : null,
                     }
                     : { enabled: false, message: null };
-                if (Array.isArray(data.banners)) {
+                if (includeBanners && Array.isArray(data.banners)) {
                     fetchedBanners = data.banners;
                     shouldReplaceBanners = true;
                 }
@@ -388,6 +412,70 @@ export function useOnlineStoreCatalogData({
                 total: fetchedTotal,
                 totalPages: normalizedTotalPages,
             });
+            if (
+                storeSort !== 'downloaded'
+                && normalizedPage < normalizedTotalPages
+                && catalogRes.ok
+            ) {
+                const nextPage = normalizedPage + 1;
+                const nextViewQueryKey = `${storeSort}::${requestSort}::${nextPage}::${requestPerPage}::${trimmedSearch || '-'}`;
+                const nextSessionViewCacheKey = `${userKey}:${nextViewQueryKey}`;
+                const cachedNext = storeViewResponseCache.get(nextSessionViewCacheKey);
+                if (!cachedNext || (Date.now() - cachedNext.savedAt) > STORE_VIEW_FETCH_COOLDOWN_MS) {
+                    const nextParams = new URLSearchParams();
+                    nextParams.set('page', String(nextPage));
+                    nextParams.set('perPage', String(requestPerPage));
+                    nextParams.set('sort', requestSort);
+                    nextParams.set('includeBanners', '0');
+                    nextParams.set('includeCount', '0');
+                    if (trimmedSearch) nextParams.set('q', trimmedSearch);
+                    void fetch(edgeFunctionUrl('store-api', `catalog?${nextParams.toString()}`), { headers })
+                        .then(async (response) => {
+                            if (!response.ok) return;
+                            const data = await response.json();
+                            const nextItems = Array.isArray(data.items) ? data.items : [];
+                            const hydratedNextItems = nextItems.map((item) => {
+                                if (retryUnlockedBankIdsRef.current.has(item.bank_id) && item.status === 'rejected') {
+                                    return { ...item, status: 'buy' as StoreItem['status'], rejection_message: null };
+                                }
+                                return item;
+                            });
+                            const nextMaintenance: StoreMaintenanceState = data?.maintenance?.enabled
+                                ? {
+                                    enabled: true,
+                                    message: typeof data?.maintenance?.message === 'string' && data.maintenance.message.trim()
+                                        ? data.maintenance.message.trim()
+                                        : null,
+                                }
+                                : fetchedMaintenance;
+                            storeViewResponseCache.set(nextSessionViewCacheKey, {
+                                savedAt: Date.now(),
+                                requestPage: nextPage,
+                                requestPerPage,
+                                total: Math.floor(fetchedTotal),
+                                totalPages: normalizedTotalPages,
+                                items: hydratedNextItems,
+                                maintenance: nextMaintenance,
+                                banners: nextBanners,
+                            });
+                            preloadStoreThumbnails(hydratedNextItems);
+                            pushDownloadDebugLog('info', 'catalog_next_page_prefetched', {
+                                page: nextPage,
+                                itemCount: hydratedNextItems.length,
+                                sort: storeSort,
+                                query: trimmedSearch || null,
+                            });
+                        })
+                        .catch((error) => {
+                            pushDownloadDebugLog('error', 'catalog_next_page_prefetch_failed', {
+                                page: nextPage,
+                                sort: storeSort,
+                                query: trimmedSearch || null,
+                                message: error instanceof Error ? error.message : String(error),
+                            });
+                        });
+                }
+            }
         } catch (error) {
             pushDownloadDebugLog('error', 'catalog_load_exception', {
                 sort: storeSort,

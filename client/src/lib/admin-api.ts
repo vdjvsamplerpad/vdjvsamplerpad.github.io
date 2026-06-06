@@ -22,6 +22,10 @@ export interface AdminUser {
   last_sign_in_device_name: string | null;
   last_sign_in_platform: string | null;
   last_sign_in_app_version: string | null;
+  attendance_days_total?: number | null;
+  attendance_days_30?: number | null;
+  attendance_days_7?: number | null;
+  today_heartbeat_count?: number | null;
   banned_until: string | null;
   is_banned: boolean;
 }
@@ -68,8 +72,25 @@ export interface AdminAccountUpgradeRequest {
   quote_price_php_snapshot: number;
   receipt_reference?: string | null;
   rejection_message?: string | null;
+  is_refunded?: boolean;
+  refunded_at?: string | null;
+  refunded_by?: string | null;
+  pending_email_status?: string | null;
+  pending_email_error?: string | null;
+  decision_email_status?: string | null;
+  decision_email_error?: string | null;
   reviewed_by?: string | null;
   reviewed_at?: string | null;
+  ocr_reference_no?: string | null;
+  ocr_payer_name?: string | null;
+  ocr_amount_php?: number | null;
+  ocr_recipient_number?: string | null;
+  ocr_provider?: string | null;
+  ocr_scanned_at?: string | null;
+  ocr_status?: 'detected' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'failed' | 'unavailable' | 'skipped' | null;
+  ocr_error_code?: string | null;
+  decision_source?: 'manual' | 'automation' | null;
+  automation_result?: string | null;
   created_at: string;
 }
 
@@ -148,6 +169,12 @@ export interface ActiveSessionRow {
   browser?: string | null;
   os?: string | null;
   last_seen_at: string;
+  attendance_date?: string | null;
+  first_seen_today_at?: string | null;
+  today_heartbeat_count?: number | null;
+  attendance_days_7?: number | null;
+  attendance_days_30?: number | null;
+  attendance_days_total?: number | null;
 }
 
 export interface AdminActiveSessionCounts {
@@ -256,6 +283,8 @@ export interface AdminDashboardOverview {
   queues: {
     accountRequests: Array<{
       id: string;
+      request_type?: 'legacy_registration' | 'account_upgrade';
+      target_tier?: 'pro' | 'pro_max' | null;
       display_name: string;
       email: string;
       payment_channel: string;
@@ -494,6 +523,19 @@ export interface AdminInstallerLicense {
   updatedAt: string | null;
   entitlements: string[];
   completedProducts: string[];
+  completedProductDetails?: AdminInstallerCompletionDetail[];
+}
+
+export type InstallerInstallMode = 'integrated' | 'portable' | 'unknown';
+
+export interface AdminInstallerCompletionDetail {
+  productCode: string;
+  installMode?: InstallerInstallMode | string | null;
+  portableMode?: boolean | null;
+  targetPath?: string | null;
+  completedAt?: string | null;
+  machineId?: string | null;
+  installId?: string | null;
 }
 
 export interface AdminInstallerEvent {
@@ -505,6 +547,13 @@ export interface AdminInstallerEvent {
   customerName: string | null;
   codeHint: string | null;
   payload: Record<string, unknown>;
+  productCode?: string | null;
+  completedProducts?: string[];
+  installMode?: InstallerInstallMode | string | null;
+  portableMode?: boolean | null;
+  targetPath?: string | null;
+  machineId?: string | null;
+  installId?: string | null;
 }
 
 export interface InstallerBuyProduct {
@@ -689,7 +738,7 @@ export const adminApi = {
     q?: string;
     page?: number;
     perPage?: number;
-    sortBy?: 'display_name' | 'email' | 'created_at' | 'last_sign_in_at' | 'last_sign_in_device_name' | 'last_sign_in_platform' | 'last_sign_in_app_version' | 'ban_status';
+    sortBy?: 'display_name' | 'email' | 'created_at' | 'last_sign_in_at' | 'last_sign_in_device_name' | 'last_sign_in_platform' | 'last_sign_in_app_version' | 'attendance_days_total' | 'ban_status';
     sortDir?: SortDirection;
     includeAdmins?: boolean;
   }) {
@@ -785,8 +834,16 @@ export const adminApi = {
     return callAdmin<{ requests: AdminAccountUpgradeRequest[]; total: number; page: number; perPage: number; totalPages: number }>('GET', `account-upgrades${query}`);
   },
 
-  async accountUpgradeDecision(requestId: string, action: 'approve' | 'reject', rejectionMessage?: string) {
-    return callAdmin<{ requestId: string; status: 'approved' | 'rejected' }>('POST', `account-upgrades/${requestId}/decision`, { action, rejectionMessage });
+  async accountUpgradeDecision(requestId: string, action: 'approve' | 'reject' | 'refund', rejectionMessage?: string) {
+    return callAdmin<{
+      requestId: string;
+      status: 'approved' | 'rejected';
+      refunded?: boolean;
+      refunded_at?: string | null;
+      refunded_by?: string | null;
+      decision_email_status?: string | null;
+      decision_email_error?: string | null;
+    }>('POST', `account-upgrades/${requestId}/decision`, { action, rejectionMessage });
   },
 
   async listVoucherCampaigns() {
@@ -989,7 +1046,7 @@ export const adminApi = {
     status?: 'all' | 'pending' | 'approved' | 'rejected';
     paymentChannel?: 'all' | 'image_proof' | 'gcash_manual' | 'maya_manual';
     decisionSource?: 'all' | 'manual' | 'automation';
-    automationResult?: 'all' | 'approved' | 'manual_review_disabled' | 'outside_window' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'duplicate_reference' | 'wallet_number_mismatch' | 'amount_mismatch' | 'ocr_failed' | 'approval_error' | 'not_image_proof';
+    automationResult?: 'all' | 'approved' | 'manual_review_disabled' | 'outside_window' | 'missing_reference' | 'reference_mismatch' | 'missing_amount' | 'missing_recipient_number' | 'duplicate_reference' | 'wallet_number_mismatch' | 'amount_mismatch' | 'ocr_failed' | 'approval_error' | 'not_image_proof';
     ocrStatus?: 'all' | 'detected' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'failed' | 'unavailable' | 'skipped';
   }) {
     const query = toQueryString({
@@ -1367,7 +1424,7 @@ export const adminApi = {
     status?: 'all' | 'pending' | 'approved' | 'rejected';
     channel?: 'all' | 'image_proof' | 'gcash_manual' | 'maya_manual';
     decision?: 'all' | 'manual' | 'automation';
-    automation?: 'all' | 'approved' | 'manual_review_disabled' | 'outside_window' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'duplicate_reference' | 'wallet_number_mismatch' | 'amount_mismatch' | 'ocr_failed' | 'approval_error' | 'not_image_proof';
+    automation?: 'all' | 'approved' | 'manual_review_disabled' | 'outside_window' | 'missing_reference' | 'reference_mismatch' | 'missing_amount' | 'missing_recipient_number' | 'duplicate_reference' | 'wallet_number_mismatch' | 'amount_mismatch' | 'ocr_failed' | 'approval_error' | 'not_image_proof';
     ocrStatus?: 'all' | 'detected' | 'missing_reference' | 'missing_amount' | 'missing_recipient_number' | 'failed' | 'unavailable' | 'skipped';
     version?: 'all' | InstallerVersionKey;
     skuCode?: string;

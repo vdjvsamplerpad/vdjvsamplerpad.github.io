@@ -6,7 +6,13 @@ import {
     StoreDownloadDebugEntry,
     StoreDownloadDebugLevel,
 } from '@/components/sampler/onlineStore.types';
-import { buildSupportLogText, buildSanitizedSupportSection, copySupportLogText, exportSupportLogText } from '@/lib/supportDiagnostics';
+import {
+    buildSupportLogText,
+    buildSanitizedSupportSection,
+    copySupportLogText,
+    exportSupportLogText,
+    getSupportLogExportActionLabel,
+} from '@/lib/supportDiagnostics';
 
 type PersistedCrashActiveOperation = {
     operation: 'bankstore_download' | 'bank_import';
@@ -149,10 +155,11 @@ export function useOnlineStoreDebugLog({
     const sessionIdRef = React.useRef(createSessionId());
     const entriesRef = React.useRef<StoreDownloadDebugEntry[]>([]);
     const activeOperationRef = React.useRef<PersistedCrashActiveOperation | null>(null);
-    const storageKeys = React.useMemo(() => ({
-        live: getLiveStateStorageKey(effectiveUserId),
-        recovered: getRecoveredReportStorageKey(effectiveUserId),
-    }), [effectiveUserId]);
+    const pageHideAtRef = React.useRef<number | null>(null);
+    const supportLogExportActionLabel = React.useMemo(() => getSupportLogExportActionLabel('Log'), []);
+    const supportReportExportActionLabel = getSupportLogExportActionLabel('Report');
+    const storageLiveKey = getLiveStateStorageKey(effectiveUserId);
+    const storageRecoveredKey = getRecoveredReportStorageKey(effectiveUserId);
 
     const persistLiveState = React.useCallback((overrides?: Partial<PersistedStoreCrashState>) => {
         if (!enabled) return;
@@ -161,20 +168,19 @@ export function useOnlineStoreDebugLog({
             sessionId: sessionIdRef.current,
             userId: effectiveUserId,
             updatedAt: Date.now(),
-            pageHideAt: null,
+            pageHideAt: pageHideAtRef.current,
             activeOperation: activeOperationRef.current,
             entries: entriesRef.current,
             ...(overrides || {}),
         };
-        writeJsonStorage(storageKeys.live, nextState);
-    }, [effectiveUserId, enabled, storageKeys.live]);
+        writeJsonStorage(storageLiveKey, nextState);
+    }, [effectiveUserId, enabled, storageLiveKey]);
 
     const setActiveOperation = React.useCallback((nextOperation: PersistedCrashActiveOperation | null) => {
         activeOperationRef.current = nextOperation;
         persistLiveState({
             activeOperation: nextOperation,
             updatedAt: nextOperation?.lastUpdatedAt || Date.now(),
-            pageHideAt: null,
         });
     }, [persistLiveState]);
 
@@ -206,14 +212,17 @@ export function useOnlineStoreDebugLog({
     }, [enabled]);
 
     const markPageHide = React.useCallback((reason: string) => {
-        persistLiveState({
-            pageHideAt: Date.now(),
-            updatedAt: Date.now(),
-        });
+        const pageHideAt = Date.now();
+        pageHideAtRef.current = pageHideAt;
         pushDownloadDebugLog('info', 'session_hidden', { reason });
+        persistLiveState({
+            pageHideAt,
+            updatedAt: pageHideAt,
+        });
     }, [persistLiveState, pushDownloadDebugLog]);
 
     const clearPageHide = React.useCallback((reason: string) => {
+        pageHideAtRef.current = null;
         persistLiveState({
             pageHideAt: null,
             updatedAt: Date.now(),
@@ -272,30 +281,21 @@ export function useOnlineStoreDebugLog({
         }
     }, [downloadSupportLogText, enabled, showToast]);
 
-    const exportDownloadDebugLog = React.useCallback(() => {
+    const exportDownloadDebugLog = React.useCallback(async () => {
         if (!enabled) return;
         try {
-            const fileName = `store-download-debug-${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
-            const blob = new Blob([downloadDebugText], { type: 'text/plain;charset=utf-8' });
-            const objectUrl = URL.createObjectURL(blob);
-            const anchor = document.createElement('a');
-            anchor.href = objectUrl;
-            anchor.download = fileName;
-            document.body.appendChild(anchor);
-            anchor.click();
-            anchor.remove();
-            URL.revokeObjectURL(objectUrl);
-            showToast('Store debug log exported.', 'success');
+            const result = await exportSupportLogText(downloadDebugText, 'store-download-debug');
+            showToast(result.message, 'success');
         } catch {
             showToast('Failed to export store debug log.', 'error');
         }
     }, [downloadDebugText, enabled, showToast]);
 
-    const exportDownloadSupportLog = React.useCallback(() => {
+    const exportDownloadSupportLog = React.useCallback(async () => {
         if (!enabled) return;
         try {
-            exportSupportLogText(downloadSupportLogText, 'store-download-support');
-            showToast('Support log exported.', 'success');
+            const result = await exportSupportLogText(downloadSupportLogText, 'store-download-support');
+            showToast(result.message, 'success');
         } catch {
             showToast('Failed to export support log.', 'error');
         }
@@ -318,11 +318,11 @@ export function useOnlineStoreDebugLog({
         }
     }, [enabled, recoveredDownloadCrash, showToast]);
 
-    const exportRecoveredSupportLog = React.useCallback(() => {
+    const exportRecoveredSupportLog = React.useCallback(async () => {
         if (!enabled || !recoveredDownloadCrash) return;
         try {
-            exportSupportLogText(recoveredDownloadCrash.supportLogText, 'store-download-recovered');
-            showToast('Recovered crash report exported.', 'success');
+            const result = await exportSupportLogText(recoveredDownloadCrash.supportLogText, 'store-download-recovered');
+            showToast(result.message, 'success');
         } catch {
             showToast('Failed to export recovered crash report.', 'error');
         }
@@ -330,8 +330,8 @@ export function useOnlineStoreDebugLog({
 
     const dismissRecoveredDownloadCrash = React.useCallback(() => {
         setRecoveredDownloadCrash(null);
-        removeStorageKey(storageKeys.recovered);
-    }, [storageKeys.recovered]);
+        removeStorageKey(storageRecoveredKey);
+    }, [storageRecoveredKey]);
 
     const sendRecoveredCrashReport = React.useCallback(async () => {
         if (!enabled || !recoveredDownloadCrash || sendingRecoveredReport) return;
@@ -372,11 +372,11 @@ export function useOnlineStoreDebugLog({
             setSendingRecoveredReport(false);
             return;
         }
-        const existingRecovered = readJsonStorage<RecoveredDownloadCrash>(storageKeys.recovered);
+        const existingRecovered = readJsonStorage<RecoveredDownloadCrash>(storageRecoveredKey);
         if (existingRecovered?.supportLogText) {
             setRecoveredDownloadCrash(existingRecovered);
         }
-        const previousState = readJsonStorage<PersistedStoreCrashState>(storageKeys.live);
+        const previousState = readJsonStorage<PersistedStoreCrashState>(storageLiveKey);
         if (
             previousState
             && previousState.sessionId !== sessionIdRef.current
@@ -387,9 +387,9 @@ export function useOnlineStoreDebugLog({
         ) {
             const recovered = buildRecoveredCrashFromState(previousState);
             setRecoveredDownloadCrash(recovered);
-            writeJsonStorage(storageKeys.recovered, recovered);
+            writeJsonStorage(storageRecoveredKey, recovered);
         }
-        writeJsonStorage(storageKeys.live, {
+        writeJsonStorage(storageLiveKey, {
             version: 1,
             sessionId: sessionIdRef.current,
             userId: effectiveUserId,
@@ -398,7 +398,8 @@ export function useOnlineStoreDebugLog({
             activeOperation: null,
             entries: [],
         } satisfies PersistedStoreCrashState);
-    }, [effectiveUserId, enabled, storageKeys.live, storageKeys.recovered]);
+        pageHideAtRef.current = null;
+    }, [effectiveUserId, enabled, storageLiveKey, storageRecoveredKey]);
 
     React.useEffect(() => {
         if (!enabled) return;
@@ -579,6 +580,7 @@ export function useOnlineStoreDebugLog({
         entriesRef.current = [];
         downloadDebugSeqRef.current = 0;
         activeOperationRef.current = null;
+        pageHideAtRef.current = null;
         setRecoveredDownloadCrash(null);
         setSendingRecoveredReport(false);
     }, [enabled]);
@@ -589,6 +591,8 @@ export function useOnlineStoreDebugLog({
         downloadSupportLogText,
         recoveredDownloadCrash,
         sendingRecoveredReport,
+        supportLogExportActionLabel,
+        supportReportExportActionLabel,
         pushDownloadDebugLog,
         copyDownloadDebugLog,
         copyDownloadSupportLog,

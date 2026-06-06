@@ -253,7 +253,7 @@ export interface AudioInstance {
   isPlaying: boolean;
   progress: number;
   triggerMode: 'toggle' | 'hold' | 'stutter' | 'unmute';
-  playbackMode: 'once' | 'loop' | 'stopper';
+  playbackMode: 'once' | 'loop' | 'stopper' | 'bank_stopper';
   startTimeMs: number;
   endTimeMs: number;
   fadeInMs: number;
@@ -316,7 +316,7 @@ export interface GlobalPlaybackManager {
     endMs: number;
     playStartTime: number;
     tempoRate?: number;
-    playbackMode?: 'once' | 'loop' | 'stopper';
+    playbackMode?: 'once' | 'loop' | 'stopper' | 'bank_stopper';
     timingSource?: 'date' | 'performance';
     channelId?: number | null
   }[];
@@ -331,7 +331,7 @@ export interface GlobalPlaybackManager {
     endMs: number;
     playStartTime: number;
     tempoRate?: number;
-    playbackMode?: 'once' | 'loop' | 'stopper';
+    playbackMode?: 'once' | 'loop' | 'stopper' | 'bank_stopper';
     timingSource?: 'date' | 'performance'
   }[];
   getChannelStates: () => DeckChannelState[];

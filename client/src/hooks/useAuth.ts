@@ -6,15 +6,20 @@ import { clearUserBankCache, refreshAccessibleBanksCache } from '@/lib/bank-util
 import {
   type AccountCapabilitySnapshot,
   fallbackCapabilitiesForProfile,
+  normalizeAccountCapabilitySnapshot,
   readCachedCapabilities,
   writeCachedCapabilities,
 } from '@/lib/account-capabilities'
 import {
+  claimCurrentSession,
   ensureActivityRuntime,
+  type SessionConflictDetails,
+  type SessionClaimDeviceInfo,
   SessionConflictError,
   checkSessionValidity,
   logActivityEvent,
   logSignoutActivity,
+  previewSessionClaim,
   sendActivityHeartbeat,
   sendHeartbeatBeacon,
 } from '@/lib/activityLogger'
@@ -26,11 +31,11 @@ const PROFILE_CACHE_KEY = 'vdjv-cached-profile';
 const BAN_CACHE_KEY = 'vdjv-cached-ban';
 const OFFLINE_SIGNOUT_PENDING_KEY = 'vdjv-offline-signout-pending';
 const SESSION_CONFLICT_REASON_KEY = 'vdjv-session-conflict-reason';
+const SESSION_CONFLICT_DETAILS_KEY = 'vdjv-session-conflict-details';
 const SESSION_ENFORCEMENT_EVENT_KEY = 'vdjv-session-enforcement-event';
 const HIDE_PROTECTED_BANKS_KEY = 'vdjv-hide-protected-banks';
 const PASSWORD_RECOVERY_MODE_KEY = 'vdjv-password-recovery-mode';
 const GOOGLE_OAUTH_LOGIN_PENDING_KEY = 'vdjv-google-oauth-login-pending';
-const GOOGLE_OAUTH_LOGIN_LOGGED_PREFIX = 'vdjv-google-oauth-login-logged:';
 const PROFILE_SELECT = 'id, role, display_name, account_tier, tier_source, tier_updated_at, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap, welcome_email_sent_at';
 const AUTH_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 const GOOGLE_OAUTH_LOGIN_PENDING_MAX_AGE_MS = 10 * 60 * 1000;
@@ -107,6 +112,15 @@ export interface Profile {
   welcome_email_sent_at?: string | null
 }
 
+export type PendingSessionClaim = {
+  userId: string
+  email: string | null
+  message: string
+  currentDevice: SessionClaimDeviceInfo | null
+  requestedAt: number
+  provider: string | null
+}
+
 interface AuthState {
   user: User | null
   profile: Profile | null
@@ -116,10 +130,18 @@ interface AuthState {
     email: string | null
   }
   sessionConflictReason: string | null
+  sessionConflictDetails: SessionConflictDetails | null
+  pendingSessionClaim: PendingSessionClaim | null
   banned: boolean
   offlineTrustedSession: boolean
   lastSessionValidationAt: number | null
   capabilities: AccountCapabilitySnapshot
+}
+
+export type AuthAccessTokenResult = {
+  token: string | null
+  reason?: 'auth_loading' | 'offline_session' | 'session_conflict' | 'session_sync_required' | 'not_authenticated'
+  message?: string
 }
 
 // Helper to get cached user from localStorage (for offline/sync issues)
@@ -187,15 +209,19 @@ function cacheBanState(banned: boolean): void {
 
 interface AuthActions {
   signIn: (email: string, password: string) => Promise<{ error?: AuthError | null; data?: { user: User | null } }>
+  continueOffline: () => Promise<{ error?: AuthError | null; data?: { user: User | null } }>
   signInWithGoogle: (redirectTo?: string) => Promise<{ error?: AuthError | null }>
   signOut: () => Promise<{ error?: AuthError | null }>
-  deleteAccount: () => Promise<{ error?: AuthError | null }>
+  getAuthenticatedAccessToken: () => Promise<AuthAccessTokenResult>
+  deleteAccount: (options: { phrase: string; acknowledge: boolean; password?: string; otp?: string }) => Promise<{ error?: AuthError | null }>
   refreshAccountCapabilities: () => Promise<AccountCapabilitySnapshot>
   requestPasswordReset: (email: string) => Promise<{ error?: AuthError | null }>
   verifyPasswordResetCode: (email: string, code: string) => Promise<{ error?: AuthError | null }>
   updatePassword: (newPassword: string) => Promise<{ error?: AuthError | null }>
   updateDisplayName: (displayName: string) => Promise<{ error?: AuthError | null; profile?: Profile | null }>
   clearSessionConflictReason: () => void
+  confirmSessionClaim: () => Promise<{ error?: AuthError | null }>
+  cancelSessionClaim: () => Promise<void>
 }
 
 type AuthContextValue = AuthState & AuthActions
@@ -245,6 +271,27 @@ const setCachedSessionConflictReason = (reason: string | null): void => {
   }
 };
 
+const getCachedSessionConflictDetails = (): SessionConflictDetails | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(SESSION_CONFLICT_DETAILS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed as SessionConflictDetails : null;
+  } catch {
+    return null;
+  }
+};
+
+const setCachedSessionConflictDetails = (details: SessionConflictDetails | null): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!details) localStorage.removeItem(SESSION_CONFLICT_DETAILS_KEY);
+    else localStorage.setItem(SESSION_CONFLICT_DETAILS_KEY, JSON.stringify(details));
+  } catch {
+  }
+};
+
 const canTrustCachedOfflineUser = (): boolean => {
   if (!getCachedUser()?.id) return false
   if (getCachedBan()) return false
@@ -252,6 +299,8 @@ const canTrustCachedOfflineUser = (): boolean => {
   if (getCachedSessionConflictReason()) return false
   return true
 }
+
+export const hasTrustedCachedOfflineUser = (): boolean => canTrustCachedOfflineUser()
 
 const emitSessionEnforcementEvent = (reason: string): void => {
   if (typeof window === 'undefined') return;
@@ -354,8 +403,9 @@ async function loadAccountCapabilities(userId: string, profile: Profile | null):
     const accountData = payload?.data && typeof payload.data === 'object' ? payload.data : payload
     const capabilities = accountData?.capabilities as AccountCapabilitySnapshot | undefined
     if (!capabilities?.features || !capabilities?.limits) return cached || fallbackCapabilitiesForProfile(profile)
-    writeCachedCapabilities(userId, capabilities)
-    return capabilities
+    const normalizedCapabilities = normalizeAccountCapabilitySnapshot(capabilities, fallbackCapabilitiesForProfile(profile))
+    writeCachedCapabilities(userId, normalizedCapabilities)
+    return normalizedCapabilities
   } catch {
     return cached || fallbackCapabilitiesForProfile(profile)
   }
@@ -378,6 +428,8 @@ function useAuthValue(): AuthProviderValue {
       email: null,
     },
     sessionConflictReason: getCachedSessionConflictReason(),
+    sessionConflictDetails: getCachedSessionConflictDetails(),
+    pendingSessionClaim: null,
     banned: cachedBan,
     offlineTrustedSession: Boolean(cachedUser && (typeof navigator !== 'undefined' ? !navigator.onLine : false)),
     lastSessionValidationAt: null,
@@ -389,10 +441,16 @@ function useAuthValue(): AuthProviderValue {
   const sessionConflictLockedRef = React.useRef(false)
   const signOutInProgressRef = React.useRef(false)
   const authTransitionStatusRef = React.useRef<AuthState['authTransition']['status']>('idle')
+  const stateRef = React.useRef(state)
+  const fetchSessionAndProfileRef = React.useRef<((session: Session | null) => Promise<void>) | null>(null)
+  const sessionClaimAlreadyConfirmedUserIdRef = React.useRef<string | null>(null)
+  const pendingSessionClaimRef = React.useRef<PendingSessionClaim | null>(null)
 
   React.useEffect(() => {
+    stateRef.current = state
     authTransitionStatusRef.current = state.authTransition.status
-  }, [state.authTransition.status])
+    pendingSessionClaimRef.current = state.pendingSessionClaim
+  }, [state])
 
   React.useEffect(() => {
     if (state.user) return
@@ -408,37 +466,10 @@ function useAuthValue(): AuthProviderValue {
   }, [])
 
   const lastAnalyticsUserIdRef = React.useRef<string | null>(null)
-  const lastGoogleOAuthLoginLoggedRef = React.useRef<string | null>(null)
 
-  const logGoogleOAuthLoginIfPending = React.useCallback((authUser: User) => {
-    if (!authUser?.id || !isGoogleOAuthLoginPending()) return
-    const provider = getAuthProvider(authUser) || 'google'
-    const logKey = `${GOOGLE_OAUTH_LOGIN_LOGGED_PREFIX}${authUser.id}:${provider}`
-    if (lastGoogleOAuthLoginLoggedRef.current === logKey) return
-
-    try {
-      if (typeof window !== 'undefined' && window.sessionStorage.getItem(logKey) === '1') {
-        setGoogleOAuthLoginPending(false)
-        return
-      }
-      if (typeof window !== 'undefined') {
-        window.sessionStorage.setItem(logKey, '1')
-      }
-    } catch {
-    }
-
-    lastGoogleOAuthLoginLoggedRef.current = logKey
-    setGoogleOAuthLoginPending(false)
-    void logActivityEvent({
-      eventType: 'auth.login',
-      status: 'success',
-      userId: authUser.id,
-      email: authUser.email || null,
-      meta: {
-        source: 'useAuth.googleOAuth',
-        provider,
-      },
-    }).catch(() => {})
+  const setPendingSessionClaim = React.useCallback((claim: PendingSessionClaim | null) => {
+    pendingSessionClaimRef.current = claim
+    setState((s) => (s.pendingSessionClaim === claim ? s : { ...s, pendingSessionClaim: claim }))
   }, [])
 
   React.useEffect(() => {
@@ -464,9 +495,18 @@ function useAuthValue(): AuthProviderValue {
     setState((s) => (s.banned === banned ? s : { ...s, banned }))
   }, [])
 
-  const setSessionConflictReason = React.useCallback((reason: string | null) => {
+  const setSessionConflictReason = React.useCallback((reason: string | null, details: SessionConflictDetails | null = null) => {
     setCachedSessionConflictReason(reason)
-    setState((s) => (s.sessionConflictReason === reason ? s : { ...s, sessionConflictReason: reason }))
+    setCachedSessionConflictDetails(reason ? details : null)
+    setState((s) => (
+      s.sessionConflictReason === reason && s.sessionConflictDetails === (reason ? details : null)
+        ? s
+        : {
+            ...s,
+            sessionConflictReason: reason,
+            sessionConflictDetails: reason ? details : null,
+          }
+    ))
   }, [])
 
   const setAuthTransition = React.useCallback((status: AuthState['authTransition']['status'], email: string | null = null) => {
@@ -501,6 +541,7 @@ function useAuthValue(): AuthProviderValue {
         email: null,
       },
       offlineTrustedSession: true,
+      pendingSessionClaim: null,
       capabilities: fallbackCapabilities,
     }))
     return true
@@ -523,6 +564,8 @@ function useAuthValue(): AuthProviderValue {
       },
       banned: true,
       offlineTrustedSession: false,
+      sessionConflictDetails: null,
+      pendingSessionClaim: null,
       lastSessionValidationAt: null,
     }))
     try {
@@ -531,14 +574,14 @@ function useAuthValue(): AuthProviderValue {
     }
   }, [])
 
-  const enforceSessionConflict = React.useCallback(async (reason?: string) => {
+  const enforceSessionConflict = React.useCallback(async (reason?: string, details?: SessionConflictDetails | null) => {
     if (sessionConflictLockedRef.current) return
     sessionConflictLockedRef.current = true
     const message = reason || 'This account was used on another device. You were signed out on this device.'
     const currentUser = state.user || getCachedUser()
     setPendingOfflineSignout(false)
     setHideProtectedBanksLock(true)
-    setSessionConflictReason(message)
+    setSessionConflictReason(message, details || null)
     emitSessionEnforcementEvent(message)
     cacheUserData(null, null)
     clearUserBankCache(currentUser?.id)
@@ -553,6 +596,7 @@ function useAuthValue(): AuthProviderValue {
         email: null,
       },
       offlineTrustedSession: false,
+      sessionConflictDetails: details || null,
       lastSessionValidationAt: null,
     }))
     try {
@@ -560,6 +604,107 @@ function useAuthValue(): AuthProviderValue {
     } catch {
     }
   }, [setSessionConflictReason, state.user])
+
+  const ensureSessionClaim = React.useCallback(async (authUser: User): Promise<'ready' | 'pending'> => {
+    if (!authUser?.id) return 'ready'
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return 'ready'
+
+    const provider = getAuthProvider(authUser) || (isGoogleOAuthLoginPending() ? 'google' : null)
+    const cachedUser = getCachedUser()
+    const shouldGate =
+      authTransitionStatusRef.current === 'signing_in' ||
+      isGoogleOAuthLoginPending() ||
+      !cachedUser?.id ||
+      cachedUser.id !== authUser.id
+
+    if (!shouldGate) return 'ready'
+
+    if (sessionClaimAlreadyConfirmedUserIdRef.current === authUser.id) {
+      sessionClaimAlreadyConfirmedUserIdRef.current = null
+      setGoogleOAuthLoginPending(false)
+      return 'ready'
+    }
+
+    const buildPending = (input: {
+      message?: string | null
+      currentDevice?: SessionClaimDeviceInfo | null
+    }): PendingSessionClaim => ({
+      userId: authUser.id,
+      email: authUser.email || null,
+      message: input.message || 'This account is already active on another device. Log it out first to continue here?',
+      currentDevice: input.currentDevice || null,
+      requestedAt: Date.now(),
+      provider,
+    })
+
+    try {
+      const preview = await previewSessionClaim({
+        userId: authUser.id,
+        email: authUser.email || null,
+        meta: {
+          source: 'useAuth.sessionClaim.preview',
+          provider,
+        },
+      })
+      if (preview.conflict || preview.requiresConfirmation) {
+        setPendingSessionClaim(buildPending({
+          message: preview.message,
+          currentDevice: preview.currentDevice,
+        }))
+        setState((s) => ({
+          ...s,
+          user: null,
+          profile: null,
+          loading: false,
+          authTransition: {
+            status: 'idle',
+            email: null,
+          },
+          offlineTrustedSession: false,
+          lastSessionValidationAt: null,
+        }))
+        authTransitionStatusRef.current = 'idle'
+        return 'pending'
+      }
+
+      const claim = await claimCurrentSession({
+        userId: authUser.id,
+        email: authUser.email || null,
+        force: false,
+        meta: {
+          source: 'useAuth.sessionClaim',
+          provider,
+          stalePreviousSession: preview.stale === true,
+        },
+      })
+      if (claim.conflict || claim.requiresConfirmation) {
+        setPendingSessionClaim(buildPending({
+          message: claim.message,
+          currentDevice: claim.currentDevice,
+        }))
+        setState((s) => ({
+          ...s,
+          user: null,
+          profile: null,
+          loading: false,
+          authTransition: {
+            status: 'idle',
+            email: null,
+          },
+          offlineTrustedSession: false,
+          lastSessionValidationAt: null,
+        }))
+        authTransitionStatusRef.current = 'idle'
+        return 'pending'
+      }
+      setPendingSessionClaim(null)
+      setGoogleOAuthLoginPending(false)
+      return 'ready'
+    } catch (error) {
+      if (isTransientNetworkError(error as any)) return 'ready'
+      throw error
+    }
+  }, [setPendingSessionClaim])
 
   const ensureProfile = React.useCallback(async (user: User) => {
     const { data: existing, error: selectErr } = await supabase
@@ -588,7 +733,7 @@ function useAuthValue(): AuthProviderValue {
         tier_source: 'signup',
         owned_bank_quota: 2,
         owned_bank_pad_cap: 25,
-        device_total_bank_cap: 4,
+        device_total_bank_cap: 10,
       }, { onConflict: 'id' })
       .select(PROFILE_SELECT)
       .single()
@@ -621,6 +766,7 @@ function useAuthValue(): AuthProviderValue {
             email: null,
           },
           offlineTrustedSession: false,
+          pendingSessionClaim: null,
           lastSessionValidationAt: null
         }))
         return
@@ -641,6 +787,7 @@ function useAuthValue(): AuthProviderValue {
               email: null,
             },
             offlineTrustedSession: false,
+            pendingSessionClaim: null,
             lastSessionValidationAt: null,
           }))
           return
@@ -667,6 +814,7 @@ function useAuthValue(): AuthProviderValue {
               email: null,
             },
             offlineTrustedSession: false,
+            pendingSessionClaim: null,
             lastSessionValidationAt: null
           }))
           return
@@ -685,6 +833,10 @@ function useAuthValue(): AuthProviderValue {
           }
         } else {
           setBannedState(false)
+        }
+        const sessionClaimStatus = await ensureSessionClaim(authUser)
+        if (sessionClaimStatus === 'pending') {
+          return
         }
         setHideProtectedBanksLock(false)
         setSessionConflictReason(null)
@@ -707,9 +859,9 @@ function useAuthValue(): AuthProviderValue {
                 email: null,
               },
               offlineTrustedSession: true,
+              pendingSessionClaim: null,
               capabilities: fallbackCapabilities,
             }))
-            logGoogleOAuthLoginIfPending(authUser)
           } else {
             cacheUserData(null, null)
             clearUserBankCache()
@@ -724,6 +876,7 @@ function useAuthValue(): AuthProviderValue {
                 email: null,
               },
               offlineTrustedSession: false,
+              pendingSessionClaim: null,
               lastSessionValidationAt: null
             }))
           }
@@ -741,10 +894,10 @@ function useAuthValue(): AuthProviderValue {
               email: null,
             },
             offlineTrustedSession: false,
+            pendingSessionClaim: null,
             lastSessionValidationAt: Date.now(),
             capabilities: resolvedCapabilities,
           }))
-          logGoogleOAuthLoginIfPending(authUser)
         }
         
         // Refresh accessible banks cache ONLY once per user session (not on every auth state change)
@@ -774,10 +927,12 @@ function useAuthValue(): AuthProviderValue {
             email: null,
           },
           offlineTrustedSession: false,
+          pendingSessionClaim: null,
           lastSessionValidationAt: null
         }))
       }
     }
+    fetchSessionAndProfileRef.current = fetchSessionAndProfile
 
     supabase.auth.getSession()
       .then(({ data: { session } }) => {
@@ -801,6 +956,7 @@ function useAuthValue(): AuthProviderValue {
             email: null,
           },
           offlineTrustedSession: false,
+          pendingSessionClaim: null,
           lastSessionValidationAt: null
         }))
       })
@@ -810,7 +966,7 @@ function useAuthValue(): AuthProviderValue {
     })
 
     return () => subscription.unsubscribe()
-  }, [ensureProfile, enforceBan, logGoogleOAuthLoginIfPending, setBannedState, setSessionConflictReason, trustCachedOfflineSession])
+  }, [ensureProfile, ensureSessionClaim, enforceBan, setBannedState, setSessionConflictReason, trustCachedOfflineSession])
 
   React.useEffect(() => {
     if (!state.user || state.banned) return
@@ -836,7 +992,7 @@ function useAuthValue(): AuthProviderValue {
         },
       }).catch((err) => {
         if (err instanceof SessionConflictError) {
-          void enforceSessionConflict(err.message)
+          void enforceSessionConflict(err.message, err.details)
           return
         }
         const message = String((err as any)?.message || err || '')
@@ -865,7 +1021,7 @@ function useAuthValue(): AuthProviderValue {
       })
       .catch((err) => {
         if (err instanceof SessionConflictError) {
-          void enforceSessionConflict(err.message)
+          void enforceSessionConflict(err.message, err.details)
         }
       })
 
@@ -889,7 +1045,7 @@ function useAuthValue(): AuthProviderValue {
         })
         .catch((err) => {
           if (err instanceof SessionConflictError) {
-            void enforceSessionConflict(err.message)
+            void enforceSessionConflict(err.message, err.details)
           }
         })
     }
@@ -933,7 +1089,7 @@ function useAuthValue(): AuthProviderValue {
         })
         .catch((err) => {
           if (err instanceof SessionConflictError) {
-            void enforceSessionConflict(err.message)
+            void enforceSessionConflict(err.message, err.details)
           }
         })
       refreshAccessibleBanksCache(state.user!.id).catch(() => {})
@@ -978,6 +1134,7 @@ function useAuthValue(): AuthProviderValue {
           email: null,
         },
         offlineTrustedSession: false,
+        pendingSessionClaim: null,
         lastSessionValidationAt: null
       }))
       void logSignoutActivity({
@@ -1025,7 +1182,8 @@ function useAuthValue(): AuthProviderValue {
       setHideProtectedBanksLock(false)
       setState((s) => ({
         ...s,
-        offlineTrustedSession: false
+        offlineTrustedSession: false,
+        pendingSessionClaim: null,
       }))
     } else {
       setAuthTransition('idle')
@@ -1035,6 +1193,35 @@ function useAuthValue(): AuthProviderValue {
     }
     return { error, data: { user: data.user } }
   }, [enforceBan, setAuthTransition, setSessionConflictReason])
+
+  const continueOffline = React.useCallback(async () => {
+    if (authTransitionStatusRef.current !== 'idle') {
+      return {
+        error: {
+          message: 'Authentication is already in progress. Please wait.',
+        } as AuthError,
+        data: { user: null },
+      }
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      return {
+        error: {
+          message: 'Offline access is only available when this device has no internet connection.',
+        } as AuthError,
+        data: { user: null },
+      }
+    }
+    const cachedUser = getCachedUser()
+    if (!cachedUser?.id || !trustCachedOfflineSession()) {
+      return {
+        error: {
+          message: 'No trusted offline account is saved on this device. Connect to the internet and sign in once.',
+        } as AuthError,
+        data: { user: null },
+      }
+    }
+    return { error: null, data: { user: cachedUser } }
+  }, [trustCachedOfflineSession])
 
   const signInWithGoogle = React.useCallback(async (redirectTo?: string) => {
     if (authTransitionStatusRef.current !== 'idle') {
@@ -1100,6 +1287,7 @@ function useAuthValue(): AuthProviderValue {
           email: null,
         },
         offlineTrustedSession: false,
+        pendingSessionClaim: null,
         lastSessionValidationAt: null,
       }))
       void logSignoutActivity({
@@ -1138,6 +1326,7 @@ function useAuthValue(): AuthProviderValue {
         email: null,
       },
       offlineTrustedSession: false,
+      pendingSessionClaim: null,
       lastSessionValidationAt: null,
     }))
     signOutInProgressRef.current = false
@@ -1154,7 +1343,77 @@ function useAuthValue(): AuthProviderValue {
     return { error }
   }, [setAuthTransition, state.user])
 
-  const deleteAccount = React.useCallback(async () => {
+  const getAuthenticatedAccessToken = React.useCallback(async (): Promise<AuthAccessTokenResult> => {
+    for (let waitAttempt = 0; waitAttempt < 10; waitAttempt += 1) {
+      const currentState = stateRef.current
+      if (!currentState.loading && authTransitionStatusRef.current === 'idle') break
+      await new Promise((resolve) => window.setTimeout(resolve, 160 + waitAttempt * 60))
+    }
+
+    const currentState = stateRef.current
+    if (currentState.loading || authTransitionStatusRef.current !== 'idle') {
+      return {
+        token: null,
+        reason: 'auth_loading',
+        message: 'Account session is still loading. Please wait a moment and try again.',
+      }
+    }
+    if (currentState.sessionConflictReason) {
+      return {
+        token: null,
+        reason: 'session_conflict',
+        message: currentState.sessionConflictReason,
+      }
+    }
+    if (currentState.pendingSessionClaim) {
+      return {
+        token: null,
+        reason: 'session_sync_required',
+        message: 'Confirm this login before submitting an upgrade request.',
+      }
+    }
+    if (currentState.offlineTrustedSession || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      return {
+        token: null,
+        reason: 'offline_session',
+        message: 'Reconnect before submitting an upgrade request.',
+      }
+    }
+
+    const expectedUserId = currentState.user?.id || getCachedUser()?.id || null
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }))
+      const sessionUserId = data.session?.user?.id || null
+      const token = data.session?.access_token || null
+      if (token && (!expectedUserId || sessionUserId === expectedUserId)) {
+        return { token }
+      }
+      if (attempt === 1 || attempt === 3) {
+        const refreshed = await supabase.auth.refreshSession().catch(() => null)
+        const refreshedUserId = refreshed?.data.session?.user?.id || null
+        const refreshedToken = refreshed?.data.session?.access_token || null
+        if (refreshedToken && (!expectedUserId || refreshedUserId === expectedUserId)) {
+          return { token: refreshedToken }
+        }
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 180 + attempt * 140))
+    }
+
+    if (expectedUserId) {
+      return {
+        token: null,
+        reason: 'session_sync_required',
+        message: 'Account session is still syncing. Please reopen upgrade pricing or refresh the app, then submit again.',
+      }
+    }
+    return {
+      token: null,
+      reason: 'not_authenticated',
+      message: 'Please sign in before submitting an upgrade request.',
+    }
+  }, [])
+
+  const deleteAccount = React.useCallback(async (options: { phrase: string; acknowledge: boolean; password?: string; otp?: string }) => {
     if (authTransitionStatusRef.current !== 'idle') {
       return {
         error: {
@@ -1169,6 +1428,42 @@ function useAuthValue(): AuthProviderValue {
         error: {
           message: 'You need to sign in first.',
         } as AuthError,
+      }
+    }
+
+    if (String(options.phrase || '').trim().toUpperCase() !== 'DELETE' || options.acknowledge !== true) {
+      return {
+        error: {
+          message: 'Deletion confirmation is incomplete.',
+        } as AuthError,
+      }
+    }
+
+    if (options.password) {
+      if (!activeUser.email) {
+        return {
+          error: {
+            message: 'Email is required to verify your password.',
+          } as AuthError,
+        }
+      }
+      const { data: reauthData, error: reauthError } = await supabase.auth.signInWithPassword({
+        email: activeUser.email,
+        password: options.password,
+      })
+      if (reauthError) {
+        return {
+          error: {
+            message: 'Current password is incorrect.',
+          } as AuthError,
+        }
+      }
+      if (reauthData.user?.id && reauthData.user.id !== activeUser.id) {
+        return {
+          error: {
+            message: 'Password verification did not match the signed-in account.',
+          } as AuthError,
+        }
       }
     }
 
@@ -1190,7 +1485,13 @@ function useAuthValue(): AuthProviderValue {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ confirm: true }),
+        body: JSON.stringify({
+          confirm: true,
+          phrase: options.phrase,
+          acknowledge: options.acknowledge,
+          password: options.password || undefined,
+          otp: options.otp || undefined,
+        }),
       })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
@@ -1213,8 +1514,10 @@ function useAuthValue(): AuthProviderValue {
           email: null,
         },
         sessionConflictReason: null,
+        sessionConflictDetails: null,
         banned: false,
         offlineTrustedSession: false,
+        pendingSessionClaim: null,
         lastSessionValidationAt: null,
         capabilities: fallbackCapabilitiesForProfile(null),
       }))
@@ -1366,14 +1669,98 @@ function useAuthValue(): AuthProviderValue {
     return { error: null, profile: nextProfile }
   }, [state.profile?.role, state.user])
 
+  const confirmSessionClaim = React.useCallback(async () => {
+    const pending = pendingSessionClaimRef.current
+    if (!pending?.userId) {
+      return { error: null }
+    }
+
+    setAuthTransition('signing_in', pending.email || null)
+    try {
+      const claim = await claimCurrentSession({
+        userId: pending.userId,
+        email: pending.email,
+        force: true,
+        expectedCurrentDeviceSessionId: pending.currentDevice?.deviceSessionId || null,
+        meta: {
+          source: 'useAuth.sessionClaim.confirm',
+          provider: pending.provider || null,
+        },
+      })
+      if (claim.conflict || claim.requiresConfirmation) {
+        const nextPending: PendingSessionClaim = {
+          ...pending,
+          message: claim.message || 'The active device changed while confirming. Review and try again.',
+          currentDevice: claim.currentDevice || pending.currentDevice,
+          requestedAt: Date.now(),
+        }
+        setPendingSessionClaim(nextPending)
+        setAuthTransition('idle')
+        return {
+          error: {
+            message: nextPending.message,
+          } as AuthError,
+        }
+      }
+
+      sessionClaimAlreadyConfirmedUserIdRef.current = pending.userId
+      setPendingSessionClaim(null)
+      setGoogleOAuthLoginPending(false)
+      const { data } = await supabase.auth.getSession()
+      await fetchSessionAndProfileRef.current?.(data.session)
+      return { error: null }
+    } catch (error) {
+      setAuthTransition('idle')
+      return {
+        error: {
+          message: error instanceof Error ? error.message : 'Could not continue this login. Please try again.',
+        } as AuthError,
+      }
+    }
+  }, [setAuthTransition, setPendingSessionClaim])
+
+  const cancelSessionClaim = React.useCallback(async () => {
+    const pending = pendingSessionClaimRef.current
+    setPendingSessionClaim(null)
+    setGoogleOAuthLoginPending(false)
+    setPasswordRecoveryMode(false)
+    sessionClaimAlreadyConfirmedUserIdRef.current = null
+    setAuthTransition('signing_out', pending?.email || null)
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+    } catch {
+    }
+    cacheUserData(null, null)
+    setHideProtectedBanksLock(true)
+    clearUserBankCache(pending?.userId)
+    cacheRefreshedForUserIdRef.current = null
+    setState((s) => ({
+      ...s,
+      user: null,
+      profile: null,
+      loading: false,
+      authTransition: {
+        status: 'idle',
+        email: null,
+      },
+      offlineTrustedSession: false,
+      pendingSessionClaim: null,
+      lastSessionValidationAt: null,
+      capabilities: fallbackCapabilitiesForProfile(null),
+    }))
+    authTransitionStatusRef.current = 'idle'
+  }, [setAuthTransition, setPendingSessionClaim])
+
   const clearSessionConflictReason = React.useCallback(() => {
     setSessionConflictReason(null)
   }, [setSessionConflictReason])
 
   const actions = React.useMemo<AuthActions>(() => ({
     signIn,
+    continueOffline,
     signInWithGoogle,
     signOut,
+    getAuthenticatedAccessToken,
     deleteAccount,
     refreshAccountCapabilities,
     requestPasswordReset,
@@ -1381,9 +1768,15 @@ function useAuthValue(): AuthProviderValue {
     updatePassword,
     updateDisplayName,
     clearSessionConflictReason,
+    confirmSessionClaim,
+    cancelSessionClaim,
   }), [
+    cancelSessionClaim,
     clearSessionConflictReason,
+    confirmSessionClaim,
+    continueOffline,
     deleteAccount,
+    getAuthenticatedAccessToken,
     requestPasswordReset,
     refreshAccountCapabilities,
     signIn,

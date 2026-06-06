@@ -17,13 +17,17 @@ export function useStorePreviewBadge(input: {
   showSignedInPreviewBanks?: boolean;
 }) {
   const { effectiveUser, profileId, showSignedInPreviewBanks = false } = input;
-  const { previewBanks } = useGuestStorePreviewBanks(effectiveUser);
+  const { previewBanks, storeUpdateSignature: guestStoreUpdateSignature } = useGuestStorePreviewBanks(effectiveUser);
   const [signedInPreviewBanks, setSignedInPreviewBanks] = React.useState<GuestStorePreviewBank[]>([]);
+  const [signedInStoreUpdateSignature, setSignedInStoreUpdateSignature] = React.useState('');
   const storePreviewItems = effectiveUser ? (showSignedInPreviewBanks ? signedInPreviewBanks : []) : previewBanks;
   const badgePreviewItems = effectiveUser ? signedInPreviewBanks : previewBanks;
   const storePreviewSignature = React.useMemo(
-    () => buildStorePreviewSignature(badgePreviewItems),
-    [badgePreviewItems],
+    () => {
+      const signature = effectiveUser ? signedInStoreUpdateSignature : guestStoreUpdateSignature;
+      return signature || buildStorePreviewSignature(badgePreviewItems);
+    },
+    [badgePreviewItems, effectiveUser, guestStoreUpdateSignature, signedInStoreUpdateSignature],
   );
   const storePreviewSeenKey = React.useMemo(
     () => `${STORE_PREVIEW_SEEN_KEY_PREFIX}${profileId || effectiveUser?.id || 'guest'}`,
@@ -54,8 +58,9 @@ export function useStorePreviewBadge(input: {
   }, [storePreviewSeenKey]);
 
   React.useEffect(() => {
-    if (!effectiveUser || !showSignedInPreviewBanks) {
+    if (!effectiveUser) {
       setSignedInPreviewBanks([]);
+      setSignedInStoreUpdateSignature('');
       return;
     }
     if (typeof navigator !== 'undefined' && !navigator.onLine) return;
@@ -63,9 +68,10 @@ export function useStorePreviewBadge(input: {
     let cancelled = false;
     const load = async () => {
       try {
-        const fetched = await fetchStorePreviewBanks();
+        const fetched = await fetchStorePreviewBanks(true);
         if (cancelled || fetched.maintenanceEnabled) return;
         setSignedInPreviewBanks(fetched.items);
+        setSignedInStoreUpdateSignature(fetched.updateSummary?.signature || buildStorePreviewSignature(fetched.items));
       } catch {
       }
     };
@@ -74,7 +80,7 @@ export function useStorePreviewBadge(input: {
     return () => {
       cancelled = true;
     };
-  }, [effectiveUser, showSignedInPreviewBanks]);
+  }, [effectiveUser]);
 
   const markStorePreviewSeen = React.useCallback(() => {
     if (!storePreviewSignature || typeof window === 'undefined') return;
