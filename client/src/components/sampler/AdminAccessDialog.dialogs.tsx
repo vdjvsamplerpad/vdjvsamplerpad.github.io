@@ -166,7 +166,7 @@ export function AdminAccessDialogModals({
   return (
     <>
       <Dialog open={create.open} onOpenChange={create.onOpenChange} useHistory={false}>
-        <DialogContent overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
+        <DialogContent depth="nested" overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <UserPlus className="w-4 h-4" />
@@ -195,7 +195,7 @@ export function AdminAccessDialogModals({
       </Dialog>
 
       <Dialog open={details.open} onOpenChange={details.onOpenChange} useHistory={false}>
-        <DialogContent overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120] max-w-5xl`}>
+        <DialogContent depth="nested" overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120] max-w-5xl`}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Users className="w-4 h-4" />
@@ -405,7 +405,7 @@ export function AdminAccessDialogModals({
       </Dialog>
 
       <Dialog open={ban.open} onOpenChange={ban.onOpenChange} useHistory={false}>
-        <DialogContent overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
+        <DialogContent depth="nested" overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
           <DialogHeader><DialogTitle>Ban User</DialogTitle></DialogHeader>
           <div className="space-y-2">
             <div><Label>Ban Duration (hours)</Label><Input type="number" min={1} max={8760} value={ban.hours} onChange={(event) => ban.onHoursChange(Math.max(1, Math.min(8760, Number(event.target.value) || 24)))} /></div>
@@ -420,6 +420,7 @@ export function AdminAccessDialogModals({
 
       <Dialog open={bankEdit.open} onOpenChange={bankEdit.onOpenChange} useHistory={false}>
         <DialogContent
+          depth="nested"
           overlayClassName="z-[110]"
           aria-describedby={undefined}
           className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120] max-w-4xl overflow-x-hidden p-4 sm:p-6`}
@@ -570,7 +571,7 @@ export function AdminAccessDialogModals({
       </Dialog>
 
       <Dialog open={bankAccess.open} onOpenChange={bankAccess.onOpenChange} useHistory={false}>
-        <DialogContent overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120] max-w-3xl`}>
+        <DialogContent depth="nested" overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120] max-w-3xl`}>
           <DialogHeader>
             <DialogTitle>Bank Access Users</DialogTitle>
           </DialogHeader>
@@ -618,7 +619,7 @@ export function AdminAccessDialogModals({
       <ConfirmationDialog open={confirmations.deleteBankOpen} onOpenChange={confirmations.onDeleteBankOpenChange} title="Archive Bank" description={`Archive "${confirmations.deleteBank?.title || 'this bank'}", unpublish it from store, and revoke all user access?`} confirmText="Archive Bank" variant="destructive" onConfirm={confirmations.onDeleteBankConfirm} theme={theme} />
 
       <Dialog open={storePublish.open} onOpenChange={storePublish.onOpenChange} useHistory={false}>
-        <DialogContent overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
+        <DialogContent depth="nested" overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
           <DialogHeader>
             <DialogTitle>Publish to Store</DialogTitle>
           </DialogHeader>
@@ -641,7 +642,7 @@ export function AdminAccessDialogModals({
       </Dialog>
 
       <Dialog open={Boolean(storeRequestReject.value)} onOpenChange={(nextOpen) => { if (!nextOpen) storeRequestReject.onChange(null); }} useHistory={false}>
-        <DialogContent overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
+        <DialogContent depth="nested" overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
           <DialogHeader>
             <DialogTitle>Decline Purchase Request</DialogTitle>
           </DialogHeader>
@@ -655,7 +656,7 @@ export function AdminAccessDialogModals({
       </Dialog>
 
       <Dialog open={Boolean(accountRequestReject.value)} onOpenChange={(nextOpen) => { if (!nextOpen) accountRequestReject.onChange(null); }} useHistory={false}>
-        <DialogContent overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
+        <DialogContent depth="nested" overlayClassName="z-[110]" aria-describedby={undefined} className={`${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'} z-[120]`}>
           <DialogHeader>
             <DialogTitle>Reject Account Registration</DialogTitle>
           </DialogHeader>

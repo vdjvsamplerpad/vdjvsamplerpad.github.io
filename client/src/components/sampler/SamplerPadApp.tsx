@@ -385,9 +385,27 @@ export function SamplerPadApp() {
   const isFreeAccountTier = capabilities.effectiveTier === 'free';
   const [accountDefaultBankAllowanceState, setAccountDefaultBankAllowanceState] = React.useState<DefaultBankPlayAllowanceState | null>(null);
   const accountDefaultBankAllowanceStateRef = React.useRef<DefaultBankPlayAllowanceState | null>(null);
+  const tierDefaultChannelCount = React.useMemo(() => {
+    const configuredMax = Number(capabilities.limits.deckCount);
+    const allowedMax = Number.isFinite(configuredMax)
+      ? Math.max(1, Math.min(8, Math.floor(configuredMax)))
+      : 8;
+    const configuredMin = Number(capabilities.limits.deckMinCount);
+    const allowedMin = Number.isFinite(configuredMin)
+      ? Math.max(1, Math.min(allowedMax, Math.floor(configuredMin)))
+      : 1;
+    const configuredDefault = Number(capabilities.limits.deckDefaultCount);
+    return Number.isFinite(configuredDefault)
+      ? Math.max(allowedMin, Math.min(allowedMax, Math.floor(configuredDefault)))
+      : undefined;
+  }, [
+    capabilities.limits.deckCount,
+    capabilities.limits.deckDefaultCount,
+    capabilities.limits.deckMinCount,
+  ]);
   const defaultSettings = React.useMemo(
-    () => createDefaultSettings(DECK_LAYOUT_SCHEMA_VERSION, samplerConfig),
-    [samplerConfig]
+    () => createDefaultSettings(DECK_LAYOUT_SCHEMA_VERSION, samplerConfig, tierDefaultChannelCount),
+    [samplerConfig, tierDefaultChannelCount]
   );
   const settingsSaveTimeoutRef = React.useRef<number | null>(null);
   const settingsLatestRef = React.useRef<AppSettings>(defaultSettings);

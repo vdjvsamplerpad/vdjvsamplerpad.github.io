@@ -851,6 +851,14 @@ export function SideMenu({
     }
   };
 
+  const handleNewBankClick = React.useCallback(() => {
+    if (!effectiveUser) {
+      requestLoginPrompt('Please sign in to create a new bank.');
+      return;
+    }
+    setShowCreateDialog(true);
+  }, [effectiveUser, requestLoginPrompt]);
+
   const handleEditBank = (bank: SamplerBank) => {
     setEditingBank(bank);
     setShowEditDialog(true);
@@ -1144,7 +1152,7 @@ export function SideMenu({
           >
             <div className={`grid gap-2 mb-2 ${canBrowseBankStore ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <Button
-                onClick={() => setShowCreateDialog(true)}
+                onClick={handleNewBankClick}
                 className={cn(menuButtonClass, 'vdjv-primary-action')}
               >
                 <Plus className="w-4 h-4 mr-1.5 shrink-0" />

@@ -1239,49 +1239,53 @@ const listActiveSessions = async (req: Request, admin: ReturnType<typeof createS
   const { data: admins } = await admin.from("profiles").select("id").eq("role", "admin");
   const adminIds = new Set((admins || []).map((a: any) => String(a.id || "")).filter(Boolean));
 
-  const attendanceTodayResp = await admin
-    .from("user_daily_attendance")
-    .select("user_id,latest_session_key,latest_email,latest_device_fingerprint,latest_device_name,latest_platform,latest_browser,latest_os,attendance_date,first_seen_at,last_seen_at,heartbeat_count")
-    .eq("attendance_date", todayDateKey)
-    .order("last_seen_at", { ascending: false })
-    .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT * 5);
-
-  let nonAdminActiveTodayRows: any[] = [];
-  if (!attendanceTodayResp.error) {
-    nonAdminActiveTodayRows = (attendanceTodayResp.data || [])
-      .map((row: any) => {
-        const userId = String(row?.user_id || "");
-        if (!userId) return null;
-        return {
-          session_key: asString(row?.latest_session_key, 80) || `attendance:${userId}:${todayDateKey}`,
-          user_id: userId,
-          email: asString(row?.latest_email, 320) || null,
-          device_fingerprint: asString(row?.latest_device_fingerprint, 256) || "unknown",
-          device_name: asString(row?.latest_device_name, 200) || null,
-          platform: asString(row?.latest_platform, 120) || null,
-          browser: asString(row?.latest_browser, 120) || null,
-          os: asString(row?.latest_os, 120) || null,
-          last_seen_at: asString(row?.last_seen_at, 80) || asString(row?.first_seen_at, 80) || null,
-          attendance_date: asString(row?.attendance_date, 20) || todayDateKey,
-          first_seen_today_at: asString(row?.first_seen_at, 80) || null,
-          today_heartbeat_count: Math.max(0, Math.floor(asFiniteNumber(row?.heartbeat_count))),
-        };
-      })
-      .filter(Boolean)
-      .filter((row: any) => !adminIds.has(String(row?.user_id || "")));
-  } else {
-    if (!isMissingAttendanceStorageError(attendanceTodayResp.error)) return fail(500, attendanceTodayResp.error.message);
-    const { data: activeTodayRows, error: activeTodayError } = await admin
+  const [attendanceTodayResp, activeTodaySessionsResp] = await Promise.all([
+    admin
+      .from("user_daily_attendance")
+      .select("user_id,latest_session_key,latest_email,latest_device_fingerprint,latest_device_name,latest_platform,latest_browser,latest_os,attendance_date,first_seen_at,last_seen_at,heartbeat_count")
+      .eq("attendance_date", todayDateKey)
+      .order("last_seen_at", { ascending: false })
+      .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT * 5),
+    admin
       .from("active_sessions")
       .select("session_key,user_id,email,device_fingerprint,device_name,platform,browser,os,last_seen_at")
       .gte("last_seen_at", startOfTodayManila.toISOString())
       .order("last_seen_at", { ascending: false })
-      .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT * 5);
-    if (activeTodayError) return fail(500, activeTodayError.message);
-    nonAdminActiveTodayRows = (activeTodayRows || []).filter((row: any) => {
-      const userId = String(row?.user_id || "");
-      return Boolean(userId) && !adminIds.has(userId);
-    });
+      .limit(DASHBOARD_ACTIVE_SESSION_SCAN_LIMIT * 5),
+  ]);
+  if (activeTodaySessionsResp.error) return fail(500, activeTodaySessionsResp.error.message);
+
+  let nonAdminActiveTodayRows: any[] = (activeTodaySessionsResp.data || []).filter((row: any) => {
+    const userId = String(row?.user_id || "");
+    return Boolean(userId) && !adminIds.has(userId);
+  });
+  if (!attendanceTodayResp.error) {
+    nonAdminActiveTodayRows = [
+      ...nonAdminActiveTodayRows,
+      ...(attendanceTodayResp.data || [])
+        .map((row: any) => {
+          const userId = String(row?.user_id || "");
+          if (!userId) return null;
+          return {
+            session_key: asString(row?.latest_session_key, 80) || `attendance:${userId}:${todayDateKey}`,
+            user_id: userId,
+            email: asString(row?.latest_email, 320) || null,
+            device_fingerprint: asString(row?.latest_device_fingerprint, 256) || "unknown",
+            device_name: asString(row?.latest_device_name, 200) || null,
+            platform: asString(row?.latest_platform, 120) || null,
+            browser: asString(row?.latest_browser, 120) || null,
+            os: asString(row?.latest_os, 120) || null,
+            last_seen_at: asString(row?.last_seen_at, 80) || asString(row?.first_seen_at, 80) || null,
+            attendance_date: asString(row?.attendance_date, 20) || todayDateKey,
+            first_seen_today_at: asString(row?.first_seen_at, 80) || null,
+            today_heartbeat_count: Math.max(0, Math.floor(asFiniteNumber(row?.heartbeat_count))),
+          };
+        })
+        .filter(Boolean)
+        .filter((row: any) => !adminIds.has(String(row?.user_id || ""))),
+    ];
+  } else {
+    if (!isMissingAttendanceStorageError(attendanceTodayResp.error)) return fail(500, attendanceTodayResp.error.message);
   }
 
   const activeTodayLatestByUser = new Map<string, any>();
@@ -2085,6 +2089,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     accountUpgradeQueueResp,
     storeQueueResp,
     trendRowsResp,
+    activeSessionTrendResp,
     storeRevenueRangeResp,
     accountRevenueRangeResp,
     accountUpgradeRevenueRangeResp,
@@ -2118,6 +2123,13 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .lte("created_at", windowEndIso)
       .order("created_at", { ascending: true })
       .limit(Math.max(100, Math.min(10000, DASHBOARD_SERIES_CAP))),
+    admin
+      .from("active_sessions")
+      .select("user_id,last_seen_at")
+      .gte("last_seen_at", windowStartIso)
+      .lte("last_seen_at", windowEndIso)
+      .order("last_seen_at", { ascending: true })
+      .limit(Math.max(1000, Math.min(50000, DASHBOARD_SERIES_CAP * 10))),
     admin
       .from("bank_purchase_requests")
       .select("created_at, price_php_snapshot")
@@ -2181,6 +2193,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   if (accountUpgradeQueueResp.error) return fail(500, accountUpgradeQueueResp.error.message);
   if (storeQueueResp.error) return fail(500, storeQueueResp.error.message);
   if (trendRowsResp.error) return fail(500, trendRowsResp.error.message);
+  if (activeSessionTrendResp.error) return fail(500, activeSessionTrendResp.error.message);
   if (storeRevenueRangeResp.error) return fail(500, storeRevenueRangeResp.error.message);
   if (accountRevenueRangeResp.error) return fail(500, accountRevenueRangeResp.error.message);
   if (accountUpgradeRevenueRangeResp.error) return fail(500, accountUpgradeRevenueRangeResp.error.message);
@@ -2355,6 +2368,20 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
 
   const trendRows = trendRowsResp.data || [];
   const dailyActiveUserSets = new Map<string, Set<string>>();
+  const addActiveUserToTrendBucket = (bucketKey: string, userIdInput: unknown) => {
+    const userId = String(userIdInput || "");
+    if (!userId || adminIds.has(userId) || !trendSeed.has(bucketKey)) return;
+    const activeSet = dailyActiveUserSets.get(bucketKey) || new Set<string>();
+    activeSet.add(userId);
+    dailyActiveUserSets.set(bucketKey, activeSet);
+  };
+  const addActiveSeenAtToTrend = (seenAtInput: unknown, userIdInput: unknown) => {
+    const userId = String(userIdInput || "");
+    if (!userId || adminIds.has(userId)) return;
+    const seenAt = new Date(String(seenAtInput || ""));
+    if (Number.isNaN(seenAt.getTime())) return;
+    addActiveUserToTrendBucket(toTrendBucketKey(seenAt), userId);
+  };
   if (attendanceTrendAvailable) {
     const nowManilaHour = new Date(now.getTime() + (ASIA_MANILA_UTC_OFFSET_MINUTES * 60 * 1000)).getUTCHours();
     const maxHourlyBucket = windowStartDate === toFixedOffsetDateKey(now, ASIA_MANILA_UTC_OFFSET_MINUTES)
@@ -2375,19 +2402,17 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
         const firstHour = Math.max(0, Math.min(23, shifted.getUTCHours()));
         for (let hour = firstHour; hour <= maxHourlyBucket; hour += 1) {
           const key = `${String(hour).padStart(2, "0")}:00`;
-          const activeSet = dailyActiveUserSets.get(key) || new Set<string>();
-          activeSet.add(userId);
-          dailyActiveUserSets.set(key, activeSet);
+          addActiveUserToTrendBucket(key, userId);
         }
       } else {
-        const bucket = trendSeed.get(attendanceDate);
-        if (!bucket) continue;
-        const activeSet = dailyActiveUserSets.get(attendanceDate) || new Set<string>();
-        activeSet.add(userId);
-        dailyActiveUserSets.set(attendanceDate, activeSet);
+        addActiveUserToTrendBucket(attendanceDate, userId);
       }
     }
   }
+  for (const row of activeSessionTrendResp.data || []) {
+    addActiveSeenAtToTrend((row as any).last_seen_at, (row as any).user_id);
+  }
+  const shouldSupplementActiveUsersFromActivityLogs = !attendanceTrendAvailable || attendanceTrendRows.length === 0;
   for (const row of trendRows) {
     const createdAt = new Date(String((row as any).created_at || ""));
     if (Number.isNaN(createdAt.getTime())) continue;
@@ -2396,10 +2421,8 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     if (!bucket) continue;
 
     const userId = String((row as any).user_id || "");
-    if (!attendanceTrendAvailable && userId && !adminIds.has(userId)) {
-      const activeSet = dailyActiveUserSets.get(date) || new Set<string>();
-      activeSet.add(userId);
-      dailyActiveUserSets.set(date, activeSet);
+    if (shouldSupplementActiveUsersFromActivityLogs && userId && !adminIds.has(userId)) {
+      addActiveUserToTrendBucket(date, userId);
     }
 
     const eventType = String((row as any).event_type || "");
@@ -2500,13 +2523,17 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       .map((row: any) => asString((row as any)?.issued_license_code, 120) || "")
       .filter(Boolean),
   ).size;
-  const activeTodayUsers = new Set(
-    (attendanceTodayAvailable
-      ? attendanceTodayRowsForCount
-      : (activeTodayRowsResp.data || []))
-      .map((row: any) => String(row?.user_id || ""))
-      .filter((userId) => Boolean(userId) && !adminIds.has(userId)),
-  ).size;
+  const activeTodayUserIds = new Set<string>();
+  const collectActiveTodayUserId = (row: any) => {
+    const userId = String(row?.user_id || "");
+    if (!userId || adminIds.has(userId)) return;
+    activeTodayUserIds.add(userId);
+  };
+  if (attendanceTodayAvailable) {
+    for (const row of attendanceTodayRowsForCount) collectActiveTodayUserId(row);
+  }
+  for (const row of activeTodayRowsResp.data || []) collectActiveTodayUserId(row);
+  const activeTodayUsers = activeTodayUserIds.size;
   const todayRequestTotal =
     Number(todayAccountRequestsResp.count || 0)
     + Number(todayAccountUpgradeRequestsResp.count || 0)

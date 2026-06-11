@@ -219,7 +219,6 @@ const resolveGithubAuthToken = async (config: RuntimeConfig): Promise<string | n
     if (!token) throw new Error("GitHub installation token missing in response");
     return token;
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.warn(`GitHub app auth unavailable, continuing without auth: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
@@ -472,16 +471,13 @@ const run = async () => {
   await ensureDir(config.reportPath);
   await fs.writeFile(config.reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
-  // eslint-disable-next-line no-console
   console.log(`Migration finished: total=${rows.length} migrated=${migrated} skipped=${skipped} failed=${failed}`);
-  // eslint-disable-next-line no-console
   console.log(`Report written: ${config.reportPath}`);
 
   if (failed > 0) process.exitCode = 2;
 };
 
 run().catch((error) => {
-  // eslint-disable-next-line no-console
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

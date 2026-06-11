@@ -8,11 +8,15 @@ import { cn } from '@/lib/utils';
 
 let historyDialogDepth = 0;
 
+const DialogDepthContext = React.createContext(0);
+
 type DialogProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root> & {
   useHistory?: boolean;
 };
 
 const Dialog = ({ open, onOpenChange, useHistory = true, ...props }: DialogProps) => {
+  const parentDialogDepth = React.useContext(DialogDepthContext);
+  const dialogDepth = parentDialogDepth + 1;
   const pushedStateRef = React.useRef(false);
   const closingFromAppRef = React.useRef(false);
   const ownsHistoryRef = React.useRef(false);
@@ -60,7 +64,11 @@ const Dialog = ({ open, onOpenChange, useHistory = true, ...props }: DialogProps
     ownsHistoryRef.current = false;
   }, [open, onOpenChange, useHistory]);
 
-  return <DialogPrimitive.Root open={open} onOpenChange={onOpenChange} {...props} />;
+  return (
+    <DialogDepthContext.Provider value={dialogDepth}>
+      <DialogPrimitive.Root open={open} onOpenChange={onOpenChange} {...props} />
+    </DialogDepthContext.Provider>
+  );
 };
 
 const DialogTrigger = DialogPrimitive.Trigger;
@@ -109,6 +117,16 @@ const dialogMotionClasses = {
   none: '',
 } as const;
 
+const resolveDialogDepth = (
+  explicitDepth: DialogContentProps['depth'],
+  dialogDepth: number,
+): NonNullable<DialogContentProps['depth']> => {
+  if (explicitDepth) return explicitDepth;
+  if (dialogDepth <= 1) return 'base';
+  if (dialogDepth === 2) return 'nested';
+  return 'system';
+};
+
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
@@ -117,49 +135,54 @@ const DialogContent = React.forwardRef<
   children,
   hideCloseButton = false,
   overlayClassName,
-  depth = 'base',
+  depth,
   mobileFullscreen = false,
   motion = 'center',
   ...props
-}, ref) => (
-  <DialogPortal>
-    <DialogOverlay className={cn(dialogOverlayDepthClasses[depth], overlayClassName)} />
-    <DialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        'vdjv-motion-surface vdjv-dialog-surface fixed left-[50%] top-[50%] grid w-full max-w-lg max-h-[85vh] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto border p-6 shadow-lg duration-200 sm:rounded-lg',
-        dialogContentDepthClasses[depth],
-        dialogMotionClasses[motion],
-        mobileFullscreen
-          ? 'vdjv-dialog-mobile-fullscreen max-sm:left-0 max-sm:top-0 max-sm:h-[100dvh] max-sm:max-h-[100dvh] max-sm:w-screen max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none'
-          : '',
-        className,
-      )}
-      onInteractOutside={(event) => {
-        event.preventDefault();
-      }}
-      onEscapeKeyDown={(event) => {
-        event.preventDefault();
-      }}
-      {...props}
-    >
-      {children}
-      {!hideCloseButton && (
-        <DialogPrimitive.Close
-          className={cn(
-            'absolute right-4 top-4 h-8 w-8 p-0 rounded-md border transition-colors inline-flex items-center justify-center leading-none',
-            'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none',
-            'border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700',
-            'dark:border-red-500/50 dark:bg-red-900/40 dark:text-red-300 dark:hover:bg-red-800/60 dark:hover:text-red-100'
-          )}
-        >
-          <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
-        </DialogPrimitive.Close>
-      )}
-    </DialogPrimitive.Content>
-  </DialogPortal>
-));
+}, ref) => {
+  const dialogDepth = React.useContext(DialogDepthContext);
+  const resolvedDepth = resolveDialogDepth(depth, dialogDepth);
+
+  return (
+    <DialogPortal>
+      <DialogOverlay className={cn(overlayClassName, dialogOverlayDepthClasses[resolvedDepth])} />
+      <DialogPrimitive.Content
+        ref={ref}
+        className={cn(
+          'vdjv-motion-surface vdjv-dialog-surface fixed left-[50%] top-[50%] grid w-full max-w-lg max-h-[85vh] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto border p-6 shadow-lg duration-200 sm:rounded-lg',
+          dialogMotionClasses[motion],
+          mobileFullscreen
+            ? 'vdjv-dialog-mobile-fullscreen max-sm:left-0 max-sm:top-0 max-sm:h-[100dvh] max-sm:max-h-[100dvh] max-sm:w-screen max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none'
+            : '',
+          className,
+          dialogContentDepthClasses[resolvedDepth],
+        )}
+        onInteractOutside={(event) => {
+          event.preventDefault();
+        }}
+        onEscapeKeyDown={(event) => {
+          event.preventDefault();
+        }}
+        {...props}
+      >
+        {children}
+        {!hideCloseButton && (
+          <DialogPrimitive.Close
+            className={cn(
+              'absolute right-4 top-4 h-8 w-8 p-0 rounded-md border transition-colors inline-flex items-center justify-center leading-none',
+              'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none',
+              'border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700',
+              'dark:border-red-500/50 dark:bg-red-900/40 dark:text-red-300 dark:hover:bg-red-800/60 dark:hover:text-red-100'
+            )}
+          >
+            <X className="h-4 w-4" />
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
+        )}
+      </DialogPrimitive.Content>
+    </DialogPortal>
+  );
+});
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 const DialogHeader = ({

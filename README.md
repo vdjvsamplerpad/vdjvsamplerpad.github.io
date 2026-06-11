@@ -28,10 +28,10 @@ This repository powers the live web app, Android builds through Capacitor, and W
 ## ⚡ Quick Download
 
 <p align="center">
-  <a href="https://github.com/vdjvsamplerpad/vdjvsamplerpad.github.io/releases/download/v0.1.0/vdjv-sampler-pad-v0.1.0-android.apk">
+  <a href="https://github.com/vdjvsamplerpad/vdjvsamplerpad.github.io/releases/latest/download/VDJV-Sampler-Pad-latest.apk">
     <img src="https://img.shields.io/badge/Download%20Android-Release-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Download Android">
   </a>
-  <a href="https://github.com/vdjvsamplerpad/vdjvsamplerpad.github.io/releases/download/v0.1.0/vdjv-sampler-pad-v0.1.0-windows.exe">
+  <a href="https://github.com/vdjvsamplerpad/vdjvsamplerpad.github.io/releases/latest/download/VDJV-Sampler-Pad-Setup-latest.exe">
     <img src="https://img.shields.io/badge/Download%20Windows-Release-0078D6?style=for-the-badge&logo=windows11&logoColor=white" alt="Download Windows">
   </a>
   <a href="https://vdjvsamplerpad.github.io/ios/">

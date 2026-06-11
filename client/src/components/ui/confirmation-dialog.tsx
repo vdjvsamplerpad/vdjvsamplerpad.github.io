@@ -14,6 +14,7 @@ interface ConfirmationDialogProps {
   icon?: React.ReactNode;
   onConfirm: () => void;
   theme?: 'light' | 'dark';
+  depth?: 'base' | 'nested' | 'system';
 }
 
 export function ConfirmationDialog({
@@ -26,7 +27,8 @@ export function ConfirmationDialog({
   variant = 'default',
   icon,
   onConfirm,
-  theme = 'light'
+  theme = 'light',
+  depth = 'system',
 }: ConfirmationDialogProps) {
   const handleConfirm = () => {
     onConfirm();
@@ -40,7 +42,7 @@ export function ConfirmationDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange} useHistory={false}>
       <DialogContent
-        depth="nested"
+        depth={depth}
         overlayClassName="bg-black/70 backdrop-blur-sm"
         className={`sm:max-w-md ${theme === 'dark' ? 'bg-gray-900 border-gray-700 text-gray-100' : 'bg-white border-gray-300 text-gray-900'
         }`}>

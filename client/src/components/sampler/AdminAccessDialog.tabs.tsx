@@ -1431,7 +1431,7 @@ export function SamplerDefaultsTab({
     savedConfigSnapshotRef.current = configSnapshot;
   };
   const samplerStats = [
-    { label: 'Channels', value: `${config.uiDefaults.defaultChannelCountMobile}/${config.uiDefaults.defaultChannelCountDesktop}`, detail: 'Mobile / desktop defaults', toneClass: 'text-cyan-500' },
+    { label: 'Pad Grid', value: `${config.uiDefaults.defaultPadSizePortrait}/${config.uiDefaults.defaultPadSizeLandscape}`, detail: 'Portrait / landscape defaults', toneClass: 'text-cyan-500' },
     { label: 'Stop Mode', value: ADMIN_STOP_MODE_LABELS[config.uiDefaults.defaultStopMode] || config.uiDefaults.defaultStopMode, detail: 'Default stop action', toneClass: 'text-violet-500' },
     { label: 'Max Audio', value: `${Math.round(config.audioLimits.maxPadAudioBytes / 1024 / 1024)} MB`, detail: 'Per pad upload size', toneClass: 'text-amber-500' },
     { label: 'Max Duration', value: `${Math.round(config.audioLimits.maxPadAudioDurationMs / 1000)}s`, detail: 'Per pad upload length', toneClass: 'text-fuchsia-500' },
@@ -1469,7 +1469,7 @@ export function SamplerDefaultsTab({
         <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
           <div>
             <div className="text-sm font-semibold">UI Defaults</div>
-            <div className={`text-xs ${mutedText}`}>Used when the app boots without saved settings.</div>
+            <div className={`text-xs ${mutedText}`}>First-run layout and controls. Deck channel limits are managed in Tier Config.</div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
@@ -1479,14 +1479,6 @@ export function SamplerDefaultsTab({
             <div className="space-y-1">
               <Label>Pad Size Landscape</Label>
               <Input type="number" min={2} max={16} value={config.uiDefaults.defaultPadSizeLandscape} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultPadSizeLandscape: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
-            <div className="space-y-1">
-              <Label>Channel Count Mobile</Label>
-              <Input type="number" min={2} max={8} value={config.uiDefaults.defaultChannelCountMobile} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultChannelCountMobile: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
-            </div>
-            <div className="space-y-1">
-              <Label>Channel Count Desktop</Label>
-              <Input type="number" min={2} max={8} value={config.uiDefaults.defaultChannelCountDesktop} onChange={(event) => onConfigChange({ ...config, uiDefaults: { ...config.uiDefaults, defaultChannelCountDesktop: Number(event.target.value) } })} className={isDark ? 'bg-gray-800 border-gray-700' : ''} />
             </div>
             <div className="space-y-1">
               <Label>Master Volume</Label>

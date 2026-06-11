@@ -417,7 +417,6 @@ const run = async () => {
         targetUrl,
         targetCount: reference.targets.length,
       });
-      // eslint-disable-next-line no-console
       console.log(`${existing && !config.force ? "SKIP" : "OK"} ${reference.objectKey} -> ${targetUrl}`);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -429,7 +428,6 @@ const run = async () => {
         targetUrl,
         targetCount: reference.targets.length,
       });
-      // eslint-disable-next-line no-console
       console.error(`FAIL ${reference.objectKey}: ${reason}`);
     }
   }
@@ -446,12 +444,10 @@ const run = async () => {
     results,
   }, null, 2), "utf8");
 
-  // eslint-disable-next-line no-console
   console.log(`Report written to ${config.reportPath}`);
 };
 
 run().catch((error) => {
-  // eslint-disable-next-line no-console
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });

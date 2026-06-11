@@ -134,9 +134,12 @@ export const saveMappingFile = async (blob: Blob, fileName: string): Promise<str
 
 export const createDefaultSettings = (
   deckLayoutVersion: number,
-  config: SamplerAppConfig = DEFAULT_SAMPLER_APP_CONFIG
+  config: SamplerAppConfig = DEFAULT_SAMPLER_APP_CONFIG,
+  initialChannelCountOverride?: number
 ): AppSettings => {
-  const initialChannelCount = resolveConfiguredInitialChannelCount(config);
+  const initialChannelCount = typeof initialChannelCountOverride === 'number' && Number.isFinite(initialChannelCountOverride)
+    ? Math.max(1, Math.min(8, Math.floor(initialChannelCountOverride)))
+    : resolveConfiguredInitialChannelCount(config);
   const systemMappings = mergeSystemMappings({
     ...DEFAULT_SYSTEM_MAPPINGS,
     ...Object.fromEntries(
