@@ -24,6 +24,7 @@ import {
   sendHeartbeatBeacon,
 } from '@/lib/activityLogger'
 import { identifyProductUser, resetProductAnalytics } from '@/lib/productAnalytics'
+import { getCapacitorAppPlugin, isNativeCapacitorRuntime } from '@/lib/capacitor-app-plugin'
 
 // Keys for localStorage caching
 const USER_CACHE_KEY = 'vdjv-cached-user';
@@ -39,6 +40,40 @@ const GOOGLE_OAUTH_LOGIN_PENDING_KEY = 'vdjv-google-oauth-login-pending';
 const PROFILE_SELECT = 'id, role, display_name, account_tier, tier_source, tier_updated_at, owned_bank_quota, owned_bank_pad_cap, device_total_bank_cap, welcome_email_sent_at';
 const AUTH_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 const GOOGLE_OAUTH_LOGIN_PENDING_MAX_AGE_MS = 10 * 60 * 1000;
+const DEFAULT_CAPACITOR_AUTH_REDIRECT_URL = 'com.powerworkout.vdjv://auth/callback';
+
+const getCapacitorAuthRedirectUrl = (): string => {
+  const configured = String((import.meta as any).env?.VITE_CAPACITOR_AUTH_REDIRECT_URL || '').trim();
+  return configured || DEFAULT_CAPACITOR_AUTH_REDIRECT_URL;
+};
+
+const isCapacitorAuthCallbackUrl = (url: string): boolean => {
+  const normalized = String(url || '').trim();
+  if (!normalized) return false;
+  const redirectUrl = getCapacitorAuthRedirectUrl();
+  return normalized.startsWith(redirectUrl) || normalized.startsWith(DEFAULT_CAPACITOR_AUTH_REDIRECT_URL);
+};
+
+const getCallbackParams = (url: string): URLSearchParams => {
+  const parsed = new URL(url);
+  const params = new URLSearchParams(parsed.search);
+  const hash = parsed.hash.startsWith('#') ? parsed.hash.slice(1) : parsed.hash;
+  if (hash) {
+    const hashParams = new URLSearchParams(hash.startsWith('?') ? hash.slice(1) : hash);
+    hashParams.forEach((value, key) => {
+      if (!params.has(key)) params.set(key, value);
+    });
+  }
+  return params;
+};
+
+const closeNativeOAuthBrowser = async (): Promise<void> => {
+  try {
+    const { Browser } = await import('@capacitor/browser');
+    await Browser.close();
+  } catch {
+  }
+};
 
 export const isPasswordRecoveryMode = (): boolean => {
   if (typeof window === 'undefined') return false
@@ -415,6 +450,7 @@ function useAuthValue(): AuthProviderValue {
   const cachedBan = getCachedBan()
   const cachedUser = cachedBan ? null : getCachedUser()
   const cachedProfile = cachedBan ? null : getCachedProfile()
+  const initialGoogleOAuthPending = isGoogleOAuthLoginPending()
   const cachedCapabilities = cachedUser?.id
     ? readCachedCapabilities(cachedUser.id) || fallbackCapabilitiesForProfile(cachedProfile)
     : fallbackCapabilitiesForProfile(null)
@@ -424,8 +460,8 @@ function useAuthValue(): AuthProviderValue {
     profile: cachedProfile,
     loading: true,
     authTransition: {
-      status: 'idle',
-      email: null,
+      status: initialGoogleOAuthPending ? 'signing_in' : 'idle',
+      email: initialGoogleOAuthPending ? 'Google' : null,
     },
     sessionConflictReason: getCachedSessionConflictReason(),
     sessionConflictDetails: getCachedSessionConflictDetails(),
@@ -906,6 +942,21 @@ function useAuthValue(): AuthProviderValue {
           refreshAccessibleBanksCache(authUser.id).catch(() => {})
         }
       } else {
+        if (isGoogleOAuthLoginPending()) {
+          setState((s) => ({
+            ...s,
+            user: s.user,
+            profile: s.profile,
+            loading: true,
+            authTransition: {
+              status: 'signing_in',
+              email: 'Google',
+            },
+            offlineTrustedSession: false,
+          }))
+          return
+        }
+
         // Native webviews and iOS A2HS can report "online" in deadspots while
         // Supabase cannot restore a session. Do not hide downloaded banks unless
         // an explicit enforcement path invalidated the cached user.
@@ -967,6 +1018,150 @@ function useAuthValue(): AuthProviderValue {
 
     return () => subscription.unsubscribe()
   }, [ensureProfile, ensureSessionClaim, enforceBan, setBannedState, setSessionConflictReason, trustCachedOfflineSession])
+
+  React.useEffect(() => {
+    if (state.authTransition.status !== 'signing_in') return
+    if (!isGoogleOAuthLoginPending()) return
+
+    const timeoutId = window.setTimeout(() => {
+      if (!isGoogleOAuthLoginPending()) return
+      setGoogleOAuthLoginPending(false)
+      setState((s) => (
+        s.user
+          ? s
+          : {
+              ...s,
+              loading: false,
+              authTransition: {
+                status: 'idle',
+                email: null,
+              },
+              pendingSessionClaim: null,
+            }
+      ))
+    }, 30_000)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [state.authTransition.status])
+
+  React.useEffect(() => {
+    const app = getCapacitorAppPlugin()
+    if (!app?.addListener) return
+
+    let listenerHandle: { remove?: () => Promise<void> | void } | null = null
+    let disposed = false
+
+    const handleNativeAuthCallback = async (payload?: { url?: string }) => {
+      const url = String(payload?.url || '').trim()
+      if (!isCapacitorAuthCallbackUrl(url)) return
+
+      await closeNativeOAuthBrowser()
+
+      try {
+        const params = getCallbackParams(url)
+        const authError =
+          params.get('error_description') ||
+          params.get('error') ||
+          params.get('error_code')
+
+        if (authError) {
+          setGoogleOAuthLoginPending(false)
+          setAuthTransition('idle')
+          void logActivityEvent({
+            eventType: 'auth.login',
+            status: 'failed',
+            email: null,
+            errorMessage: authError,
+            meta: {
+              source: 'useAuth.nativeOAuthCallback',
+              provider: 'google',
+            },
+          }).catch(() => {})
+          return
+        }
+
+        const accessToken = params.get('access_token')
+        const refreshToken = params.get('refresh_token')
+        const code = params.get('code')
+        const authResult = accessToken && refreshToken
+          ? await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            })
+          : code
+            ? await supabase.auth.exchangeCodeForSession(code)
+            : null
+
+        if (!authResult) {
+          setGoogleOAuthLoginPending(false)
+          setAuthTransition('idle')
+          void logActivityEvent({
+            eventType: 'auth.login',
+            status: 'failed',
+            email: null,
+            errorMessage: 'Native OAuth callback did not include a session token or code.',
+            meta: {
+              source: 'useAuth.nativeOAuthCallback',
+              provider: 'google',
+            },
+          }).catch(() => {})
+          return
+        }
+
+        if (authResult.error) {
+          setGoogleOAuthLoginPending(false)
+          setAuthTransition('idle')
+          void logActivityEvent({
+            eventType: 'auth.login',
+            status: 'failed',
+            email: null,
+            errorMessage: authResult.error.message,
+            meta: {
+              source: 'useAuth.nativeOAuthCallback',
+              provider: 'google',
+            },
+          }).catch(() => {})
+          if (isBanError(authResult.error)) {
+            await enforceBan()
+          }
+          return
+        }
+
+        if (authResult.data.session) {
+          await fetchSessionAndProfileRef.current?.(authResult.data.session)
+        }
+      } catch (error) {
+        setGoogleOAuthLoginPending(false)
+        setAuthTransition('idle')
+        void logActivityEvent({
+          eventType: 'auth.login',
+          status: 'failed',
+          email: null,
+          errorMessage: error instanceof Error ? error.message : 'Native OAuth callback failed.',
+          meta: {
+            source: 'useAuth.nativeOAuthCallback',
+            provider: 'google',
+          },
+        }).catch(() => {})
+      }
+    }
+
+    const nextHandle = app.addListener('appUrlOpen', handleNativeAuthCallback)
+    Promise.resolve(nextHandle)
+      .then((handle) => {
+        if (disposed) {
+          void handle?.remove?.()
+          return
+        }
+        listenerHandle = handle
+      })
+      .catch(() => {})
+
+    return () => {
+      disposed = true
+      void listenerHandle?.remove?.()
+    }
+  }, [enforceBan, setAuthTransition])
 
   React.useEffect(() => {
     if (!state.user || state.banned) return
@@ -1236,10 +1431,12 @@ function useAuthValue(): AuthProviderValue {
     sessionConflictLockedRef.current = false
     setAuthTransition('signing_in', 'Google')
     setGoogleOAuthLoginPending(true)
-    const { error } = await supabase.auth.signInWithOAuth({
+    const nativeOAuth = isNativeCapacitorRuntime()
+    const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo,
+        redirectTo: nativeOAuth ? getCapacitorAuthRedirectUrl() : redirectTo,
+        skipBrowserRedirect: nativeOAuth,
         queryParams: {
           prompt: 'select_account',
         },
@@ -1260,6 +1457,28 @@ function useAuthValue(): AuthProviderValue {
       }).catch(() => {})
       if (isBanError(error)) {
         await enforceBan()
+      }
+    }
+    if (!error && nativeOAuth) {
+      const authUrl = data?.url
+      if (!authUrl) {
+        const nativeError = {
+          message: 'Google sign-in could not open. Please try again.',
+        } as AuthError
+        setGoogleOAuthLoginPending(false)
+        setAuthTransition('idle')
+        return { error: nativeError }
+      }
+      try {
+        const { Browser } = await import('@capacitor/browser')
+        await Browser.open({ url: authUrl })
+      } catch (openError) {
+        const nativeError = {
+          message: openError instanceof Error ? openError.message : 'Google sign-in could not open. Please try again.',
+        } as AuthError
+        setGoogleOAuthLoginPending(false)
+        setAuthTransition('idle')
+        return { error: nativeError }
       }
     }
     return { error }

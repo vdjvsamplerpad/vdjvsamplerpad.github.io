@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2, ArrowUpCircle } from 'lucide-react';
+import { Upload, Menu, Pencil, Volume2, VolumeX, Square, Sliders, Shield, LogIn, X, Search, Palette, Undo2, ArrowUpCircle, Loader2 } from 'lucide-react';
 import type { SamplerBank, StopMode } from './types/sampler';
 import { createPortal, flushSync } from 'react-dom';
 import { getCachedUser, useAuthActions, useAuthState } from '@/hooks/useAuth';
@@ -26,6 +26,7 @@ import { useAppUpdate } from '@/hooks/useAppUpdate';
 import { useStorePreviewBadge } from './hooks/useStorePreviewBadge';
 import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
 import { cn } from '@/lib/utils';
+import { APP_NOTICE_EVENT, type AppNoticePayload } from '@/lib/app-notices';
 
 const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then((module) => ({ default: module.LoginModal }))) as unknown as typeof LoginModalType;
 const AppSettingsDialog = React.lazy(() => import('@/components/ui/AppSettingsDialog').then((module) => ({ default: module.AppSettingsDialog }))) as unknown as typeof AppSettingsDialogType;
@@ -519,7 +520,6 @@ export function HeaderControls({
   const stopModeHoldTimeoutRef = React.useRef<number | null>(null);
   const stopClickSuppressTimeoutRef = React.useRef<number | null>(null);
   const stopGestureRef = React.useRef<StopGestureState | null>(null);
-  const offlineNoticeShownRef = React.useRef(false);
   const appVersion = (import.meta as any).env?.VITE_APP_VERSION || 'unknown';
   const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.onFullscreenChange);
   const { state: appUpdateState, checkForUpdates, installUpdate } = useAppUpdate();
@@ -545,6 +545,17 @@ export function HeaderControls({
   const { notices, pushNotice, dismiss } = useNotices()
 
   React.useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleAppNotice = (event: Event) => {
+      const detail = (event as CustomEvent<AppNoticePayload>).detail
+      if (!detail?.message) return
+      pushNotice({ variant: detail.variant, message: detail.message })
+    }
+    window.addEventListener(APP_NOTICE_EVENT, handleAppNotice as EventListener)
+    return () => window.removeEventListener(APP_NOTICE_EVENT, handleAppNotice as EventListener)
+  }, [pushNotice])
+
+  React.useEffect(() => {
     if (pendingSessionClaim || sessionConflictReason) {
       setShowLoginModal(true);
     }
@@ -552,22 +563,8 @@ export function HeaderControls({
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
-    const showOfflineNotice = () => {
-      if (offlineNoticeShownRef.current) return;
-      offlineNoticeShownRef.current = true;
-      pushNotice({
-        variant: 'info',
-        message: 'Offline mode active. Local and prepared banks are available; Store, sync, and account changes need internet.',
-      });
-    };
     const updateOnlineState = () => {
-      const nextOnline = navigator.onLine;
-      setIsOnline(nextOnline);
-      if (nextOnline) {
-        offlineNoticeShownRef.current = false;
-      } else {
-        showOfflineNotice();
-      }
+      setIsOnline(navigator.onLine);
     };
     updateOnlineState();
     window.addEventListener('online', updateOnlineState);
@@ -576,7 +573,7 @@ export function HeaderControls({
       window.removeEventListener('online', updateOnlineState);
       window.removeEventListener('offline', updateOnlineState);
     };
-  }, [pushNotice]);
+  }, []);
 
   React.useEffect(() => {
     if (loading || isOnline) return;
@@ -1045,6 +1042,7 @@ export function HeaderControls({
   const isAuthenticated = Boolean(effectiveAuthUser);
   const isSigningIn = authTransition.status === 'signing_in';
   const isSigningOut = authTransition.status === 'signing_out';
+  const isAuthResolvingWithoutUser = !effectiveAuthUser && isSigningIn;
   const isPortraitViewport = typeof window !== 'undefined'
     ? window.innerHeight > window.innerWidth
     : windowWidth < 768;
@@ -1152,6 +1150,10 @@ export function HeaderControls({
   ), []);
 
   const handleSearchSlotClick = React.useCallback(() => {
+    if (isAuthResolvingWithoutUser) {
+      pushNotice({ variant: 'info', message: 'Signing you in. Please wait a moment.' });
+      return;
+    }
     if (capabilities.features.search) {
       onToggleSearch();
       return;
@@ -1175,7 +1177,7 @@ export function HeaderControls({
       return;
     }
     openUpgradeDialog('Search is available in PRO and PRO MAX.');
-  }, [capabilities.features.search, onToggleSearch, openUpgradeDialog, playSummary, pushNotice]);
+  }, [capabilities.features.search, isAuthResolvingWithoutUser, onToggleSearch, openUpgradeDialog, playSummary, pushNotice]);
 
   const navButtonBase = cn(
     'relative flex h-12 items-center justify-center gap-1.5 rounded-2xl border text-xs font-bold transition-colors',
@@ -1280,7 +1282,7 @@ export function HeaderControls({
         id="global-audio-upload-input"
       />
 
-      <header className="fixed left-0 right-0 top-[calc(var(--vdjv-safe-top)+0.35rem)] z-40 flex min-h-[2.65rem] items-start justify-center px-2 text-center pointer-events-none">
+      <header className="fixed left-0 right-0 top-[calc(var(--vdjv-safe-top)+0.35rem)] z-30 flex min-h-[2.65rem] items-start justify-center px-2 text-center pointer-events-none">
         <div className="absolute left-2 top-1 pointer-events-auto">
           {isAdmin && (
             <React.Suspense fallback={null}>
@@ -1525,7 +1527,7 @@ export function HeaderControls({
 
       <div
         className={cn(
-          'fixed left-1/2 z-40 -translate-x-1/2 pointer-events-none',
+          'fixed left-1/2 z-[60] -translate-x-1/2 pointer-events-none',
           isCompactBottomNav
             ? 'bottom-[calc(var(--vdjv-safe-bottom)+0.65rem)] w-[min(29rem,calc(100vw-1rem))]'
             : 'bottom-[calc(var(--vdjv-safe-bottom)+0.85rem)]'
@@ -1571,15 +1573,20 @@ export function HeaderControls({
             type="button"
             onClick={handleSearchSlotClick}
             className={isCompactBottomNav ? compactNavButtonBase : cn(navButtonBase, 'w-full', searchOpen && 'border-red-400 text-red-500')}
-            title={capabilities.features.search ? 'Search pads' : 'Upgrade or sign in for full search'}
+            disabled={isAuthResolvingWithoutUser}
+            title={isAuthResolvingWithoutUser ? 'Account session is still loading.' : capabilities.features.search ? 'Search pads' : 'Upgrade or sign in for full search'}
           >
-            {capabilities.features.search
+            {isAuthResolvingWithoutUser
+              ? renderNavIcon(<Loader2 className={cn(isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4', 'animate-spin')} />)
+              : capabilities.features.search
               ? renderNavIcon(<Search className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />)
               : playSummary?.mode === 'guest' || !isAuthenticated
                 ? renderNavIcon(<LogIn className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />)
                 : renderNavIcon(<ArrowUpCircle className={isCompactBottomNav ? 'h-5 w-5' : 'h-4 w-4'} />)}
             <span className="max-w-full truncate">
-              {capabilities.features.search
+              {isAuthResolvingWithoutUser
+                ? 'Signing in'
+                : capabilities.features.search
                   ? 'Search'
                   : playSummary?.mode === 'guest' || !isAuthenticated
                     ? 'Login'
@@ -1703,7 +1710,7 @@ export function HeaderControls({
       </div>
 
       {isCompactBottomNav && (
-      <div className="fixed bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)] right-3 z-40 flex flex-col-reverse gap-2">
+      <div className="fixed bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)] right-3 z-30 flex flex-col-reverse gap-2">
         <Button
           type="button"
           onClick={onToggleEditMode}
@@ -1728,7 +1735,7 @@ export function HeaderControls({
       {isAdmin && (
         <div
           className={cn(
-            'fixed left-3 z-40 flex flex-col-reverse gap-2',
+            'fixed left-3 z-30 flex flex-col-reverse gap-2',
             isCompactBottomNav ? 'bottom-[calc(var(--vdjv-safe-bottom)+6.15rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+4.85rem)]'
           )}
         >
@@ -1760,7 +1767,7 @@ export function HeaderControls({
       {isAdmin && editMode && (
         <div
           className={cn(
-            'fixed right-3 z-40',
+            'fixed right-3 z-30',
             isCompactBottomNav ? 'bottom-[calc(var(--vdjv-safe-bottom)+9.65rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+4.85rem)]'
           )}
         >
@@ -1791,7 +1798,7 @@ export function HeaderControls({
           variant="outline"
           size="sm"
           className={cn(
-            'fixed left-1/2 z-50 h-8 -translate-x-1/2 rounded-full px-3 text-[11px] font-black shadow-lg',
+            'fixed left-1/2 z-[60] h-8 -translate-x-1/2 rounded-full px-3 text-[11px] font-black shadow-lg',
             isCompactBottomNav ? 'bottom-[calc(var(--vdjv-safe-bottom)+5.95rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+4.85rem)]',
             'h-10 px-4',
             theme === 'dark'
@@ -1807,7 +1814,7 @@ export function HeaderControls({
 
       {globalMuted && (
         <div className={cn(
-          'fixed left-1/2 z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-lg',
+          'fixed left-1/2 z-30 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-lg',
           isCompactBottomNav ? 'top-[calc(var(--vdjv-safe-top)+3.25rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+6rem)]',
           theme === 'dark'
             ? 'border-red-400/50 bg-red-950 text-red-100'
@@ -1822,7 +1829,7 @@ export function HeaderControls({
 
       {(editMode || channelLoadArmed) && (
         <div className={cn(
-          'fixed left-1/2 z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-lg animate-pulse',
+          'fixed left-1/2 z-30 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-lg animate-pulse',
           isCompactBottomNav ? 'top-[calc(var(--vdjv-safe-top)+5.75rem)]' : 'bottom-[calc(var(--vdjv-safe-bottom)+8.25rem)]',
           channelLoadArmed && !editMode
             ? theme === 'dark'
@@ -1842,7 +1849,7 @@ export function HeaderControls({
 
       {isAdmin && adminPadColorPaintActive && adminPadColorPaintColor && (
         <div className={cn(
-          'fixed left-1/2 top-[calc(var(--vdjv-safe-top)+3.25rem)] z-50 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1 text-xs font-semibold shadow-lg',
+          'fixed left-1/2 top-[calc(var(--vdjv-safe-top)+3.25rem)] z-30 max-w-[92vw] -translate-x-1/2 rounded-full border px-3 py-1 text-xs font-semibold shadow-lg',
           theme === 'dark'
             ? 'border-red-400/40 bg-red-950 text-red-100'
             : 'border-red-300 bg-red-50 text-red-700'

@@ -25,6 +25,45 @@ const hexToRgbString = (hex: string): string => {
   return `${r} ${g} ${b}`;
 };
 
+const MOBILE_EDIT_DRAG_LONG_PRESS_MS = 320;
+const MOBILE_EDIT_DRAG_CANCEL_PX = 12;
+
+type MobileEditDragTargetKind = 'pad' | 'bank' | null;
+
+type MobileEditDragSession = {
+  pointerId: number;
+  sourceIndex: number;
+  sourcePadId: string;
+  sourcePadName: string;
+  sourceBankId: string;
+  sourceElement: HTMLElement;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+  active: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+  targetIndex: number | null;
+  targetBankId: string | null;
+  targetBankName: string | null;
+  targetKind: MobileEditDragTargetKind;
+};
+
+type MobileEditDragViewState = Pick<
+  MobileEditDragSession,
+  | 'sourceIndex'
+  | 'sourcePadId'
+  | 'sourcePadName'
+  | 'sourceBankId'
+  | 'currentX'
+  | 'currentY'
+  | 'active'
+  | 'targetIndex'
+  | 'targetBankId'
+  | 'targetBankName'
+  | 'targetKind'
+>;
+
 export interface PadGridProps {
   pads: PadData[];
   bankId: string;
@@ -116,7 +155,11 @@ export const PadGrid = React.memo(function PadGrid({
   const [dragOverIndex, setDragOverIndex] = React.useState<number | null>(null);
   const [isDragOverGrid, setIsDragOverGrid] = React.useState(false);
   const [dragOverPadTransfer, setDragOverPadTransfer] = React.useState(false);
+  const [mobileEditDragState, setMobileEditDragState] = React.useState<MobileEditDragViewState | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const mobileEditDragRef = React.useRef<MobileEditDragSession | null>(null);
+  const suppressMobileEditClickRef = React.useRef(false);
+  const suppressMobileEditClickTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const dialogBanks = editMode ? allBanks : EMPTY_BANKS;
   const dialogAllPads = editMode ? allPads : EMPTY_PADS;
   const dialogBankPads = editMode ? pads : EMPTY_PADS;
@@ -248,6 +291,284 @@ export const PadGrid = React.memo(function PadGrid({
   const aspectRatio = 'aspect-square';
   const showAddPadText = isMobile ? padSize <= 8 : padSize <= 6;
   const showAddPadDropHint = supportsDesktopDragDrop && padSize <= 6;
+  const useMobileEditDrag = editMode && !adminPadColorPaintActive && (isMobile || isNativeCapacitor);
+
+  const resolveBankName = React.useCallback((targetBankId: string | null) => {
+    if (!targetBankId) return null;
+    if (targetBankId === bankId) return bankName || 'Current bank';
+    return (
+      allBanks.find((entry) => entry.id === targetBankId)?.name ||
+      availableBanks.find((entry) => entry.id === targetBankId)?.name ||
+      'Target bank'
+    );
+  }, [allBanks, availableBanks, bankId, bankName]);
+
+  const snapshotMobileEditDrag = React.useCallback((session: MobileEditDragSession): MobileEditDragViewState => ({
+    sourceIndex: session.sourceIndex,
+    sourcePadId: session.sourcePadId,
+    sourcePadName: session.sourcePadName,
+    sourceBankId: session.sourceBankId,
+    currentX: session.currentX,
+    currentY: session.currentY,
+    active: session.active,
+    targetIndex: session.targetIndex,
+    targetBankId: session.targetBankId,
+    targetBankName: session.targetBankName,
+    targetKind: session.targetKind,
+  }), []);
+
+  const clearMobileEditClickSuppress = React.useCallback(() => {
+    suppressMobileEditClickRef.current = false;
+    if (suppressMobileEditClickTimerRef.current !== null) {
+      clearTimeout(suppressMobileEditClickTimerRef.current);
+      suppressMobileEditClickTimerRef.current = null;
+    }
+  }, []);
+
+  const markMobileEditClickSuppressed = React.useCallback(() => {
+    suppressMobileEditClickRef.current = true;
+    if (suppressMobileEditClickTimerRef.current !== null) {
+      clearTimeout(suppressMobileEditClickTimerRef.current);
+    }
+    suppressMobileEditClickTimerRef.current = setTimeout(() => {
+      suppressMobileEditClickTimerRef.current = null;
+      suppressMobileEditClickRef.current = false;
+    }, 450);
+  }, []);
+
+  const resetMobileEditDrag = React.useCallback((options?: { suppressClick?: boolean }) => {
+    const session = mobileEditDragRef.current;
+    if (session?.timer) {
+      clearTimeout(session.timer);
+    }
+    if (session?.active && typeof session.sourceElement.releasePointerCapture === 'function') {
+      try {
+        session.sourceElement.releasePointerCapture(session.pointerId);
+      } catch {
+      }
+    }
+    mobileEditDragRef.current = null;
+    setMobileEditDragState(null);
+    setDragOverIndex(null);
+    setDragOverPadTransfer(false);
+    if (options?.suppressClick) {
+      markMobileEditClickSuppressed();
+    }
+  }, [markMobileEditClickSuppressed]);
+
+  const resolveMobileEditDragTarget = React.useCallback((clientX: number, clientY: number) => {
+    const session = mobileEditDragRef.current;
+    if (!session || typeof document === 'undefined') return;
+
+    const hit = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    const padTarget = hit?.closest('[data-vdjv-pad-bank-id][data-vdjv-pad-index]') as HTMLElement | null;
+    const bankTarget = hit?.closest('[data-vdjv-bank-drop-id]') as HTMLElement | null;
+
+    let targetIndex: number | null = null;
+    let targetBankId: string | null = null;
+    let targetKind: MobileEditDragTargetKind = null;
+
+    if (padTarget) {
+      const nextBankId = padTarget.dataset.vdjvPadBankId || null;
+      const indexText = padTarget.dataset.vdjvPadIndex;
+      const parsedIndex = typeof indexText === 'string' ? Number.parseInt(indexText, 10) : Number.NaN;
+      targetBankId = nextBankId;
+      targetIndex = Number.isFinite(parsedIndex) ? parsedIndex : null;
+      targetKind = 'pad';
+    } else if (bankTarget) {
+      targetBankId = bankTarget.dataset.vdjvBankDropId || null;
+      targetKind = 'bank';
+    }
+
+    if (targetBankId === session.sourceBankId && targetKind === 'bank') {
+      targetBankId = null;
+      targetKind = null;
+    }
+
+    if (targetBankId && targetBankId !== session.sourceBankId) {
+      const canTransfer = Boolean(onTransferPad) && (!canTransferFromBank || canTransferFromBank(session.sourceBankId));
+      if (!canTransfer) {
+        targetBankId = null;
+        targetIndex = null;
+        targetKind = null;
+      }
+    }
+
+    if (targetBankId !== session.sourceBankId) {
+      targetIndex = null;
+    }
+
+    session.currentX = clientX;
+    session.currentY = clientY;
+    session.targetIndex = targetIndex;
+    session.targetBankId = targetBankId;
+    session.targetBankName = resolveBankName(targetBankId);
+    session.targetKind = targetKind;
+    setDragOverIndex(targetBankId === session.sourceBankId ? targetIndex : null);
+    setMobileEditDragState(snapshotMobileEditDrag(session));
+  }, [canTransferFromBank, onTransferPad, resolveBankName, snapshotMobileEditDrag]);
+
+  const activateMobileEditDrag = React.useCallback((pointerId: number) => {
+    const session = mobileEditDragRef.current;
+    if (!session || session.pointerId !== pointerId || session.active) return;
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = null;
+    }
+    session.active = true;
+    if (typeof session.sourceElement.setPointerCapture === 'function') {
+      try {
+        session.sourceElement.setPointerCapture(pointerId);
+      } catch {
+      }
+    }
+    setDraggedIndex(null);
+    setDragOverIndex(session.sourceIndex);
+    setMobileEditDragState(snapshotMobileEditDrag(session));
+    resolveMobileEditDragTarget(session.currentX, session.currentY);
+  }, [resolveMobileEditDragTarget, snapshotMobileEditDrag]);
+
+  const finishMobileEditDrag = React.useCallback(() => {
+    const session = mobileEditDragRef.current;
+    if (!session) return;
+
+    const wasActive = session.active;
+    const sourceIndex = session.sourceIndex;
+    const sourceBankId = session.sourceBankId;
+    const sourcePadId = session.sourcePadId;
+    const targetIndex = session.targetIndex;
+    const targetBankId = session.targetBankId;
+
+    resetMobileEditDrag({ suppressClick: wasActive });
+    if (!wasActive) return;
+
+    if (targetBankId && targetBankId !== sourceBankId) {
+      if (onTransferPad && (!canTransferFromBank || canTransferFromBank(sourceBankId))) {
+        onTransferPad(sourcePadId, sourceBankId, targetBankId);
+      }
+      return;
+    }
+
+    if (targetIndex !== null && targetIndex !== sourceIndex) {
+      onReorderPads(sourceIndex, targetIndex);
+    }
+  }, [canTransferFromBank, onReorderPads, onTransferPad, resetMobileEditDrag]);
+
+  const handleMobileEditPointerDown = React.useCallback((event: React.PointerEvent<HTMLElement>, pad: PadData, index: number) => {
+    if (!useMobileEditDrag) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if ((event.target as HTMLElement).closest('.transfer-indicator')) return;
+
+    resetMobileEditDrag();
+    const sourceElement = event.currentTarget;
+    const session: MobileEditDragSession = {
+      pointerId: event.pointerId,
+      sourceIndex: index,
+      sourcePadId: pad.id,
+      sourcePadName: pad.name || 'Pad',
+      sourceBankId: bankId,
+      sourceElement,
+      startX: event.clientX,
+      startY: event.clientY,
+      currentX: event.clientX,
+      currentY: event.clientY,
+      active: false,
+      timer: null,
+      targetIndex: null,
+      targetBankId: null,
+      targetBankName: null,
+      targetKind: null,
+    };
+    session.timer = setTimeout(() => activateMobileEditDrag(event.pointerId), MOBILE_EDIT_DRAG_LONG_PRESS_MS);
+    mobileEditDragRef.current = session;
+  }, [activateMobileEditDrag, bankId, resetMobileEditDrag, useMobileEditDrag]);
+
+  const handleMobileEditClickCapture = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
+    if (!suppressMobileEditClickRef.current) return;
+    clearMobileEditClickSuppress();
+    event.preventDefault();
+    event.stopPropagation();
+  }, [clearMobileEditClickSuppress]);
+
+  React.useEffect(() => {
+    if (!useMobileEditDrag || typeof document === 'undefined') {
+      resetMobileEditDrag();
+      return;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const session = mobileEditDragRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+
+      const deltaX = Math.abs(event.clientX - session.startX);
+      const deltaY = Math.abs(event.clientY - session.startY);
+      if (!session.active && Math.max(deltaX, deltaY) >= MOBILE_EDIT_DRAG_CANCEL_PX) {
+        resetMobileEditDrag();
+        return;
+      }
+
+      session.currentX = event.clientX;
+      session.currentY = event.clientY;
+      if (session.active) {
+        event.preventDefault();
+        resolveMobileEditDragTarget(event.clientX, event.clientY);
+      }
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const session = mobileEditDragRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      if (session.active) {
+        event.preventDefault();
+      }
+      finishMobileEditDrag();
+    };
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      const session = mobileEditDragRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      resetMobileEditDrag({ suppressClick: session.active });
+    };
+
+    const handleScroll = () => {
+      const session = mobileEditDragRef.current;
+      if (!session) return;
+      resetMobileEditDrag({ suppressClick: session.active });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        resetMobileEditDrag({ suppressClick: Boolean(mobileEditDragRef.current?.active) });
+      }
+    };
+
+    document.addEventListener('pointermove', handlePointerMove, { capture: true });
+    document.addEventListener('pointerup', handlePointerUp, { capture: true });
+    document.addEventListener('pointercancel', handlePointerCancel, { capture: true });
+    document.addEventListener('scroll', handleScroll, { capture: true });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleScroll);
+
+    return () => {
+      document.removeEventListener('pointermove', handlePointerMove, { capture: true });
+      document.removeEventListener('pointerup', handlePointerUp, { capture: true });
+      document.removeEventListener('pointercancel', handlePointerCancel, { capture: true });
+      document.removeEventListener('scroll', handleScroll, { capture: true });
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleScroll);
+    };
+  }, [finishMobileEditDrag, resetMobileEditDrag, resolveMobileEditDragTarget, useMobileEditDrag]);
+
+  React.useEffect(() => {
+    resetMobileEditDrag();
+  }, [adminPadColorPaintActive, bankId, editMode, resetMobileEditDrag]);
+
+  React.useEffect(() => {
+    return () => {
+      resetMobileEditDrag();
+      clearMobileEditClickSuppress();
+    };
+  }, [clearMobileEditClickSuppress, resetMobileEditDrag]);
 
   const handlePadDragStart = (e: React.DragEvent, index: number) => {
     if (!editMode || adminPadColorPaintActive) return;
@@ -318,6 +639,7 @@ export const PadGrid = React.memo(function PadGrid({
           className="hidden"
         />
         <div
+          data-vdjv-bank-drop-id={bankId}
           className={`vdjv-surface flex h-64 cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed transition-all duration-300 relative ${dragOverPadTransfer
             ? 'border-orange-400 bg-orange-100 scale-105 dark:bg-orange-950/40'
             : isDragOverGrid
@@ -363,7 +685,8 @@ export const PadGrid = React.memo(function PadGrid({
         className="hidden"
       />
       <div
-      className={`grid ${gap} w-full min-w-0 max-w-full overflow-x-hidden transition-all duration-200 ${adminPadColorPaintActive ? 'cursor-crosshair' : ''} ${dragOverPadTransfer
+      data-vdjv-bank-drop-id={bankId}
+      className={`grid ${gap} w-full min-w-0 max-w-full overflow-x-hidden transition-all duration-200 ${useMobileEditDrag ? 'touch-pan-y' : ''} ${mobileEditDragState?.active ? 'touch-none' : ''} ${adminPadColorPaintActive ? 'cursor-crosshair' : ''} ${dragOverPadTransfer
                 ? 'ring-4 ring-orange-400 ring-offset-2 ring-offset-transparent bg-orange-50 dark:bg-orange-900/20 rounded-2xl p-2'
         : channelLoadArmed
           ? 'rounded-2xl shadow-[inset_0_0_0_2px_rgba(16,185,129,0.65)] bg-emerald-50/20 dark:bg-emerald-900/10'
@@ -398,8 +721,14 @@ export const PadGrid = React.memo(function PadGrid({
           id={buildPadSearchAnchorId(bankId, pad.id)}
           data-bank-id={bankId}
           data-pad-id={pad.id}
+          data-vdjv-pad-bank-id={bankId}
+          data-vdjv-pad-index={index}
           className={`relative min-w-0 max-w-full ${aspectRatio} transition-all duration-300 ${
             editMode && dragOverIndex === index ? 'ring-2 ring-red-400' : ''
+            } ${
+            mobileEditDragState?.active && mobileEditDragState.sourcePadId === pad.id
+              ? 'z-20 scale-[1.02] opacity-75'
+              : ''
             } ${
             highlightedPadId === pad.id
               ? (theme === 'dark'
@@ -415,6 +744,8 @@ export const PadGrid = React.memo(function PadGrid({
           onDragOver={(e) => handlePadDragOver(e, index)}
           onDrop={(e) => handlePadDrop(e, index)}
           onDragLeave={(e) => handlePadDragLeave(e)}
+          onPointerDown={useMobileEditDrag ? (e) => handleMobileEditPointerDown(e, pad, index) : undefined}
+          onClickCapture={useMobileEditDrag ? handleMobileEditClickCapture : undefined}
         >
           {highlightedPadId === pad.id ? (
             <div className="sampler-search-hit-badge pointer-events-none">
@@ -461,6 +792,7 @@ export const PadGrid = React.memo(function PadGrid({
             requiresAuthToPlay={requiresAuthToPlay}
             onRequireLogin={onRequireLogin}
             onGuestTrialConsumePlayback={onGuestTrialConsumePlayback}
+            useNativeEditDrag={!useMobileEditDrag}
           />
         </div>
       ))}
@@ -504,6 +836,31 @@ export const PadGrid = React.memo(function PadGrid({
         />
       ))}
       </div>
+      {mobileEditDragState?.active && (
+        <div
+          className={`pointer-events-none fixed z-[90] max-w-[220px] rounded-xl border px-3 py-2 text-xs font-bold shadow-2xl ${
+            theme === 'dark'
+              ? 'border-amber-300/40 bg-slate-950/92 text-white'
+              : 'border-amber-500/50 bg-white/95 text-slate-950'
+          }`}
+          style={{
+            left: 0,
+            top: 0,
+            transform: `translate3d(${mobileEditDragState.currentX + 12}px, ${mobileEditDragState.currentY + 12}px, 0)`,
+          }}
+        >
+          <div className="truncate">{mobileEditDragState.sourcePadName}</div>
+          <div className={`mt-1 truncate text-[10px] font-semibold uppercase tracking-wide ${
+            theme === 'dark' ? 'text-amber-200' : 'text-amber-700'
+          }`}>
+            {mobileEditDragState.targetBankId && mobileEditDragState.targetBankId !== mobileEditDragState.sourceBankId
+              ? `Transfer to ${mobileEditDragState.targetBankName || 'bank'}`
+              : mobileEditDragState.targetIndex !== null && mobileEditDragState.targetIndex !== mobileEditDragState.sourceIndex
+                ? `Move to slot ${mobileEditDragState.targetIndex + 1}`
+                : 'Drag to a pad or bank'}
+          </div>
+        </div>
+      )}
     </>
   );
 }

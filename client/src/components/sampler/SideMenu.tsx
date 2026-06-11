@@ -16,7 +16,7 @@ import { normalizeStoredShortcutKey } from '@/lib/keyboard-shortcuts';
 import type { PerformanceTier } from '@/lib/performance-monitor';
 import { type GuestStorePreviewBank } from './hooks/useGuestStorePreviewBanks';
 import { useStorePreviewBadge } from './hooks/useStorePreviewBadge';
-import { isCanonicalDefaultBankIdentity, isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
+import { countOwnedCountedBanks, isCanonicalDefaultBankIdentity, isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { useOnlineStoreDownloadTransfer } from './hooks/useOnlineStoreDownloadTransfer';
 import { deriveSnapshotRestoreStatus } from './hooks/useSamplerStore.snapshotMetadata';
 import type { OnlineBankStoreImportMeta, StoreDownloadedArtifact, StoreItem, TransferState } from './onlineStore.types';
@@ -403,10 +403,11 @@ export function SideMenu({
   const isProAccount = capabilities.effectiveTier === 'pro';
   const showProMaxUpgradeCta = Boolean(effectiveUser && !isAdmin && isProAccount);
   const ownedBankQuotaLimit = Number(capabilities.limits.ownedBankQuota);
+  const ownedCountedBankCount = React.useMemo(() => countOwnedCountedBanks(banks), [banks]);
   const showProMaxBankLimitCta = showProMaxUpgradeCta
     && Number.isFinite(ownedBankQuotaLimit)
     && ownedBankQuotaLimit > 0
-    && banks.length >= ownedBankQuotaLimit;
+    && ownedCountedBankCount >= ownedBankQuotaLimit;
   const openProMaxUpgrade = React.useCallback((reason: string) => {
     requestUpgradePrompt(reason);
   }, [requestUpgradePrompt]);
@@ -449,7 +450,7 @@ export function SideMenu({
   const accountIdentityLabel = effectiveUser ? `${accountTierLabel} - ${displayName}` : 'GUEST';
   const isLowestGraphics = graphicsTier === 'lowest';
   const panelClass = cn(
-    'fixed inset-y-0 left-0 z-[35] flex h-[100dvh] w-64 flex-col border-r transition-transform duration-200 will-change-transform',
+    'fixed inset-y-0 left-0 z-50 flex h-[100dvh] w-64 flex-col border-r transition-transform duration-200 will-change-transform',
     theme === 'dark' ? 'border-slate-800 bg-slate-950 text-slate-100' : 'border-slate-200 bg-white text-slate-900',
     open ? 'translate-x-0 pointer-events-auto' : '-translate-x-full pointer-events-none',
     !isLowestGraphics && 'perf-high:shadow-2xl',
@@ -1454,6 +1455,7 @@ export function SideMenu({
                 return (
                   <div
                     key={isPreview ? `preview:${preview?.catalogItemId || bankId}` : bankId}
+                    data-vdjv-bank-drop-id={isPreview ? undefined : bankId}
                     className={`${bankCardSpacingClass} border-[1.5px] ${isLowestGraphics ? 'transition-none' : 'transition-all duration-200'} relative overflow-hidden ${isDragOver
                       ? 'ring-4 ring-orange-400 scale-[1.02] bg-orange-200'
                       : ''

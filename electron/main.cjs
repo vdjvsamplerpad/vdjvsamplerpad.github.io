@@ -30,6 +30,14 @@ const MAX_IMPORT_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_IMPORT_ARCHIVE_ENTRY_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
 const WINDOW_STATE_FILE_NAME = 'window-state.json';
 const GUEST_DEFAULT_BANK_TRIAL_FILE_NAME = 'guest-default-bank-trial.json';
+const MIN_WINDOW_STATE = Object.freeze({
+  width: 1100,
+  height: 700,
+});
+const MAX_WINDOW_STATE = Object.freeze({
+  width: 5000,
+  height: 4000,
+});
 const DEFAULT_WINDOW_STATE = Object.freeze({
   width: 1200,
   height: 800,
@@ -97,11 +105,11 @@ function sanitizeWindowState(rawValue) {
   const x = Number(rawValue.x);
   const y = Number(rawValue.y);
 
-  if (!Number.isFinite(width) || width < 640 || width > 5000) return null;
-  if (!Number.isFinite(height) || height < 480 || height > 4000) return null;
+  if (!Number.isFinite(width) || width > MAX_WINDOW_STATE.width) return null;
+  if (!Number.isFinite(height) || height > MAX_WINDOW_STATE.height) return null;
 
-  nextState.width = Math.round(width);
-  nextState.height = Math.round(height);
+  nextState.width = Math.round(Math.max(MIN_WINDOW_STATE.width, width));
+  nextState.height = Math.round(Math.max(MIN_WINDOW_STATE.height, height));
 
   if (Number.isFinite(x)) nextState.x = Math.round(x);
   if (Number.isFinite(y)) nextState.y = Math.round(y);
@@ -1306,6 +1314,8 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: persistedWindowState?.width || DEFAULT_WINDOW_STATE.width,
     height: persistedWindowState?.height || DEFAULT_WINDOW_STATE.height,
+    minWidth: MIN_WINDOW_STATE.width,
+    minHeight: MIN_WINDOW_STATE.height,
     ...(Number.isFinite(persistedWindowState?.x) ? { x: persistedWindowState.x } : {}),
     ...(Number.isFinite(persistedWindowState?.y) ? { y: persistedWindowState.y } : {}),
     autoHideMenuBar: true,

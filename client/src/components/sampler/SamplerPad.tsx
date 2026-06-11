@@ -54,6 +54,7 @@ interface SamplerPadProps {
   requiresAuthToPlay?: boolean;
   onRequireLogin?: (reason?: string) => void;
   onGuestTrialConsumePlayback?: (pad: PadData, bankId: string, bankName: string) => boolean;
+  useNativeEditDrag?: boolean;
 }
 
 const PLAY_GREEN_HEX = '#4ade80';
@@ -62,7 +63,7 @@ const PLAY_AMBER_BORDER_HEX = '#b45309';
 const PLAY_COLOR_DISTANCE_THRESHOLD = 90;
 const FORCE_WARM_LONG_DURATION_MS = 90_000;
 const TOUCH_TRIGGER_CLICK_SUPPRESS_MS = 700;
-const TOUCH_TRIGGER_SCROLL_CANCEL_PX = 10;
+const TOUCH_TRIGGER_SCROLL_CANCEL_PX = 8;
 const TOUCH_TRIGGER_COMMIT_MS = 45;
 const TRIGGER_DOT_SYNC_SETTLE_MS = 420;
 
@@ -73,6 +74,11 @@ type PendingTouchTriggerState = {
   mode: PendingTouchTriggerMode;
   startX: number;
   startY: number;
+  scrollElement: HTMLElement | null;
+  startScrollTop: number;
+  startScrollLeft: number;
+  startWindowScrollX: number;
+  startWindowScrollY: number;
   timer: ReturnType<typeof setTimeout> | null;
 };
 
@@ -111,6 +117,18 @@ const getContrastTextColor = (hex: string): '#111827' | '#ffffff' => {
 const withAlpha = (hex: string, alphaHex: string): string => {
   const normalized = normalizeHexColor(hex).slice(1);
   return `#${normalized}${alphaHex}`;
+};
+
+const getNearestScrollableElement = (element: HTMLElement | null): HTMLElement | null => {
+  let current = element?.parentElement || null;
+  while (current && current !== document.body) {
+    const style = window.getComputedStyle(current);
+    const canScrollY = /(auto|scroll|overlay)/.test(style.overflowY) && current.scrollHeight > current.clientHeight;
+    const canScrollX = /(auto|scroll|overlay)/.test(style.overflowX) && current.scrollWidth > current.clientWidth;
+    if (canScrollY || canScrollX) return current;
+    current = current.parentElement;
+  }
+  return null;
 };
 
 export const SamplerPad = React.memo(function SamplerPad({
@@ -152,7 +170,8 @@ export const SamplerPad = React.memo(function SamplerPad({
   onSelectPadForChannelLoad,
   requiresAuthToPlay = false,
   onRequireLogin,
-  onGuestTrialConsumePlayback
+  onGuestTrialConsumePlayback,
+  useNativeEditDrag = true
 }: SamplerPadProps) {
   const audioPlayer = useAudioPlayer(
     pad,
@@ -343,12 +362,51 @@ export const SamplerPad = React.memo(function SamplerPad({
     return true;
   };
 
-  const commitPendingTouchTrigger = (pointerId: number, reason: 'timer' | 'release' = 'timer') => {
+  const hasPendingTouchIntentMovedOrScrolled = (
+    pending: PendingTouchTriggerState,
+    clientX: number,
+    clientY: number
+  ): boolean => {
+    const deltaX = Math.abs(clientX - pending.startX);
+    const deltaY = Math.abs(clientY - pending.startY);
+    if (Math.max(deltaX, deltaY) >= TOUCH_TRIGGER_SCROLL_CANCEL_PX) return true;
+
+    if (pending.scrollElement) {
+      const scrollDeltaX = Math.abs(pending.scrollElement.scrollLeft - pending.startScrollLeft);
+      const scrollDeltaY = Math.abs(pending.scrollElement.scrollTop - pending.startScrollTop);
+      if (Math.max(scrollDeltaX, scrollDeltaY) > 1) return true;
+    }
+
+    if (typeof window !== 'undefined') {
+      const windowScrollDeltaX = Math.abs(window.scrollX - pending.startWindowScrollX);
+      const windowScrollDeltaY = Math.abs(window.scrollY - pending.startWindowScrollY);
+      if (Math.max(windowScrollDeltaX, windowScrollDeltaY) > 1) return true;
+    }
+
+    return false;
+  };
+
+  const commitPendingTouchTrigger = (
+    pointerId: number,
+    reason: 'timer' | 'release' = 'timer',
+    clientX?: number,
+    clientY?: number
+  ) => {
     const pending = pendingTouchTriggerRef.current;
     if (!pending || pending.pointerId !== pointerId) return;
 
+    if (
+      typeof clientX === 'number' &&
+      typeof clientY === 'number' &&
+      hasPendingTouchIntentMovedOrScrolled(pending, clientX, clientY)
+    ) {
+      clearPendingTouchTrigger();
+      return;
+    }
+
     clearPendingTouchTrigger();
     if (pending.mode === 'stutter') {
+      if (reason !== 'release') return;
       startStutterPlayback();
       return;
     }
@@ -360,14 +418,22 @@ export const SamplerPad = React.memo(function SamplerPad({
 
   const queueTouchTriggerIntent = (e: React.PointerEvent<HTMLButtonElement>, mode: PendingTouchTriggerMode) => {
     clearPendingTouchTrigger();
+    const scrollElement = getNearestScrollableElement(e.currentTarget);
     pendingTouchTriggerRef.current = {
       pointerId: e.pointerId,
       mode,
       startX: e.clientX,
       startY: e.clientY,
-      timer: setTimeout(() => {
-        commitPendingTouchTrigger(e.pointerId, 'timer');
-      }, TOUCH_TRIGGER_COMMIT_MS),
+      scrollElement,
+      startScrollTop: scrollElement?.scrollTop || 0,
+      startScrollLeft: scrollElement?.scrollLeft || 0,
+      startWindowScrollX: typeof window === 'undefined' ? 0 : window.scrollX,
+      startWindowScrollY: typeof window === 'undefined' ? 0 : window.scrollY,
+      timer: mode === 'hold'
+        ? setTimeout(() => {
+          commitPendingTouchTrigger(e.pointerId, 'timer');
+        }, TOUCH_TRIGGER_COMMIT_MS)
+        : null,
     };
   };
 
@@ -498,17 +564,15 @@ export const SamplerPad = React.memo(function SamplerPad({
     const pending = pendingTouchTriggerRef.current;
     if (!pending || pending.pointerId !== e.pointerId) return;
 
-    const deltaX = Math.abs(e.clientX - pending.startX);
-    const deltaY = Math.abs(e.clientY - pending.startY);
-    if (Math.max(deltaX, deltaY) < TOUCH_TRIGGER_SCROLL_CANCEL_PX) return;
-
-    clearPendingTouchTrigger();
+    if (hasPendingTouchIntentMovedOrScrolled(pending, e.clientX, e.clientY)) {
+      clearPendingTouchTrigger();
+    }
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
     const pending = pendingTouchTriggerRef.current;
     if (pending && pending.pointerId === e.pointerId) {
-      commitPendingTouchTrigger(e.pointerId, 'release');
+      commitPendingTouchTrigger(e.pointerId, 'release', e.clientX, e.clientY);
       return;
     }
     if (editMode || channelLoadArmed) return;
@@ -991,7 +1055,7 @@ export const SamplerPad = React.memo(function SamplerPad({
         onPointerUp={!editMode ? handlePointerUp : undefined}
         onPointerCancel={!editMode ? handlePointerCancel : undefined}
         onPointerLeave={pad.triggerMode === 'hold' && !editMode ? handlePointerLeave : undefined}
-        draggable={editMode && !adminColorPaintActive}
+        draggable={editMode && !adminColorPaintActive && useNativeEditDrag}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         // Added title for native browser tooltip on hover (shows full name)

@@ -1329,22 +1329,22 @@ export function WaveformTrim({
     <div className="space-y-2 select-none">
       <div className="rounded-lg border border-gray-700 bg-gray-900/80 p-2 space-y-2">
         {/* Top Row: Preview, Trim Inputs, Lock, Reset */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid grid-cols-[4.25rem_minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:flex-wrap">
           <Button
             onClick={handlePreview}
             variant={isPreviewing ? 'destructive' : 'secondary'}
             size="sm"
-            className="h-8 w-full sm:w-auto sm:min-w-[70px] gap-1.5 px-3 flex-1 sm:flex-none"
+            className="h-8 w-full min-w-0 gap-1.5 px-2 sm:w-auto sm:min-w-[70px] sm:flex-none sm:px-3"
             disabled={isLoading || effectiveDuration <= 0}
           >
             {isPreviewing ? <Square className="h-3.5 w-3.5 text-red-500" /> : <Play className="h-3.5 w-3.5 text-green-500" />}
             <span className="text-xs font-medium">{isPreviewing ? 'Stop' : 'Play'}</span>
           </Button>
 
-          <div className="flex items-center flex-1 min-w-[220px] h-8 rounded-md border border-gray-700 bg-gray-950 overflow-hidden">
+          <div className="flex h-8 min-w-0 flex-1 items-center overflow-hidden rounded-md border border-gray-700 bg-gray-950 sm:min-w-[220px]">
             <button
               type="button"
-              className="pl-3 pr-2 text-[10px] font-bold uppercase tracking-wider text-green-500 bg-gray-900/50 h-full flex items-center border-r border-gray-800 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex h-full shrink-0 items-center border-r border-gray-800 bg-gray-900/50 px-2 text-[10px] font-bold uppercase tracking-wider text-green-500 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50 sm:pl-3"
               disabled={trimMarkersLocked || isLoading || detectingSilence !== null}
               onClick={() => handleAutoSilenceTrim('in')}
               title="Auto-detect leading silence and set Trim In"
@@ -1368,7 +1368,7 @@ export function WaveformTrim({
               type="button"
               variant="ghost"
               size="sm"
-              className={`h-full rounded-none border-x border-gray-700 px-3 hover:bg-gray-800 transition-colors ${trimMarkersLocked ? 'bg-gray-800/50 text-gray-400' : 'text-gray-300'}`}
+              className={`h-full shrink-0 rounded-none border-x border-gray-700 px-2 transition-colors hover:bg-gray-800 sm:px-3 ${trimMarkersLocked ? 'bg-gray-800/50 text-gray-400' : 'text-gray-300'}`}
               onClick={handleTrimLockToggle}
               title={trimMarkersLocked ? 'Unlock markers' : 'Lock markers'}
             >
@@ -1389,7 +1389,7 @@ export function WaveformTrim({
             />
             <button
               type="button"
-              className="pr-3 pl-2 text-[10px] font-bold uppercase tracking-wider text-red-500 bg-gray-900/50 h-full flex items-center border-l border-gray-800 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex h-full shrink-0 items-center border-l border-gray-800 bg-gray-900/50 px-2 text-[10px] font-bold uppercase tracking-wider text-red-500 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50 sm:pr-3"
               disabled={trimMarkersLocked || isLoading || detectingSilence !== null}
               onClick={() => handleAutoSilenceTrim('out')}
               title="Auto-detect ending silence and set Trim Out"

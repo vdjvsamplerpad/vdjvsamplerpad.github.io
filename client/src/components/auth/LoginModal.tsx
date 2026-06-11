@@ -557,6 +557,24 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   }, [authTransition.status, awaitingSignInSync, notifyAuthSuccess, onOpenChange, pendingSessionClaim, pushNotice, user])
 
   React.useEffect(() => {
+    if (!open || !googleLoading) return
+    if (pendingSessionClaim) {
+      setGoogleLoading(false)
+      return
+    }
+    if (authTransition.status !== 'idle') return
+    if (!user) {
+      setGoogleLoading(false)
+      pushNotice?.({ variant: 'error', message: 'Google sign-in did not complete. Please try again.' })
+      return
+    }
+    setGoogleLoading(false)
+    notifyAuthSuccess()
+    pushNotice?.({ variant: 'success', message: signupOnly ? 'Account ready. Choose your V1 download.' : 'Logged in successfully.' })
+    onOpenChange(false)
+  }, [authTransition.status, googleLoading, notifyAuthSuccess, onOpenChange, open, pendingSessionClaim, pushNotice, signupOnly, user])
+
+  React.useEffect(() => {
     if (!open || !signupOnly || !user || awaitingSignInSync) return
     setLoading(false)
     setGoogleLoading(false)

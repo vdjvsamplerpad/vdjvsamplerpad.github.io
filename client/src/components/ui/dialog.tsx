@@ -93,20 +93,19 @@ type DialogContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.
 };
 
 const dialogOverlayDepthClasses = {
-  base: 'z-50',
+  base: 'z-[180]',
   nested: 'z-[220]',
   system: 'z-[240]',
 } as const;
 
 const dialogContentDepthClasses = {
-  base: 'z-50',
+  base: 'z-[190]',
   nested: 'z-[230]',
   system: 'z-[250]',
 } as const;
 
 const dialogMotionClasses = {
-  center:
-    'origin-center data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
+  center: 'vdjv-dialog-center-motion origin-center',
   none: '',
 } as const;
 
@@ -132,7 +131,7 @@ const DialogContent = React.forwardRef<
         dialogContentDepthClasses[depth],
         dialogMotionClasses[motion],
         mobileFullscreen
-          ? 'max-sm:left-0 max-sm:top-0 max-sm:h-[100dvh] max-sm:max-h-[100dvh] max-sm:w-screen max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none'
+          ? 'vdjv-dialog-mobile-fullscreen max-sm:left-0 max-sm:top-0 max-sm:h-[100dvh] max-sm:max-h-[100dvh] max-sm:w-screen max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none'
           : '',
         className,
       )}

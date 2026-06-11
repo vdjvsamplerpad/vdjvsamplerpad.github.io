@@ -30,6 +30,8 @@ import { edgeFunctionUrl } from '@/lib/edge-api';
 import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { getAudioTelemetry } from '@/lib/audio-telemetry';
 import { normalizeStopTimingOverrides } from '@/lib/audio-engine';
+import { emitAppNotice } from '@/lib/app-notices';
+import { warmEssentialOfflineModules } from '@/lib/offline-readiness';
 import {
   consumeGuestDefaultBankTrialPlay,
   loadGuestDefaultBankTrialState,
@@ -90,6 +92,7 @@ const PAD_WARMUP_IDLE_DELAY_MS = 120;
 const PAD_WARMUP_MOBILE_MAX_DURATION_MS = 120_000;
 const PAD_WARMUP_UNKNOWN_SAFE_MAX_BYTES = 1_500_000;
 const PAD_WARMUP_UNKNOWN_SAFE_MAX_TRIM_MS = 12_000;
+const OFFLINE_READINESS_STORAGE_VERSION = 'v1';
 const DECK_LOADED_BANKS_EVENT = 'vdjv-deck-loaded-banks-changed';
 const DECK_PLAYBACK_EVENT = 'vdjv-deck-playback-changed';
 
@@ -605,6 +608,8 @@ export function SamplerPadApp() {
   const [isOnline, setIsOnline] = React.useState(
     () => (typeof navigator === 'undefined' ? true : navigator.onLine)
   );
+  const previousOnlineStateRef = React.useRef<boolean | null>(null);
+  const offlineReadinessRunUserIdRef = React.useRef<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [showErrorDialog, setShowErrorDialog] = React.useState(false);
   const [missingMediaSummary, setMissingMediaSummary] = React.useState<{
@@ -761,6 +766,88 @@ export function SamplerPadApp() {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  React.useEffect(() => {
+    const wasOnline = previousOnlineStateRef.current;
+    previousOnlineStateRef.current = isOnline;
+    if (wasOnline === null) {
+      if (!isOnline) {
+        emitAppNotice({
+          variant: 'info',
+          message: 'Offline mode active. Local sampler features stay available; Store, upgrades, payment, admin sync, and new downloads need internet.',
+        });
+      }
+      return;
+    }
+    if (!wasOnline && isOnline) {
+      emitAppNotice({
+        variant: 'success',
+        message: 'Back online. Store, upgrades, payment, and account sync are available again.',
+      });
+      return;
+    }
+    if (wasOnline && !isOnline) {
+      emitAppNotice({
+        variant: 'info',
+        message: 'Offline mode active. Local sampler features stay available; Store, upgrades, payment, admin sync, and new downloads need internet.',
+      });
+    }
+  }, [isOnline]);
+
+  React.useEffect(() => {
+    if (!isOnline || loading || authTransition.status !== 'idle' || !effectiveAuthUser?.id) return;
+    const userId = effectiveAuthUser.id;
+    if (offlineReadinessRunUserIdRef.current === userId) return;
+    offlineReadinessRunUserIdRef.current = userId;
+
+    let cancelled = false;
+    const storageKey = `vdjv-offline-readiness:${OFFLINE_READINESS_STORAGE_VERSION}:${userId}`;
+    const shouldNotify = (() => {
+      if (typeof window === 'undefined') return false;
+      try {
+        return window.localStorage.getItem(storageKey) !== '1';
+      } catch {
+        return false;
+      }
+    })();
+
+    if (shouldNotify) {
+      emitAppNotice({
+        variant: 'info',
+        message: 'Preparing offline mode. Keep this app online for a moment before going offline.',
+      });
+    }
+
+    void warmEssentialOfflineModules().then((result) => {
+      if (cancelled) return;
+      const ready = result.failed.length === 0;
+      if (ready && typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(storageKey, '1');
+        } catch {
+        }
+      }
+      if (shouldNotify) {
+        emitAppNotice({
+          variant: ready ? 'success' : 'info',
+          message: ready
+            ? 'Offline mode is ready on this device. Local dialogs and saved banks can open without internet.'
+            : 'Offline mode is partially ready. Reconnect if an unopened feature does not load offline.',
+        });
+      }
+    }).catch(() => {
+      if (!cancelled && shouldNotify) {
+        emitAppNotice({
+          variant: 'info',
+          message: 'Offline preparation did not finish. Reconnect once before relying on offline dialogs.',
+        });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authTransition.status, effectiveAuthUser?.id, isOnline, loading]);
 
   React.useEffect(() => {
     performanceMonitor.setOverrideTier(settings.graphicsProfile === 'auto' ? null : settings.graphicsProfile);
@@ -1021,10 +1108,14 @@ export function SamplerPadApp() {
   const handlePadEditDialogOpenChange = React.useCallback((padId: string, open: boolean) => {
     if (open) {
       setActivePadEditId(padId);
+      setEditRequest((current) => (current?.padId === padId ? null : current));
+      setPendingPadEditRequest((current) => (current?.padId === padId ? null : current));
       setCloseEditRequest((current) => (current?.padId === padId ? null : current));
       return;
     }
     setActivePadEditId((current) => (current === padId ? null : current));
+    setEditRequest((current) => (current?.padId === padId ? null : current));
+    setPendingPadEditRequest((current) => (current?.padId === padId ? null : current));
     setCloseEditRequest((current) => (current?.padId === padId ? null : current));
   }, []);
 
@@ -1034,6 +1125,20 @@ export function SamplerPadApp() {
     setEditRequest(pendingPadEditRequest);
     setPendingPadEditRequest(null);
   }, [activePadEditId, pendingPadEditRequest]);
+
+  React.useEffect(() => {
+    if (settings.editMode) return;
+    setEditRequest(null);
+    setPendingPadEditRequest(null);
+    setCloseEditRequest(null);
+  }, [settings.editMode]);
+
+  React.useEffect(() => {
+    setEditRequest(null);
+    setPendingPadEditRequest(null);
+    setCloseEditRequest(null);
+    setActivePadEditId(null);
+  }, [currentBankId, primaryBankId, secondaryBankId]);
 
   const requestEditBank = React.useCallback((bankId: string) => {
     setEditBankRequest({ bankId, token: Date.now() });
@@ -2372,6 +2477,16 @@ export function SamplerPadApp() {
     setSearchLoadError(null);
   }, []);
 
+  const closeTransientPanelsForFocus = React.useCallback(() => {
+    if (!isPortraitOrSmallScreen && windowWidth >= 900) return;
+    if (settings.sideMenuOpen) {
+      updateSetting('sideMenuOpen', false);
+    }
+    if (settings.mixerOpen) {
+      updateSetting('mixerOpen', false);
+    }
+  }, [isPortraitOrSmallScreen, settings.mixerOpen, settings.sideMenuOpen, updateSetting, windowWidth]);
+
   const clearSearchLocator = React.useCallback(() => {
     searchLocatorTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
     searchLocatorTimersRef.current = [];
@@ -2480,23 +2595,25 @@ export function SamplerPadApp() {
     clearSearchLocator();
     setSearchLoadError(null);
     setPendingSearchLoadPicker(null);
+    closeTransientPanelsForFocus();
     applyDualSearchBankSelection(bankId, 'auto');
     setPendingSearchPadScroll({ bankId, padId, padName: '' });
     setHighlightedPadTarget(null);
     updateSetting('mixerOpen', false);
-  }, [applyDualSearchBankSelection, clearSearchLocator, updateSetting]);
+  }, [applyDualSearchBankSelection, clearSearchLocator, closeTransientPanelsForFocus, updateSetting]);
 
   const handleSearchGo = React.useCallback((result: SamplerSearchResult) => {
     setSearchLoadError(null);
     setPendingSearchLoadPicker(null);
     clearSearchLocator();
+    closeTransientPanelsForFocus();
 
     applyDualSearchBankSelection(result.bankId, 'auto');
 
     setPendingSearchPadScroll({ bankId: result.bankId, padId: result.padId, padName: result.padName });
     setHighlightedPadTarget(null);
     closeSearchOverlay();
-  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay]);
+  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay, closeTransientPanelsForFocus]);
   const handleSearchOpenBank = React.useCallback((
     result: SamplerBankSearchResult,
     target: 'auto' | 'primary' | 'secondary' = 'auto'
@@ -2504,32 +2621,35 @@ export function SamplerPadApp() {
     setSearchLoadError(null);
     setPendingSearchLoadPicker(null);
     clearSearchLocator();
+    closeTransientPanelsForFocus();
 
     applyDualSearchBankSelection(result.bankId, target);
 
     closeSearchOverlay();
-  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay]);
+  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay, closeTransientPanelsForFocus]);
   const handleSearchEditBank = React.useCallback((result: SamplerBankSearchResult) => {
     setSearchLoadError(null);
     setPendingSearchLoadPicker(null);
     clearSearchLocator();
+    closeTransientPanelsForFocus();
 
     applyDualSearchBankSelection(result.bankId, 'auto');
 
     setEditBankRequest({ bankId: result.bankId, token: Date.now() });
     closeSearchOverlay();
-  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay]);
+  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay, closeTransientPanelsForFocus]);
   const handleSearchEdit = React.useCallback((result: SamplerSearchResult) => {
     setSearchLoadError(null);
     setPendingSearchLoadPicker(null);
     clearSearchLocator();
+    closeTransientPanelsForFocus();
 
     applyDualSearchBankSelection(result.bankId, 'auto');
 
     setHighlightedPadTarget(null);
     requestEditPad(result.padId);
     closeSearchOverlay();
-  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay, requestEditPad]);
+  }, [applyDualSearchBankSelection, clearSearchLocator, closeSearchOverlay, closeTransientPanelsForFocus, requestEditPad]);
 
   const runSearchLoad = React.useCallback(async (result: SamplerSearchResult, channelId: number): Promise<boolean> => {
     if (!result.canLoad) {
@@ -2542,6 +2662,7 @@ export function SamplerPadApp() {
       setSearchLoadError('This pad is no longer available in the loaded banks.');
       return false;
     }
+    closeTransientPanelsForFocus();
 
     const targetChannel = playbackManager.getChannelStates().find((entry) => entry.channelId === channelId);
     if (targetChannel?.isPlaying) {
@@ -2565,7 +2686,7 @@ export function SamplerPadApp() {
 
     setSearchLoadError(`Failed to load "${target.pad.name}" into Channel ${channelId}.`);
     return false;
-  }, [closeSearchOverlay, executePadLoadToChannel, findSearchTarget, playbackManager, resolveSearchLoadError]);
+  }, [closeSearchOverlay, closeTransientPanelsForFocus, executePadLoadToChannel, findSearchTarget, playbackManager, resolveSearchLoadError]);
 
   const handleSearchLoad = React.useCallback((result: SamplerSearchResult) => {
     setSearchLoadError(null);
