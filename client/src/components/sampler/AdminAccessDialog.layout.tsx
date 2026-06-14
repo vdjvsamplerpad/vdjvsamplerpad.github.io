@@ -4,6 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 type AdminPageScaffoldProps = {
   panelClass: string;
@@ -332,18 +333,28 @@ export function AdminToolbar({
         <div className="flex flex-wrap items-center justify-start gap-2 xl:justify-end">
           {resultLabel ? <span className="rounded-full border px-2.5 py-1 text-xs opacity-75">{resultLabel}</span> : null}
           {moreFilters ? (
-            <details className="group relative">
-              <summary className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-[14px] border bg-white/60 px-3 text-xs font-semibold shadow-sm transition hover:bg-white dark:bg-white/[0.04] dark:hover:bg-white/[0.08]">
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-[14px] border bg-white/60 px-3 text-xs font-semibold shadow-sm transition hover:bg-white dark:bg-white/[0.04] dark:hover:bg-white/[0.08]"
+                >
                 <SlidersHorizontal className="h-3.5 w-3.5" />
                 More Filters
                 {activeFilterCount > 0 ? (
                   <span className="rounded-full bg-[#B9FF12] px-1.5 py-0.5 text-[10px] font-black text-slate-950">{activeFilterCount}</span>
                 ) : null}
-              </summary>
-              <div className="absolute right-0 z-40 mt-2 w-[min(88vw,420px)] rounded-2xl border bg-white p-3 shadow-2xl dark:bg-gray-950">
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="center"
+                sideOffset={8}
+                collisionPadding={16}
+                className="z-[360] w-[min(92vw,440px)] max-h-[min(72dvh,520px)] overflow-y-auto rounded-2xl border bg-white p-3 shadow-2xl dark:bg-gray-950"
+              >
                 {moreFilters}
-              </div>
-            </details>
+              </PopoverContent>
+            </Popover>
           ) : null}
           {onClearFilters && activeFilterCount > 0 ? (
             <Button type="button" size="sm" variant="outline" className="rounded-[14px]" onClick={onClearFilters}>

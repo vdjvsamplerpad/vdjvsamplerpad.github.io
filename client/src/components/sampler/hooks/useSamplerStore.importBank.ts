@@ -53,8 +53,12 @@ import {
 const NATIVE_IMPORT_CONCURRENCY = 1;
 const NATIVE_ANDROID_IMPORT_CONCURRENCY = 2;
 const WEB_IMPORT_CONCURRENCY = 4;
+const IOS_WEB_IMPORT_CONCURRENCY = 1;
+const IOS_CONSERVATIVE_IMPORT_BYTES = 250 * 1024 * 1024;
 const IMPORT_BATCH_FLUSH_COUNT = 12;
 const IMPORT_BATCH_FLUSH_BYTES = 48 * 1024 * 1024;
+const IOS_IMPORT_BATCH_FLUSH_COUNT = 1;
+const IOS_IMPORT_BATCH_FLUSH_BYTES = 8 * 1024 * 1024;
 const IMPORT_FILE_ACCESS_DENIED_MESSAGE =
   'Cannot read the selected file. Android denied storage access. Please import via the in-app picker and allow file access when prompted.';
 const SHARED_EXPORT_DISABLED_PASSWORD = 'vdjv-export-disabled-2024-secure';
@@ -64,6 +68,15 @@ interface BatchFileItem {
   blob: Blob;
   type: 'audio' | 'image';
 }
+
+const isLikelyIOSWebRuntime = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  const userAgent = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  const touchPoints = Number((navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints || 0);
+  return /iPad|iPhone|iPod/i.test(userAgent)
+    || (/Mac/i.test(platform) && touchPoints > 1);
+};
 
 type SegmentedImportManifest = {
   schemaVersion: number;
@@ -537,7 +550,8 @@ const runSegmentedStoreImportPipeline = async (
       remoteSnapshotApplied: replaceExistingBank?.remoteSnapshotApplied,
     };
 
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    const isIOS = isLikelyIOSWebRuntime();
+    const useConservativeIOSImport = isIOS;
     const createFastIOSBlobURL = async (blob: Blob): Promise<string> => {
       if (!isIOS) return URL.createObjectURL(blob);
       try {
@@ -560,7 +574,7 @@ const runSegmentedStoreImportPipeline = async (
     const aggressiveAndroidImport = isNativeCapacitorPlatform() && isNativeAndroid();
     const concurrentPadCount = nativeMode
       ? (aggressiveAndroidImport ? NATIVE_ANDROID_IMPORT_CONCURRENCY : NATIVE_IMPORT_CONCURRENCY)
-      : WEB_IMPORT_CONCURRENCY;
+      : (useConservativeIOSImport ? IOS_WEB_IMPORT_CONCURRENCY : WEB_IMPORT_CONCURRENCY);
     const pendingBatchFilesToStore: BatchFileItem[] = [];
     let pendingBatchBytes = 0;
     const flushPendingBatchFiles = async () => {
@@ -734,9 +748,12 @@ const runSegmentedStoreImportPipeline = async (
           onProgress?.(Math.min(97, Math.round(progress)));
           await yieldToMainThread();
         }
-        if (!nativeMode && (pendingBatchFilesToStore.length >= IMPORT_BATCH_FLUSH_COUNT || pendingBatchBytes >= IMPORT_BATCH_FLUSH_BYTES)) {
+        const flushCountLimit = useConservativeIOSImport ? IOS_IMPORT_BATCH_FLUSH_COUNT : IMPORT_BATCH_FLUSH_COUNT;
+        const flushBytesLimit = useConservativeIOSImport ? IOS_IMPORT_BATCH_FLUSH_BYTES : IMPORT_BATCH_FLUSH_BYTES;
+        if (!nativeMode && (pendingBatchFilesToStore.length >= flushCountLimit || pendingBatchBytes >= flushBytesLimit)) {
           await flushPendingBatchFiles();
         }
+        if (useConservativeIOSImport) await yieldToMainThread();
       }
     }
 
@@ -1474,7 +1491,8 @@ export const runImportBankPipeline = async (
         }
       }
 
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+      const isIOS = isLikelyIOSWebRuntime();
+      const useConservativeIOSImport = isIOS && file.size >= IOS_CONSERVATIVE_IMPORT_BYTES;
       const createFastIOSBlobURL = async (blob: Blob): Promise<string> => {
         if (!isIOS) return URL.createObjectURL(blob);
         try {
@@ -1498,7 +1516,7 @@ export const runImportBankPipeline = async (
       const aggressiveAndroidImport = isNativeCapacitorPlatform() && isNativeAndroid();
       const concurrentPadCount = nativeMode
         ? (aggressiveAndroidImport ? NATIVE_ANDROID_IMPORT_CONCURRENCY : NATIVE_IMPORT_CONCURRENCY)
-        : WEB_IMPORT_CONCURRENCY;
+        : (useConservativeIOSImport ? IOS_WEB_IMPORT_CONCURRENCY : WEB_IMPORT_CONCURRENCY);
       const pendingBatchFilesToStore: BatchFileItem[] = [];
       let pendingBatchBytes = 0;
       const importDiagnostics = {
@@ -1700,12 +1718,15 @@ export const runImportBankPipeline = async (
           await yieldToMainThread();
         }
 
+        const flushCountLimit = useConservativeIOSImport ? IOS_IMPORT_BATCH_FLUSH_COUNT : IMPORT_BATCH_FLUSH_COUNT;
+        const flushBytesLimit = useConservativeIOSImport ? IOS_IMPORT_BATCH_FLUSH_BYTES : IMPORT_BATCH_FLUSH_BYTES;
         if (!nativeMode && (
-          pendingBatchFilesToStore.length >= IMPORT_BATCH_FLUSH_COUNT ||
-          pendingBatchBytes >= IMPORT_BATCH_FLUSH_BYTES
+          pendingBatchFilesToStore.length >= flushCountLimit ||
+          pendingBatchBytes >= flushBytesLimit
         )) {
           await flushPendingBatchFiles();
         }
+        if (useConservativeIOSImport) await yieldToMainThread();
         reportImportStage(
           `Importing pads... ${Math.min(i + chunk.length, totalPads)}/${totalPads}`,
           Math.min(95, 30 + ((Math.min(i + chunk.length, totalPads) / Math.max(totalPads, 1)) * 60)),

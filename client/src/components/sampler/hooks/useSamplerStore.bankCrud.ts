@@ -621,9 +621,14 @@ export const runTransferPadPipeline = (
       originCatalogItemId: pad.originCatalogItemId,
       originBankTitle: pad.originBankTitle || src.name,
       restoreAssetKind: pad.restoreAssetKind || (sourceIsDefaultBank ? 'default_asset' : undefined),
+      sourcePadId: pad.sourcePadId || pad.originPadId || pad.id,
     };
     return prev.map((b) => {
-      if (b.id === sourceBankId) return applyBankContentPolicy({ ...b, pads: b.pads.filter((p) => p.id !== padId) });
+      if (b.id === sourceBankId) {
+        return sourceIsDefaultBank
+          ? b
+          : applyBankContentPolicy({ ...b, pads: b.pads.filter((p) => p.id !== padId) });
+      }
       if (b.id === targetBankId) {
         return applyBankContentPolicy({
           ...b,

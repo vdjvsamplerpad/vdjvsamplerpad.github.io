@@ -203,6 +203,7 @@ interface Window {
       lastError?: string | null;
     }>;
     installDownloadedAppUpdate?: () => Promise<{ ok: boolean; reason?: string }>;
+    openExternalOAuthUrl?: (payload: { url: string }) => Promise<{ ok: boolean; reason?: string }>;
     onAppUpdateState?: (
       callback: (payload: {
         enabled: boolean;
@@ -214,6 +215,9 @@ interface Window {
         lastCheckedAt?: string | null;
         lastError?: string | null;
       }) => void
+    ) => (() => void) | void;
+    onExternalAuthCallback?: (
+      callback: (payload: { url?: string } | string) => void
     ) => (() => void) | void;
     onImportArchiveProgress?: (
       callback: (payload: {

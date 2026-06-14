@@ -12,6 +12,9 @@ const yazl = require('yazl');
 const { setupAutoUpdater, disposeAutoUpdater } = require('./auto-updater.cjs');
 
 let mainWindow;
+const AUTH_CALLBACK_SCHEME = 'com.powerworkout.vdjv';
+const AUTH_CALLBACK_PREFIX = `${AUTH_CALLBACK_SCHEME}://auth/callback`;
+const pendingAuthCallbackUrls = [];
 const isDev = !app.isPackaged;
 const PORTABLE_DATA_MARKER_FILES = [
   'vdjv-portable-data.flag',
@@ -356,13 +359,26 @@ function getArchiveEntryCleanupPaths(payload) {
   return cleanupPaths;
 }
 
+function isSafeStagedExportPath(rawPath) {
+  try {
+    const resolvedPath = path.resolve(String(rawPath || ''));
+    const stagedDir = path.dirname(resolvedPath);
+    const tempRoot = path.resolve(os.tmpdir());
+    const stagedBaseName = path.basename(stagedDir);
+    return stagedDir.startsWith(`${tempRoot}${path.sep}`) && stagedBaseName.startsWith('vdjv-export-stage-');
+  } catch {
+    return false;
+  }
+}
+
 async function cleanupStagedExportEntriesElectron(payload) {
   const rawPaths = Array.isArray(payload?.paths) ? payload.paths : [];
   const stagedDirs = Array.from(
     new Set(
       rawPaths
         .filter((value) => typeof value === 'string' && value.trim().length > 0)
-        .map((value) => path.dirname(value))
+        .filter((value) => isSafeStagedExportPath(value))
+        .map((value) => path.dirname(path.resolve(value)))
     )
   );
   await Promise.all(
@@ -1123,6 +1139,40 @@ function isAllowedExternalUrl(rawUrl) {
   }
 }
 
+function isAuthCallbackUrl(rawUrl) {
+  const normalized = String(rawUrl || '').trim();
+  return normalized.startsWith(AUTH_CALLBACK_PREFIX);
+}
+
+function dispatchAuthCallbackUrl(rawUrl) {
+  const url = String(rawUrl || '').trim();
+  if (!isAuthCallbackUrl(url)) return false;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.show();
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+      mainWindow.webContents.send('vdjv-auth-callback-url', { url });
+      return true;
+    } catch {
+    }
+  }
+  pendingAuthCallbackUrls.push(url);
+  return true;
+}
+
+function drainPendingAuthCallbacks() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  while (pendingAuthCallbackUrls.length > 0) {
+    const url = pendingAuthCallbackUrls.shift();
+    if (url) dispatchAuthCallbackUrl(url);
+  }
+}
+
+function findAuthCallbackArg(argv) {
+  return (Array.isArray(argv) ? argv : []).find((entry) => isAuthCallbackUrl(entry)) || null;
+}
+
 function setupWindowStateCycle(win) {
   let cycleMode = 'windowed';
   let normalBounds = readWindowState() || win.getBounds();
@@ -1340,6 +1390,7 @@ function createMainWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    drainPendingAuthCallbacks();
   });
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -1379,6 +1430,7 @@ function createMainWindow() {
   ipcMain.removeHandler('vdjv-native-media-write');
   ipcMain.removeHandler('vdjv-native-media-read');
   ipcMain.removeHandler('vdjv-native-media-delete');
+  ipcMain.removeHandler('vdjv-auth-open-external-oauth');
   ipcMain.removeAllListeners('vdjv-system-memory-info');
   ipcMain.handle('vdjv-window-toggle-fullscreen', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return false;
@@ -1437,6 +1489,14 @@ function createMainWindow() {
   ipcMain.handle('vdjv-save-file', async (_event, payload) => {
     return await saveFileElectron(payload);
   });
+  ipcMain.handle('vdjv-auth-open-external-oauth', async (_event, payload) => {
+    const url = String(payload?.url || '').trim();
+    if (!isAllowedExternalUrl(url)) {
+      return { ok: false, reason: 'invalid_url' };
+    }
+    await shell.openExternal(url);
+    return { ok: true };
+  });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
@@ -1460,12 +1520,48 @@ function createMainWindow() {
     ipcMain.removeHandler('vdjv-native-media-write');
     ipcMain.removeHandler('vdjv-native-media-read');
     ipcMain.removeHandler('vdjv-native-media-delete');
+    ipcMain.removeHandler('vdjv-auth-open-external-oauth');
     ipcMain.removeAllListeners('vdjv-system-memory-info');
     mainWindow = null;
   });
 }
 
+try {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(AUTH_CALLBACK_SCHEME, process.execPath, [path.resolve(process.argv[1])]);
+  } else {
+    app.setAsDefaultProtocolClient(AUTH_CALLBACK_SCHEME);
+  }
+} catch {
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const callbackUrl = findAuthCallbackArg(argv);
+    if (callbackUrl) {
+      dispatchAuthCallbackUrl(callbackUrl);
+      return;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
+app.on('open-url', (event, url) => {
+  if (isAuthCallbackUrl(url)) {
+    event.preventDefault();
+    dispatchAuthCallbackUrl(url);
+  }
+});
+
 app.on('window-all-closed', () => {
+  if (app.vdjvInstallingUpdate) return;
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -1477,6 +1573,8 @@ app.whenReady().then(() => {
   if (process.platform === 'win32') {
     app.setAppUserModelId('com.vdjv.samplerpad.desktop');
   }
+  const initialCallbackUrl = findAuthCallbackArg(process.argv);
+  if (initialCallbackUrl) dispatchAuthCallbackUrl(initialCallbackUrl);
   createMainWindow();
   if (!isPortableDataMode) {
     setupAutoUpdater({

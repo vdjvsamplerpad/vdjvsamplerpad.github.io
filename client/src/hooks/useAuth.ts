@@ -75,6 +75,17 @@ const closeNativeOAuthBrowser = async (): Promise<void> => {
   }
 };
 
+const isElectronOAuthRuntime = (): boolean => (
+  typeof window !== 'undefined' && typeof window.electronAPI?.openExternalOAuthUrl === 'function'
+);
+
+const isStandaloneIosPwaRuntime = (): boolean => {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const standalone = window.matchMedia?.('(display-mode: standalone)').matches
+    || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+  return standalone && /iPad|iPhone|iPod/i.test(navigator.userAgent || '');
+};
+
 export const isPasswordRecoveryMode = (): boolean => {
   if (typeof window === 'undefined') return false
   try {
@@ -246,6 +257,7 @@ interface AuthActions {
   signIn: (email: string, password: string) => Promise<{ error?: AuthError | null; data?: { user: User | null } }>
   continueOffline: () => Promise<{ error?: AuthError | null; data?: { user: User | null } }>
   signInWithGoogle: (redirectTo?: string) => Promise<{ error?: AuthError | null }>
+  cancelGoogleSignIn: () => Promise<void>
   signOut: () => Promise<{ error?: AuthError | null }>
   getAuthenticatedAccessToken: () => Promise<AuthAccessTokenResult>
   deleteAccount: (options: { phrase: string; acknowledge: boolean; password?: string; otp?: string }) => Promise<{ error?: AuthError | null }>
@@ -1044,6 +1056,225 @@ function useAuthValue(): AuthProviderValue {
     return () => window.clearTimeout(timeoutId)
   }, [state.authTransition.status])
 
+  const cancelGoogleSignIn = React.useCallback(async () => {
+    if (!isGoogleOAuthLoginPending() && authTransitionStatusRef.current !== 'signing_in') return
+    setGoogleOAuthLoginPending(false)
+    setAuthTransition('idle')
+    await closeNativeOAuthBrowser()
+    void logActivityEvent({
+      eventType: 'auth.login',
+      status: 'failed',
+      email: null,
+      errorMessage: 'Google sign-in was cancelled before a session was created.',
+      meta: {
+        source: 'useAuth.googleOAuthCancel',
+        provider: 'google',
+      },
+    }).catch(() => {})
+  }, [setAuthTransition])
+
+  React.useEffect(() => {
+    if (!isNativeCapacitorRuntime()) return
+    let listenerHandle: { remove?: () => Promise<void> | void } | null = null
+    let disposed = false
+
+    const setup = async () => {
+      try {
+        const { Browser } = await import('@capacitor/browser')
+        const nextHandle = await Browser.addListener('browserFinished', async () => {
+          const pending = isGoogleOAuthLoginPending()
+          if (!pending) return
+          const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } as any }))
+          if (data?.session) return
+          setGoogleOAuthLoginPending(false)
+          setAuthTransition('idle')
+          void logActivityEvent({
+            eventType: 'auth.login',
+            status: 'failed',
+            email: null,
+            errorMessage: 'Google sign-in browser closed before completion.',
+            meta: {
+              source: 'useAuth.googleOAuthBrowserFinished',
+              provider: 'google',
+            },
+          }).catch(() => {})
+        })
+        if (disposed) {
+          void nextHandle?.remove?.()
+          return
+        }
+        listenerHandle = nextHandle
+      } catch {
+      }
+    }
+    void setup()
+
+    return () => {
+      disposed = true
+      void listenerHandle?.remove?.()
+    }
+  }, [setAuthTransition])
+
+  React.useEffect(() => {
+    if (isNativeCapacitorRuntime()) return
+    if (typeof window === 'undefined') return
+    let checkTimer: number | null = null
+
+    const clearCheckTimer = () => {
+      if (checkTimer !== null) {
+        window.clearTimeout(checkTimer)
+        checkTimer = null
+      }
+    }
+
+    const scheduleOAuthReturnCheck = () => {
+      if (!isGoogleOAuthLoginPending()) return
+      if (document.visibilityState === 'hidden') return
+      clearCheckTimer()
+      checkTimer = window.setTimeout(async () => {
+        if (!isGoogleOAuthLoginPending()) return
+        const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } as any }))
+        if (data?.session) return
+        setGoogleOAuthLoginPending(false)
+        setAuthTransition('idle')
+        void logActivityEvent({
+          eventType: 'auth.login',
+          status: 'failed',
+          email: null,
+          errorMessage: 'Google sign-in did not return a session.',
+          meta: {
+            source: 'useAuth.googleOAuthFocusReturn',
+            provider: 'google',
+          },
+        }).catch(() => {})
+      }, 1800)
+    }
+
+    window.addEventListener('focus', scheduleOAuthReturnCheck)
+    window.addEventListener('pageshow', scheduleOAuthReturnCheck)
+    document.addEventListener('visibilitychange', scheduleOAuthReturnCheck)
+    return () => {
+      clearCheckTimer()
+      window.removeEventListener('focus', scheduleOAuthReturnCheck)
+      window.removeEventListener('pageshow', scheduleOAuthReturnCheck)
+      document.removeEventListener('visibilitychange', scheduleOAuthReturnCheck)
+    }
+  }, [setAuthTransition])
+
+  const handleOAuthCallbackUrl = React.useCallback(async (
+    url: string,
+    source: string,
+    options?: { closeNativeBrowser?: boolean },
+  ) => {
+    const normalizedUrl = String(url || '').trim()
+    if (!normalizedUrl) return
+
+    if (options?.closeNativeBrowser) {
+      await closeNativeOAuthBrowser()
+    }
+
+    try {
+      const params = getCallbackParams(normalizedUrl)
+      const authError =
+        params.get('error_description') ||
+        params.get('error') ||
+        params.get('error_code')
+
+      if (authError) {
+        setGoogleOAuthLoginPending(false)
+        setAuthTransition('idle')
+        void logActivityEvent({
+          eventType: 'auth.login',
+          status: 'failed',
+          email: null,
+          errorMessage: authError,
+          meta: {
+            source,
+            provider: 'google',
+          },
+        }).catch(() => {})
+        return
+      }
+
+      const accessToken = params.get('access_token')
+      const refreshToken = params.get('refresh_token')
+      const code = params.get('code')
+      const authResult = accessToken && refreshToken
+        ? await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          })
+        : code
+          ? await supabase.auth.exchangeCodeForSession(code)
+          : null
+
+      if (!authResult) {
+        setGoogleOAuthLoginPending(false)
+        setAuthTransition('idle')
+        void logActivityEvent({
+          eventType: 'auth.login',
+          status: 'failed',
+          email: null,
+          errorMessage: 'OAuth callback did not include a session token or code.',
+          meta: {
+            source,
+            provider: 'google',
+          },
+        }).catch(() => {})
+        return
+      }
+
+      if (authResult.error) {
+        setGoogleOAuthLoginPending(false)
+        setAuthTransition('idle')
+        void logActivityEvent({
+          eventType: 'auth.login',
+          status: 'failed',
+          email: null,
+          errorMessage: authResult.error.message,
+          meta: {
+            source,
+            provider: 'google',
+          },
+        }).catch(() => {})
+        if (isBanError(authResult.error)) {
+          await enforceBan()
+        }
+        return
+      }
+
+      if (authResult.data.session) {
+        await fetchSessionAndProfileRef.current?.(authResult.data.session)
+      }
+    } catch (error) {
+      setGoogleOAuthLoginPending(false)
+      setAuthTransition('idle')
+      void logActivityEvent({
+        eventType: 'auth.login',
+        status: 'failed',
+        email: null,
+        errorMessage: error instanceof Error ? error.message : 'OAuth callback failed.',
+        meta: {
+          source,
+          provider: 'google',
+        },
+      }).catch(() => {})
+    }
+  }, [enforceBan, setAuthTransition])
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return
+    const subscribe = window.electronAPI?.onExternalAuthCallback
+    if (typeof subscribe !== 'function') return
+    const unsubscribe = subscribe((payload) => {
+      const url = typeof payload === 'string' ? payload : String(payload?.url || '')
+      void handleOAuthCallbackUrl(url, 'useAuth.electronOAuthCallback')
+    })
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe()
+    }
+  }, [handleOAuthCallbackUrl])
+
   React.useEffect(() => {
     const app = getCapacitorAppPlugin()
     if (!app?.addListener) return
@@ -1054,96 +1285,7 @@ function useAuthValue(): AuthProviderValue {
     const handleNativeAuthCallback = async (payload?: { url?: string }) => {
       const url = String(payload?.url || '').trim()
       if (!isCapacitorAuthCallbackUrl(url)) return
-
-      await closeNativeOAuthBrowser()
-
-      try {
-        const params = getCallbackParams(url)
-        const authError =
-          params.get('error_description') ||
-          params.get('error') ||
-          params.get('error_code')
-
-        if (authError) {
-          setGoogleOAuthLoginPending(false)
-          setAuthTransition('idle')
-          void logActivityEvent({
-            eventType: 'auth.login',
-            status: 'failed',
-            email: null,
-            errorMessage: authError,
-            meta: {
-              source: 'useAuth.nativeOAuthCallback',
-              provider: 'google',
-            },
-          }).catch(() => {})
-          return
-        }
-
-        const accessToken = params.get('access_token')
-        const refreshToken = params.get('refresh_token')
-        const code = params.get('code')
-        const authResult = accessToken && refreshToken
-          ? await supabase.auth.setSession({
-              access_token: accessToken,
-              refresh_token: refreshToken,
-            })
-          : code
-            ? await supabase.auth.exchangeCodeForSession(code)
-            : null
-
-        if (!authResult) {
-          setGoogleOAuthLoginPending(false)
-          setAuthTransition('idle')
-          void logActivityEvent({
-            eventType: 'auth.login',
-            status: 'failed',
-            email: null,
-            errorMessage: 'Native OAuth callback did not include a session token or code.',
-            meta: {
-              source: 'useAuth.nativeOAuthCallback',
-              provider: 'google',
-            },
-          }).catch(() => {})
-          return
-        }
-
-        if (authResult.error) {
-          setGoogleOAuthLoginPending(false)
-          setAuthTransition('idle')
-          void logActivityEvent({
-            eventType: 'auth.login',
-            status: 'failed',
-            email: null,
-            errorMessage: authResult.error.message,
-            meta: {
-              source: 'useAuth.nativeOAuthCallback',
-              provider: 'google',
-            },
-          }).catch(() => {})
-          if (isBanError(authResult.error)) {
-            await enforceBan()
-          }
-          return
-        }
-
-        if (authResult.data.session) {
-          await fetchSessionAndProfileRef.current?.(authResult.data.session)
-        }
-      } catch (error) {
-        setGoogleOAuthLoginPending(false)
-        setAuthTransition('idle')
-        void logActivityEvent({
-          eventType: 'auth.login',
-          status: 'failed',
-          email: null,
-          errorMessage: error instanceof Error ? error.message : 'Native OAuth callback failed.',
-          meta: {
-            source: 'useAuth.nativeOAuthCallback',
-            provider: 'google',
-          },
-        }).catch(() => {})
-      }
+      await handleOAuthCallbackUrl(url, 'useAuth.nativeOAuthCallback', { closeNativeBrowser: true })
     }
 
     const nextHandle = app.addListener('appUrlOpen', handleNativeAuthCallback)
@@ -1161,7 +1303,7 @@ function useAuthValue(): AuthProviderValue {
       disposed = true
       void listenerHandle?.remove?.()
     }
-  }, [enforceBan, setAuthTransition])
+  }, [handleOAuthCallbackUrl])
 
   React.useEffect(() => {
     if (!state.user || state.banned) return
@@ -1432,11 +1574,16 @@ function useAuthValue(): AuthProviderValue {
     setAuthTransition('signing_in', 'Google')
     setGoogleOAuthLoginPending(true)
     const nativeOAuth = isNativeCapacitorRuntime()
+    const iosStandalonePwa = isStandaloneIosPwaRuntime()
+    const electronOAuth = !nativeOAuth && !iosStandalonePwa && isElectronOAuthRuntime()
+    // iOS Add-to-Home-Screen must keep OAuth in the PWA window until a Universal Link
+    // handoff exists; external Safari would land the session outside the standalone app.
+    const externalOAuth = nativeOAuth || electronOAuth
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: nativeOAuth ? getCapacitorAuthRedirectUrl() : redirectTo,
-        skipBrowserRedirect: nativeOAuth,
+        redirectTo: externalOAuth ? getCapacitorAuthRedirectUrl() : redirectTo,
+        skipBrowserRedirect: externalOAuth,
         queryParams: {
           prompt: 'select_account',
         },
@@ -1459,7 +1606,30 @@ function useAuthValue(): AuthProviderValue {
         await enforceBan()
       }
     }
-    if (!error && nativeOAuth) {
+    if (!error && electronOAuth) {
+      const authUrl = data?.url
+      if (!authUrl) {
+        const electronError = {
+          message: 'Google sign-in could not open. Please try again.',
+        } as AuthError
+        setGoogleOAuthLoginPending(false)
+        setAuthTransition('idle')
+        return { error: electronError }
+      }
+      try {
+        const result = await window.electronAPI?.openExternalOAuthUrl?.({ url: authUrl })
+        if (!result?.ok) {
+          throw new Error(result?.reason || 'external_browser_failed')
+        }
+      } catch (openError) {
+        const electronError = {
+          message: openError instanceof Error ? openError.message : 'Google sign-in could not open. Please try again.',
+        } as AuthError
+        setGoogleOAuthLoginPending(false)
+        setAuthTransition('idle')
+        return { error: electronError }
+      }
+    } else if (!error && nativeOAuth) {
       const authUrl = data?.url
       if (!authUrl) {
         const nativeError = {
@@ -1978,6 +2148,7 @@ function useAuthValue(): AuthProviderValue {
     signIn,
     continueOffline,
     signInWithGoogle,
+    cancelGoogleSignIn,
     signOut,
     getAuthenticatedAccessToken,
     deleteAccount,
@@ -1990,6 +2161,7 @@ function useAuthValue(): AuthProviderValue {
     confirmSessionClaim,
     cancelSessionClaim,
   }), [
+    cancelGoogleSignIn,
     cancelSessionClaim,
     clearSessionConflictReason,
     confirmSessionClaim,

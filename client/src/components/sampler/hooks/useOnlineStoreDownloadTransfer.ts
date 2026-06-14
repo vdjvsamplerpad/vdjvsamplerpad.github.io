@@ -90,9 +90,29 @@ const shouldInvalidateArtifactAfterImportError = (message: string): boolean => {
         || lowered.includes('no valid pads found');
 };
 
-const LARGE_WEB_STORE_DOWNLOAD_WARNING_BYTES = 250 * 1024 * 1024;
+export const LARGE_WEB_STORE_DOWNLOAD_WARNING_BYTES = 250 * 1024 * 1024;
+const IOS_WEB_STORE_DOWNLOAD_CONCURRENCY_LIMIT = 1;
+const DEFAULT_STORE_DOWNLOAD_CONCURRENCY_LIMIT = 3;
 
-const isLikelyIOSWebRuntime = (): boolean => {
+export const getStoreItemFileSizeBytes = (item: Pick<StoreItem, 'file_size_bytes'>): number => {
+    const bytes = Number(item.file_size_bytes);
+    return Number.isFinite(bytes) ? Math.max(0, Math.floor(bytes)) : 0;
+};
+
+export const storeItemHasLowMemoryVariant = (
+    item: Pick<StoreItem, 'has_low_memory_variant' | 'low_memory_variant_id' | 'low_memory_part_count'>
+): boolean => {
+    return Boolean(
+        item.has_low_memory_variant
+        || item.low_memory_variant_id
+        || (Number.isFinite(Number(item.low_memory_part_count)) && Number(item.low_memory_part_count) > 0)
+    );
+};
+
+export const isLargeStoreDownload = (item: Pick<StoreItem, 'file_size_bytes'>): boolean =>
+    getStoreItemFileSizeBytes(item) >= LARGE_WEB_STORE_DOWNLOAD_WARNING_BYTES;
+
+export const isLikelyIOSWebRuntime = (): boolean => {
     if (typeof navigator === 'undefined') return false;
     const userAgent = navigator.userAgent || '';
     const platform = navigator.platform || '';
@@ -100,6 +120,9 @@ const isLikelyIOSWebRuntime = (): boolean => {
     return /iPad|iPhone|iPod/i.test(userAgent)
         || (/Mac/i.test(platform) && touchPoints > 1);
 };
+
+export const requiresIOSLowMemoryVariant = (item: StoreItem): boolean =>
+    isLikelyIOSWebRuntime() && isLargeStoreDownload(item) && !storeItemHasLowMemoryVariant(item);
 
 const isLikelySafariBrowser = (): boolean => {
     if (typeof navigator === 'undefined') return false;
@@ -109,7 +132,7 @@ const isLikelySafariBrowser = (): boolean => {
 };
 
 const shouldRecommendLowMemoryImport = (item: StoreItem): boolean => {
-    if (!item.has_low_memory_variant) return false;
+    if (!storeItemHasLowMemoryVariant(item)) return false;
     const bytes = Number.isFinite(Number(item.low_memory_total_bytes ?? item.file_size_bytes))
         ? Math.max(0, Number(item.low_memory_total_bytes ?? item.file_size_bytes))
         : 0;
@@ -229,6 +252,50 @@ export function useOnlineStoreDownloadTransfer({
                 bankId: item.bank_id,
                 phase: transfers[item.id]?.phase || null,
             });
+            return;
+        }
+
+        if (requiresIOSLowMemoryVariant(item)) {
+            const message = 'This bank needs a low-memory variant before it can be imported safely on iPhone or iPad.';
+            pushDownloadDebugLog('error', 'download_blocked_ios_low_memory_required', {
+                catalogItemId: item.id,
+                bankId: item.bank_id,
+                bankTitle: item.bank.title,
+                fileSizeBytes: getStoreItemFileSizeBytes(item),
+            });
+            const now = Date.now();
+            setTransfers(prev => ({
+                ...prev,
+                [item.id]: {
+                    phase: 'error',
+                    progress: 0,
+                    error: message,
+                    errorStage: 'download',
+                    startedAt: prev[item.id]?.startedAt || now,
+                    updatedAt: now,
+                },
+            }));
+            showToast(message, 'error');
+            return;
+        }
+
+        const activeTransferCount = Object.values(transfers).filter((transfer) =>
+            transfer?.phase === 'downloading' || transfer?.phase === 'importing'
+        ).length;
+        const activeTransferLimit = isLikelyIOSWebRuntime()
+            ? IOS_WEB_STORE_DOWNLOAD_CONCURRENCY_LIMIT
+            : DEFAULT_STORE_DOWNLOAD_CONCURRENCY_LIMIT;
+        if (activeTransferCount >= activeTransferLimit) {
+            const message = isLikelyIOSWebRuntime()
+                ? 'Finish the current Bank Store download before starting another on iPhone or iPad.'
+                : `Bank Store can download up to ${activeTransferLimit} banks at a time.`;
+            pushDownloadDebugLog('info', 'download_blocked_concurrency_limit', {
+                catalogItemId: item.id,
+                bankId: item.bank_id,
+                activeTransferCount,
+                activeTransferLimit,
+            });
+            showToast(message, 'error');
             return;
         }
 
@@ -470,6 +537,19 @@ export function useOnlineStoreDownloadTransfer({
                     : planPayload) as StoreDownloadPlan;
                 if (!resolvedPlan || (resolvedPlan.mode !== 'full' && resolvedPlan.mode !== 'low_memory_segmented')) {
                     throw new Error('Download plan missing');
+                }
+                if (
+                    requestedMode === 'low_memory_segmented'
+                    && resolvedPlan.mode === 'full'
+                    && isLikelyIOSWebRuntime()
+                    && isLargeStoreDownload(item)
+                ) {
+                    pushDownloadDebugLog('error', 'download_plan_low_memory_unavailable_for_ios', {
+                        catalogItemId: item.id,
+                        bankId: item.bank_id,
+                        fileSizeBytes: getStoreItemFileSizeBytes(item),
+                    });
+                    throw new Error('This bank needs a low-memory variant before it can be imported safely on iPhone or iPad.');
                 }
                 importedBankDerivedKey = resolvedPlan.derivedKey || importedBankDerivedKey;
                 importedEntitlementToken = resolvedPlan.entitlementToken || importedEntitlementToken;
@@ -871,7 +951,9 @@ export function useOnlineStoreDownloadTransfer({
                     updatedAt: Date.now()
                 }
             }));
-            if (failedStage === 'import') {
+            if (errorMessage.toLowerCase().includes('low-memory variant')) {
+                showToast(errorMessage, 'error');
+            } else if (failedStage === 'import') {
                 showToast(displayErrorMessage, 'error');
             } else if (failedStage === 'checksum') {
                 showToast('Downloaded file failed integrity check. Re-download required.', 'error');

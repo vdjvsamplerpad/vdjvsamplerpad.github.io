@@ -116,8 +116,62 @@ async function promptForInstall() {
     detail: 'Restart now to install the update, or close the app later to install on exit.',
   });
   if (result.response === 0 && activeUpdater) {
-    activeUpdater.quitAndInstall();
+    void installDownloadedUpdate('prompt');
   }
+}
+
+async function installDownloadedUpdate(trigger = 'manual') {
+  if (!activeUpdater) return { ok: false, reason: 'disabled' };
+  if (checkTimer) {
+    clearInterval(checkTimer);
+    checkTimer = null;
+  }
+  pushUpdateState({
+    enabled: true,
+    status: 'installing',
+    message: 'Closing VDJV Sampler Pad to install the update...',
+    lastError: null,
+  });
+  app.vdjvInstallingUpdate = true;
+
+  const win = windowResolver();
+  try {
+    if (win && !win.isDestroyed()) {
+      await new Promise((resolve) => {
+        const done = () => resolve(undefined);
+        win.once('closed', done);
+        try {
+          win.close();
+        } catch {
+          done();
+        }
+        setTimeout(() => {
+          try {
+            if (!win.isDestroyed()) win.destroy();
+          } catch {
+          }
+          resolve(undefined);
+        }, 1800);
+      });
+    }
+  } catch {
+  }
+
+  setTimeout(() => {
+    try {
+      activeUpdater?.quitAndInstall(false, true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error(`[auto-update] install failed (${trigger}):`, message);
+      pushUpdateState({
+        enabled: true,
+        status: 'error',
+        message: 'Could not start the update installer.',
+        lastError: message,
+      });
+    }
+  }, 250);
+  return { ok: true };
 }
 
 async function checkForUpdates(trigger = 'manual') {
@@ -161,9 +215,7 @@ function setupAutoUpdater({ getMainWindow }) {
   ipcMain.handle('vdjv-app-update-get-state', () => updateState);
   ipcMain.handle('vdjv-app-update-check', async () => checkForUpdates('manual'));
   ipcMain.handle('vdjv-app-update-install', async () => {
-    if (!activeUpdater) return { ok: false, reason: 'disabled' };
-    activeUpdater.quitAndInstall();
-    return { ok: true };
+    return await installDownloadedUpdate('ipc');
   });
 
   if (process.platform !== 'win32') {

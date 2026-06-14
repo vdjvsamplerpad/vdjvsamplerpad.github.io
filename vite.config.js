@@ -119,6 +119,7 @@ export default defineConfig(({ mode }) => {
   const isElectron = env.ELECTRON === 'true';
   const isCapacitor = env.CAPACITOR === 'true';
   const includeLanding = env.VITE_INCLUDE_LANDING === 'false' ? false : (!isElectron && !isCapacitor);
+  const buildSourcemap = env.VITE_BUILD_SOURCEMAP === 'true';
   const requiredClientEnv = ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'];
   const missingClientEnv = requiredClientEnv.filter((key) => !String(env[key] || '').trim());
 
@@ -221,16 +222,41 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: '../dist/public',
       emptyOutDir: true, 
-      sourcemap: true,
+      sourcemap: buildSourcemap,
       minify: 'terser',
       rollupOptions: {
         output: {
-          manualChunks: {
-            'react-vendor': ['react', 'react-dom'],
-            'ui-vendor': ['@radix-ui/react-dialog', '@radix-ui/react-popover', '@radix-ui/react-select', '@radix-ui/react-switch', '@radix-ui/react-progress', '@radix-ui/react-checkbox', '@radix-ui/react-label', '@radix-ui/react-slider', '@radix-ui/react-toggle', '@radix-ui/react-tooltip'],
-            'supabase-vendor': ['@supabase/supabase-js'],
-            'utils-vendor': ['jszip', 'lucide-react', 'class-variance-authority', 'clsx', 'tailwind-merge'],
-            'cmd-vendor': ['cmdk'],
+          manualChunks: (id) => {
+            const normalizedId = id.replace(/\\/g, '/');
+            if (normalizedId.includes('/node_modules/react/') || normalizedId.includes('/node_modules/react-dom/')) {
+              return 'react-vendor';
+            }
+            if (
+              normalizedId.includes('/node_modules/@radix-ui/react-dialog/') ||
+              normalizedId.includes('/node_modules/@radix-ui/react-popover/') ||
+              normalizedId.includes('/node_modules/@radix-ui/react-select/') ||
+              normalizedId.includes('/node_modules/@radix-ui/react-switch/') ||
+              normalizedId.includes('/node_modules/@radix-ui/react-progress/') ||
+              normalizedId.includes('/node_modules/@radix-ui/react-checkbox/') ||
+              normalizedId.includes('/node_modules/@radix-ui/react-label/') ||
+              normalizedId.includes('/node_modules/@radix-ui/react-slider/') ||
+              normalizedId.includes('/node_modules/@radix-ui/react-toggle/') ||
+              normalizedId.includes('/node_modules/@radix-ui/react-tooltip/')
+            ) {
+              return 'ui-vendor';
+            }
+            if (normalizedId.includes('/node_modules/@supabase/supabase-js/')) return 'supabase-vendor';
+            if (
+              normalizedId.includes('/node_modules/jszip/') ||
+              normalizedId.includes('/node_modules/lucide-react/') ||
+              normalizedId.includes('/node_modules/class-variance-authority/') ||
+              normalizedId.includes('/node_modules/clsx/') ||
+              normalizedId.includes('/node_modules/tailwind-merge/')
+            ) {
+              return 'utils-vendor';
+            }
+            if (normalizedId.includes('/node_modules/cmdk/')) return 'cmd-vendor';
+            return undefined;
           },
           chunkFileNames: (chunkInfo) => {
             return `assets/[name]-[hash].js`;

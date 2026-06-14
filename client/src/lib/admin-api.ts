@@ -345,6 +345,11 @@ export interface AdminStoreCatalogItem {
   coming_soon?: boolean;
   asset_protection?: 'encrypted' | 'public' | null;
   file_size_bytes?: number | null;
+  has_low_memory_variant?: boolean;
+  low_memory_variant_id?: string | null;
+  low_memory_part_count?: number | null;
+  low_memory_total_bytes?: number | null;
+  low_memory_min_client_version?: string | null;
   storage_key?: string | null;
   expected_asset_name?: string | null;
   price_php?: number | null;
@@ -1251,6 +1256,28 @@ export const adminApi = {
     return callStoreApi<{
       report: { id: string; status: 'new' | 'acknowledged' | 'fixed' | 'ignored'; updated_at: string };
     }>('PATCH', `admin/store/crash-reports/${reportId}`, { status });
+  },
+
+  async fetchClientCrashReportLog(reportId: string) {
+    const headers = await getAuthHeaders(true);
+    const response = await fetch(edgeFunctionUrl('store-api', `admin/store/crash-reports/${reportId}/log`), {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+      headers,
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(String(payload?.error || payload?.message || `Crash report log request failed (${response.status})`));
+    }
+    const contentType = response.headers.get('Content-Type') || 'text/plain;charset=utf-8';
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const fileNameMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+    const fileName = fileNameMatch?.[1]
+      ? decodeURIComponent(fileNameMatch[1].replace(/^"|"$/g, '').trim())
+      : `crash-report-${reportId}.log`;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return { bytes, contentType, fileName };
   },
 
   async listInstallerPackages(version: InstallerVersionKey) {

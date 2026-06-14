@@ -10,10 +10,18 @@ import { Loader2, Download, ShoppingCart, LockIcon, ExternalLink, Check, X, Chev
 import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { Input } from '@/components/ui/input';
 import { useOnlineStoreDebugLog } from '@/components/sampler/hooks/useOnlineStoreDebugLog';
-import { useOnlineStoreDownloadTransfer, type StoreHandleDownloadOptions } from '@/components/sampler/hooks/useOnlineStoreDownloadTransfer';
+import {
+    isLargeStoreDownload,
+    isLikelyIOSWebRuntime,
+    requiresIOSLowMemoryVariant,
+    storeItemHasLowMemoryVariant,
+    useOnlineStoreDownloadTransfer,
+    type StoreHandleDownloadOptions,
+} from '@/components/sampler/hooks/useOnlineStoreDownloadTransfer';
 import { useOnlineStoreCatalogData } from '@/components/sampler/hooks/useOnlineStoreCatalogData';
 import { useOnlineStorePurchaseFlow } from '@/components/sampler/hooks/useOnlineStorePurchaseFlow';
 import { captureProductEvent } from '@/lib/productAnalytics';
+import { buildFeatureGateMessage } from '@/lib/account-capabilities';
 import {
     OnlineBankStoreImportMeta,
     PaymentChannel,
@@ -40,6 +48,8 @@ interface OnlineBankStoreDialogProps {
         onProgress?: (progress: number) => void
     ) => Promise<void>;
 }
+
+type StoreDownloadConfirmMode = 'large_browser_warning' | 'ios_low_memory_required';
 
 const ACCOUNT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
 const ACCOUNT_PROOF_ALLOWED_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'heif']);
@@ -102,8 +112,6 @@ function StoreCardThumbnail({
 const formatPhp = (value: number): string =>
     `PHP ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const LARGE_WEB_STORE_DOWNLOAD_WARNING_BYTES = 250 * 1024 * 1024;
-
 const formatFileSizeLabel = (value: number | null | undefined): string => {
     const bytes = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
     if (bytes <= 0) return 'Unknown size';
@@ -116,15 +124,6 @@ const formatFileSizeLabel = (value: number | null | undefined): string => {
     }
     const decimals = size >= 100 || unitIndex === 0 ? 0 : 1;
     return `${size.toFixed(decimals)} ${units[unitIndex]}`;
-};
-
-const isLikelyIOSWebRuntime = (): boolean => {
-    if (typeof navigator === 'undefined') return false;
-    const userAgent = navigator.userAgent || '';
-    const platform = navigator.platform || '';
-    const touchPoints = Number((navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints || 0);
-    return /iPad|iPhone|iPod/i.test(userAgent)
-        || (/Mac/i.test(platform) && touchPoints > 1);
 };
 
 const normalizeBannerRotationMs = (value: unknown): number | null => {
@@ -181,6 +180,7 @@ export function OnlineBankStoreDialog({
     const isAdmin = profile?.role === 'admin';
     const isFreeAccount = !isGuest && capabilities.effectiveTier === 'free';
     const canBrowseBankStore = isAdmin || capabilities.features.bankStoreBrowse;
+    const bankStoreDownloadGateMessage = buildFeatureGateMessage('Bank Store downloads and free promotions', 'bankStoreDownload', capabilities.effectiveTier);
     const showProMaxStoreFooterCta = Boolean(effectiveUser && !isAdmin && capabilities.effectiveTier !== 'pro_max');
 
     const [loading, setLoading] = React.useState(false);
@@ -229,7 +229,7 @@ export function OnlineBankStoreDialog({
     const [expandedQrUrl, setExpandedQrUrl] = React.useState<string | null>(null);
     const [purchaseReceipt, setPurchaseReceipt] = React.useState<PurchaseReceiptState | null>(null);
     const [refreshAssetsItem, setRefreshAssetsItem] = React.useState<StoreItem | null>(null);
-    const [downloadConfirmState, setDownloadConfirmState] = React.useState<{ item: StoreItem; options?: StoreHandleDownloadOptions } | null>(null);
+    const [downloadConfirmState, setDownloadConfirmState] = React.useState<{ item: StoreItem; options?: StoreHandleDownloadOptions; mode: StoreDownloadConfirmMode } | null>(null);
     const [freePromoConfirmItem, setFreePromoConfirmItem] = React.useState<StoreItem | null>(null);
     const dialogScrollRef = React.useRef<HTMLDivElement | null>(null);
     const proofOcrSeqRef = React.useRef(0);
@@ -690,18 +690,20 @@ export function OnlineBankStoreDialog({
         if (typeof window === 'undefined') return false;
         if (window.electronAPI) return false;
         if (Boolean((window as any).Capacitor?.isNativePlatform?.())) return false;
-        const fileSizeBytes = Number.isFinite(Number(item.file_size_bytes))
-            ? Math.max(0, Math.floor(Number(item.file_size_bytes)))
-            : 0;
-        return fileSizeBytes >= LARGE_WEB_STORE_DOWNLOAD_WARNING_BYTES;
+        if (storeItemHasLowMemoryVariant(item)) return false;
+        return isLargeStoreDownload(item);
     }, []);
 
     const startStoreDownload = React.useCallback((item: StoreItem, options?: StoreHandleDownloadOptions) => {
+        if (requiresIOSLowMemoryVariant(item)) {
+            setDownloadConfirmState({ item, options, mode: 'ios_low_memory_required' });
+            return;
+        }
         if (
             shouldWarnForLargeBrowserDownload(item)
             && !confirmedLargeDownloadIdsRef.current.has(item.id)
         ) {
-            setDownloadConfirmState({ item, options });
+            setDownloadConfirmState({ item, options, mode: 'large_browser_warning' });
             return;
         }
         void handleDownload(item, options);
@@ -1360,7 +1362,7 @@ export function OnlineBankStoreDialog({
         <Button
             size="sm"
             onClick={() => {
-                requestUpgrade('FREE accounts can browse the Store, but downloads, checkout, and free promotions require PRO or PRO MAX.');
+                requestUpgrade(bankStoreDownloadGateMessage);
             }}
             disabled={!isOnline}
             className="h-8 px-4 text-xs font-semibold rounded-full disabled:opacity-50 bg-amber-500 hover:bg-amber-400 text-black shadow-lg"
@@ -1372,7 +1374,7 @@ export function OnlineBankStoreDialog({
             size="sm"
             onClick={() => {
                 requestUpgrade(isFreeAccount
-                    ? 'FREE accounts can browse the Store, but downloads and free promotions require PRO or PRO MAX.'
+                    ? bankStoreDownloadGateMessage
                     : 'Upgrade required to get this Store bank.');
             }}
             disabled={!isOnline}
@@ -1851,7 +1853,11 @@ export function OnlineBankStoreDialog({
                             onOpenAutoFocus={(event) => event.preventDefault()}
                         >
                             <DialogHeader>
-                                <DialogTitle>Large Bank Download</DialogTitle>
+                                <DialogTitle>
+                                    {downloadConfirmState?.mode === 'ios_low_memory_required'
+                                        ? 'Low-Memory Variant Required'
+                                        : 'Large Bank Download'}
+                                </DialogTitle>
                                 <DialogDescription>
                                     {downloadConfirmState
                                         ? `${downloadConfirmState.item.bank.title} is ${formatFileSizeLabel(downloadConfirmState.item.file_size_bytes)}.`
@@ -1859,31 +1865,46 @@ export function OnlineBankStoreDialog({
                                 </DialogDescription>
                             </DialogHeader>
                             <div className="space-y-4 text-sm">
-                                <p className={isDark ? 'text-gray-300' : 'text-gray-600'}>
-                                    Large banks can take longer to download and may fail during browser import if local memory or storage becomes unstable.
-                                </p>
-                                {isLikelyIOSWebRuntime() && (
-                                    <p className={isDark ? 'text-amber-200' : 'text-amber-700'}>
-                                        On older iPad or iPhone Safari, very large banks are more likely to fail after download even when the file exists on the server.
-                                    </p>
+                                {downloadConfirmState?.mode === 'ios_low_memory_required' ? (
+                                    <>
+                                        <p className={isDark ? 'text-gray-300' : 'text-gray-600'}>
+                                            This bank is too large for safe iPhone or iPad web import without a published low-memory variant.
+                                        </p>
+                                        <p className={isDark ? 'text-amber-200' : 'text-amber-700'}>
+                                            Ask admin to publish a low-memory variant for this bank, or download it from Android or desktop for now.
+                                        </p>
+                                    </>
+                                ) : (
+                                    <>
+                                        <p className={isDark ? 'text-gray-300' : 'text-gray-600'}>
+                                            Large banks can take longer to download and may fail during browser import if local memory or storage becomes unstable.
+                                        </p>
+                                        {isLikelyIOSWebRuntime() && (
+                                            <p className={isDark ? 'text-amber-200' : 'text-amber-700'}>
+                                                On older iPad or iPhone Safari, very large banks are more likely to fail after download even when the file exists on the server.
+                                            </p>
+                                        )}
+                                        <p className={isDark ? 'text-gray-400' : 'text-gray-500'}>
+                                            You can still continue and try it anyway.
+                                        </p>
+                                    </>
                                 )}
-                                <p className={isDark ? 'text-gray-400' : 'text-gray-500'}>
-                                    You can still continue and try it anyway.
-                                </p>
                                 <div className="grid grid-cols-1 gap-2">
-                                    <Button
-                                        onClick={() => {
-                                            if (!downloadConfirmState) return;
-                                            confirmedLargeDownloadIdsRef.current.add(downloadConfirmState.item.id);
-                                            const next = downloadConfirmState;
-                                            setDownloadConfirmState(null);
-                                            void handleDownload(next.item, next.options);
-                                        }}
-                                    >
-                                        Continue Anyway
-                                    </Button>
+                                    {downloadConfirmState?.mode !== 'ios_low_memory_required' && (
+                                        <Button
+                                            onClick={() => {
+                                                if (!downloadConfirmState) return;
+                                                confirmedLargeDownloadIdsRef.current.add(downloadConfirmState.item.id);
+                                                const next = downloadConfirmState;
+                                                setDownloadConfirmState(null);
+                                                void handleDownload(next.item, next.options);
+                                            }}
+                                        >
+                                            Continue Anyway
+                                        </Button>
+                                    )}
                                     <Button variant="ghost" onClick={() => setDownloadConfirmState(null)}>
-                                        Cancel
+                                        {downloadConfirmState?.mode === 'ios_low_memory_required' ? 'OK' : 'Cancel'}
                                     </Button>
                                 </div>
                             </div>

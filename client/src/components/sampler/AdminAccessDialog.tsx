@@ -8,6 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { adminApi, type AccessEntry, type ActiveSessionRow, type AdminAccountRegistrationRequest, type AdminActivityRow, type AdminBank, type AdminClientCrashReport, type AdminDashboardOverview, type AdminUser, type BankAccessEntry, type DefaultBankRelease, type LandingDownloadConfig, type SortDirection } from '@/lib/admin-api';
 import { edgeFunctionUrl } from '@/lib/edge-api';
+import { stopEditableKeyPropagation } from '@/lib/dom-event-targets';
 import { DEFAULT_LANDING_DOWNLOAD_CONFIG, normalizeLandingDownloadConfig } from '@/components/landing/download-config';
 import { normalizeAdminLegalDocuments, normalizeLegalDocument, type AdminLegalDocumentState, type LegalDocument, type LegalDocumentKey } from '@/lib/legal-content';
 import { DEFAULT_SAMPLER_APP_CONFIG, normalizeSamplerAppConfig, type SamplerAppConfig } from './samplerAppConfig';
@@ -2036,7 +2037,7 @@ export function AdminAccessDialog({
       <NoticesPortal notices={notices} dismiss={dismiss} theme={theme} />
 
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent aria-describedby={undefined} className={`w-full max-w-[100vw] sm:max-w-[95vw] md:max-w-[92vw] 2xl:max-w-[1800px] h-[100dvh] max-h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] overflow-hidden grid grid-rows-[auto_1fr] p-2 sm:p-6 ${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'}`}>
+        <DialogContent aria-describedby={undefined} onKeyDown={stopEditableKeyPropagation} className={`w-full max-w-[100vw] sm:max-w-[95vw] md:max-w-[92vw] 2xl:max-w-[1800px] h-[100dvh] max-h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] overflow-hidden grid grid-rows-[auto_1fr] p-2 sm:p-6 ${theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'}`}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Shield className="w-4 h-4" />
@@ -2817,7 +2818,7 @@ export function AdminAccessDialog({
                   </span>
                   <div className="opacity-75 mt-0.5">{activeTab.hint}</div>
                 </div>
-                <div className="space-y-4 overflow-auto max-h-[calc(100vh-120px)] pr-1">
+                <div className="space-y-4 overflow-auto max-h-[calc(100dvh-120px)] pb-[calc(env(safe-area-inset-bottom)+5rem)] pr-1">
                   {navGroups.map((group) => (
                     <div key={`mobile-group-${group.label}`} className="space-y-1.5">
                       <div className="px-1 text-[10px] font-black uppercase tracking-[0.18em] opacity-55">{group.label}</div>

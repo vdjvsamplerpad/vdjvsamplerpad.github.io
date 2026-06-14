@@ -1,6 +1,13 @@
 const DEFAULT_ALLOW_HEADERS = "authorization, x-client-info, apikey, content-type";
 const ALLOW_METHODS = "GET,POST,PATCH,DELETE,OPTIONS";
 const ORIGIN_ENV_KEYS = ["APP_ALLOWED_ORIGINS", "ALLOWED_ORIGINS"] as const;
+const DEFAULT_ALLOWED_ORIGIN_RULES = [
+  "https://vdjvsamplerpad.online",
+  "https://vdjvsamplerpad.github.io",
+  "*.vdjvsamplerpad.online",
+  "capacitor://localhost",
+  "ionic://localhost",
+] as const;
 
 const parseAllowedOrigins = (raw: string | null | undefined): string[] => {
   if (!raw) return [];
@@ -45,10 +52,28 @@ const matchesOriginRule = (origin: string, ruleRaw: string): boolean => {
   return origin === normalizedRule;
 };
 
+const isTrustedLocalOrigin = (origin: string): boolean => {
+  try {
+    const parsed = new URL(origin);
+    const protocol = parsed.protocol.toLowerCase();
+    const host = parsed.hostname.toLowerCase();
+    return (protocol === "http:" || protocol === "https:") && (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0"
+    );
+  } catch {
+    return false;
+  }
+};
+
 const isOriginAllowed = (origin: string): boolean => {
   if (!origin) return false;
-  if (configuredAllowedOrigins.length === 0) return true;
-  return configuredAllowedOrigins.some((rule) => matchesOriginRule(origin, rule));
+  if (isTrustedLocalOrigin(origin)) return true;
+  const allowedOrigins = configuredAllowedOrigins.length > 0
+    ? configuredAllowedOrigins
+    : [...DEFAULT_ALLOWED_ORIGIN_RULES];
+  return allowedOrigins.some((rule) => matchesOriginRule(origin, rule));
 };
 
 const resolveCorsOrigin = (req?: Request): string | null => {

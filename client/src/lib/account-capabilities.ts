@@ -258,6 +258,44 @@ export const fallbackCapabilitiesForProfile = (profile?: { role?: string | null;
   return DEFAULT_ACCOUNT_CAPABILITIES[tier];
 };
 
+export const ACCOUNT_TIER_LABELS: Record<AccountTier, string> = {
+  guest: 'FREE',
+  free: 'FREE',
+  pro: 'PRO',
+  pro_max: 'PRO MAX',
+};
+
+const UPGRADE_TIER_ORDER: StoredAccountTier[] = ['free', 'pro', 'pro_max'];
+
+export const resolveNextTierForFeature = (
+  featureKey: keyof AccountFeatures,
+  currentTier: AccountTier,
+): StoredAccountTier | null => {
+  const normalizedTier = normalizeAccountTier(currentTier);
+  const currentIndex = normalizedTier === 'guest'
+    ? 0
+    : UPGRADE_TIER_ORDER.indexOf(normalizedTier as StoredAccountTier);
+  const startIndex = Math.max(0, currentIndex) + 1;
+  for (const tier of UPGRADE_TIER_ORDER.slice(startIndex)) {
+    if (DEFAULT_ACCOUNT_CAPABILITIES[tier].features[featureKey]) {
+      return tier;
+    }
+  }
+  return null;
+};
+
+export const buildFeatureGateMessage = (
+  featureLabel: string,
+  featureKey: keyof AccountFeatures,
+  currentTier: AccountTier,
+): string => {
+  const nextTier = resolveNextTierForFeature(featureKey, currentTier);
+  if (!nextTier) {
+    return `${featureLabel} is currently unavailable for this account.`;
+  }
+  return `${featureLabel} requires ${ACCOUNT_TIER_LABELS[nextTier]}.`;
+};
+
 export const readCachedCapabilities = (userId: string | null): AccountCapabilitySnapshot | null => {
   if (typeof window === 'undefined' || !userId) return null;
   try {

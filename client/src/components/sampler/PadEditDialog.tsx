@@ -16,6 +16,7 @@ import { isReservedShortcutCombo, normalizeShortcutKey, normalizeStoredShortcutK
 import { MidiMessage } from '@/lib/midi';
 import { EXTRA_PAD_COLORS, PRIMARY_PAD_COLORS } from './padColorPalette';
 import { useAuthState } from '@/hooks/useAuth';
+import { buildFeatureGateMessage } from '@/lib/account-capabilities';
 
 interface PadEditDialogProps {
   pad: PadData;
@@ -187,6 +188,7 @@ export function PadEditDialog({
   const canEditPadKeyboardMidi = capabilities.features.padEditKeyboardMidi;
   const canEditPadHotcue = capabilities.features.padEditHotcue;
   const canEditPadFades = capabilities.features.padEditFades;
+  const padKeyboardMidiGateMessage = buildFeatureGateMessage('Keyboard and MIDI pad assignment', 'padEditKeyboardMidi', capabilities.effectiveTier);
   const [name, setName] = React.useState(pad.name);
   const [artist, setArtist] = React.useState(pad.artist || '');
   const [color, setColor] = React.useState(pad.color);
@@ -595,7 +597,7 @@ export function PadEditDialog({
 
   const applyShortcutKey = (nextKey: string | null) => {
     if (!canEditPadKeyboardMidi) {
-      setShortcutError('Keyboard and MIDI pad assignment requires PRO.');
+      setShortcutError(padKeyboardMidiGateMessage);
       return;
     }
     if (!nextKey) {
@@ -644,7 +646,7 @@ export function PadEditDialog({
     if (event.key === 'Tab') return;
     event.preventDefault();
     if (!canEditPadKeyboardMidi) {
-      setShortcutError('Keyboard and MIDI pad assignment requires PRO.');
+      setShortcutError(padKeyboardMidiGateMessage);
       return;
     }
 

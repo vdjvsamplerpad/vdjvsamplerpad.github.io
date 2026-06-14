@@ -34,7 +34,7 @@ export const SOCIAL_OPTIONS: LandingSocialKey[] = ['facebook', 'instagram', 'you
 
 export const DEFAULT_DOWNLOAD_LINKS: Record<VersionKey, Record<PlatformKey, string>> = {
   V1: {
-    android: '/android/',
+    android: 'https://github.com/vdjvsamplerpad/vdjvsamplerpad.github.io/releases/latest',
     ios: '/ios/',
     windows: 'https://m.me/vdjvsampler/',
     macos: 'https://m.me/vdjvsampler/',

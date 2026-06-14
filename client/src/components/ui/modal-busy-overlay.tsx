@@ -8,6 +8,8 @@ interface ModalBusyOverlayProps {
   description?: string;
   theme?: 'light' | 'dark';
   className?: string;
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
 export function ModalBusyOverlay({
@@ -16,6 +18,8 @@ export function ModalBusyOverlay({
   description,
   theme = 'light',
   className,
+  actionLabel,
+  onAction,
 }: ModalBusyOverlayProps) {
   if (!show) return null;
 
@@ -48,6 +52,20 @@ export function ModalBusyOverlay({
           <div className={cn('mt-2 text-sm leading-relaxed', isDark ? 'text-gray-300' : 'text-gray-600')}>
             {description}
           </div>
+        ) : null}
+        {actionLabel && onAction ? (
+          <button
+            type="button"
+            onClick={onAction}
+            className={cn(
+              'mt-5 inline-flex h-10 items-center justify-center rounded-xl border px-4 text-xs font-black uppercase tracking-wide transition',
+              isDark
+                ? 'border-white/15 bg-white/[0.04] text-white hover:bg-white/[0.08]'
+                : 'border-slate-950/15 bg-white/80 text-slate-900 hover:bg-white',
+            )}
+          >
+            {actionLabel}
+          </button>
         ) : null}
       </div>
     </div>

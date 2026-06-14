@@ -27,6 +27,8 @@ import { useStorePreviewBadge } from './hooks/useStorePreviewBadge';
 import { AUDIO_FILE_INPUT_ACCEPT } from '@/lib/audio-file-accept';
 import { cn } from '@/lib/utils';
 import { APP_NOTICE_EVENT, type AppNoticePayload } from '@/lib/app-notices';
+import { isEditableEventTarget } from '@/lib/dom-event-targets';
+import { buildFeatureGateMessage } from '@/lib/account-capabilities';
 
 const LoginModal = React.lazy(() => import('@/components/auth/LoginModal').then((module) => ({ default: module.LoginModal }))) as unknown as typeof LoginModalType;
 const AppSettingsDialog = React.lazy(() => import('@/components/ui/AppSettingsDialog').then((module) => ({ default: module.AppSettingsDialog }))) as unknown as typeof AppSettingsDialogType;
@@ -188,6 +190,9 @@ interface HeaderControlsProps {
   onToggleTheme: () => void;
   onExitDualMode: () => void;
   onPadSizeChange: (size: number) => void;
+  layoutDefaultPadSize?: number;
+  layoutDefaultChannelCount?: number;
+  onResetLayoutDefaults?: () => void;
   onStopModeChange: (mode: StopMode) => void;
   onStopTimingOverridesChange: (overrides: StopTimingOverridesMs) => void;
   defaultTriggerMode: SamplerBank['pads'][number]['triggerMode'];
@@ -439,6 +444,9 @@ export function HeaderControls({
   onToggleTheme,
   onExitDualMode,
   onPadSizeChange,
+  layoutDefaultPadSize,
+  layoutDefaultChannelCount,
+  onResetLayoutDefaults,
   onStopModeChange,
   onStopTimingOverridesChange,
   defaultTriggerMode,
@@ -523,6 +531,7 @@ export function HeaderControls({
   const appVersion = (import.meta as any).env?.VITE_APP_VERSION || 'unknown';
   const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.onFullscreenChange);
   const { state: appUpdateState, checkForUpdates, installUpdate } = useAppUpdate();
+  const updateNoticeShownRef = React.useRef<Set<string>>(new Set());
   const baseStopTimingProfile = React.useMemo(() => getStopTimingProfile(), []);
   const activeStopDurationMs = React.useMemo(() => (
     Math.max(10, getStopModeDurationMs(
@@ -554,6 +563,28 @@ export function HeaderControls({
     window.addEventListener(APP_NOTICE_EVENT, handleAppNotice as EventListener)
     return () => window.removeEventListener(APP_NOTICE_EVENT, handleAppNotice as EventListener)
   }, [pushNotice])
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (appUpdateState.status !== 'available' && appUpdateState.status !== 'downloaded') return;
+    const nextVersion = String(appUpdateState.nextVersion || '').trim();
+    const currentVersion = String(appUpdateState.currentVersion || appVersion || '').trim();
+    if (appUpdateState.platform === 'web' && nextVersion && currentVersion && nextVersion === currentVersion) return;
+    const versionKey = nextVersion || appUpdateState.status;
+    const storageKey = `vdjv-update-notice:${appUpdateState.platform}:${versionKey}`;
+    if (updateNoticeShownRef.current.has(storageKey)) return;
+    try {
+      if (window.localStorage.getItem(storageKey) === '1') return;
+      window.localStorage.setItem(storageKey, '1');
+    } catch {
+    }
+    updateNoticeShownRef.current.add(storageKey);
+    const versionLabel = nextVersion ? ` ${nextVersion}` : '';
+    pushNotice({
+      variant: 'info',
+      message: `There is a new version${versionLabel}. Check Settings > App Update.`,
+    });
+  }, [appUpdateState.currentVersion, appUpdateState.nextVersion, appUpdateState.platform, appUpdateState.status, appVersion, pushNotice]);
 
   React.useEffect(() => {
     if (pendingSessionClaim || sessionConflictReason) {
@@ -588,6 +619,9 @@ export function HeaderControls({
     }
     setShowOfflineReadyDialog(true);
   }, [isOnline, loading, offlineTrustedSession, user]);
+
+  const searchGateMessage = buildFeatureGateMessage('Search', 'search', capabilities.effectiveTier);
+  const advancedStopModesGateMessage = buildFeatureGateMessage('Advanced stop modes', 'advancedStopModes', capabilities.effectiveTier);
 
   const openUpgradeDialog = React.useCallback((reason?: string | null) => {
     const message = reason || 'Choose a PRO or PRO MAX plan to unlock this feature.';
@@ -654,14 +688,14 @@ export function HeaderControls({
     closeStopModePicker();
     if (!mode) return;
     if (!isStopModeAllowed(mode)) {
-      openUpgradeDialog('Advanced stop modes require PRO.');
+      openUpgradeDialog(advancedStopModesGateMessage);
       return;
     }
     if (mode !== stopMode) {
       onStopModeChange(mode);
       pushNotice({ variant: 'success', message: `Stop mode: ${getStopModeLabel(mode)}` });
     }
-  }, [closeStopModePicker, isStopModeAllowed, onStopModeChange, openUpgradeDialog, pushNotice, stopMode]);
+  }, [advancedStopModesGateMessage, closeStopModePicker, isStopModeAllowed, onStopModeChange, openUpgradeDialog, pushNotice, stopMode]);
 
   const clearStopHoldTimer = React.useCallback(() => {
     if (stopModeHoldTimeoutRef.current !== null) {
@@ -860,30 +894,18 @@ export function HeaderControls({
   }, [isElectronWindowControlsAvailable, pushNotice]);
 
   React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null): boolean => {
-      const element = target as HTMLElement | null;
-      if (!element) return false;
-      const tagName = element.tagName;
-      return (
-        element.isContentEditable ||
-        tagName === 'INPUT' ||
-        tagName === 'TEXTAREA' ||
-        tagName === 'SELECT'
-      );
-    };
-
     const handleKeyDown = (event: KeyboardEvent) => {
       if (windowWidth < 1024) return;
       const normalizedKey = typeof event.key === 'string' ? event.key.toLowerCase() : '';
       if (!normalizedKey) return;
       if ((event.metaKey || event.ctrlKey) && normalizedKey === 'k') {
-        if (isEditableTarget(event.target)) return;
+        if (isEditableEventTarget(event.target)) return;
         if (!capabilities.features.search) {
           if (capabilities.effectiveTier === 'free') {
             event.preventDefault();
-            openUpgradeDialog('Search is available in PRO and PRO MAX.');
+            openUpgradeDialog(searchGateMessage);
           } else {
-            pushNotice({ variant: 'info', message: 'Search is available in PRO.' });
+            pushNotice({ variant: 'info', message: searchGateMessage });
           }
           return;
         }
@@ -903,7 +925,7 @@ export function HeaderControls({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [adminPadColorPaintActive, capabilities.effectiveTier, capabilities.features.search, onStopAdminPadColorPaint, onToggleSearch, openUpgradeDialog, pushNotice, searchOpen, windowWidth]);
+  }, [adminPadColorPaintActive, capabilities.effectiveTier, capabilities.features.search, onStopAdminPadColorPaint, onToggleSearch, openUpgradeDialog, pushNotice, searchGateMessage, searchOpen, windowWidth]);
 
   // Show greeting notification when user logs in
   React.useEffect(() => {
@@ -1008,7 +1030,6 @@ export function HeaderControls({
       pushNotice({ variant: 'error', message: error.message || 'Sign out failed.' });
       return;
     }
-    pushNotice({ variant: 'info', message: 'Signing out...' });
   }, [authTransition.status, signOut, pushNotice]);
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1176,8 +1197,8 @@ export function HeaderControls({
       );
       return;
     }
-    openUpgradeDialog('Search is available in PRO and PRO MAX.');
-  }, [capabilities.features.search, isAuthResolvingWithoutUser, onToggleSearch, openUpgradeDialog, playSummary, pushNotice]);
+    openUpgradeDialog(searchGateMessage);
+  }, [capabilities.features.search, isAuthResolvingWithoutUser, onToggleSearch, openUpgradeDialog, playSummary, pushNotice, searchGateMessage]);
 
   const navButtonBase = cn(
     'relative flex h-12 items-center justify-center gap-1.5 rounded-2xl border text-xs font-bold transition-colors',
@@ -1627,7 +1648,7 @@ export function HeaderControls({
             {stopAnimation && isCompactBottomNav ? (
               <svg
                 key={`stop-ring-${stopAnimation.key}`}
-                className="pointer-events-none absolute -inset-2.5 z-20 -rotate-90 overflow-visible"
+                className="pointer-events-none absolute inset-0 z-20 -rotate-90 overflow-visible"
                 viewBox="0 0 100 100"
                 aria-hidden="true"
               >
@@ -2001,6 +2022,9 @@ export function HeaderControls({
             padSizeMin={minPadSize}
             padSizeMax={maxPadSize}
             onPadSizeChange={handlePadSizeFromDialog}
+            layoutDefaultPadSize={layoutDefaultPadSize}
+            layoutDefaultChannelCount={layoutDefaultChannelCount}
+            onResetLayoutDefaults={onResetLayoutDefaults}
             onStopModeChange={onStopModeChange}
             onStopTimingOverridesChange={onStopTimingOverridesChange}
             defaultTriggerMode={defaultTriggerMode}

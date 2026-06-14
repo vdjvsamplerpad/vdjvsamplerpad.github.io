@@ -27,6 +27,8 @@ const hexToRgbString = (hex: string): string => {
 
 const MOBILE_EDIT_DRAG_LONG_PRESS_MS = 320;
 const MOBILE_EDIT_DRAG_CANCEL_PX = 12;
+const MOBILE_EDIT_DRAG_AUTOSCROLL_EDGE_PX = 72;
+const MOBILE_EDIT_DRAG_AUTOSCROLL_STEP_PX = 18;
 
 type MobileEditDragTargetKind = 'pad' | 'bank' | null;
 
@@ -37,6 +39,7 @@ type MobileEditDragSession = {
   sourcePadName: string;
   sourceBankId: string;
   sourceElement: HTMLElement;
+  scrollElement: HTMLElement | null;
   startX: number;
   startY: number;
   currentX: number;
@@ -47,6 +50,7 @@ type MobileEditDragSession = {
   targetBankId: string | null;
   targetBankName: string | null;
   targetKind: MobileEditDragTargetKind;
+  rafId: number | null;
 };
 
 type MobileEditDragViewState = Pick<
@@ -63,6 +67,17 @@ type MobileEditDragViewState = Pick<
   | 'targetBankName'
   | 'targetKind'
 >;
+
+const getNearestScrollableElement = (element: HTMLElement | null): HTMLElement | null => {
+  let current = element?.parentElement || null;
+  while (current && current !== document.body) {
+    const style = window.getComputedStyle(current);
+    const canScrollY = /(auto|scroll|overlay)/.test(style.overflowY) && current.scrollHeight > current.clientHeight;
+    if (canScrollY) return current;
+    current = current.parentElement;
+  }
+  return null;
+};
 
 export interface PadGridProps {
   pads: PadData[];
@@ -341,6 +356,9 @@ export const PadGrid = React.memo(function PadGrid({
     if (session?.timer) {
       clearTimeout(session.timer);
     }
+    if (session && session.rafId !== null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(session.rafId);
+    }
     if (session?.active && typeof session.sourceElement.releasePointerCapture === 'function') {
       try {
         session.sourceElement.releasePointerCapture(session.pointerId);
@@ -468,6 +486,7 @@ export const PadGrid = React.memo(function PadGrid({
       sourcePadName: pad.name || 'Pad',
       sourceBankId: bankId,
       sourceElement,
+      scrollElement: getNearestScrollableElement(sourceElement),
       startX: event.clientX,
       startY: event.clientY,
       currentX: event.clientX,
@@ -478,6 +497,7 @@ export const PadGrid = React.memo(function PadGrid({
       targetBankId: null,
       targetBankName: null,
       targetKind: null,
+      rafId: null,
     };
     session.timer = setTimeout(() => activateMobileEditDrag(event.pointerId), MOBILE_EDIT_DRAG_LONG_PRESS_MS);
     mobileEditDragRef.current = session;
@@ -496,6 +516,35 @@ export const PadGrid = React.memo(function PadGrid({
       return;
     }
 
+    const scheduleTargetResolve = (session: MobileEditDragSession) => {
+      if (session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(() => {
+        const current = mobileEditDragRef.current;
+        if (!current || current.pointerId !== session.pointerId) return;
+        current.rafId = null;
+        resolveMobileEditDragTarget(current.currentX, current.currentY);
+      });
+    };
+
+    const autoScrollForPointer = (session: MobileEditDragSession, clientY: number) => {
+      if (typeof window === 'undefined') return;
+      const viewportHeight = window.visualViewport?.height || window.innerHeight || 0;
+      if (viewportHeight <= 0) return;
+      let delta = 0;
+      if (clientY < MOBILE_EDIT_DRAG_AUTOSCROLL_EDGE_PX) {
+        delta = -MOBILE_EDIT_DRAG_AUTOSCROLL_STEP_PX;
+      } else if (clientY > viewportHeight - MOBILE_EDIT_DRAG_AUTOSCROLL_EDGE_PX) {
+        delta = MOBILE_EDIT_DRAG_AUTOSCROLL_STEP_PX;
+      }
+      if (delta === 0) return;
+      const scrollTarget = session.scrollElement;
+      if (scrollTarget) {
+        scrollTarget.scrollTop += delta;
+      } else {
+        window.scrollBy({ top: delta, behavior: 'auto' });
+      }
+    };
+
     const handlePointerMove = (event: PointerEvent) => {
       const session = mobileEditDragRef.current;
       if (!session || session.pointerId !== event.pointerId) return;
@@ -511,7 +560,8 @@ export const PadGrid = React.memo(function PadGrid({
       session.currentY = event.clientY;
       if (session.active) {
         event.preventDefault();
-        resolveMobileEditDragTarget(event.clientX, event.clientY);
+        autoScrollForPointer(session, event.clientY);
+        scheduleTargetResolve(session);
       }
     };
 
@@ -533,6 +583,10 @@ export const PadGrid = React.memo(function PadGrid({
     const handleScroll = () => {
       const session = mobileEditDragRef.current;
       if (!session) return;
+      if (session.active) {
+        scheduleTargetResolve(session);
+        return;
+      }
       resetMobileEditDrag({ suppressClick: session.active });
     };
 

@@ -478,36 +478,36 @@ function HomeTab({
       controls={(
         <AdminControlsBar
           left={(
-            <div className="grid gap-2 md:grid-cols-[160px_160px_auto_minmax(0,1fr)] md:items-end">
-              <div className="space-y-1">
+            <div className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_auto_minmax(14rem,1.2fr)] lg:items-end">
+              <div className="min-w-0 space-y-1">
                 <Label>From</Label>
                 <Input
                   type="date"
                   value={homeFromDate}
                   onChange={(event) => onHomeFromDateChange(event.target.value)}
-                  className={`h-10 text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
+                  className={`h-10 min-w-0 w-full text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
                 />
               </div>
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <Label>To</Label>
                 <Input
                   type="date"
                   value={homeToDate}
                   onChange={(event) => onHomeToDateChange(event.target.value)}
-                  className={`h-10 text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
+                  className={`h-10 min-w-0 w-full text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
                 />
               </div>
               <Button
                 type="button"
                 size="sm"
                 variant="success"
-                className="h-10 rounded-[14px] px-4"
+                className="h-10 rounded-[14px] px-4 sm:col-span-2 lg:col-span-1"
                 onClick={onRefresh}
                 disabled={homeLoading}
               >
                 Apply
               </Button>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex min-w-0 flex-wrap gap-2 sm:col-span-2 lg:col-span-1">
                 {HOME_WINDOW_OPTIONS.map((option) => (
                   <Button
                     key={option}

@@ -238,6 +238,7 @@ function resolveAuthAppRedirectUrl(appReturnUrl?: string): string | undefined {
 }
 
 export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, modePreset = 'default', onAuthSuccess, pushNotice }: LoginModalProps) {
+  const logoSrc = `${import.meta.env.BASE_URL}assets/logo.png`
   const signupOnly = modePreset === 'signup-only'
   const [signInError, setSignInError] = React.useState<string | null>(null)
   const [signInCooldownSeconds, setSignInCooldownSeconds] = React.useState(0)
@@ -294,6 +295,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
     signIn,
     continueOffline,
     signInWithGoogle,
+    cancelGoogleSignIn,
     confirmSessionClaim,
     cancelSessionClaim,
     requestPasswordReset,
@@ -346,7 +348,13 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
   const isSignInBusy = loading || googleLoading || awaitingSignInSync || isSignInSyncing || sessionClaimLoading
   const isLoginSubmitting = mode === 'signin' && isSignInBusy
   const isBuySubmitting = mode === 'buy' && loading
-  const authBusyOverlay = isLoginSubmitting
+  const isGoogleSubmitting = googleLoading || (isSignInSyncing && authTransition.email === 'Google')
+  const authBusyOverlay = isGoogleSubmitting
+    ? {
+        title: 'Signing you in...',
+        description: 'Please wait while Google returns your account session.',
+      }
+    : isLoginSubmitting
     ? {
         title: 'Signing you in...',
         description: 'Please wait while we check your account and sync your access.',
@@ -1565,7 +1573,7 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
             <div className={`mb-5 flex h-14 w-14 items-center justify-center rounded-[16px] border shadow-[0_0_46px_rgba(239,68,68,0.36)] ${
               isDark ? 'border-red-300/20 bg-black/20' : 'border-red-500/20 bg-white/70'
             }`}>
-              <img src="/assets/logo.png" alt="VDJV" className="h-12 w-12 object-contain drop-shadow-[0_10px_22px_rgba(0,0,0,0.40)]" />
+              <img src={logoSrc} alt="VDJV" className="h-12 w-12 object-contain drop-shadow-[0_10px_22px_rgba(0,0,0,0.40)]" />
             </div>
             <DialogTitle className={`text-center text-[28px] font-black leading-tight tracking-[-0.04em] sm:text-[30px] ${colorText}`}>
               <Title />
@@ -2546,6 +2554,12 @@ export function LoginModal({ open, onOpenChange, theme = 'light', appReturnUrl, 
           title={authBusyOverlay?.title || ''}
           description={authBusyOverlay?.description}
           theme={theme}
+          actionLabel={isGoogleSubmitting ? 'Cancel sign-in' : undefined}
+          onAction={isGoogleSubmitting ? () => {
+            setGoogleLoading(false)
+            setAwaitingSignInSync(false)
+            void cancelGoogleSignIn()
+          } : undefined}
         />
         </div>
       </DialogContent>

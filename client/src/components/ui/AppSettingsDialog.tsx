@@ -29,6 +29,7 @@ import { setPasswordRecoveryMode, useAuthActions, useAuthState } from '@/hooks/u
 import { isNativeBankImportAvailable, pickNativeSharedBankFile } from '@/lib/native-bank-import';
 import type { ImportBankSource } from '@/components/sampler/hooks/nativeBankImport.types';
 import { HelpTooltip } from '@/components/ui/help-tooltip';
+import { buildFeatureGateMessage } from '@/lib/account-capabilities';
 
 const SYSTEM_COLOR_OPTIONS = [
   { name: 'Red', hex: '#ff0000' },
@@ -311,6 +312,9 @@ interface AppSettingsDialogProps {
   onSetMasterVolumeCC: (cc?: number) => void;
   channelCount: number;
   onChangeChannelCount: (count: number) => void;
+  layoutDefaultPadSize?: number;
+  layoutDefaultChannelCount?: number;
+  onResetLayoutDefaults?: () => void;
   onUpdateChannelMapping: (channelIndex: number, updates: Partial<ChannelMapping>) => void;
   padBankShortcutKeys: Set<string>;
   padBankMidiNotes: Set<number>;
@@ -408,6 +412,9 @@ export function AppSettingsDialog({
   onSetMasterVolumeCC,
   channelCount,
   onChangeChannelCount,
+  layoutDefaultPadSize,
+  layoutDefaultChannelCount,
+  onResetLayoutDefaults,
   onUpdateChannelMapping,
   padBankShortcutKeys,
   padBankMidiNotes,
@@ -472,6 +479,12 @@ export function AppSettingsDialog({
   const canUseMappingImportExport = capabilities.features.mappingImportExport;
   const canUseBackupRepair = capabilities.features.backupRepair;
   const canUseAdvancedStopModes = capabilities.features.advancedStopModes;
+  const advancedStopModesGateMessage = buildFeatureGateMessage('Advanced stop modes', 'advancedStopModes', capabilities.effectiveTier);
+  const inputMappingGateMessage = buildFeatureGateMessage('Keyboard, MIDI, and mapping controls', 'inputMapping', capabilities.effectiveTier);
+  const systemShortcutsGateMessage = buildFeatureGateMessage('System shortcuts', 'systemShortcuts', capabilities.effectiveTier);
+  const channelShortcutsGateMessage = buildFeatureGateMessage('Channel deck mappings', 'channelShortcuts', capabilities.effectiveTier);
+  const mappingImportExportGateMessage = buildFeatureGateMessage('Mapping backup', 'mappingImportExport', capabilities.effectiveTier);
+  const backupRepairGateMessage = buildFeatureGateMessage('Account backup and repair', 'backupRepair', capabilities.effectiveTier);
   const effectiveStopMode = canUseAdvancedStopModes ? stopMode : 'instant';
   const normalizedStopTimingOverrides = React.useMemo(
     () => normalizeStopTimingOverrides(stopTimingOverrides),
@@ -840,6 +853,12 @@ export function AppSettingsDialog({
     () => Array.from({ length: deckChannelMax - deckChannelMin + 1 }, (_, idx) => deckChannelMin + idx),
     [deckChannelMax, deckChannelMin]
   );
+  const resolvedLayoutDefaultPadSize = Number.isFinite(Number(layoutDefaultPadSize))
+    ? Math.max(padSizeMin, Math.min(padSizeMax, Math.floor(Number(layoutDefaultPadSize))))
+    : null;
+  const resolvedLayoutDefaultChannelCount = Number.isFinite(Number(layoutDefaultChannelCount))
+    ? Math.max(deckChannelMin, Math.min(deckChannelMax, Math.floor(Number(layoutDefaultChannelCount))))
+    : Math.max(deckChannelMin, Math.min(deckChannelMax, Math.floor(Number(capabilities.limits.deckDefaultCount || deckChannelMin))));
   const activeChannelMappings = React.useMemo(
     () => channelMappings.slice(0, activeChannelCount),
     [activeChannelCount, channelMappings]
@@ -1947,7 +1966,14 @@ export function AppSettingsDialog({
                   <div className="flex flex-col gap-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="space-y-0.5">
-                        <FieldLabel label="Pad size" />
+                        <FieldLabel
+                          label="Pad Grid Columns"
+                          help="Controls how many sampler pad columns are shown in the active layout. This is separate from Deck Channels, which controls mixer/load decks."
+                        />
+                        <p className="text-[10px] text-gray-500">
+                          Current layout: {isDualMode ? 'dual bank' : 'single bank'}
+                          {resolvedLayoutDefaultPadSize !== null ? ` | Default ${resolvedLayoutDefaultPadSize}` : ''}
+                        </p>
                       </div>
                       <div className="flex items-center gap-2">
                         <Button
@@ -1975,6 +2001,23 @@ export function AppSettingsDialog({
                         </Button>
                       </div>
                     </div>
+                    {onResetLayoutDefaults ? (
+                      <div className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-white/60 p-2 dark:border-gray-800 dark:bg-gray-950/30 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="text-[11px] text-gray-500">
+                          Reset pad grid columns and deck channels to the current admin/tier defaults
+                          {resolvedLayoutDefaultPadSize !== null ? ` (${resolvedLayoutDefaultPadSize} grid, ${resolvedLayoutDefaultChannelCount} deck${resolvedLayoutDefaultChannelCount === 1 ? '' : 's'})` : ''}.
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 shrink-0 px-2 text-[10px]"
+                          onClick={onResetLayoutDefaults}
+                        >
+                          Reset Layout Defaults
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
                 <div className="space-y-1">
@@ -1997,13 +2040,13 @@ export function AppSettingsDialog({
                   </Select>
                   {!canUseAdvancedStopModes && (
                     <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-                      <div className="font-semibold">Advanced stop modes require PRO.</div>
+                      <div className="font-semibold">{advancedStopModesGateMessage}</div>
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         className="mt-2 h-8 border-amber-400 bg-white/70 text-amber-800 hover:bg-amber-100 dark:bg-amber-950/20 dark:text-amber-200"
-                        onClick={() => openUpgradeFromSettings('Advanced stop modes require PRO.')}
+                        onClick={() => openUpgradeFromSettings(advancedStopModesGateMessage)}
                       >
                         Upgrade
                       </Button>
@@ -2119,7 +2162,9 @@ export function AppSettingsDialog({
                         {appUpdatePlatform === 'electron'
                           ? 'Restart to Install'
                           : appUpdatePlatform === 'web'
-                            ? 'Reload to Update'
+                            ? appUpdateStatus === 'refresh_ready'
+                              ? 'Refresh App Files'
+                              : 'Reload to Update'
                             : 'Restart to Update'}
                       </Button>
                     ) : null}
@@ -2163,13 +2208,13 @@ export function AppSettingsDialog({
               />
               {!canUseInputMapping ? (
                 <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-                  <div className="font-semibold">Keyboard, MIDI, and mapping controls require PRO.</div>
+                  <div className="font-semibold">{inputMappingGateMessage}</div>
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     className="mt-2 h-8 border-amber-400 bg-white/70 text-amber-800 hover:bg-amber-100 dark:bg-amber-950/20 dark:text-amber-200"
-                    onClick={() => openUpgradeFromSettings('Keyboard, MIDI, and mapping controls require PRO.')}
+                    onClick={() => openUpgradeFromSettings(inputMappingGateMessage)}
                   >
                     Upgrade
                   </Button>
@@ -2272,9 +2317,9 @@ export function AppSettingsDialog({
           )}
           {!canUseSystemShortcuts && activePanel === 'controls' && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-              <div className="font-semibold">System shortcuts require PRO.</div>
+              <div className="font-semibold">{systemShortcutsGateMessage}</div>
               <p className="mt-1">Upgrade to map global actions such as stop all, mixer, edit mode, navigation, upload, and import.</p>
-              <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings('System shortcuts require PRO.')}>
+              <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings(systemShortcutsGateMessage)}>
                 Upgrade
               </Button>
             </div>
@@ -2515,9 +2560,9 @@ export function AppSettingsDialog({
           )}
           {!canUseChannelShortcuts && activePanel === 'controls' && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-              <div className="font-semibold">Channel deck mappings require PRO.</div>
+              <div className="font-semibold">{channelShortcutsGateMessage}</div>
               <p className="mt-1">Upgrade to map deck stop, volume, transport, load controls, and hotcues.</p>
-              <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings('Channel deck mappings require PRO.')}>
+              <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings(channelShortcutsGateMessage)}>
                 Upgrade
               </Button>
             </div>
@@ -2533,7 +2578,7 @@ export function AppSettingsDialog({
                   <div className="flex items-center gap-2 rounded-md border px-2 py-1">
                     <div className="flex items-center gap-1.5">
                       <Label className="text-[10px] uppercase tracking-wide text-gray-500">Deck Channels</Label>
-                      <HelpTooltip content={renderHelpContent('Sets how many channel decks are available for loading and playback control.')} label="Deck Channels help" />
+                      <HelpTooltip content={renderHelpContent(`Sets how many mixer/load decks are available for playback control. This is separate from Pad Grid Columns. Your current tier allows ${deckChannelMin}-${deckChannelMax}. Default is ${resolvedLayoutDefaultChannelCount}.`)} label="Deck Channels help" />
                     </div>
                     <Select
                       value={String(activeChannelCount)}
@@ -3103,9 +3148,9 @@ export function AppSettingsDialog({
               )}
               {!canUseMappingImportExport && (
                 <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-                  <div className="font-semibold">Mapping backup requires PRO.</div>
+                  <div className="font-semibold">{mappingImportExportGateMessage}</div>
                   <p className="mt-1">Upgrade to export and import keyboard, MIDI, and mapping setup.</p>
-                  <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings('Mapping backup requires PRO.')}>
+                  <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings(mappingImportExportGateMessage)}>
                     Upgrade
                   </Button>
                 </div>
@@ -3166,9 +3211,9 @@ export function AppSettingsDialog({
               )}
               {!canUseBackupRepair && (
                 <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-                  <div className="font-semibold">Account backup and repair require PRO.</div>
+                  <div className="font-semibold">{backupRepairGateMessage}</div>
                   <p className="mt-1">Upgrade to export account backups, restore backups, import shared banks, and repair missing media.</p>
-                  <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings('Account backup and repair require PRO.')}>
+                  <Button type="button" variant="outline" size="sm" className="mt-2 h-8" onClick={() => openUpgradeFromSettings(backupRepairGateMessage)}>
                     Upgrade
                   </Button>
                 </div>

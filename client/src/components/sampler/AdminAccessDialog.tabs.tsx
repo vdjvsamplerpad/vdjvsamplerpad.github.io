@@ -3400,24 +3400,16 @@ export function CrashReportsTab({
   }, []);
 
   const handleDownloadCrashReport = React.useCallback(async (row: AdminClientCrashReport) => {
-    if (!row.report_download_url) return;
+    if (!row.report_object_key) return;
     setDownloadingReportId(row.id);
     try {
-      const response = await fetch(row.report_download_url, {
-        method: 'GET',
-        cache: 'no-store',
-        credentials: 'omit',
-      });
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        const fileName = buildCrashReportDownloadFileName(row);
-        const bytes = new Uint8Array(await response.arrayBuffer());
+        const log = await adminApi.fetchClientCrashReportLog(row.id);
+        const fileName = log.fileName || buildCrashReportDownloadFileName(row);
         if (typeof window !== 'undefined' && typeof window.electronAPI?.saveFile === 'function') {
           const result = await window.electronAPI.saveFile({
             title: 'Save Crash Report Log',
             fileName,
-            data: bytes,
+            data: log.bytes,
             filters: [{ name: 'Log Files', extensions: ['log', 'txt'] }],
           });
           if (!result?.ok && !result?.canceled) {
@@ -3425,7 +3417,7 @@ export function CrashReportsTab({
           }
           return;
         }
-        const blob = new Blob([bytes], { type: 'text/plain;charset=utf-8' });
+        const blob = new Blob([log.bytes], { type: log.contentType || 'text/plain;charset=utf-8' });
         const objectUrl = URL.createObjectURL(blob);
         const anchor = document.createElement('a');
         anchor.href = objectUrl;
@@ -3434,31 +3426,24 @@ export function CrashReportsTab({
         anchor.click();
         anchor.remove();
         URL.revokeObjectURL(objectUrl);
-      } catch {
-        window.open(row.report_download_url, '_blank', 'noopener,noreferrer');
+      } catch (error) {
+        console.warn('Failed to download crash report log', error);
       } finally {
         setDownloadingReportId((current) => (current === row.id ? null : current));
       }
     }, [buildCrashReportDownloadFileName]);
 
   const handleOpenCrashReport = React.useCallback(async (row: AdminClientCrashReport) => {
-    if (!row.report_download_url) return;
+    if (!row.report_object_key) return;
     setOpeningReportId(row.id);
     try {
-      const response = await fetch(row.report_download_url, {
-        method: 'GET',
-        cache: 'no-store',
-        credentials: 'omit',
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const text = await response.text();
-      setLogViewerTitle(buildCrashReportDownloadFileName(row));
+      const log = await adminApi.fetchClientCrashReportLog(row.id);
+      const text = new TextDecoder('utf-8').decode(log.bytes);
+      setLogViewerTitle(log.fileName || buildCrashReportDownloadFileName(row));
       setLogViewerContent(text);
       setLogViewerOpen(true);
-    } catch {
-      window.open(row.report_download_url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      console.warn('Failed to open crash report log', error);
     } finally {
       setOpeningReportId((current) => (current === row.id ? null : current));
     }
@@ -3622,7 +3607,7 @@ export function CrashReportsTab({
                         <option key={`${row.id}-${option.value}`} value={option.value}>{option.label}</option>
                       ))}
                     </select>
-                    {row.report_download_url ? (
+                    {row.report_object_key ? (
                       <>
                         <Button
                           size="sm"
@@ -3732,7 +3717,7 @@ export function CrashReportsTab({
                       <option key={`selected-${option.value}`} value={option.value}>{option.label}</option>
                     ))}
                   </select>
-                  {selectedReport.report_download_url ? (
+                  {selectedReport.report_object_key ? (
                     <>
                       <Button
                         variant="outline"

@@ -67,6 +67,8 @@ const createWebState = (patch: Partial<AppUpdateViewState> = {}): AppUpdateViewS
   ...patch,
 });
 
+const WEB_REFRESH_READY_STATUS = 'refresh_ready';
+
 const normalizeState = (
   platform: AppUpdatePlatform,
   patch: Partial<NativeAppUpdateState & { enabled: boolean }>
@@ -111,6 +113,10 @@ const fetchLatestWebBuildVersion = async (): Promise<string | null> => {
   const payload = await response.json().catch(() => null) as { appVersion?: unknown; version?: unknown } | null;
   return normalizeWebVersion(payload?.appVersion ?? payload?.version);
 };
+
+const getCurrentWebBuildVersion = (): string | null => (
+  normalizeWebVersion((import.meta as any).env?.VITE_APP_VERSION ?? null)
+);
 
 export function useAppUpdate() {
   const [state, setState] = React.useState<AppUpdateViewState>(() => createBaseState());
@@ -334,12 +340,24 @@ export function useAppUpdate() {
         setSafeState(createWebState(patch));
       };
 
+      try {
+        webDeployedVersionRef.current = await fetchLatestWebBuildVersion();
+      } catch {
+        webDeployedVersionRef.current = null;
+      }
+
       const markReady = (message?: string) => {
         webUpdateReadyRef.current = true;
+        const currentVersion = getCurrentWebBuildVersion();
+        const deployedVersion = normalizeWebVersion(webDeployedVersionRef.current);
+        const hasNewerDeployedVersion = Boolean(deployedVersion && (!currentVersion || deployedVersion !== currentVersion));
+        const refreshOnly = !hasNewerDeployedVersion;
         setWebState({
-          status: 'downloaded',
-          message: message || 'A newer web app version is ready. Reload from Settings to apply it.',
-          nextVersion: webDeployedVersionRef.current,
+          status: refreshOnly ? WEB_REFRESH_READY_STATUS : 'downloaded',
+          message: message || (refreshOnly
+            ? 'Updated web app files are ready for this same version. Refresh app files from Settings to apply them.'
+            : `Web app ${deployedVersion} is ready. Reload from Settings to apply it.`),
+          nextVersion: deployedVersion,
           canInstall: true,
         });
       };
@@ -489,14 +507,14 @@ export function useAppUpdate() {
         latestVersion = await fetchLatestWebBuildVersion();
         webDeployedVersionRef.current = latestVersion;
         await registration.update();
-        const hasNewerDeployedVersion = Boolean(latestVersion && latestVersion !== currentVersion);
+        const hasNewerDeployedVersion = Boolean(latestVersion && (!currentVersion || latestVersion !== currentVersion));
         if (registration.waiting || webUpdateReadyRef.current) {
           setState((prev) => createWebState({
             ...prev,
-            status: 'downloaded',
-            message: latestVersion && latestVersion !== currentVersion
+            status: hasNewerDeployedVersion ? 'downloaded' : WEB_REFRESH_READY_STATUS,
+            message: hasNewerDeployedVersion
               ? `Web app ${latestVersion} is ready. Reload from Settings to apply it.`
-              : 'A newer web app version is ready. Reload from Settings to apply it.',
+              : 'Updated web app files are ready for this same version. Refresh app files from Settings to apply them.',
             nextVersion: latestVersion,
             canInstall: true,
             busy: false,
@@ -528,7 +546,7 @@ export function useAppUpdate() {
         }
       } catch (error) {
         versionCheckError = error instanceof Error ? error.message : String(error);
-        const hasNewerDeployedVersion = Boolean(latestVersion && latestVersion !== currentVersion);
+        const hasNewerDeployedVersion = Boolean(latestVersion && (!currentVersion || latestVersion !== currentVersion));
         if (hasNewerDeployedVersion) {
           setState((prev) => createWebState({
             ...prev,
@@ -588,17 +606,17 @@ export function useAppUpdate() {
           registration.waiting.postMessage({ type: 'SKIP_WAITING' });
         }
       }
-      if (latestVersion && latestVersion !== currentVersion) {
-        setState((prev) => createWebState({
-          ...prev,
-          status: 'installing',
-          message: `Reloading the web app to ${latestVersion}...`,
-          nextVersion: latestVersion,
-          busy: true,
-          canCheck: false,
-          canInstall: false,
-        }));
-      }
+      setState((prev) => createWebState({
+        ...prev,
+        status: 'installing',
+        message: latestVersion && latestVersion !== currentVersion
+          ? `Reloading the web app to ${latestVersion}...`
+          : 'Refreshing web app files...',
+        nextVersion: latestVersion,
+        busy: true,
+        canCheck: false,
+        canInstall: false,
+      }));
       await forceFreshAppReload();
     }
   }, [state.platform]);

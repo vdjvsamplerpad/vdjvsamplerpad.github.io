@@ -449,6 +449,11 @@ export interface CatalogDraft {
   expected_asset_name: string;
   asset_protection?: 'encrypted' | 'public' | null;
   file_size_bytes?: number | null;
+  has_low_memory_variant?: boolean;
+  low_memory_variant_id?: string | null;
+  low_memory_part_count?: number | null;
+  low_memory_total_bytes?: number | null;
+  low_memory_min_client_version?: string | null;
   storage_key?: string | null;
   storage_uploaded_at?: string | null;
   thumbnail_path?: string | null;

@@ -31,6 +31,7 @@ import { getCachedUser, useAuthState } from '@/hooks/useAuth';
 import { getAudioTelemetry } from '@/lib/audio-telemetry';
 import { normalizeStopTimingOverrides } from '@/lib/audio-engine';
 import { emitAppNotice } from '@/lib/app-notices';
+import { isEditableEventTarget } from '@/lib/dom-event-targets';
 import { warmEssentialOfflineModules } from '@/lib/offline-readiness';
 import {
   consumeGuestDefaultBankTrialPlay,
@@ -792,6 +793,8 @@ export function SamplerPadApp() {
       if (!isOnline) {
         emitAppNotice({
           variant: 'info',
+          dedupeKey: 'network:offline',
+          dedupeMs: 10000,
           message: 'Offline mode active. Local sampler features stay available; Store, upgrades, payment, admin sync, and new downloads need internet.',
         });
       }
@@ -800,6 +803,8 @@ export function SamplerPadApp() {
     if (!wasOnline && isOnline) {
       emitAppNotice({
         variant: 'success',
+        dedupeKey: 'network:online',
+        dedupeMs: 10000,
         message: 'Back online. Store, upgrades, payment, and account sync are available again.',
       });
       return;
@@ -807,6 +812,8 @@ export function SamplerPadApp() {
     if (wasOnline && !isOnline) {
       emitAppNotice({
         variant: 'info',
+        dedupeKey: 'network:offline',
+        dedupeMs: 10000,
         message: 'Offline mode active. Local sampler features stay available; Store, upgrades, payment, admin sync, and new downloads need internet.',
       });
     }
@@ -832,6 +839,8 @@ export function SamplerPadApp() {
     if (shouldNotify) {
       emitAppNotice({
         variant: 'info',
+        dedupeKey: `offline-readiness:prepare:${userId}`,
+        dedupeMs: 60000,
         message: 'Preparing offline mode. Keep this app online for a moment before going offline.',
       });
     }
@@ -848,6 +857,8 @@ export function SamplerPadApp() {
       if (shouldNotify) {
         emitAppNotice({
           variant: ready ? 'success' : 'info',
+          dedupeKey: `offline-readiness:result:${userId}`,
+          dedupeMs: 60000,
           message: ready
             ? 'Offline mode is ready on this device. Local dialogs and saved banks can open without internet.'
             : 'Offline mode is partially ready. Reconnect if an unopened feature does not load offline.',
@@ -857,6 +868,8 @@ export function SamplerPadApp() {
       if (!cancelled && shouldNotify) {
         emitAppNotice({
           variant: 'info',
+          dedupeKey: `offline-readiness:failed:${userId}`,
+          dedupeMs: 60000,
           message: 'Offline preparation did not finish. Reconnect once before relying on offline dialogs.',
         });
       }
@@ -944,10 +957,11 @@ export function SamplerPadApp() {
     }));
   }, [settings.channelCount, settings.systemMappings.channelCount]);
 
-  React.useEffect(() => {
+  const deckChannelDefaults = React.useMemo(() => {
     const configuredMax = Number(capabilities.limits.deckCount);
-    if (!Number.isFinite(configuredMax) || configuredMax <= 0) return;
-    const allowedMax = Math.max(1, Math.min(8, Math.floor(configuredMax)));
+    const allowedMax = Number.isFinite(configuredMax) && configuredMax > 0
+      ? Math.max(1, Math.min(8, Math.floor(configuredMax)))
+      : 8;
     const configuredMin = Number(capabilities.limits.deckMinCount);
     const allowedMin = Number.isFinite(configuredMin)
       ? Math.max(1, Math.min(allowedMax, Math.floor(configuredMin)))
@@ -956,6 +970,17 @@ export function SamplerPadApp() {
     const defaultCount = Number.isFinite(configuredDefault)
       ? Math.max(allowedMin, Math.min(allowedMax, Math.floor(configuredDefault)))
       : allowedMin;
+    return { allowedMin, allowedMax, defaultCount };
+  }, [
+    capabilities.limits.deckCount,
+    capabilities.limits.deckDefaultCount,
+    capabilities.limits.deckMinCount,
+  ]);
+
+  React.useEffect(() => {
+    const allowedMax = deckChannelDefaults.allowedMax;
+    const allowedMin = deckChannelDefaults.allowedMin;
+    const defaultCount = deckChannelDefaults.defaultCount;
     const currentCount = Math.max(1, Math.min(8, Math.floor(settings.channelCount || defaultCount)));
     const previousTier = previousDeckTierRef.current;
     const previousDefault = previousDeckDefaultRef.current;
@@ -984,9 +1009,9 @@ export function SamplerPadApp() {
     }));
   }, [
     capabilities.effectiveTier,
-    capabilities.limits.deckCount,
-    capabilities.limits.deckDefaultCount,
-    capabilities.limits.deckMinCount,
+    deckChannelDefaults.allowedMax,
+    deckChannelDefaults.allowedMin,
+    deckChannelDefaults.defaultCount,
     settings.channelCount,
   ]);
 
@@ -2956,6 +2981,12 @@ export function SamplerPadApp() {
     return clamped > PAD_SIZE_MIN ? clamped - 1 : Math.min(activePadSizeMax, clamped + 1);
   }, [activePadSizeRaw, activePadSizeMax, configuredPadSizeFallback, requiresEvenPadColumns]);
 
+  const layoutDefaultPadSize = React.useMemo(() => {
+    const clamped = normalizePadSize(configuredPadSizeFallback, PAD_SIZE_MIN, activePadSizeMax, configuredPadSizeFallback);
+    if (!requiresEvenPadColumns || clamped % 2 === 0) return clamped;
+    return clamped > PAD_SIZE_MIN ? clamped - 1 : Math.min(activePadSizeMax, clamped + 1);
+  }, [activePadSizeMax, configuredPadSizeFallback, requiresEvenPadColumns]);
+
   const handlePadSizeChange = React.useCallback((requestedSize: number) => {
     const maxForOrientation = isPortraitViewport ? PAD_SIZE_MAX_PORTRAIT : PAD_SIZE_MAX_LANDSCAPE;
     let nextSize = normalizePadSize(requestedSize, PAD_SIZE_MIN, maxForOrientation, configuredPadSizeFallback);
@@ -2973,6 +3004,38 @@ export function SamplerPadApp() {
   const handleResetPadSize = React.useCallback(() => {
     handlePadSizeChange(configuredPadSizeFallback);
   }, [configuredPadSizeFallback, handlePadSizeChange]);
+
+  const handleResetLayoutDefaults = React.useCallback(() => {
+    const nextPortraitPadSize = normalizePadSize(
+      samplerConfig.uiDefaults.defaultPadSizePortrait,
+      PAD_SIZE_MIN,
+      PAD_SIZE_MAX_PORTRAIT,
+      samplerConfig.uiDefaults.defaultPadSizePortrait
+    );
+    const nextLandscapePadSize = normalizePadSize(
+      samplerConfig.uiDefaults.defaultPadSizeLandscape,
+      PAD_SIZE_MIN,
+      PAD_SIZE_MAX_LANDSCAPE,
+      samplerConfig.uiDefaults.defaultPadSizeLandscape
+    );
+    const nextChannelCount = deckChannelDefaults.defaultCount;
+    setSettings((prev) => ({
+      ...prev,
+      padSizePortrait: nextPortraitPadSize,
+      padSizeLandscape: nextLandscapePadSize,
+      channelCount: nextChannelCount,
+      systemMappings: {
+        ...prev.systemMappings,
+        channelCount: nextChannelCount,
+      },
+    }));
+    playbackManager.setChannelCount(nextChannelCount);
+  }, [
+    deckChannelDefaults.defaultCount,
+    playbackManager,
+    samplerConfig.uiDefaults.defaultPadSizeLandscape,
+    samplerConfig.uiDefaults.defaultPadSizePortrait,
+  ]);
 
   const handlePadSizeIncrease = React.useCallback(() => {
     const step = isDualMode ? 2 : 1;
@@ -3502,23 +3565,11 @@ export function SamplerPadApp() {
   }, [orderedBanks, isDualMode, secondaryBankId, primaryBankId, currentBankId, setSecondaryBank, setCurrentBank]);
 
   React.useEffect(() => {
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!target || !(target as HTMLElement).tagName) return false;
-      const element = target as HTMLElement;
-      const tagName = element.tagName.toLowerCase();
-      return (
-        tagName === 'input' ||
-        tagName === 'textarea' ||
-        tagName === 'select' ||
-        element.isContentEditable
-      );
-    };
-
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!settings.keyboardMappingEnabled) return;
       if (!capabilities.features.inputMapping) return;
       if (event.defaultPrevented) return;
-      if (isEditableTarget(event.target)) return;
+      if (isEditableEventTarget(event.target)) return;
 
       const normalized = normalizeShortcutKey(event.key, {
         shiftKey: event.shiftKey,
@@ -3765,7 +3816,7 @@ export function SamplerPadApp() {
       if (!settings.keyboardMappingEnabled) return;
       if (!capabilities.features.inputMapping) return;
       if (event.defaultPrevented) return;
-      if (isEditableTarget(event.target)) return;
+      if (isEditableEventTarget(event.target)) return;
 
       const hasNonShiftModifier = event.ctrlKey || event.altKey || event.metaKey;
       const comboKey = hasNonShiftModifier
@@ -4502,7 +4553,6 @@ export function SamplerPadApp() {
     onSetSecondaryBank: setSecondaryBank,
     onSetCurrentBank: setCurrentBank,
     onUpdateBank: updateBank,
-    onUpdatePad: handleUpdatePad,
     onDeleteBank: handleDeleteBank,
     onDuplicateBank: duplicateBank,
     onImportBank: importBank,
@@ -4611,6 +4661,9 @@ export function SamplerPadApp() {
     onToggleTheme: toggleTheme,
     onExitDualMode: () => setPrimaryBank(null),
     onPadSizeChange: handlePadSizeChange,
+    layoutDefaultPadSize,
+    layoutDefaultChannelCount: deckChannelDefaults.defaultCount,
+    onResetLayoutDefaults: handleResetLayoutDefaults,
     onStopModeChange: (mode: typeof settings.stopMode) => updateSetting('stopMode', mode),
     onStopTimingOverridesChange: (overrides: typeof settings.stopTimingOverrides) => updateSetting('stopTimingOverrides', normalizeStopTimingOverrides(overrides)),
     defaultTriggerMode: settings.defaultTriggerMode,

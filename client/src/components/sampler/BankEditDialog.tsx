@@ -18,6 +18,7 @@ import { bankColorOptions, extraBankColorOptions, formatBankEditDate, primaryBan
 import { isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { validateManagedImageFile } from '@/lib/image-upload';
 import { deleteBlobFromDB, saveBlobToDB } from './hooks/useSamplerStore.idbStorage';
+import { buildFeatureGateMessage } from '@/lib/account-capabilities';
 import type { ExportAudioMode, LinkExistingStoreBankCandidate, UpdateStoreBankInput } from './hooks/useSamplerStore.types';
 import type { BankPreparedSummary } from './hooks/preparedAudio';
 
@@ -113,6 +114,7 @@ export function BankEditDialog({
   const { profile, capabilities } = useAuthState();
   const canEditBankPosition = capabilities.features.bankEditPosition;
   const canEditBankKeyboardMidi = capabilities.features.bankEditKeyboardMidi;
+  const bankKeyboardMidiGateMessage = buildFeatureGateMessage('Bank keyboard and MIDI assignment', 'bankEditKeyboardMidi', capabilities.effectiveTier);
   const shouldShowPreparedPlaybackUi = profile?.role === 'admin';
   const [name, setName] = React.useState(bank.name);
   const [defaultColor, setDefaultColor] = React.useState(bank.defaultColor);
@@ -878,7 +880,7 @@ export function BankEditDialog({
 
   const applyShortcutKey = (nextKey: string | null) => {
     if (!canEditBankKeyboardMidi) {
-      setShortcutError('Bank keyboard and MIDI assignment requires PRO.');
+      setShortcutError(bankKeyboardMidiGateMessage);
       return;
     }
     if (!nextKey) {
@@ -928,7 +930,7 @@ export function BankEditDialog({
     if (event.key === 'Tab') return;
     event.preventDefault();
     if (!canEditBankKeyboardMidi) {
-      setShortcutError('Bank keyboard and MIDI assignment requires PRO.');
+      setShortcutError(bankKeyboardMidiGateMessage);
       return;
     }
 

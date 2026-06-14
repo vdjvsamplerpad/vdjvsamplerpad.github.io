@@ -298,12 +298,15 @@ export const SamplerPad = React.memo(function SamplerPad({
     setMissingPadAction(pad.restoreAssetKind === 'custom_local_media' ? 'custom_link' : 'official_sync');
   }, [pad.restoreAssetKind]);
 
-  const clearPendingTouchTrigger = React.useCallback(() => {
+  const clearPendingTouchTrigger = React.useCallback((options?: { suppressClick?: boolean }) => {
     const pending = pendingTouchTriggerRef.current;
     if (pending?.timer) {
       clearTimeout(pending.timer);
     }
     pendingTouchTriggerRef.current = null;
+    if (options?.suppressClick) {
+      suppressClickUntilRef.current = Date.now() + TOUCH_TRIGGER_CLICK_SUPPRESS_MS;
+    }
   }, []);
 
   const startStutterPlayback = (preventDefault?: () => void) => {
@@ -400,7 +403,7 @@ export const SamplerPad = React.memo(function SamplerPad({
       typeof clientY === 'number' &&
       hasPendingTouchIntentMovedOrScrolled(pending, clientX, clientY)
     ) {
-      clearPendingTouchTrigger();
+      clearPendingTouchTrigger({ suppressClick: true });
       return;
     }
 
@@ -565,9 +568,20 @@ export const SamplerPad = React.memo(function SamplerPad({
     if (!pending || pending.pointerId !== e.pointerId) return;
 
     if (hasPendingTouchIntentMovedOrScrolled(pending, e.clientX, e.clientY)) {
-      clearPendingTouchTrigger();
+      clearPendingTouchTrigger({ suppressClick: true });
     }
   };
+
+  React.useEffect(() => {
+    const handleScroll = () => {
+      if (!pendingTouchTriggerRef.current) return;
+      clearPendingTouchTrigger({ suppressClick: true });
+    };
+    document.addEventListener('scroll', handleScroll, { capture: true });
+    return () => {
+      document.removeEventListener('scroll', handleScroll, { capture: true });
+    };
+  }, [clearPendingTouchTrigger]);
 
   const handlePointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
     const pending = pendingTouchTriggerRef.current;

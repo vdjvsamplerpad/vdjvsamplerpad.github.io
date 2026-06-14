@@ -32,10 +32,12 @@ import type {
 
 const PROOF_SIGNED_URL_TTL_SECONDS = 20 * 60;
 const PROOF_SIGNED_URL_CACHE_TTL_MS = (PROOF_SIGNED_URL_TTL_SECONDS - 60) * 1000;
+const ADMIN_LOW_MEMORY_WARNING_BYTES = 250 * 1024 * 1024;
 const proofSignedUrlCache = new Map<string, { url: string; expiresAt: number }>();
 
 type Notice = { id: string; variant: 'success' | 'error' | 'info'; message: string };
 export type PushNoticeInput = Omit<Notice, 'id'>;
+const ADMIN_NOTICE_LIMIT = 4;
 
 export function useNotices() {
   const [notices, setNotices] = React.useState<Notice[]>([]);
@@ -48,7 +50,10 @@ export function useNotices() {
     const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID()
       : String(Date.now() + Math.random());
-    setNotices((arr) => [{ id, ...notice }, ...arr]);
+    setNotices((arr) => {
+      const deduped = arr.filter((entry) => entry.variant !== notice.variant || entry.message !== notice.message);
+      return [{ id, ...notice }, ...deduped].slice(0, ADMIN_NOTICE_LIMIT);
+    });
     window.setTimeout(() => dismiss(id), 4000);
   }, [dismiss]);
 
@@ -632,6 +637,55 @@ export function CatalogCard({
     }
     return `${next.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
   }, []);
+  const catalogFileSizeBytes = Number.isFinite(Number(draft.file_size_bytes))
+    ? Math.max(0, Math.floor(Number(draft.file_size_bytes)))
+    : 0;
+  const isLargeCatalogAsset = !isBundle && catalogFileSizeBytes >= ADMIN_LOW_MEMORY_WARNING_BYTES;
+  const hasReadyLowMemoryVariant = Boolean(
+    draft.has_low_memory_variant
+    || draft.low_memory_variant_id
+    || (Number.isFinite(Number(draft.low_memory_part_count)) && Number(draft.low_memory_part_count) > 0)
+  );
+  const visibleUploadSessions = React.useMemo(() => {
+    const statusRank = (status: string | null | undefined): number => {
+      switch (String(status || '').toLowerCase()) {
+        case 'completed': return 5;
+        case 'issued': return 4;
+        case 'uploading': return 3;
+        case 'expired': return 2;
+        case 'failed': return 1;
+        default: return 0;
+      }
+    };
+    const timestampValue = (value: string | null | undefined): number => {
+      const parsed = Date.parse(String(value || ''));
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const normalizeSessionKey = (session: AdminCatalogUploadSession): string => (
+      String(session.asset_name || session.storage_key || session.id)
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+    );
+    const bestByKey = new Map<string, AdminCatalogUploadSession>();
+    for (const session of uploadSessions) {
+      const key = normalizeSessionKey(session);
+      const current = bestByKey.get(key);
+      if (!current) {
+        bestByKey.set(key, session);
+        continue;
+      }
+      const rankDelta = statusRank(session.status) - statusRank(current.status);
+      const timeDelta = timestampValue(session.completed_at || session.updated_at || session.created_at) - timestampValue(current.completed_at || current.updated_at || current.created_at);
+      if (rankDelta > 0 || (rankDelta === 0 && timeDelta > 0)) {
+        bestByKey.set(key, session);
+      }
+    }
+    return Array.from(bestByKey.values()).sort((left, right) => (
+      timestampValue(right.completed_at || right.updated_at || right.created_at)
+      - timestampValue(left.completed_at || left.updated_at || left.created_at)
+    ));
+  }, [uploadSessions]);
 
   const loadUploadSessions = React.useCallback(async () => {
     if (isBundle) {
@@ -872,6 +926,17 @@ export function CatalogCard({
               Includes {draft.bundle_count || bundleBankIds.length || 0} bank{(draft.bundle_count || bundleBankIds.length || 0) === 1 ? '' : 's'}
             </div>
           )}
+          {isLargeCatalogAsset && (
+            <div className={`mt-2 inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-bold uppercase tracking-wide ${
+              hasReadyLowMemoryVariant
+                ? (isDark ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-emerald-200 bg-emerald-50 text-emerald-700')
+                : (isDark ? 'border-amber-400/35 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-700')
+            }`}>
+              {hasReadyLowMemoryVariant
+                ? `Low-memory ready${Number(draft.low_memory_part_count) > 0 ? ` (${Number(draft.low_memory_part_count)} parts)` : ''}`
+                : 'Low-memory needed for iOS'}
+            </div>
+          )}
           <div className="mt-1 flex items-center justify-between gap-3">
             <div className={`text-base font-semibold ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>{savedPriceLabel}</div>
             <Button size="sm" onClick={openEditor} className="h-7 px-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] shrink-0">
@@ -969,11 +1034,11 @@ export function CatalogCard({
                   <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Recent Staged Uploads</div>
                   {uploadSessionsLoading ? (
                     <div className="flex items-center justify-center py-4"><Loader2 className="w-4 h-4 animate-spin" /></div>
-                  ) : uploadSessions.length === 0 ? (
+                  ) : visibleUploadSessions.length === 0 ? (
                     <div className="text-xs opacity-70">No staged upload sessions found for this catalog item.</div>
                   ) : (
                     <div className="space-y-2">
-                      {uploadSessions.map((session) => {
+                      {visibleUploadSessions.map((session) => {
                         const busy = sessionActionId === session.id;
                         return (
                           <div key={session.id} className={`rounded border p-2 text-[11px] space-y-1.5 ${isDark ? 'border-gray-700 bg-gray-800/50' : 'border-gray-200 bg-gray-50/70'}`}>

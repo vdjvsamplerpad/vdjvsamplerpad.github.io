@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppUpdateState: () => ipcRenderer.invoke('vdjv-app-update-get-state'),
   checkForAppUpdates: () => ipcRenderer.invoke('vdjv-app-update-check'),
   installDownloadedAppUpdate: () => ipcRenderer.invoke('vdjv-app-update-install'),
+  openExternalOAuthUrl: (payload) => ipcRenderer.invoke('vdjv-auth-open-external-oauth', payload),
   getSystemMemoryInfo: () => ipcRenderer.sendSync('vdjv-system-memory-info'),
   onFullscreenChange: (callback) => {
     if (typeof callback !== 'function') return () => {};
@@ -39,6 +40,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('vdjv-app-update-state', handler);
     return () => ipcRenderer.removeListener('vdjv-app-update-state', handler);
+  },
+  onExternalAuthCallback: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('vdjv-auth-callback-url', handler);
+    return () => ipcRenderer.removeListener('vdjv-auth-callback-url', handler);
   },
 });
 

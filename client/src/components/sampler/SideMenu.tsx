@@ -84,7 +84,6 @@ interface SideMenuProps {
   onSetSecondaryBank: (id: string | null) => void;
   onSetCurrentBank: (id: string | null) => void;
   onUpdateBank: (id: string, updates: Partial<SamplerBank>) => void;
-  onUpdatePad: (bankId: string, id: string, updatedPad: PadData) => void;
   onDeleteBank: (id: string) => void;
   onDuplicateBank?: (bankId: string, onProgress?: (progress: number) => void) => Promise<SamplerBank>;
   onImportBank: (
@@ -167,7 +166,6 @@ export function SideMenu({
   onSetSecondaryBank,
   onSetCurrentBank,
   onUpdateBank,
-  onUpdatePad,
   onDeleteBank,
   onDuplicateBank,
   onImportBank,
@@ -299,37 +297,47 @@ export function SideMenu({
     const latestBank = banks.find((bank) => bank.id === editingBank.id);
     if (!latestBank) return;
     let cleared = 0;
-    latestBank.pads.forEach((pad) => {
-      if (pad.shortcutKey) {
-        cleared += 1;
-        onUpdatePad(latestBank.id, pad.id, { ...pad, shortcutKey: undefined });
-      }
+    const nextPads = latestBank.pads.map((pad) => {
+      if (!pad.shortcutKey) return pad;
+      cleared += 1;
+      return { ...pad, shortcutKey: undefined };
     });
-    onUpdateBank(latestBank.id, { disableDefaultPadShortcutLayout: true });
+    if (cleared > 0) {
+      onUpdateBank(latestBank.id, {
+        pads: nextPads,
+        disableDefaultPadShortcutLayout: true,
+      });
+    } else {
+      onUpdateBank(latestBank.id, { disableDefaultPadShortcutLayout: true });
+    }
     if (cleared > 0) {
       pushNotice({ variant: 'success', message: `Cleared keyboard shortcuts from ${cleared} pad${cleared === 1 ? '' : 's'}.` });
     } else {
       pushNotice({ variant: 'info', message: 'No pad keyboard shortcuts to clear.' });
     }
-  }, [banks, editingBank, onUpdatePad, onUpdateBank, pushNotice]);
+  }, [banks, editingBank, onUpdateBank, pushNotice]);
 
   const executeClearPadMidi = React.useCallback(() => {
     if (!editingBank) return;
     const latestBank = banks.find((bank) => bank.id === editingBank.id);
     if (!latestBank) return;
     let cleared = 0;
-    latestBank.pads.forEach((pad) => {
+    const nextPads = latestBank.pads.map((pad) => {
       if (typeof pad.midiNote === 'number' || typeof pad.midiCC === 'number') {
         cleared += 1;
-        onUpdatePad(latestBank.id, pad.id, { ...pad, midiNote: undefined, midiCC: undefined });
+        return { ...pad, midiNote: undefined, midiCC: undefined };
       }
+      return pad;
     });
+    if (cleared > 0) {
+      onUpdateBank(latestBank.id, { pads: nextPads });
+    }
     if (cleared > 0) {
       pushNotice({ variant: 'success', message: `Cleared MIDI mappings from ${cleared} pad${cleared === 1 ? '' : 's'}.` });
     } else {
       pushNotice({ variant: 'info', message: 'No pad MIDI mappings to clear.' });
     }
-  }, [banks, editingBank, onUpdatePad, pushNotice]);
+  }, [banks, editingBank, onUpdateBank, pushNotice]);
 
   const { user, profile, capabilities } = useAuthState();
   const isAdmin = profile?.role === 'admin';
@@ -400,6 +408,7 @@ export function SideMenu({
     window.dispatchEvent(new CustomEvent('vdjv-open-upgrade', { detail: { reason } }));
   }, []);
   const effectiveUser = user || getCachedUser();
+  const hasAuthenticatedAccount = Boolean(user?.id && profile?.id);
   const isProAccount = capabilities.effectiveTier === 'pro';
   const showProMaxUpgradeCta = Boolean(effectiveUser && !isAdmin && isProAccount);
   const ownedBankQuotaLimit = Number(capabilities.limits.ownedBankQuota);
@@ -852,12 +861,17 @@ export function SideMenu({
   };
 
   const handleNewBankClick = React.useCallback(() => {
-    if (!effectiveUser) {
+    if (!hasAuthenticatedAccount) {
       requestLoginPrompt('Please sign in to create a new bank.');
       return;
     }
     setShowCreateDialog(true);
-  }, [effectiveUser, requestLoginPrompt]);
+  }, [hasAuthenticatedAccount, requestLoginPrompt]);
+
+  React.useEffect(() => {
+    if (hasAuthenticatedAccount || !showCreateDialog) return;
+    setShowCreateDialog(false);
+  }, [hasAuthenticatedAccount, showCreateDialog]);
 
   const handleEditBank = (bank: SamplerBank) => {
     setEditingBank(bank);

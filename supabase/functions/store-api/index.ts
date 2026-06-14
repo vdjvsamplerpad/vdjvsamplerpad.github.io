@@ -1916,6 +1916,15 @@ const normalizeAdminCatalogItem = (item: any) => {
     coming_soon: Boolean(item?.coming_soon),
     status: item?.is_published ? "published" : "draft",
     price_php: resolveCatalogPrice(item),
+    has_low_memory_variant: Boolean(item?.has_low_memory_variant),
+    low_memory_variant_id: asString(item?.low_memory_variant_id, 80) || null,
+    low_memory_part_count: Number.isFinite(Number(item?.low_memory_part_count))
+      ? Math.max(0, Math.floor(Number(item?.low_memory_part_count)))
+      : 0,
+    low_memory_total_bytes: Number.isFinite(Number(item?.low_memory_total_bytes))
+      ? Math.max(0, Math.floor(Number(item?.low_memory_total_bytes)))
+      : null,
+    low_memory_min_client_version: asString(item?.low_memory_min_client_version, 64) || null,
     bank: {
       title: displayBank.title,
       description: displayBank.description,
@@ -4246,7 +4255,7 @@ type LandingPlatformKey = typeof LANDING_PLATFORM_KEYS[number];
 type LandingSocialKey = typeof LANDING_SOCIAL_KEYS[number];
 const DEFAULT_LANDING_DOWNLOAD_LINKS = {
   V1: {
-    android: "/android/",
+    android: "https://github.com/vdjvsamplerpad/vdjvsamplerpad.github.io/releases/latest",
     ios: "/ios/",
     windows: "https://m.me/vdjvsampler/",
     macos: "https://m.me/vdjvsampler/",
@@ -9071,6 +9080,60 @@ const listAdminClientCrashReports = async (req: Request) => {
   });
 };
 
+const getAdminClientCrashReportLog = async (req: Request, reportId: string) => {
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .from("client_crash_reports")
+    .select("id,report_title,report_object_key")
+    .eq("id", reportId)
+    .maybeSingle();
+  if (error) return fail(500, error.message);
+  if (!data) return fail(404, "Crash report not found");
+
+  const objectKey = asString(data?.report_object_key, 2000);
+  if (!objectKey) return fail(404, "Crash report log is not available");
+  if (!R2_BUCKET) return fail(503, "R2_BUCKET_NOT_CONFIGURED");
+
+  const signedUrl = await createPresignedGetUrl(
+    R2_BUCKET,
+    objectKey,
+    STORE_R2_SIGNED_DOWNLOAD_TTL_SECONDS,
+  ).catch((err) => {
+    throw new Error(err instanceof Error ? err.message : "Failed to sign crash report log");
+  });
+
+  const upstream = await fetch(signedUrl, {
+    method: "GET",
+    cache: "no-store",
+  });
+  if (!upstream.ok) {
+    return fail(upstream.status === 404 ? 404 : 502, `Crash report log fetch failed (${upstream.status})`);
+  }
+
+  const title = asString(data?.report_title, 120) || "crash-report";
+  const safeTitle = title
+    .replace(/[^a-z0-9_-]+/gi, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80) || "crash-report";
+  const objectFileName = objectKey.split("/").pop()?.trim();
+  const fileName = (objectFileName && /^[a-z0-9_.-]+$/i.test(objectFileName))
+    ? objectFileName
+    : `${safeTitle}_${reportId}.log`;
+
+  const headers = new Headers({
+    ...buildCorsHeaders(req),
+    "Content-Type": upstream.headers.get("Content-Type") || "text/plain; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Content-Disposition": `attachment; filename="${fileName.replace(/"/g, "")}"`,
+  });
+  headers.set("Access-Control-Expose-Headers", "Content-Disposition, Content-Type");
+
+  return new Response(await upstream.arrayBuffer(), {
+    status: 200,
+    headers,
+  });
+};
+
 const patchAdminClientCrashReport = async (reportId: string, body: any) => {
   const status = asString(body?.status, 40)?.trim().toLowerCase();
   if (status !== "new" && status !== "acknowledged" && status !== "fixed" && status !== "ignored") {
@@ -9518,9 +9581,30 @@ const listAdminStoreCatalog = async () => {
     const bank = getFirstRelationRow(item?.banks);
     return !bank?.deleted_at;
   });
+  const lowMemoryVariantMap = await loadReadyLowMemoryVariantsByCatalogItem(
+    admin,
+    visible.map((item: any) => asString(item?.id, 80) || "").filter(Boolean),
+  );
+  const visibleWithVariants = visible.map((item: any) => {
+    const catalogItemId = asString(item?.id, 80) || "";
+    const lowMemoryVariant = catalogItemId ? lowMemoryVariantMap.get(catalogItemId) : null;
+    if (!lowMemoryVariant) return item;
+    return {
+      ...item,
+      has_low_memory_variant: true,
+      low_memory_variant_id: asString(lowMemoryVariant?.id, 80) || null,
+      low_memory_part_count: Number.isFinite(Number(asNumber(lowMemoryVariant?.part_count)))
+        ? Math.max(0, Math.floor(Number(asNumber(lowMemoryVariant?.part_count) || 0)))
+        : 0,
+      low_memory_total_bytes: Number.isFinite(Number(asNumber(lowMemoryVariant?.total_file_size_bytes)))
+        ? Math.max(0, Math.floor(Number(asNumber(lowMemoryVariant?.total_file_size_bytes) || 0)))
+        : null,
+      low_memory_min_client_version: asString(lowMemoryVariant?.min_client_version, 64) || null,
+    };
+  });
   const bannersResult = await listMarketingBanners(admin, { includeInactive: true });
   if (!bannersResult.ok) return bannersResult.response;
-  return ok({ items: visible.map(normalizeAdminCatalogItem), banners: bannersResult.banners });
+  return ok({ items: visibleWithVariants.map(normalizeAdminCatalogItem), banners: bannersResult.banners });
 };
 
 const normalizeBundleBankIds = (body: any): string[] => {
@@ -10990,6 +11074,11 @@ Deno.serve(async (req) => {
 
     if (req.method === "GET" && scoped[2] === "crash-reports" && scoped.length === 3) {
       return await listAdminClientCrashReports(req);
+    }
+    if (req.method === "GET" && scoped[2] === "crash-reports" && scoped[4] === "log" && scoped.length === 5) {
+      const reportId = asUuid(scoped[3]);
+      if (!reportId) return badRequest("Invalid crash report id");
+      return await getAdminClientCrashReportLog(req, reportId);
     }
     if (req.method === "PATCH" && scoped[2] === "crash-reports" && scoped.length === 4) {
       const reportId = asUuid(scoped[3]);
