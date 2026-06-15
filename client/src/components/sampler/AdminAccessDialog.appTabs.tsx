@@ -478,14 +478,14 @@ function HomeTab({
       controls={(
         <AdminControlsBar
           left={(
-            <div className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_auto_minmax(14rem,1.2fr)] lg:items-end">
+            <div className="grid w-full min-w-0 max-w-full gap-2 min-[520px]:grid-cols-2 xl:grid-cols-[minmax(0,11rem)_minmax(0,11rem)_auto_minmax(0,1fr)] xl:items-end">
               <div className="min-w-0 space-y-1">
                 <Label>From</Label>
                 <Input
                   type="date"
                   value={homeFromDate}
                   onChange={(event) => onHomeFromDateChange(event.target.value)}
-                  className={`h-10 min-w-0 w-full text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
+                  className={`h-10 min-w-0 max-w-full w-full px-2 text-xs sm:text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
                 />
               </div>
               <div className="min-w-0 space-y-1">
@@ -494,20 +494,20 @@ function HomeTab({
                   type="date"
                   value={homeToDate}
                   onChange={(event) => onHomeToDateChange(event.target.value)}
-                  className={`h-10 min-w-0 w-full text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
+                  className={`h-10 min-w-0 max-w-full w-full px-2 text-xs sm:text-sm ${isDark ? 'bg-gray-800/80 border-gray-700 text-gray-100' : 'bg-white/85 border-gray-300 text-gray-900'}`}
                 />
               </div>
               <Button
                 type="button"
                 size="sm"
                 variant="success"
-                className="h-10 rounded-[14px] px-4 sm:col-span-2 lg:col-span-1"
+                className="h-10 rounded-[14px] px-4 min-[520px]:col-span-2 xl:col-span-1"
                 onClick={onRefresh}
                 disabled={homeLoading}
               >
                 Apply
               </Button>
-              <div className="flex min-w-0 flex-wrap gap-2 sm:col-span-2 lg:col-span-1">
+              <div className="flex min-w-0 max-w-full flex-wrap gap-2 min-[520px]:col-span-2 xl:col-span-1">
                 {HOME_WINDOW_OPTIONS.map((option) => (
                   <Button
                     key={option}
@@ -523,7 +523,7 @@ function HomeTab({
               </div>
             </div>
           )}
-          right={<div className="rounded-xl border px-3 py-2 text-xs opacity-75">{heroRangeMeta}</div>}
+          right={<div className="max-w-full overflow-hidden text-ellipsis rounded-xl border px-3 py-2 text-xs opacity-75">{heroRangeMeta}</div>}
         />
       )}
     >

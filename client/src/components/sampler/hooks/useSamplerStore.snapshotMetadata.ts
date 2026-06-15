@@ -141,7 +141,7 @@ export const buildSamplerMetadataSnapshot = (input: {
         restoreAssetKind,
         missingMediaExpected: isCustomMedia,
         missingImageExpected: isCustomMedia && expectsImage,
-        sourcePadId: pad.originPadId || pad.id,
+        sourcePadId: pad.sourcePadId || pad.originPadId || pad.id,
         sourceCatalogItemId: pad.originCatalogItemId || bank.bankMetadata?.catalogItemId,
       };
     }) as SnapshotPadRecord[];
@@ -244,7 +244,12 @@ export const materializeSnapshotBanks = (
           }
         : bank.bankMetadata,
       pads: bank.pads.map((pad) => {
-        const existingPad = existing?.pads.find((candidate) => candidate.id === pad.id || candidate.originPadId === pad.sourcePadId);
+        const existingPad = existing?.pads.find(
+          (candidate) =>
+            candidate.id === pad.id ||
+            candidate.originPadId === pad.sourcePadId ||
+            (Boolean(pad.sourcePadId) && candidate.sourcePadId === pad.sourcePadId)
+        );
         if (existingPad?.audioUrl) {
           return {
             ...pad,
@@ -316,7 +321,7 @@ export const applyResolvedOfficialPadMedia = (banks: SamplerBank[]): SamplerBank
   return banks.map((bank) => {
     let changed = false;
     const nextPads = bank.pads.map((pad) => {
-      if (!pad.missingMediaExpected || pad.restoreAssetKind === 'custom_local_media') return pad;
+      if (pad.audioUrl || pad.restoreAssetKind === 'custom_local_media') return pad;
       const sourceKey = pad.restoreAssetKind === 'default_asset'
         ? `default:${pad.sourcePadId || pad.originPadId || pad.id}`
         : (pad.originCatalogItemId || pad.sourceCatalogItemId)

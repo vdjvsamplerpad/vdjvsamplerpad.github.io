@@ -1,6 +1,16 @@
 export type OfflineReadinessResult = {
   loaded: string[];
   failed: Array<{ id: string; message: string }>;
+  shell: OfflineShellReadinessResult;
+};
+
+export type OfflineShellReadinessResult = {
+  supported: boolean;
+  ready: boolean;
+  cacheName?: string;
+  checked?: number;
+  missing: string[];
+  error?: string;
 };
 
 type OfflineReadinessEntry = {
@@ -10,6 +20,7 @@ type OfflineReadinessEntry = {
 
 const OFFLINE_READINESS_BATCH_SIZE = 3;
 const OFFLINE_READINESS_IDLE_TIMEOUT_MS = 180;
+const OFFLINE_SHELL_MESSAGE_TIMEOUT_MS = 20_000;
 
 let cachedResult: OfflineReadinessResult | null = null;
 let inFlight: Promise<OfflineReadinessResult> | null = null;
@@ -42,6 +53,67 @@ const waitForIdle = (): Promise<void> => {
   return new Promise((resolve) => window.setTimeout(resolve, OFFLINE_READINESS_IDLE_TIMEOUT_MS));
 };
 
+const postServiceWorkerReadinessMessage = async (
+  type: 'VDJV_PREPARE_OFFLINE_READY' | 'VDJV_VERIFY_OFFLINE_READY'
+): Promise<OfflineShellReadinessResult> => {
+  if (
+    typeof window === 'undefined' ||
+    typeof navigator === 'undefined' ||
+    !('serviceWorker' in navigator) ||
+    typeof MessageChannel === 'undefined'
+  ) {
+    return { supported: false, ready: false, missing: [], error: 'Service Worker is unavailable.' };
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const worker = registration.active || navigator.serviceWorker.controller || registration.waiting || registration.installing;
+    if (!worker) {
+      return { supported: true, ready: false, missing: [], error: 'Service Worker is not active yet.' };
+    }
+
+    return await new Promise<OfflineShellReadinessResult>((resolve) => {
+      const channel = new MessageChannel();
+      const timeoutId = window.setTimeout(() => {
+        channel.port1.close();
+        resolve({ supported: true, ready: false, missing: [], error: 'Offline shell verification timed out.' });
+      }, OFFLINE_SHELL_MESSAGE_TIMEOUT_MS);
+
+      channel.port1.onmessage = (event) => {
+        window.clearTimeout(timeoutId);
+        channel.port1.close();
+        const data = event.data || {};
+        const missing = Array.isArray(data.missing)
+          ? data.missing.filter((entry: unknown): entry is string => typeof entry === 'string')
+          : [];
+        resolve({
+          supported: true,
+          ready: data.ready === true,
+          cacheName: typeof data.cacheName === 'string' ? data.cacheName : undefined,
+          checked: typeof data.checked === 'number' ? data.checked : undefined,
+          missing,
+          error: typeof data.error === 'string' ? data.error : undefined,
+        });
+      };
+
+      worker.postMessage({ type }, [channel.port2]);
+    });
+  } catch (error) {
+    return {
+      supported: true,
+      ready: false,
+      missing: [],
+      error: error instanceof Error ? error.message : 'Offline shell verification failed.',
+    };
+  }
+};
+
+export const prepareOfflineShellCache = (): Promise<OfflineShellReadinessResult> =>
+  postServiceWorkerReadinessMessage('VDJV_PREPARE_OFFLINE_READY');
+
+export const verifyOfflineShellCache = (): Promise<OfflineShellReadinessResult> =>
+  postServiceWorkerReadinessMessage('VDJV_VERIFY_OFFLINE_READY');
+
 export const warmEssentialOfflineModules = async (): Promise<OfflineReadinessResult> => {
   if (cachedResult && cachedResult.failed.length === 0) return cachedResult;
   if (inFlight) return inFlight;
@@ -68,8 +140,9 @@ export const warmEssentialOfflineModules = async (): Promise<OfflineReadinessRes
       await waitForIdle();
     }
 
-    const result = { loaded, failed };
-    if (failed.length === 0) cachedResult = result;
+    const shell = await prepareOfflineShellCache();
+    const result = { loaded, failed, shell };
+    if (failed.length === 0 && (!shell.supported || shell.ready)) cachedResult = result;
     return result;
   })().finally(() => {
     inFlight = null;

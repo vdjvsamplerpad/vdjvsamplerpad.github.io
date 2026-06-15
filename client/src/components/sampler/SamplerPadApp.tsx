@@ -93,7 +93,7 @@ const PAD_WARMUP_IDLE_DELAY_MS = 120;
 const PAD_WARMUP_MOBILE_MAX_DURATION_MS = 120_000;
 const PAD_WARMUP_UNKNOWN_SAFE_MAX_BYTES = 1_500_000;
 const PAD_WARMUP_UNKNOWN_SAFE_MAX_TRIM_MS = 12_000;
-const OFFLINE_READINESS_STORAGE_VERSION = 'v1';
+const OFFLINE_READINESS_STORAGE_VERSION = 'v2';
 const DECK_LOADED_BANKS_EVENT = 'vdjv-deck-loaded-banks-changed';
 const DECK_PLAYBACK_EVENT = 'vdjv-deck-playback-changed';
 
@@ -826,7 +826,8 @@ export function SamplerPadApp() {
     offlineReadinessRunUserIdRef.current = userId;
 
     let cancelled = false;
-    const storageKey = `vdjv-offline-readiness:${OFFLINE_READINESS_STORAGE_VERSION}:${userId}`;
+    const appVersion = String((import.meta as any).env?.VITE_APP_VERSION || 'unknown').trim() || 'unknown';
+    const storageKey = `vdjv-offline-readiness:${OFFLINE_READINESS_STORAGE_VERSION}:${appVersion}:${userId}`;
     const shouldNotify = (() => {
       if (typeof window === 'undefined') return false;
       try {
@@ -847,7 +848,8 @@ export function SamplerPadApp() {
 
     void warmEssentialOfflineModules().then((result) => {
       if (cancelled) return;
-      const ready = result.failed.length === 0;
+      const shellReady = result.shell.supported ? result.shell.ready : true;
+      const ready = result.failed.length === 0 && shellReady;
       if (ready && typeof window !== 'undefined') {
         try {
           window.localStorage.setItem(storageKey, '1');
@@ -861,7 +863,9 @@ export function SamplerPadApp() {
           dedupeMs: 60000,
           message: ready
             ? 'Offline mode is ready on this device. Local dialogs and saved banks can open without internet.'
-            : 'Offline mode is partially ready. Reconnect if an unopened feature does not load offline.',
+            : result.shell.supported && !result.shell.ready
+              ? 'Offline shell is still preparing. Keep this app online a little longer before closing it.'
+              : 'Offline mode is partially ready. Reconnect if an unopened feature does not load offline.',
         });
       }
     }).catch(() => {

@@ -587,6 +587,7 @@ export const runTransferPadPipeline = (
   deps: {
     setBanks: SetState<SamplerBank[]>;
     isOwnedCountedBankForQuota: (bank: SamplerBank) => boolean;
+    generateId: () => string;
   }
 ): void => {
   const {
@@ -599,6 +600,7 @@ export const runTransferPadPipeline = (
   const {
     setBanks,
     isOwnedCountedBankForQuota,
+    generateId,
   } = deps;
 
   setBanks((prev) => {
@@ -611,21 +613,26 @@ export const runTransferPadPipeline = (
     const pad = src.pads.find((p) => p.id === padId);
     if (!pad) return prev;
     const maxPos = tgt.pads.length > 0 ? Math.max(...tgt.pads.map((p) => p.position || 0)) : -1;
-    const sourceIsDefaultBank = src.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(src);
+    const sourceIsCanonicalDefaultBank =
+      !src.isLocalDuplicate && (src.sourceBankId === DEFAULT_BANK_SOURCE_ID || isExplicitDefaultBankIdentity(src));
+    const sourceHasDefaultOfficialAsset =
+      sourceIsCanonicalDefaultBank || pad.restoreAssetKind === 'default_asset' || pad.originBankId === DEFAULT_BANK_SOURCE_ID;
+    const nextPadId = sourceIsCanonicalDefaultBank ? generateId() : pad.id;
     const upPad: PadData = {
       ...pad,
+      id: nextPadId,
       position: maxPos + 1,
-      contentOrigin: pad.contentOrigin || (sourceIsDefaultBank ? 'official_admin' : 'user'),
+      contentOrigin: pad.contentOrigin || (sourceHasDefaultOfficialAsset ? 'official_admin' : 'user'),
       originPadId: pad.originPadId || pad.id,
-      originBankId: pad.originBankId || (sourceIsDefaultBank ? DEFAULT_BANK_SOURCE_ID : undefined),
+      originBankId: pad.originBankId || (sourceHasDefaultOfficialAsset ? DEFAULT_BANK_SOURCE_ID : undefined),
       originCatalogItemId: pad.originCatalogItemId,
       originBankTitle: pad.originBankTitle || src.name,
-      restoreAssetKind: pad.restoreAssetKind || (sourceIsDefaultBank ? 'default_asset' : undefined),
+      restoreAssetKind: pad.restoreAssetKind || (sourceHasDefaultOfficialAsset ? 'default_asset' : undefined),
       sourcePadId: pad.sourcePadId || pad.originPadId || pad.id,
     };
     return prev.map((b) => {
       if (b.id === sourceBankId) {
-        return sourceIsDefaultBank
+        return sourceIsCanonicalDefaultBank
           ? b
           : applyBankContentPolicy({ ...b, pads: b.pads.filter((p) => p.id !== padId) });
       }

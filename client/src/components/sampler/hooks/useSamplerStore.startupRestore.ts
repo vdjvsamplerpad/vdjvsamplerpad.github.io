@@ -220,7 +220,11 @@ export const runRestoreAllFilesPipeline = async (
     };
 
     const restoreBankMedia = async (bank: SamplerBank): Promise<SamplerBank> => {
-      const defaultBankAssetSource = isExplicitDefaultBankIdentity(bank)
+      const isDefaultBank = isExplicitDefaultBankIdentity(bank);
+      const hasDefaultAssetPads = Array.isArray(bank.pads) && bank.pads.some(
+        (pad) => pad.restoreAssetKind === 'default_asset' || pad.originBankId === DEFAULT_BANK_SOURCE_ID
+      );
+      const defaultBankAssetSource = isDefaultBank || hasDefaultAssetPads
         ? await getDefaultBankAssetSource().catch(() => null)
         : null;
       const defaultBankAssetPadsById = defaultBankAssetSource
@@ -263,12 +267,14 @@ export const runRestoreAllFilesPipeline = async (
       const restoredPads: PadData[] = [];
       for (let i = 0; i < bank.pads.length; i += 1) {
         const restoredPad = await restorePadMedia(bank.pads[i]);
+        const defaultAssetSourcePadId = restoredPad.sourcePadId || restoredPad.originPadId || restoredPad.id;
         const assetPad =
+          (defaultAssetSourcePadId ? defaultBankAssetPadsById?.get(defaultAssetSourcePadId) : undefined) ||
           defaultBankAssetPadsById?.get(restoredPad.id) ||
-          defaultBankAssetSource?.pads[i] ||
+          (isDefaultBank ? defaultBankAssetSource?.pads[i] : undefined) ||
           null;
         if (assetPad) {
-          const imagePreference = getDefaultBankPadImagePreference(restoredPad.id || assetPad.id || '');
+          const imagePreference = getDefaultBankPadImagePreference(defaultAssetSourcePadId || assetPad.id || '');
           const shouldHideImage = imagePreference === 'none';
           if (!restoredPad.audioUrl && !restoredPad.audioStorageKey && !restoredPad.audioBackend) {
             restoredPad.audioUrl = assetPad.audioUrl || restoredPad.audioUrl;
@@ -294,6 +300,53 @@ export const runRestoreAllFilesPipeline = async (
       const first = candidateBanks.filter((bank) => bank.id === priorityBankId);
       const rest = candidateBanks.filter((bank) => bank.id !== priorityBankId);
       return [...first, ...rest];
+    };
+
+    const repairDefaultPadCopyIdCollisions = (candidateBanks: SamplerBank[]): SamplerBank[] => {
+      const canonicalDefaultPadIds = new Set<string>();
+      candidateBanks.forEach((bank) => {
+        if (!isExplicitDefaultBankIdentity(bank) || bank.isLocalDuplicate) return;
+        bank.pads.forEach((pad) => {
+          if (pad.id) canonicalDefaultPadIds.add(pad.id);
+        });
+      });
+      if (canonicalDefaultPadIds.size === 0) return candidateBanks;
+
+      const usedPadIds = new Set<string>();
+      candidateBanks.forEach((bank) => {
+        bank.pads.forEach((pad) => {
+          if (pad.id) usedPadIds.add(pad.id);
+        });
+      });
+
+      return candidateBanks.map((bank) => {
+        if (isExplicitDefaultBankIdentity(bank) && !bank.isLocalDuplicate) return bank;
+        let bankChanged = false;
+        const pads = bank.pads.map((pad) => {
+          const collidesWithCanonicalDefault = canonicalDefaultPadIds.has(pad.id);
+          const looksLikeDefaultCopy =
+            pad.restoreAssetKind === 'default_asset' ||
+            pad.originBankId === DEFAULT_BANK_SOURCE_ID ||
+            pad.contentOrigin === 'official_admin';
+          if (!collidesWithCanonicalDefault || !looksLikeDefaultCopy) return pad;
+
+          let nextId = '';
+          do {
+            nextId = generateId();
+          } while (!nextId || usedPadIds.has(nextId) || canonicalDefaultPadIds.has(nextId));
+          usedPadIds.add(nextId);
+          bankChanged = true;
+          return {
+            ...pad,
+            id: nextId,
+            sourcePadId: pad.sourcePadId || pad.originPadId || pad.id,
+            originPadId: pad.originPadId || pad.id,
+            originBankId: pad.originBankId || DEFAULT_BANK_SOURCE_ID,
+            restoreAssetKind: pad.restoreAssetKind || 'default_asset',
+          };
+        });
+        return bankChanged ? { ...bank, pads } : bank;
+      });
     };
 
     let restoredBanks: SamplerBank[] = savedBanks.map((bank: any, index: number) => ({
@@ -327,6 +380,7 @@ export const runRestoreAllFilesPipeline = async (
       const repairedBank = repairDuplicatePadIdsInBank(bank, generateId).bank;
       return applyBankContentPolicy(repairedBank);
     });
+    restoredBanks = repairDefaultPadCopyIdCollisions(restoredBanks).map((bank) => applyBankContentPolicy(bank));
 
     const hideProtectedLock =
       typeof window !== 'undefined' && localStorage.getItem(hideProtectedBanksKey) === '1';

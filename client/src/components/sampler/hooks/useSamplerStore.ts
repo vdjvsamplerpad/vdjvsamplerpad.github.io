@@ -2457,6 +2457,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
       {
         setBanks,
         isOwnedCountedBankForQuota,
+        generateId,
       }
     );
   }, [profile?.role, quotaPolicy.ownedBankPadCap]);

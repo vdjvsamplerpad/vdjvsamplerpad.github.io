@@ -52,11 +52,51 @@ const copySamplerEntryShell = (distPublicDir) => {
   fs.copyFileSync(sourceIndexPath, path.join(samplerDir, 'index.html'));
 };
 
-const rewriteServiceWorkerCacheName = (distPublicDir, appVersion) => {
+const escapeForSingleQuotedJs = (value) =>
+  String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n');
+
+const collectBuildPrecacheUrls = (distPublicDir) => {
+  const urls = new Set([
+    '/',
+    '/index.html',
+    '/vdjv/',
+    '/vdjv/index.html',
+    '/version.json',
+  ]);
+  const assetsDir = path.join(distPublicDir, 'assets');
+  const cacheableExtensions = new Set(['.js', '.css', '.woff', '.woff2']);
+
+  const walk = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+        continue;
+      }
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!cacheableExtensions.has(ext)) continue;
+      const relativePath = path.relative(distPublicDir, fullPath).replace(/\\/g, '/');
+      urls.add(`/${relativePath}`);
+    }
+  };
+
+  walk(assetsDir);
+  return Array.from(urls).sort();
+};
+
+const rewriteServiceWorkerMetadata = (distPublicDir, appVersion) => {
   const serviceWorkerPath = path.join(distPublicDir, 'sw.js');
   if (!fs.existsSync(serviceWorkerPath)) return;
   const raw = fs.readFileSync(serviceWorkerPath, 'utf8');
-  const next = raw.replace(/__VDJV_SHELL_CACHE__/g, `vdjv-shell-cache-${sanitizeVersionToken(appVersion)}`);
+  const buildPrecacheJson = JSON.stringify(collectBuildPrecacheUrls(distPublicDir));
+  const next = raw
+    .replace(/__VDJV_SHELL_CACHE__/g, `vdjv-shell-cache-${sanitizeVersionToken(appVersion)}`)
+    .replace(/__VDJV_BUILD_PRECACHE__/g, escapeForSingleQuotedJs(buildPrecacheJson));
   fs.writeFileSync(serviceWorkerPath, next);
 };
 
@@ -210,7 +250,7 @@ export default defineConfig(({ mode }) => {
           writeVersionManifest(distPublicDir, appVersion);
           if (!includeLanding) return;
           copySamplerEntryShell(distPublicDir);
-          rewriteServiceWorkerCacheName(distPublicDir, appVersion);
+          rewriteServiceWorkerMetadata(distPublicDir, appVersion);
         },
       },
     ],

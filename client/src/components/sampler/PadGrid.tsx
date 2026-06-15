@@ -68,6 +68,13 @@ type MobileEditDragViewState = Pick<
   | 'targetKind'
 >;
 
+type MobileEditDragScrollLock = {
+  sourceElement: HTMLElement;
+  sourceTouchAction: string;
+  bodyTouchAction: string;
+  documentOverscrollBehaviorY: string;
+};
+
 const getNearestScrollableElement = (element: HTMLElement | null): HTMLElement | null => {
   let current = element?.parentElement || null;
   while (current && current !== document.body) {
@@ -173,6 +180,7 @@ export const PadGrid = React.memo(function PadGrid({
   const [mobileEditDragState, setMobileEditDragState] = React.useState<MobileEditDragViewState | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const mobileEditDragRef = React.useRef<MobileEditDragSession | null>(null);
+  const mobileEditDragScrollLockRef = React.useRef<MobileEditDragScrollLock | null>(null);
   const suppressMobileEditClickRef = React.useRef(false);
   const suppressMobileEditClickTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const dialogBanks = editMode ? allBanks : EMPTY_BANKS;
@@ -351,6 +359,28 @@ export const PadGrid = React.memo(function PadGrid({
     }, 450);
   }, []);
 
+  const unlockMobileEditDragScroll = React.useCallback(() => {
+    const lock = mobileEditDragScrollLockRef.current;
+    if (!lock || typeof document === 'undefined') return;
+    lock.sourceElement.style.touchAction = lock.sourceTouchAction;
+    document.body.style.touchAction = lock.bodyTouchAction;
+    document.documentElement.style.overscrollBehaviorY = lock.documentOverscrollBehaviorY;
+    mobileEditDragScrollLockRef.current = null;
+  }, []);
+
+  const lockMobileEditDragScroll = React.useCallback((sourceElement: HTMLElement) => {
+    if (typeof document === 'undefined' || mobileEditDragScrollLockRef.current) return;
+    mobileEditDragScrollLockRef.current = {
+      sourceElement,
+      sourceTouchAction: sourceElement.style.touchAction,
+      bodyTouchAction: document.body.style.touchAction,
+      documentOverscrollBehaviorY: document.documentElement.style.overscrollBehaviorY,
+    };
+    sourceElement.style.touchAction = 'none';
+    document.body.style.touchAction = 'none';
+    document.documentElement.style.overscrollBehaviorY = 'contain';
+  }, []);
+
   const resetMobileEditDrag = React.useCallback((options?: { suppressClick?: boolean }) => {
     const session = mobileEditDragRef.current;
     if (session?.timer) {
@@ -365,6 +395,7 @@ export const PadGrid = React.memo(function PadGrid({
       } catch {
       }
     }
+    unlockMobileEditDragScroll();
     mobileEditDragRef.current = null;
     setMobileEditDragState(null);
     setDragOverIndex(null);
@@ -372,7 +403,7 @@ export const PadGrid = React.memo(function PadGrid({
     if (options?.suppressClick) {
       markMobileEditClickSuppressed();
     }
-  }, [markMobileEditClickSuppressed]);
+  }, [markMobileEditClickSuppressed, unlockMobileEditDragScroll]);
 
   const resolveMobileEditDragTarget = React.useCallback((clientX: number, clientY: number) => {
     const session = mobileEditDragRef.current;
@@ -434,6 +465,7 @@ export const PadGrid = React.memo(function PadGrid({
       session.timer = null;
     }
     session.active = true;
+    lockMobileEditDragScroll(session.sourceElement);
     if (typeof session.sourceElement.setPointerCapture === 'function') {
       try {
         session.sourceElement.setPointerCapture(pointerId);
@@ -444,7 +476,7 @@ export const PadGrid = React.memo(function PadGrid({
     setDragOverIndex(session.sourceIndex);
     setMobileEditDragState(snapshotMobileEditDrag(session));
     resolveMobileEditDragTarget(session.currentX, session.currentY);
-  }, [resolveMobileEditDragTarget, snapshotMobileEditDrag]);
+  }, [lockMobileEditDragScroll, resolveMobileEditDragTarget, snapshotMobileEditDrag]);
 
   const finishMobileEditDrag = React.useCallback(() => {
     const session = mobileEditDragRef.current;
@@ -565,6 +597,11 @@ export const PadGrid = React.memo(function PadGrid({
       }
     };
 
+    const handleTouchMove = (event: TouchEvent) => {
+      if (!mobileEditDragRef.current?.active) return;
+      event.preventDefault();
+    };
+
     const handlePointerUp = (event: PointerEvent) => {
       const session = mobileEditDragRef.current;
       if (!session || session.pointerId !== event.pointerId) return;
@@ -596,17 +633,20 @@ export const PadGrid = React.memo(function PadGrid({
       }
     };
 
-    document.addEventListener('pointermove', handlePointerMove, { capture: true });
+    const activeMoveOptions: AddEventListenerOptions = { capture: true, passive: false };
+    document.addEventListener('pointermove', handlePointerMove, activeMoveOptions);
     document.addEventListener('pointerup', handlePointerUp, { capture: true });
     document.addEventListener('pointercancel', handlePointerCancel, { capture: true });
+    document.addEventListener('touchmove', handleTouchMove, activeMoveOptions);
     document.addEventListener('scroll', handleScroll, { capture: true });
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleScroll);
 
     return () => {
-      document.removeEventListener('pointermove', handlePointerMove, { capture: true });
+      document.removeEventListener('pointermove', handlePointerMove, activeMoveOptions);
       document.removeEventListener('pointerup', handlePointerUp, { capture: true });
       document.removeEventListener('pointercancel', handlePointerCancel, { capture: true });
+      document.removeEventListener('touchmove', handleTouchMove, activeMoveOptions);
       document.removeEventListener('scroll', handleScroll, { capture: true });
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleScroll);
@@ -740,7 +780,7 @@ export const PadGrid = React.memo(function PadGrid({
       />
       <div
       data-vdjv-bank-drop-id={bankId}
-      className={`grid ${gap} w-full min-w-0 max-w-full overflow-x-hidden transition-all duration-200 ${useMobileEditDrag ? 'touch-pan-y' : ''} ${mobileEditDragState?.active ? 'touch-none' : ''} ${adminPadColorPaintActive ? 'cursor-crosshair' : ''} ${dragOverPadTransfer
+      className={`grid ${gap} w-full min-w-0 max-w-full overflow-x-hidden transition-all duration-200 ${mobileEditDragState?.active ? 'touch-none' : useMobileEditDrag ? 'touch-pan-y' : ''} ${adminPadColorPaintActive ? 'cursor-crosshair' : ''} ${dragOverPadTransfer
                 ? 'ring-4 ring-orange-400 ring-offset-2 ring-offset-transparent bg-orange-50 dark:bg-orange-900/20 rounded-2xl p-2'
         : channelLoadArmed
           ? 'rounded-2xl shadow-[inset_0_0_0_2px_rgba(16,185,129,0.65)] bg-emerald-50/20 dark:bg-emerald-900/10'
