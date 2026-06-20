@@ -32,9 +32,39 @@ const DECK_LOADED_BANKS_EVENT = 'vdjv-deck-loaded-banks-changed';
 const DECK_PLAYBACK_EVENT = 'vdjv-deck-playback-changed';
 const PREPARED_PLAYBACK_PAD_STARTED_EVENT = 'vdjv-prepared-playback-pad-started';
 const HOT_TRANSPORT_PADS_CHANGED_EVENT = 'vdjv-audio-transport-hot-pads-changed';
+const DEFAULT_BANK_NATIVE_AUDIO_STORAGE_PREFIX = 'default-bank/audio';
 
 const isBlobUrl = (value: string | null | undefined): value is string =>
   typeof value === 'string' && value.startsWith('blob:');
+
+const sanitizeStorageToken = (value: string): string =>
+  value.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 96) || 'pad';
+
+const inferAudioMimeFromBlob = async (blob: Blob): Promise<string> => {
+  const declaredType = typeof blob.type === 'string' ? blob.type.toLowerCase() : '';
+  if (declaredType.startsWith('audio/')) return blob.type;
+
+  try {
+    const header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+    const text = String.fromCharCode(...Array.from(header));
+    if (text.startsWith('ID3') || (header[0] === 0xff && (header[1] & 0xe0) === 0xe0)) return 'audio/mpeg';
+    if (text.startsWith('RIFF') && text.slice(8, 12) === 'WAVE') return 'audio/wav';
+    if (text.startsWith('OggS')) return 'audio/ogg';
+    if (text.slice(4, 8) === 'ftyp') return 'audio/mp4';
+  } catch {
+  }
+
+  return 'audio/mpeg';
+};
+
+const audioExtFromMime = (mime: string): string => {
+  const lower = mime.toLowerCase();
+  if (lower.includes('wav')) return 'wav';
+  if (lower.includes('ogg')) return 'ogg';
+  if (lower.includes('aac')) return 'aac';
+  if (lower.includes('mp4') || lower.includes('m4a')) return 'm4a';
+  return 'mp3';
+};
 
 const bankHasBlobMedia = (bank: SamplerBank, preservedPadIds: Set<string> = new Set()): boolean => {
   return (bank.pads || []).some((pad) => {
@@ -109,6 +139,7 @@ interface UseSamplerStoreBankLifecycleParams {
   generateId: () => string;
   restoreFileAccess: SamplerMediaHelpers['restoreFileAccess'];
   storeFile: SamplerMediaHelpers['storeFile'];
+  isNativeCapacitorPlatform: () => boolean;
   selectedBankHydrationRunIdRef: React.MutableRefObject<number>;
   selectedBankHydrationRetryAttemptsRef: React.MutableRefObject<Record<string, number>>;
   selectedBankHydrationRetryTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
@@ -160,6 +191,7 @@ export function useSamplerStoreBankLifecycle({
   generateId,
   restoreFileAccess,
   storeFile,
+  isNativeCapacitorPlatform,
   selectedBankHydrationRunIdRef,
   selectedBankHydrationRetryAttemptsRef,
   selectedBankHydrationRetryTimerRef,
@@ -606,11 +638,64 @@ export function useSamplerStoreBankLifecycle({
       return await loadInstalledDefaultBankSource(installedRemoteDefault, allowAudio);
     }
 
-    return loadDefaultBankFromAssetsPipeline(allowAudio, {
+    const assetDefault = await loadDefaultBankFromAssetsPipeline(allowAudio, {
       generateId,
       defaultBankSourceId: DEFAULT_BANK_SOURCE_ID,
     });
-  }, [banksRef, defaultBankSourceOverrideRef, generateId, loadInstalledDefaultBankSource]);
+
+    if (!allowAudio || !isNativeCapacitorPlatform()) return assetDefault;
+
+    let changed = false;
+    const pads: PadData[] = [];
+    for (let index = 0; index < assetDefault.pads.length; index += 1) {
+      const pad = assetDefault.pads[index];
+      if (!pad.audioUrl || pad.audioStorageKey) {
+        pads.push(pad);
+        continue;
+      }
+
+      try {
+        const response = await fetch(pad.audioUrl, { cache: 'force-cache' });
+        if (!response.ok) {
+          pads.push(pad);
+          continue;
+        }
+        const rawBlob = await response.blob();
+        if (rawBlob.size <= 0) {
+          pads.push(pad);
+          continue;
+        }
+        const mime = await inferAudioMimeFromBlob(rawBlob);
+        const ext = audioExtFromMime(mime);
+        const audioBlob = rawBlob.type === mime ? rawBlob : new Blob([rawBlob], { type: mime });
+        const file = new File([audioBlob], `${pad.id}.${ext}`, { type: mime });
+        const storageHint = `${DEFAULT_BANK_NATIVE_AUDIO_STORAGE_PREFIX}/${sanitizeStorageToken(pad.id)}.${ext}`;
+        const storedAudio = await storeFile(pad.id, file, 'audio', {
+          storageId: `audio_${pad.id}`,
+          nativeStorageKeyHint: storageHint,
+        });
+
+        if (!storedAudio.storageKey) {
+          pads.push(pad);
+          continue;
+        }
+
+        pads.push({
+          ...pad,
+          audioStorageKey: storedAudio.storageKey,
+          audioBackend: storedAudio.backend,
+          audioBytes: typeof pad.audioBytes === 'number' ? pad.audioBytes : rawBlob.size,
+        });
+        changed = true;
+      } catch {
+        pads.push(pad);
+      }
+
+      await yieldToMainThread();
+    }
+
+    return changed ? { ...assetDefault, pads } : assetDefault;
+  }, [banksRef, defaultBankSourceOverrideRef, generateId, isNativeCapacitorPlatform, loadInstalledDefaultBankSource, storeFile, yieldToMainThread]);
 
   React.useEffect(() => {
     if (!startupRestoreCompleted) return;
@@ -648,11 +733,15 @@ export function useSamplerStoreBankLifecycle({
       const needsInsert = !defaultBank;
       const hasAnyAudio = Boolean(defaultBank?.pads.some((pad) => Boolean(pad.audioUrl)));
       const hasLockedPads = Boolean(defaultBank?.pads.some((pad) => !pad.audioUrl));
+      const needsNativeAudioStorage = allowAudio && isNativeCapacitorPlatform();
+      const hasAssetAudioWithoutStorage = needsNativeAudioStorage && Boolean(defaultBank?.pads.some((pad) => (
+        Boolean(pad.audioUrl) && !pad.audioStorageKey
+      )));
       const hasMissingVisibleImages = Boolean(defaultBank?.pads.some((pad) => {
         if (getDefaultBankPadImagePreference(pad.id) === 'none') return false;
         return !pad.imageUrl;
       }));
-      const needsAudioStateSync = !needsInsert && (allowAudio ? hasLockedPads : hasAnyAudio);
+      const needsAudioStateSync = !needsInsert && (allowAudio ? (hasLockedPads || hasAssetAudioWithoutStorage) : hasAnyAudio);
       const needsVisualStateSync = !needsInsert && hasMissingVisibleImages;
       const forceApplySource = defaultBankSourceForceApplyRef.current;
       const syncSignature = [
@@ -661,6 +750,7 @@ export function useSamplerStoreBankLifecycle({
         defaultBank?.pads?.length || 0,
         hasAnyAudio ? '1' : '0',
         hasLockedPads ? '1' : '0',
+        hasAssetAudioWithoutStorage ? '1' : '0',
         hasMissingVisibleImages ? '1' : '0',
         defaultBankSourceRevision,
         forceApplySource ? '1' : '0',
@@ -715,6 +805,7 @@ export function useSamplerStoreBankLifecycle({
     getDefaultBankPadImagePreference,
     isBanksHydrated,
     isGuestLockedSession,
+    isNativeCapacitorPlatform,
     loadDefaultBankSource,
     setBanks,
     setCurrentBankIdState,

@@ -4178,7 +4178,7 @@ const redeemAccountVoucher = async (req: Request, body: any) => {
   if ((voucher as any).status !== "reserved") return fail(409, "VOUCHER_NOT_AVAILABLE");
   if (voucherExpires && new Date(voucherExpires).getTime() <= now) return fail(409, "VOUCHER_EXPIRED");
   if (campaignExpires && new Date(campaignExpires).getTime() <= now) return fail(409, "VOUCHER_EXPIRED");
-  if (campaign && campaign.is_active === false) return fail(409, "VOUCHER_CAMPAIGN_INACTIVE");
+  if (campaign && (campaign.is_active === false || campaign.archived_at)) return fail(409, "VOUCHER_CAMPAIGN_INACTIVE");
   const targetEmail = asString((voucher as any).reserved_for_email || campaign?.target_email, 320)?.toLowerCase();
   if (targetEmail && targetEmail !== String(user.email || "").toLowerCase()) return fail(403, "VOUCHER_EMAIL_MISMATCH");
   const targetUserId = asUuid((voucher as any).reserved_for_user_id || campaign?.target_user_id);
@@ -4186,6 +4186,14 @@ const redeemAccountVoucher = async (req: Request, body: any) => {
 
   const targetTier = normalizeUpgradeTier((voucher as any).target_tier);
   if (!targetTier) return fail(409, "VOUCHER_INVALID_TIER");
+  const voucherValuePhp = Boolean((voucher as any).counts_as_revenue_snapshot)
+    ? normalizeTierPrice((voucher as any).value_php_snapshot ?? campaign?.value_php)
+    : 0;
+  const voucherCountsAsRevenue = voucherValuePhp > 0 && Boolean((voucher as any).counts_as_revenue_snapshot);
+  const voucherNotes = [
+    asString(campaign?.name, 160) ? `Voucher campaign: ${asString(campaign?.name, 160)}` : null,
+    asString(campaign?.external_payment_note, 500) ? `External payment note: ${asString(campaign?.external_payment_note, 500)}` : null,
+  ].filter(Boolean).join("\n");
   const requestId = crypto.randomUUID();
   const receiptReference = buildUpgradeReceiptReference(requestId);
   const nowIso = new Date().toISOString();
@@ -4199,12 +4207,13 @@ const redeemAccountVoucher = async (req: Request, body: any) => {
       target_tier: targetTier,
       status: "approved",
       payment_channel: "voucher",
-      base_price_php_snapshot: 0,
+      base_price_php_snapshot: voucherCountsAsRevenue ? voucherValuePhp : 0,
       store_credit_php_snapshot: 0,
-      quote_price_php_snapshot: 0,
+      quote_price_php_snapshot: voucherCountsAsRevenue ? voucherValuePhp : 0,
       purchase_credit_snapshot: [],
       voucher_id: (voucher as any).id,
       receipt_reference: receiptReference,
+      notes: voucherNotes || null,
       reviewed_at: nowIso,
     })
     .select("*")
@@ -4234,6 +4243,8 @@ const redeemAccountVoucher = async (req: Request, body: any) => {
     email: user.email || null,
     target_tier: targetTier,
     request_id: requestId,
+    value_php_snapshot: voucherCountsAsRevenue ? voucherValuePhp : 0,
+    counts_as_revenue_snapshot: voucherCountsAsRevenue,
   });
   await admin
     .from("account_voucher_campaigns")
@@ -4244,7 +4255,7 @@ const redeemAccountVoucher = async (req: Request, body: any) => {
     .eq("id", (voucher as any).campaign_id);
 
   const capabilities = await applyAccountTierToUser(admin, user.id, targetTier, "voucher");
-  return ok({ request: requestRow, capabilities });
+  return ok({ request: requestRow, capabilities, targetTier, voucherValuePhp: voucherCountsAsRevenue ? voucherValuePhp : 0 });
 };
 
 const LANDING_VERSION_KEYS = ["V1", "V2", "V3"] as const;

@@ -1901,6 +1901,7 @@ export function useSamplerStore(options?: { samplerConfig?: SamplerAppConfig }):
     generateId,
     restoreFileAccess,
     storeFile,
+    isNativeCapacitorPlatform,
     selectedBankHydrationRunIdRef,
     selectedBankHydrationRetryAttemptsRef,
     selectedBankHydrationRetryTimerRef,

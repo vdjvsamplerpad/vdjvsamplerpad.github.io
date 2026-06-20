@@ -105,8 +105,73 @@ export interface AdminVoucherCampaign {
   target_email?: string | null;
   target_user_id?: string | null;
   notes?: string | null;
+  value_php?: number | null;
+  counts_as_revenue?: boolean | null;
+  external_payment_note?: string | null;
+  archived_at?: string | null;
+  archived_by?: string | null;
   is_active: boolean;
   created_at: string;
+}
+
+export interface AdminVoucherDetailVoucher {
+  id: string;
+  campaign_id: string;
+  code_prefix?: string | null;
+  code_suffix?: string | null;
+  target_tier: 'pro' | 'pro_max';
+  status: 'reserved' | 'redeemed' | 'disabled' | string;
+  reserved_for_email?: string | null;
+  reserved_for_user_id?: string | null;
+  copied_by?: string | null;
+  copied_at?: string | null;
+  expires_at?: string | null;
+  redeemed_by?: string | null;
+  redeemed_at?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+  value_php_snapshot?: number | null;
+  counts_as_revenue_snapshot?: boolean | null;
+}
+
+export interface AdminVoucherRedemption {
+  id: string;
+  voucher_id: string;
+  campaign_id: string;
+  user_id?: string | null;
+  email?: string | null;
+  user_display_name?: string | null;
+  target_tier: 'pro' | 'pro_max';
+  redeemed_at: string;
+  request_id?: string | null;
+  value_php_snapshot?: number | null;
+  counts_as_revenue_snapshot?: boolean | null;
+  request?: {
+    id: string;
+    status: string;
+    target_tier: 'pro' | 'pro_max';
+    quote_price_php_snapshot?: number | null;
+    base_price_php_snapshot?: number | null;
+    receipt_reference?: string | null;
+    is_refunded?: boolean | null;
+    created_at?: string | null;
+    reviewed_at?: string | null;
+    email?: string | null;
+    display_name?: string | null;
+  } | null;
+}
+
+export interface AdminVoucherCampaignDetails {
+  campaign: AdminVoucherCampaign;
+  vouchers: AdminVoucherDetailVoucher[];
+  redemptions: AdminVoucherRedemption[];
+  summary: {
+    issued_count: number;
+    usable_count: number;
+    redeemed_count: number;
+    disabled_count: number;
+    revenue_php: number;
+  };
 }
 
 export interface AdminBank {
@@ -311,6 +376,7 @@ export interface AdminDashboardOverview {
     seriesCap: number;
     rangeStartDate?: string;
     rangeEndDate?: string;
+    activeTrendSource?: 'daily_aggregate' | 'raw_rows' | string;
   };
 }
 
@@ -863,8 +929,19 @@ export const adminApi = {
     targetEmail?: string | null;
     targetUserId?: string | null;
     notes?: string | null;
+    valuePhp?: number;
+    countsAsRevenue?: boolean;
+    externalPaymentNote?: string | null;
   }) {
     return callAdmin<{ campaign: AdminVoucherCampaign }>('POST', 'vouchers/campaigns/create', input);
+  },
+
+  async getVoucherCampaignDetails(campaignId: string) {
+    return callAdmin<AdminVoucherCampaignDetails>('GET', `vouchers/${campaignId}/details`);
+  },
+
+  async archiveVoucherCampaign(campaignId: string) {
+    return callAdmin<{ campaign: AdminVoucherCampaign }>('POST', `vouchers/${campaignId}/archive`);
   },
 
   async copyNextVoucher(campaignId: string) {

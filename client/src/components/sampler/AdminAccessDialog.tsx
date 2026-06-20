@@ -266,7 +266,7 @@ export function AdminAccessDialog({
   const [usersTotal, setUsersTotal] = React.useState(0);
   const [usersPage, setUsersPage] = React.useState(1);
   const [usersQuery, setUsersQuery] = React.useState('');
-  const [usersTierFilter, setUsersTierFilter] = React.useState<'all' | 'free' | 'pro' | 'pro_max' | 'admin'>('all');
+  const [usersTierFilter, setUsersTierFilter] = React.useState<'all' | 'free' | 'pro' | 'pro_max'>('all');
   const [usersStatusFilter, setUsersStatusFilter] = React.useState<'all' | 'active' | 'banned' | 'never_signed_in'>('all');
   const [usersSortBy, setUsersSortBy] = React.useState<UserSortBy>('created_at');
   const [usersSortDir, setUsersSortDir] = React.useState<SortDirection>('desc');
@@ -2213,9 +2213,12 @@ export function AdminAccessDialog({
                   usersQuery,
                   users: pagedUsers,
                   allUsers: users,
+                  filteredUsersTotal: filteredUsers.length,
+                  usersTotal,
                   userTierFilter: usersTierFilter,
                   userStatusFilter: usersStatusFilter,
                   usersPage,
+                  usersPerPage: PAGE_SIZE,
                   usersTotalPages,
                   usersSortBy,
                   usersSortDir,

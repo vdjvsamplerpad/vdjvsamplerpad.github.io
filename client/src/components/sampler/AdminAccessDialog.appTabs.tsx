@@ -137,14 +137,17 @@ interface UsersTabProps {
   usersQuery: string;
   users: AdminUser[];
   allUsers: AdminUser[];
-  userTierFilter: 'all' | 'free' | 'pro' | 'pro_max' | 'admin';
+  filteredUsersTotal: number;
+  usersTotal: number;
+  userTierFilter: 'all' | 'free' | 'pro' | 'pro_max';
   userStatusFilter: 'all' | 'active' | 'banned' | 'never_signed_in';
   usersPage: number;
+  usersPerPage: number;
   usersTotalPages: number;
   usersSortBy: UserSortBy;
   usersSortDir: SortDirection;
   onUsersQueryChange: (value: string) => void;
-  onUserTierFilterChange: (value: 'all' | 'free' | 'pro' | 'pro_max' | 'admin') => void;
+  onUserTierFilterChange: (value: 'all' | 'free' | 'pro' | 'pro_max') => void;
   onUserStatusFilterChange: (value: 'all' | 'active' | 'banned' | 'never_signed_in') => void;
   onRefreshUsers: () => void;
   onUsersPageChange: (page: number) => void;
@@ -1053,9 +1056,12 @@ function UsersTab({
   usersQuery,
   users,
   allUsers,
+  filteredUsersTotal,
+  usersTotal,
   userTierFilter,
   userStatusFilter,
   usersPage,
+  usersPerPage,
   usersTotalPages,
   usersSortBy,
   usersSortDir,
@@ -1071,11 +1077,11 @@ function UsersTab({
   const selectClass = `h-9 rounded-md border bg-background/70 px-3 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-900 text-gray-100' : ''}`;
   const proUsers = allUsers.filter((user) => (user.effective_account_tier || user.account_tier) === 'pro').length;
   const proMaxUsers = allUsers.filter((user) => (user.effective_account_tier || user.account_tier) === 'pro_max' || user.role === 'admin').length;
-  const bannedUsers = allUsers.filter(isUserBanned).length;
-  const recentUser = React.useMemo(() => (
-    [...allUsers].sort((left, right) => new Date(right.created_at || 0).getTime() - new Date(left.created_at || 0).getTime())[0] || null
-  ), [allUsers]);
+  const freeUsers = allUsers.filter((user) => user.role !== 'admin' && (user.effective_account_tier || user.account_tier || 'free') === 'free').length;
+  const totalUsers = Math.max(0, Number(usersTotal || allUsers.filter((user) => user.role !== 'admin').length));
   const userFilterCount = Number(Boolean(usersQuery.trim())) + Number(userTierFilter !== 'all') + Number(userStatusFilter !== 'all');
+  const userResultStart = users.length > 0 ? ((usersPage - 1) * usersPerPage) + 1 : 0;
+  const userResultEnd = users.length > 0 ? userResultStart + users.length - 1 : 0;
   const renderAttendance = (user: AdminUser) => {
     const total = Math.max(0, Number(user.attendance_days_total || 0));
     const days7 = Math.max(0, Number(user.attendance_days_7 || 0));
@@ -1101,12 +1107,12 @@ function UsersTab({
       )}
       stats={<AdminStatsStrip items={[
         { label: 'PRO Users', value: proUsers, detail: 'Effective PRO accounts', toneClass: 'text-blue-500' },
-        { label: 'PRO MAX Users', value: proMaxUsers, detail: 'Includes admins', toneClass: 'text-fuchsia-500' },
-        { label: 'Banned', value: bannedUsers, detail: 'Accounts currently blocked', toneClass: 'text-red-500' },
+        { label: 'PRO MAX Users', value: proMaxUsers, detail: 'Effective PRO MAX accounts', toneClass: 'text-fuchsia-500' },
+        { label: 'FREE Users', value: freeUsers, detail: 'Non-admin free accounts', toneClass: 'text-cyan-500' },
         {
-          label: 'Latest User',
-          value: recentUser ? truncateAdminStatText(recentUser.display_name || recentUser.email || 'Unnamed user', 24) : '-',
-          detail: recentUser?.email || 'No email',
+          label: 'Total Users',
+          value: totalUsers,
+          detail: 'Visible non-admin accounts',
           toneClass: 'text-emerald-500',
         },
       ]} />}
@@ -1118,7 +1124,7 @@ function UsersTab({
             onSubmit: onRefreshUsers,
             placeholder: 'Search name, email, id...',
           }}
-          resultLabel={`Page ${usersPage}/${usersTotalPages}`}
+          resultLabel={`${userResultStart}-${userResultEnd} of ${filteredUsersTotal} results · Page ${usersPage}/${usersTotalPages}`}
           activeFilterCount={userFilterCount}
           onClearFilters={() => {
             onUsersQueryChange('');
@@ -1132,7 +1138,6 @@ function UsersTab({
                 <option value="free">FREE</option>
                 <option value="pro">PRO</option>
                 <option value="pro_max">PRO MAX</option>
-                <option value="admin">Admins</option>
               </select>
               <select className={selectClass} value={userStatusFilter} onChange={(event) => onUserStatusFilterChange(event.target.value as typeof userStatusFilter)}>
                 <option value="all">All statuses</option>

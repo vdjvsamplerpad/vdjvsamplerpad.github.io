@@ -186,9 +186,12 @@ interface AuthState {
 
 export type AuthAccessTokenResult = {
   token: string | null
-  reason?: 'auth_loading' | 'offline_session' | 'session_conflict' | 'session_sync_required' | 'not_authenticated'
+  reason?: 'auth_loading' | 'offline_session' | 'session_conflict' | 'session_sync_required' | 'reauth_required' | 'not_authenticated'
   message?: string
 }
+
+const REAUTH_REQUIRED_MESSAGE = 'Your secure sign-in session expired. Please sign in again before submitting an upgrade request.'
+const OFFLINE_REAUTH_REQUIRED_MESSAGE = 'Reconnect and sign in again before submitting an upgrade request.'
 
 // Helper to get cached user from localStorage (for offline/sync issues)
 export function getCachedUser(): User | null {
@@ -1761,7 +1764,7 @@ function useAuthValue(): AuthProviderValue {
         message: 'Confirm this login before submitting an upgrade request.',
       }
     }
-    if (currentState.offlineTrustedSession || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
       return {
         token: null,
         reason: 'offline_session',
@@ -1769,30 +1772,56 @@ function useAuthValue(): AuthProviderValue {
       }
     }
 
-    const expectedUserId = currentState.user?.id || getCachedUser()?.id || null
+    const expectedStateUserId = currentState.user?.id || null
+    const cachedUserId = getCachedUser()?.id || null
+    const expectedUserId = expectedStateUserId || cachedUserId || null
+    const acceptLiveSession = async (session: Session): Promise<AuthAccessTokenResult | null> => {
+      const token = session.access_token || null
+      const sessionUserId = session.user?.id || null
+      if (!token || !sessionUserId) return null
+
+      const userMismatch =
+        (expectedStateUserId && sessionUserId !== expectedStateUserId) ||
+        (!expectedStateUserId && cachedUserId && sessionUserId !== cachedUserId)
+
+      if (userMismatch) {
+        try {
+          await fetchSessionAndProfileRef.current?.(session)
+        } catch {
+        }
+      }
+
+      return { token }
+    }
+
     for (let attempt = 0; attempt < 6; attempt += 1) {
       const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }))
-      const sessionUserId = data.session?.user?.id || null
-      const token = data.session?.access_token || null
-      if (token && (!expectedUserId || sessionUserId === expectedUserId)) {
-        return { token }
+      if (data.session) {
+        const accepted = await acceptLiveSession(data.session)
+        if (accepted) return accepted
       }
       if (attempt === 1 || attempt === 3) {
         const refreshed = await supabase.auth.refreshSession().catch(() => null)
-        const refreshedUserId = refreshed?.data.session?.user?.id || null
-        const refreshedToken = refreshed?.data.session?.access_token || null
-        if (refreshedToken && (!expectedUserId || refreshedUserId === expectedUserId)) {
-          return { token: refreshedToken }
+        if (refreshed?.data.session) {
+          const accepted = await acceptLiveSession(refreshed.data.session)
+          if (accepted) return accepted
         }
       }
       await new Promise((resolve) => window.setTimeout(resolve, 180 + attempt * 140))
     }
 
     if (expectedUserId) {
+      if (currentState.offlineTrustedSession) {
+        return {
+          token: null,
+          reason: 'reauth_required',
+          message: OFFLINE_REAUTH_REQUIRED_MESSAGE,
+        }
+      }
       return {
         token: null,
-        reason: 'session_sync_required',
-        message: 'Account session is still syncing. Please reopen upgrade pricing or refresh the app, then submit again.',
+        reason: 'reauth_required',
+        message: REAUTH_REQUIRED_MESSAGE,
       }
     }
     return {

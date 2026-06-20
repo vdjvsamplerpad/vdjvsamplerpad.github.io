@@ -510,9 +510,8 @@ export default function PricingPage() {
       try {
         const accountHeaders: Record<string, string> = { ...getClientCompatibilityHeaders() };
         try {
-          const tokenResult = authUser?.id ? await getAuthenticatedAccessToken() : { token: null };
           const { data: sessionData } = await supabase.auth.getSession();
-          const token = tokenResult.token || sessionData.session?.access_token || '';
+          const token = sessionData.session?.access_token || '';
           if (token) {
             accountHeaders.Authorization = `Bearer ${token}`;
           }
@@ -559,7 +558,7 @@ export default function PricingPage() {
     return () => {
       active = false;
     };
-  }, [authLoading, authUser?.id, getAuthenticatedAccessToken]);
+  }, [authLoading, authUser?.id]);
 
   const applyPendingV1UpgradeRequest = React.useCallback((targetTier: TargetTier, request: Record<string, unknown>) => {
     const rawQuotePrice = request.quote_price_php_snapshot ?? request.account_price_php_snapshot;
@@ -744,6 +743,7 @@ export default function PricingPage() {
         cache: 'no-store',
         credentials: 'omit',
         headers: {
+          ...getClientCompatibilityHeaders(),
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
@@ -757,7 +757,13 @@ export default function PricingPage() {
       const uploadPayload = await uploadRes.json().catch(() => ({}));
       const uploadData = uploadPayload?.data ?? uploadPayload;
       const code = String(uploadPayload?.error || uploadData?.error || '');
-      if (!uploadRes.ok || code) throw new Error(mapRegistrationError(code, uploadPayload));
+      if (!uploadRes.ok || code) {
+        if (code === 'NOT_AUTHENTICATED') {
+          setCheckoutSessionUser(null);
+          setV1CheckoutAuthMode('email');
+        }
+        throw new Error(mapRegistrationError(code, uploadPayload));
+      }
       const bucket = String(uploadData?.bucket || 'payment-proof');
       const path = String(uploadData?.path || '');
       const token = String(uploadData?.token || '');
@@ -1016,7 +1022,13 @@ export default function PricingPage() {
           accessToken = tokenResult.token || sessionData.session?.access_token || '';
           const activeSessionUser = sessionData.session?.user || authUser || null;
           checkoutEmail = String(activeSessionUser?.email || checkoutEmail).toLowerCase();
-          if (!accessToken) throw new Error(tokenResult.message || 'Google/session sign-in did not finish. Please continue with Google again.');
+          if (!accessToken) {
+            if (tokenResult.reason === 'reauth_required' || tokenResult.reason === 'not_authenticated') {
+              setCheckoutSessionUser(null);
+              setV1CheckoutAuthMode('email');
+            }
+            throw new Error(tokenResult.message || 'Please sign in again before submitting an upgrade request.');
+          }
           setCheckoutSessionUser((activeSessionUser || null) as PricingAuthSessionUser | null);
         } else {
           const { data: signInData, error: signInError } = await signIn(normalizedEmail, password);
@@ -1041,7 +1053,7 @@ export default function PricingPage() {
               meta: { source: 'PricingPage.checkout' },
             }).catch(() => {});
           } else if (!signInError) {
-            throw new Error(tokenResult.message || 'Sign in sync did not finish. Please try again.');
+            throw new Error(tokenResult.message || 'Sign in did not finish. Please try again.');
           } else if (signInError && isInvalidCredentialErrorMessage(signInError.message)) {
             const hint = await postPublicStoreApi('account-registration/login-hint', { email: normalizedEmail });
             const hintStatus = String(hint.data?.status || '');
@@ -1089,6 +1101,10 @@ export default function PricingPage() {
           const upgradeData = upgradePayload?.data ?? upgradePayload;
           const upgradeCode = String(upgradePayload?.error || upgradeData?.error || '');
           if (!upgradeRes.ok || upgradeCode) {
+            if (upgradeCode === 'NOT_AUTHENTICATED') {
+              setCheckoutSessionUser(null);
+              setV1CheckoutAuthMode('email');
+            }
             throw new Error(mapRegistrationError(upgradeCode, upgradePayload));
           }
           const request = (upgradeData?.request && typeof upgradeData.request === 'object' ? upgradeData.request : {}) as Record<string, unknown>;

@@ -2214,6 +2214,17 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
   }
   const attendanceTrendAvailable = !attendanceTrendResp.error;
   const attendanceTrendRows = attendanceTrendAvailable ? (attendanceTrendResp.data || []) : [];
+  const activeUserDailyTrendResp = isHourlyWindow
+    ? { data: [], error: null }
+    : await admin.rpc("get_admin_active_user_trend", {
+      p_start_date: windowStartDate,
+      p_end_date: windowEndDate,
+      p_excluded_user_ids: Array.from(adminIds),
+    });
+  if (activeUserDailyTrendResp.error) {
+    return fail(500, activeUserDailyTrendResp.error.message || "Failed to load active-user trend");
+  }
+  const activeUserDailyTrendRows = !isHourlyWindow ? (activeUserDailyTrendResp.data || []) : [];
   const todayAttendanceDateKey = toFixedOffsetDateKey(now, ASIA_MANILA_UTC_OFFSET_MINUTES);
   const attendanceTodayResp = await admin
     .from("user_daily_attendance")
@@ -2382,7 +2393,16 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
     if (Number.isNaN(seenAt.getTime())) return;
     addActiveUserToTrendBucket(toTrendBucketKey(seenAt), userId);
   };
-  if (attendanceTrendAvailable) {
+  const useDailyActiveTrendAggregate = !isHourlyWindow && activeUserDailyTrendRows.length > 0;
+  if (useDailyActiveTrendAggregate) {
+    for (const row of activeUserDailyTrendRows) {
+      const date = asString((row as any)?.bucket_date, 20);
+      if (!date) continue;
+      const bucket = trendSeed.get(date);
+      if (!bucket) continue;
+      bucket.activeUsers = Math.max(0, Math.floor(asFiniteNumber((row as any)?.active_users)));
+    }
+  } else if (attendanceTrendAvailable) {
     const nowManilaHour = new Date(now.getTime() + (ASIA_MANILA_UTC_OFFSET_MINUTES * 60 * 1000)).getUTCHours();
     const maxHourlyBucket = windowStartDate === toFixedOffsetDateKey(now, ASIA_MANILA_UTC_OFFSET_MINUTES)
       ? nowManilaHour
@@ -2409,10 +2429,13 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       }
     }
   }
-  for (const row of activeSessionTrendResp.data || []) {
-    addActiveSeenAtToTrend((row as any).last_seen_at, (row as any).user_id);
+  if (!useDailyActiveTrendAggregate) {
+    for (const row of activeSessionTrendResp.data || []) {
+      addActiveSeenAtToTrend((row as any).last_seen_at, (row as any).user_id);
+    }
   }
-  const shouldSupplementActiveUsersFromActivityLogs = !attendanceTrendAvailable || attendanceTrendRows.length === 0;
+  const shouldSupplementActiveUsersFromActivityLogs = !useDailyActiveTrendAggregate
+    && (!attendanceTrendAvailable || attendanceTrendRows.length === 0);
   for (const row of trendRows) {
     const createdAt = new Date(String((row as any).created_at || ""));
     if (Number.isNaN(createdAt.getTime())) continue;
@@ -2442,10 +2465,12 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       continue;
     }
   }
-  for (const [date, activeSet] of dailyActiveUserSets.entries()) {
-    const bucket = trendSeed.get(date);
-    if (!bucket) continue;
-    bucket.activeUsers = activeSet.size;
+  if (!useDailyActiveTrendAggregate) {
+    for (const [date, activeSet] of dailyActiveUserSets.entries()) {
+      const bucket = trendSeed.get(date);
+      if (!bucket) continue;
+      bucket.activeUsers = activeSet.size;
+    }
   }
 
   const accountRequests = [
@@ -2589,6 +2614,7 @@ const getDashboardOverview = async (req: Request, admin: ReturnType<typeof creat
       seriesCap: Math.max(100, Math.min(10000, DASHBOARD_SERIES_CAP)),
       rangeStartDate: windowStartDate,
       rangeEndDate: windowEndDate,
+      activeTrendSource: useDailyActiveTrendAggregate ? "daily_aggregate" : "raw_rows",
     },
   });
 };
@@ -4733,6 +4759,8 @@ const createVoucherCampaign = async (body: any, admin: ReturnType<typeof createS
   const maxCodes = Math.max(1, Math.min(10000, Math.floor(Number(body?.maxCodes ?? body?.max_codes ?? 1))));
   const expiresAtRaw = asString(body?.expiresAt ?? body?.expires_at, 80);
   const expiresAt = expiresAtRaw ? parseIsoDateTime(expiresAtRaw) : null;
+  const valuePhp = normalizeTierPrice(body?.valuePhp ?? body?.value_php);
+  const countsAsRevenue = Boolean(body?.countsAsRevenue ?? body?.counts_as_revenue);
   const { data, error } = await admin
     .from("account_voucher_campaigns")
     .insert({
@@ -4743,12 +4771,135 @@ const createVoucherCampaign = async (body: any, admin: ReturnType<typeof createS
       target_email: asString(body?.targetEmail ?? body?.target_email, 320)?.toLowerCase() || null,
       target_user_id: asUuid(body?.targetUserId ?? body?.target_user_id),
       notes: asString(body?.notes, 1000),
+      value_php: valuePhp,
+      counts_as_revenue: countsAsRevenue,
+      external_payment_note: asString(body?.externalPaymentNote ?? body?.external_payment_note, 1000),
       created_by: adminUserId,
     })
     .select("*")
     .single();
   if (error || !data) return fail(500, error?.message || "Voucher campaign could not be created");
   return ok({ campaign: data }, 201);
+};
+
+const getVoucherCampaignDetails = async (
+  campaignId: string,
+  admin: ReturnType<typeof createServiceClient>,
+) => {
+  const { data: campaign, error: campaignError } = await admin
+    .from("account_voucher_campaigns")
+    .select("*")
+    .eq("id", campaignId)
+    .maybeSingle();
+  if (campaignError) return fail(500, campaignError.message);
+  if (!campaign) return fail(404, "Voucher campaign not found");
+
+  const { data: voucherRows, error: vouchersError } = await admin
+    .from("account_vouchers")
+    .select("id,campaign_id,code_prefix,code_suffix,target_tier,status,reserved_for_email,reserved_for_user_id,copied_by,copied_at,expires_at,redeemed_by,redeemed_at,created_at,updated_at,value_php_snapshot,counts_as_revenue_snapshot")
+    .eq("campaign_id", campaignId)
+    .order("created_at", { ascending: false })
+    .limit(1000);
+  if (vouchersError) return fail(500, vouchersError.message);
+
+  const { data: redemptionRows, error: redemptionsError } = await admin
+    .from("account_voucher_redemptions")
+    .select("id,voucher_id,campaign_id,user_id,email,target_tier,redeemed_at,request_id,value_php_snapshot,counts_as_revenue_snapshot")
+    .eq("campaign_id", campaignId)
+    .order("redeemed_at", { ascending: false })
+    .limit(1000);
+  if (redemptionsError) return fail(500, redemptionsError.message);
+
+  const requestIds = Array.from(new Set((redemptionRows || []).map((row: any) => asUuid(row?.request_id)).filter(Boolean) as string[]));
+  const userIds = Array.from(new Set((redemptionRows || []).map((row: any) => asUuid(row?.user_id)).filter(Boolean) as string[]));
+  const [requestsResp, profilesResp] = await Promise.all([
+    requestIds.length
+      ? admin
+        .from("account_upgrade_requests")
+        .select("id,status,target_tier,quote_price_php_snapshot,base_price_php_snapshot,receipt_reference,is_refunded,created_at,reviewed_at,email,display_name")
+        .in("id", requestIds)
+      : Promise.resolve({ data: [], error: null } as any),
+    userIds.length
+      ? admin
+        .from("profiles")
+        .select("id,display_name")
+        .in("id", userIds)
+      : Promise.resolve({ data: [], error: null } as any),
+  ]);
+  if (requestsResp.error) return fail(500, requestsResp.error.message);
+  if (profilesResp.error) return fail(500, profilesResp.error.message);
+
+  const requestsById = new Map((requestsResp.data || []).map((row: any) => [String(row.id || ""), row]));
+  const profilesById = new Map((profilesResp.data || []).map((row: any) => [String(row.id || ""), row]));
+  const redemptions = (redemptionRows || []).map((row: any) => {
+    const request = requestsById.get(String(row.request_id || "")) || null;
+    const profile = profilesById.get(String(row.user_id || "")) || null;
+    return {
+      ...row,
+      user_display_name: asString((profile as any)?.display_name, 160) || asString(request?.display_name, 160) || null,
+      request,
+    };
+  });
+  const revenueTotal = redemptions.reduce((sum: number, row: any) => {
+    const request = row.request;
+    if (request) {
+      return request.status === "approved" && !request.is_refunded
+        ? sum + asFiniteNumber(request.quote_price_php_snapshot)
+        : sum;
+    }
+    return sum + (row.counts_as_revenue_snapshot ? asFiniteNumber(row.value_php_snapshot) : 0);
+  }, 0);
+
+  return ok({
+    campaign,
+    vouchers: voucherRows || [],
+    redemptions,
+    summary: {
+      issued_count: (voucherRows || []).length,
+      usable_count: (voucherRows || []).filter((row: any) => row.status === "reserved").length,
+      redeemed_count: (redemptionRows || []).length,
+      disabled_count: (voucherRows || []).filter((row: any) => row.status === "disabled").length,
+      revenue_php: normalizeTierPrice(revenueTotal),
+    },
+  });
+};
+
+const archiveVoucherCampaign = async (
+  campaignId: string,
+  admin: ReturnType<typeof createServiceClient>,
+  adminUserId: string,
+) => {
+  const nowIso = new Date().toISOString();
+  const { data: campaign, error } = await admin
+    .from("account_voucher_campaigns")
+    .update({
+      is_active: false,
+      archived_at: nowIso,
+      archived_by: adminUserId,
+      updated_at: nowIso,
+    })
+    .eq("id", campaignId)
+    .select("*")
+    .maybeSingle();
+  if (error) return fail(500, error.message);
+  if (!campaign) return fail(404, "Voucher campaign not found");
+  const { error: voucherError } = await admin
+    .from("account_vouchers")
+    .update({ status: "disabled", updated_at: nowIso })
+    .eq("campaign_id", campaignId)
+    .eq("status", "reserved")
+    .is("redeemed_at", null);
+  if (voucherError) return fail(500, voucherError.message);
+  await swallowDiscordError(() =>
+    sendDiscordAdminActionEvent({
+      severity: "info",
+      title: "Voucher Campaign Archived",
+      description: "Admin archived a voucher campaign and disabled unused codes.",
+      actorUserId: adminUserId,
+      extraFields: [{ name: "Campaign ID", value: campaignId, inline: false }],
+    })
+  );
+  return ok({ campaign });
 };
 
 const copyNextVoucher = async (
@@ -4872,6 +5023,12 @@ Deno.serve(async (req) => {
 
     if (req.method === "GET" && route.section === "vouchers" && !route.id) {
       return await listVoucherCampaigns(admin);
+    }
+
+    if (req.method === "GET" && route.section === "vouchers" && route.id && route.action === "details") {
+      const campaignId = asUuid(route.id);
+      if (!campaignId) return badRequest("Invalid voucher campaign id");
+      return await getVoucherCampaignDetails(campaignId, admin);
     }
 
     if (req.method === "GET" && route.section === "store" && route.id === "catalog" && url.pathname.includes("/upload-sessions")) {
@@ -5022,6 +5179,12 @@ Deno.serve(async (req) => {
       const campaignId = asUuid(route.id);
       if (!campaignId) return badRequest("Invalid voucher campaign id");
       return await revokeLatestUnusedVoucher(campaignId, admin, adminCheck.userId);
+    }
+
+    if (route.section === "vouchers" && route.id && route.action === "archive") {
+      const campaignId = asUuid(route.id);
+      if (!campaignId) return badRequest("Invalid voucher campaign id");
+      return await archiveVoucherCampaign(campaignId, admin, adminCheck.userId);
     }
 
     if (route.section === "users" && route.id && route.action) {

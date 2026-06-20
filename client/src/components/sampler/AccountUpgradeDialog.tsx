@@ -174,7 +174,7 @@ const mapUpgradeError = (value: unknown): string => {
   const code = String(value || '').trim();
   switch (code) {
     case 'NOT_AUTHENTICATED':
-      return 'Account session is still syncing. Please reopen upgrade pricing and submit again.';
+      return 'Please sign in again before submitting an upgrade request.';
     case 'ALREADY_ON_TIER':
       return 'Your account is already on this tier.';
     case 'ALREADY_ABOVE_TIER':
@@ -258,6 +258,12 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
   React.useEffect(() => {
     selectedTierRef.current = selectedTier;
   }, [selectedTier]);
+
+  const requestLoginAgain = React.useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('vdjv-login-request'));
+    }
+  }, []);
 
   React.useLayoutEffect(() => {
     if (!open) return;
@@ -464,7 +470,13 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     try {
       const tokenResult = await getAuthenticatedAccessToken();
       const token = tokenResult.token;
-      if (!token) throw new Error(tokenResult.message || 'Account session is still syncing. Please reopen upgrade pricing and submit again.');
+      if (!token) {
+        const message = tokenResult.message || 'Please sign in again before submitting an upgrade request.';
+        if (tokenResult.reason === 'reauth_required' || tokenResult.reason === 'not_authenticated') {
+          requestLoginAgain();
+        }
+        throw new Error(message);
+      }
       let proofPath: string | null = null;
       if (quotePrice > 0 && proofFile) {
         const uploadReq = await fetch(edgeFunctionUrl('store-api', 'account/upgrade-proof-upload-url'), {
@@ -485,7 +497,11 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
         });
         const uploadPayload = await uploadReq.json().catch(() => ({}));
         const uploadData = uploadPayload?.data && typeof uploadPayload.data === 'object' ? uploadPayload.data : uploadPayload;
-        if (!uploadReq.ok) throw new Error(mapUpgradeError(uploadPayload?.error || uploadData?.error));
+        if (!uploadReq.ok) {
+          const errorCode = uploadPayload?.error || uploadData?.error;
+          if (String(errorCode || '') === 'NOT_AUTHENTICATED') requestLoginAgain();
+          throw new Error(mapUpgradeError(errorCode));
+        }
         const bucket = String(uploadData?.bucket || 'payment-proof');
         const path = String(uploadData?.path || '');
         const uploadToken = String(uploadData?.token || '');
@@ -515,7 +531,11 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
       });
       const requestPayload = await requestRes.json().catch(() => ({}));
       const requestData = requestPayload?.data && typeof requestPayload.data === 'object' ? requestPayload.data : requestPayload;
-      if (!requestRes.ok) throw new Error(mapUpgradeError(requestPayload?.error || requestData?.error));
+      if (!requestRes.ok) {
+        const errorCode = requestPayload?.error || requestData?.error;
+        if (String(errorCode || '') === 'NOT_AUTHENTICATED') requestLoginAgain();
+        throw new Error(mapUpgradeError(errorCode));
+      }
       await refreshAccountCapabilities();
       const requestRow = ((requestData?.request && typeof requestData.request === 'object') ? requestData.request : {}) as Record<string, unknown>;
       const status = String((requestRow as any)?.status || 'pending');
@@ -559,7 +579,7 @@ export function AccountUpgradeDialog({ open, onOpenChange, theme, pushNotice }: 
     } finally {
       setSubmitting(false);
     }
-  }, [getAuthenticatedAccessToken, notes, online, payerName, paymentChannel, proofFile, pushNotice, quotePrice, refreshAccountCapabilities, referenceNo, selected, submitting]);
+  }, [getAuthenticatedAccessToken, notes, online, payerName, paymentChannel, proofFile, pushNotice, quotePrice, refreshAccountCapabilities, referenceNo, requestLoginAgain, selected, submitting]);
 
   const selectPlan = React.useCallback((tier: UpgradeTierOption) => {
     setSelectedTier(tier.tier);

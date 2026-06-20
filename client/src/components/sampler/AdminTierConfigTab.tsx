@@ -6,11 +6,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ChevronDown, ChevronUp, Loader2, Plus, Save, Search } from 'lucide-react';
+import { Archive, ChevronDown, ChevronUp, Eye, Loader2, Plus, Save, Search } from 'lucide-react';
 import {
   adminApi,
   type AdminAccountTierConfig,
   type AdminVoucherCampaign,
+  type AdminVoucherCampaignDetails,
   type SortDirection,
 } from '@/lib/admin-api';
 import {
@@ -68,6 +69,17 @@ const formatDateTime = (value?: string | null): string => {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
+};
+
+const formatMoneyPhp = (value?: number | string | null): string => {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount) || amount <= 0) return 'PHP 0';
+  return `PHP ${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+};
+
+const formatVoucherCodePreview = (prefix?: string | null, suffix?: string | null): string => {
+  if (!prefix && !suffix) return 'Hidden code';
+  return `${prefix || 'VDJV-***'}...${suffix || '***'}`;
 };
 
 const getTierPromoDiscountPercent = (limits: Record<string, unknown> | null | undefined): number => {
@@ -289,13 +301,20 @@ export function AdminTierConfigTab({
   const [campaignMaxCodes, setCampaignMaxCodes] = React.useState('1');
   const [campaignExpiresAt, setCampaignExpiresAt] = React.useState('');
   const [campaignTargetEmail, setCampaignTargetEmail] = React.useState('');
+  const [campaignValuePhp, setCampaignValuePhp] = React.useState('0');
+  const [campaignCountsAsRevenue, setCampaignCountsAsRevenue] = React.useState(false);
+  const [campaignExternalPaymentNote, setCampaignExternalPaymentNote] = React.useState('');
   const [campaignNotes, setCampaignNotes] = React.useState('');
   const [voucherSearch, setVoucherSearch] = React.useState('');
-  const [voucherStatusFilter, setVoucherStatusFilter] = React.useState<'all' | 'active' | 'inactive'>('all');
-  const [voucherSortBy, setVoucherSortBy] = React.useState<'name' | 'tier' | 'used' | 'expires_at' | 'target'>('expires_at');
+  const [voucherStatusFilter, setVoucherStatusFilter] = React.useState<'all' | 'active' | 'inactive' | 'archived'>('all');
+  const [voucherSortBy, setVoucherSortBy] = React.useState<'name' | 'tier' | 'used' | 'expires_at' | 'target' | 'value'>('expires_at');
   const [voucherSortDir, setVoucherSortDir] = React.useState<SortDirection>('asc');
   const [createVoucherOpen, setCreateVoucherOpen] = React.useState(false);
   const [revokeCampaign, setRevokeCampaign] = React.useState<AdminVoucherCampaign | null>(null);
+  const [archiveCampaign, setArchiveCampaign] = React.useState<AdminVoucherCampaign | null>(null);
+  const [viewCampaign, setViewCampaign] = React.useState<AdminVoucherCampaign | null>(null);
+  const [viewCampaignDetails, setViewCampaignDetails] = React.useState<AdminVoucherCampaignDetails | null>(null);
+  const [viewCampaignLoading, setViewCampaignLoading] = React.useState(false);
   const [activeSection, setActiveSection] = React.useState<AccountAdminSection>(mode === 'tiers' ? 'tiers' : 'vouchers');
   const pushNoticeRef = React.useRef(pushNotice);
   const hasUnsavedTierChangesRef = React.useRef(false);
@@ -505,6 +524,7 @@ export function AdminTierConfigTab({
       return;
     }
     const maxCodes = Math.max(1, Math.floor(Number(campaignMaxCodes) || 1));
+    const valuePhp = Math.max(0, Number(campaignValuePhp) || 0);
     setVoucherBusyId('create');
     try {
       await adminApi.createVoucherCampaign({
@@ -514,17 +534,53 @@ export function AdminTierConfigTab({
         expiresAt: campaignExpiresAt || null,
         targetEmail: campaignTargetEmail.trim() || null,
         notes: campaignNotes.trim() || null,
+        valuePhp,
+        countsAsRevenue: campaignCountsAsRevenue && valuePhp > 0,
+        externalPaymentNote: campaignExternalPaymentNote.trim() || null,
       });
       setCampaignName('');
       setCampaignMaxCodes('1');
       setCampaignExpiresAt('');
       setCampaignTargetEmail('');
+      setCampaignValuePhp('0');
+      setCampaignCountsAsRevenue(false);
+      setCampaignExternalPaymentNote('');
       setCampaignNotes('');
       setCreateVoucherOpen(false);
       pushNotice('success', 'Voucher campaign created.');
       await loadData();
     } catch (error) {
       pushNotice('error', error instanceof Error ? error.message : 'Voucher campaign create failed.');
+    } finally {
+      setVoucherBusyId(null);
+    }
+  };
+
+  const openVoucherDetails = async (campaign: AdminVoucherCampaign) => {
+    setViewCampaign(campaign);
+    setViewCampaignDetails(null);
+    setViewCampaignLoading(true);
+    try {
+      const details = await adminApi.getVoucherCampaignDetails(campaign.id);
+      setViewCampaignDetails(details);
+    } catch (error) {
+      pushNotice('error', error instanceof Error ? error.message : 'Voucher campaign details failed to load.');
+    } finally {
+      setViewCampaignLoading(false);
+    }
+  };
+
+  const archiveVoucherCampaign = async (campaign: AdminVoucherCampaign) => {
+    setVoucherBusyId(`archive:${campaign.id}`);
+    try {
+      await adminApi.archiveVoucherCampaign(campaign.id);
+      pushNotice('success', 'Voucher campaign archived. Unused codes were disabled.');
+      await loadData();
+      if (viewCampaign?.id === campaign.id) {
+        await openVoucherDetails(campaign);
+      }
+    } catch (error) {
+      pushNotice('error', error instanceof Error ? error.message : 'Voucher campaign archive failed.');
     } finally {
       setVoucherBusyId(null);
     }
@@ -581,6 +637,9 @@ export function AdminTierConfigTab({
   const filteredVoucherCampaigns = React.useMemo(() => {
     const needle = voucherSearch.trim().toLowerCase();
     const filtered = voucherCampaigns.filter((campaign) => {
+      const isArchived = Boolean(campaign.archived_at);
+      if (voucherStatusFilter === 'archived' && !isArchived) return false;
+      if (voucherStatusFilter !== 'archived' && isArchived) return false;
       if (voucherStatusFilter === 'active' && !campaign.is_active) return false;
       if (voucherStatusFilter === 'inactive' && campaign.is_active) return false;
       if (!needle) return true;
@@ -590,6 +649,7 @@ export function AdminTierConfigTab({
         campaign.target_email,
         campaign.target_user_id,
         campaign.notes,
+        campaign.external_payment_note,
       ].some((value) => String(value || '').toLowerCase().includes(needle));
     });
     const sorted = [...filtered].sort((left, right) => {
@@ -603,6 +663,7 @@ export function AdminTierConfigTab({
       if (voucherSortBy === 'target') {
         return String(left.target_email || left.target_user_id || '').localeCompare(String(right.target_email || right.target_user_id || ''), undefined, { sensitivity: 'base' });
       }
+      if (voucherSortBy === 'value') return Number(left.value_php || 0) - Number(right.value_php || 0);
       const leftTime = left.expires_at ? new Date(left.expires_at).getTime() : Number.POSITIVE_INFINITY;
       const rightTime = right.expires_at ? new Date(right.expires_at).getTime() : Number.POSITIVE_INFINITY;
       return leftTime - rightTime;
@@ -1141,12 +1202,13 @@ export function AdminTierConfigTab({
           primaryFilters={(
             <select
               value={voucherStatusFilter}
-              onChange={(event) => setVoucherStatusFilter(event.target.value as 'all' | 'active' | 'inactive')}
+              onChange={(event) => setVoucherStatusFilter(event.target.value as 'all' | 'active' | 'inactive' | 'archived')}
               className={`h-9 rounded-md border px-3 text-sm ${theme === 'dark' ? 'border-gray-700 bg-gray-900 text-gray-100 [&>option]:bg-gray-950 [&>option]:text-gray-100' : 'border-gray-300 bg-white text-gray-900'}`}
             >
-              <option value="all">All statuses</option>
+              <option value="all">All current</option>
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
+              <option value="archived">Archive</option>
             </select>
           )}
           activeFilterCount={Number(Boolean(voucherSearch.trim())) + Number(voucherStatusFilter !== 'all')}
@@ -1162,6 +1224,7 @@ export function AdminTierConfigTab({
               <TableRow>
                 <TableHead><SortHeader title="Campaign" active={voucherSortBy === 'name'} direction={voucherSortDir} onClick={() => toggleVoucherSort('name')} /></TableHead>
                 <TableHead><SortHeader title="Tier" active={voucherSortBy === 'tier'} direction={voucherSortDir} onClick={() => toggleVoucherSort('tier')} /></TableHead>
+                <TableHead><SortHeader title="Value" active={voucherSortBy === 'value'} direction={voucherSortDir} onClick={() => toggleVoucherSort('value')} /></TableHead>
                 <TableHead><SortHeader title="Used" active={voucherSortBy === 'used'} direction={voucherSortDir} onClick={() => toggleVoucherSort('used')} /></TableHead>
                 <TableHead><SortHeader title="Expires" active={voucherSortBy === 'expires_at'} direction={voucherSortDir} onClick={() => toggleVoucherSort('expires_at')} /></TableHead>
                 <TableHead><SortHeader title="Target" active={voucherSortBy === 'target'} direction={voucherSortDir} onClick={() => toggleVoucherSort('target')} /></TableHead>
@@ -1171,25 +1234,38 @@ export function AdminTierConfigTab({
             <TableBody>
               {filteredVoucherCampaigns.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-6 text-center text-sm text-gray-500">No voucher campaigns yet.</TableCell>
+                  <TableCell colSpan={7} className="py-6 text-center text-sm text-gray-500">No voucher campaigns yet.</TableCell>
                 </TableRow>
               ) : filteredVoucherCampaigns.map((campaign) => (
                 <TableRow key={campaign.id}>
                   <TableCell>
                     <div className="font-medium">{campaign.name}</div>
-                    <div className="text-xs text-gray-500">{campaign.is_active ? 'Active' : 'Inactive'}</div>
+                    <div className="text-xs text-gray-500">{campaign.archived_at ? 'Archived' : campaign.is_active ? 'Active' : 'Inactive'}</div>
                   </TableCell>
                   <TableCell className="uppercase">{campaign.target_tier.replace('_', ' ')}</TableCell>
+                  <TableCell>
+                    <div className="font-medium">{formatMoneyPhp(campaign.value_php)}</div>
+                    <div className="text-xs text-gray-500">{campaign.counts_as_revenue ? 'Revenue per redeem' : 'Not counted'}</div>
+                  </TableCell>
                   <TableCell>{campaign.redeemed_count}/{campaign.reserved_count}/{campaign.max_codes}</TableCell>
                   <TableCell>{formatDateTime(campaign.expires_at)}</TableCell>
                   <TableCell>{campaign.target_email || campaign.target_user_id || '-'}</TableCell>
                   <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void openVoucherDetails(campaign)}
+                        disabled={viewCampaignLoading && viewCampaign?.id === campaign.id}
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        View
+                      </Button>
                       <Button
                         size="sm"
                         variant="destructive"
                         onClick={() => setRevokeCampaign(campaign)}
-                        disabled={voucherBusyId === `revoke:${campaign.id}` || campaign.reserved_count <= campaign.redeemed_count}
+                        disabled={voucherBusyId === `revoke:${campaign.id}` || !campaign.is_active || Boolean(campaign.archived_at) || campaign.reserved_count <= campaign.redeemed_count}
                       >
                         {voucherBusyId === `revoke:${campaign.id}` ? 'Revoking...' : 'Revoke Latest'}
                       </Button>
@@ -1200,6 +1276,15 @@ export function AdminTierConfigTab({
                         disabled={voucherBusyId === campaign.id || !campaign.is_active || campaign.reserved_count >= campaign.max_codes}
                       >
                         {voucherBusyId === campaign.id ? 'Copying...' : 'Copy Next Code'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => setArchiveCampaign(campaign)}
+                        disabled={Boolean(campaign.archived_at) || !campaign.is_active || voucherBusyId === `archive:${campaign.id}`}
+                      >
+                        {voucherBusyId === `archive:${campaign.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />}
+                        Archive
                       </Button>
                     </div>
                   </TableCell>
@@ -1242,6 +1327,29 @@ export function AdminTierConfigTab({
                 <Label>Target Email</Label>
                 <Input value={campaignTargetEmail} onChange={(event) => setCampaignTargetEmail(event.target.value)} placeholder="Optional" />
               </div>
+              <div className="space-y-1">
+                <Label>Voucher Value (PHP)</Label>
+                <Input value={campaignValuePhp} onChange={(event) => setCampaignValuePhp(event.target.value)} inputMode="decimal" placeholder="0" />
+              </div>
+              <div className="flex items-center gap-2 rounded-md border px-3 py-2 sm:col-span-2">
+                <Checkbox
+                  checked={campaignCountsAsRevenue}
+                  onCheckedChange={(checked) => setCampaignCountsAsRevenue(checked === true)}
+                  id="voucher-counts-revenue"
+                />
+                <Label htmlFor="voucher-counts-revenue" className="text-sm">
+                  Count voucher value as revenue when each code is redeemed
+                </Label>
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label>External Payment Note</Label>
+                <textarea
+                  value={campaignExternalPaymentNote}
+                  onChange={(event) => setCampaignExternalPaymentNote(event.target.value)}
+                  className="min-h-16 w-full rounded-md border bg-transparent px-3 py-2 text-sm"
+                  placeholder="Optional payment channel or Facebook/WhatsApp reference"
+                />
+              </div>
               <div className="space-y-1 sm:col-span-2">
                 <Label>Notes</Label>
                 <textarea
@@ -1261,6 +1369,148 @@ export function AdminTierConfigTab({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        <Dialog
+          open={Boolean(viewCampaign)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setViewCampaign(null);
+              setViewCampaignDetails(null);
+            }
+          }}
+        >
+          <DialogContent className="max-h-[86dvh] overflow-y-auto sm:max-w-5xl">
+            <DialogHeader>
+              <DialogTitle>{viewCampaign?.name || 'Voucher Campaign Details'}</DialogTitle>
+              <DialogDescription>
+                Issued codes, redeemed users, and voucher revenue are counted per redeemed code only.
+              </DialogDescription>
+            </DialogHeader>
+            {viewCampaignLoading ? (
+              <div className="grid gap-3 sm:grid-cols-4">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <div key={index} className="h-20 animate-pulse rounded-lg bg-gray-500/10" />
+                ))}
+              </div>
+            ) : viewCampaignDetails ? (
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-4">
+                  <div className="rounded-lg border p-3">
+                    <div className="text-xs uppercase tracking-wide text-gray-500">Issued</div>
+                    <div className="text-xl font-semibold">{viewCampaignDetails.summary.issued_count}</div>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <div className="text-xs uppercase tracking-wide text-gray-500">Usable</div>
+                    <div className="text-xl font-semibold">{viewCampaignDetails.summary.usable_count}</div>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <div className="text-xs uppercase tracking-wide text-gray-500">Redeemed</div>
+                    <div className="text-xl font-semibold">{viewCampaignDetails.summary.redeemed_count}</div>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <div className="text-xs uppercase tracking-wide text-gray-500">Revenue</div>
+                    <div className="text-xl font-semibold">{formatMoneyPhp(viewCampaignDetails.summary.revenue_php)}</div>
+                  </div>
+                </div>
+                <div className="grid gap-3 text-sm sm:grid-cols-2">
+                  <div className="rounded-lg border p-3">
+                    <div className="font-semibold">Campaign</div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      {viewCampaignDetails.campaign.archived_at ? `Archived ${formatDateTime(viewCampaignDetails.campaign.archived_at)}` : viewCampaignDetails.campaign.is_active ? 'Active' : 'Inactive'}
+                    </div>
+                    <div className="mt-2">Target: <span className="font-medium uppercase">{viewCampaignDetails.campaign.target_tier.replace('_', ' ')}</span></div>
+                    <div>Value: <span className="font-medium">{formatMoneyPhp(viewCampaignDetails.campaign.value_php)}</span> {viewCampaignDetails.campaign.counts_as_revenue ? '(counts as revenue)' : '(tracking only)'}</div>
+                    {viewCampaignDetails.campaign.external_payment_note ? (
+                      <div className="mt-2 text-xs text-gray-500">{viewCampaignDetails.campaign.external_payment_note}</div>
+                    ) : null}
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <div className="font-semibold">Target</div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      {viewCampaignDetails.campaign.target_email || viewCampaignDetails.campaign.target_user_id || 'Everyone'}
+                    </div>
+                    <div className="mt-2">Expires: {formatDateTime(viewCampaignDetails.campaign.expires_at)}</div>
+                    <div>Max codes: {viewCampaignDetails.campaign.max_codes}</div>
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 text-sm font-semibold">Redeemed Users</div>
+                  <div className="overflow-x-auto rounded border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>User</TableHead>
+                          <TableHead>Tier</TableHead>
+                          <TableHead>Receipt</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Redeemed</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {viewCampaignDetails.redemptions.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={5} className="py-6 text-center text-sm text-gray-500">No redemptions yet.</TableCell>
+                          </TableRow>
+                        ) : viewCampaignDetails.redemptions.map((redemption) => (
+                          <TableRow key={redemption.id}>
+                            <TableCell>
+                              <div className="font-medium">{redemption.user_display_name || redemption.request?.display_name || redemption.email || 'User'}</div>
+                              <div className="text-xs text-gray-500">{redemption.email || redemption.request?.email || redemption.user_id || '-'}</div>
+                            </TableCell>
+                            <TableCell className="uppercase">{redemption.target_tier.replace('_', ' ')}</TableCell>
+                            <TableCell>{redemption.request?.receipt_reference || redemption.request_id || '-'}</TableCell>
+                            <TableCell>{formatMoneyPhp(redemption.request?.quote_price_php_snapshot ?? redemption.value_php_snapshot)}</TableCell>
+                            <TableCell>{formatDateTime(redemption.redeemed_at)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 text-sm font-semibold">Issued Codes</div>
+                  <div className="overflow-x-auto rounded border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Code</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Value</TableHead>
+                          <TableHead>Target</TableHead>
+                          <TableHead>Created</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {viewCampaignDetails.vouchers.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={5} className="py-6 text-center text-sm text-gray-500">No issued codes yet.</TableCell>
+                          </TableRow>
+                        ) : viewCampaignDetails.vouchers.map((voucher) => (
+                          <TableRow key={voucher.id}>
+                            <TableCell className="font-mono text-xs">{formatVoucherCodePreview(voucher.code_prefix, voucher.code_suffix)}</TableCell>
+                            <TableCell className="capitalize">{voucher.status}</TableCell>
+                            <TableCell>{formatMoneyPhp(voucher.value_php_snapshot)}</TableCell>
+                            <TableCell>{voucher.reserved_for_email || voucher.reserved_for_user_id || 'Everyone'}</TableCell>
+                            <TableCell>{formatDateTime(voucher.created_at)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border p-4 text-sm text-gray-500">Details are not loaded.</div>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => {
+                setViewCampaign(null);
+                setViewCampaignDetails(null);
+              }}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <ConfirmationDialog
           open={Boolean(revokeCampaign)}
           onOpenChange={(open) => {
@@ -1274,6 +1524,21 @@ export function AdminTierConfigTab({
           onConfirm={() => {
             if (revokeCampaign) void revokeLatestVoucher(revokeCampaign);
             setRevokeCampaign(null);
+          }}
+        />
+        <ConfirmationDialog
+          open={Boolean(archiveCampaign)}
+          onOpenChange={(open) => {
+            if (!open) setArchiveCampaign(null);
+          }}
+          theme={theme}
+          variant="destructive"
+          title="Archive voucher campaign?"
+          description={`Archive "${archiveCampaign?.name || 'this campaign'}" and disable unused codes. Redeemed users and revenue history stay visible.`}
+          confirmText="Archive"
+          onConfirm={() => {
+            if (archiveCampaign) void archiveVoucherCampaign(archiveCampaign);
+            setArchiveCampaign(null);
           }}
         />
       </div>
