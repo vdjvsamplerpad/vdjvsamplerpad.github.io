@@ -10,7 +10,7 @@ import {
 import {
   fetchLatestAndroidSideloadRelease,
   isAndroidSideloadUpdateConfigured,
-  isNewerAndroidSideloadVersion,
+  isNewerAndroidSideloadRelease,
   openAndroidSideloadDownload,
   type AndroidSideloadReleaseInfo,
 } from '@/lib/android-sideload-update';
@@ -25,7 +25,9 @@ export interface AppUpdateViewState {
   status: string;
   message: string;
   currentVersion?: string | null;
+  currentBuildCode?: number | string | null;
   nextVersion?: string | null;
+  nextBuildCode?: number | string | null;
   downloadPercent?: number | null;
   lastCheckedAt?: string | null;
   lastError?: string | null;
@@ -41,7 +43,9 @@ const createBaseState = (): AppUpdateViewState => ({
   status: 'disabled',
   message: 'Automatic app updates are unavailable in the browser build.',
   currentVersion: null,
+  currentBuildCode: null,
   nextVersion: null,
+  nextBuildCode: null,
   downloadPercent: null,
   lastCheckedAt: null,
   lastError: null,
@@ -57,7 +61,9 @@ const createWebState = (patch: Partial<AppUpdateViewState> = {}): AppUpdateViewS
   status: 'idle',
   message: 'Web app is ready. Check here when you want to refresh to the latest deployed version.',
   currentVersion: (import.meta as any).env?.VITE_APP_VERSION ?? null,
+  currentBuildCode: (import.meta as any).env?.VITE_APP_BUILD_CODE ?? null,
   nextVersion: null,
+  nextBuildCode: null,
   downloadPercent: null,
   lastCheckedAt: null,
   lastError: null,
@@ -88,12 +94,14 @@ const normalizeState = (
           ? 'Play in-app updates are unavailable on this build.'
           : 'Auto-update is unavailable.',
     currentVersion: patch.currentVersion ?? null,
+    currentBuildCode: patch.currentBuildCode ?? null,
     nextVersion: patch.nextVersion ?? null,
+    nextBuildCode: patch.nextBuildCode ?? null,
     downloadPercent: patch.downloadPercent ?? null,
     lastCheckedAt: patch.lastCheckedAt ?? null,
     lastError: patch.lastError ?? null,
     canCheck: platform !== 'web' && status !== 'checking' && status !== 'installing',
-    canInstall: status === 'downloaded',
+    canInstall: status === 'downloaded' || (platform === 'android' && status === 'available'),
     busy: status === 'checking' || status === 'downloading' || status === 'installing',
   };
 };
@@ -117,6 +125,11 @@ const fetchLatestWebBuildVersion = async (): Promise<string | null> => {
 const getCurrentWebBuildVersion = (): string | null => (
   normalizeWebVersion((import.meta as any).env?.VITE_APP_VERSION ?? null)
 );
+
+const getAndroidReleaseLabel = (release: AndroidSideloadReleaseInfo): string => {
+  const publicVersion = release.publicVersion || release.version;
+  return release.buildVersion ? `${publicVersion} (${release.buildVersion})` : publicVersion;
+};
 
 export function useAppUpdate() {
   const [state, setState] = React.useState<AppUpdateViewState>(() => createBaseState());
@@ -174,6 +187,7 @@ export function useAppUpdate() {
 
       const resolveAndroidSideloadFallback = async (
         currentVersion: string | null | undefined,
+        currentBuildCode: number | string | null | undefined,
         options?: { openIfNewer?: boolean; checking?: boolean }
       ): Promise<AppUpdateViewState | null> => {
         if (!isAndroidSideloadUpdateConfigured()) {
@@ -182,14 +196,17 @@ export function useAppUpdate() {
         }
         const latest = await fetchLatestAndroidSideloadRelease();
         androidSideloadReleaseRef.current = latest;
-        const isNewer = isNewerAndroidSideloadVersion(currentVersion, latest.version);
+        const releaseLabel = getAndroidReleaseLabel(latest);
+        const isNewer = isNewerAndroidSideloadRelease(currentVersion, currentBuildCode, latest);
         if (!isNewer) {
           return normalizeState('android', {
             enabled: true,
             status: 'idle',
             message: 'You already have the latest APK release.',
             currentVersion: currentVersion ?? null,
-            nextVersion: latest.version,
+            currentBuildCode: currentBuildCode ?? null,
+            nextVersion: releaseLabel,
+            nextBuildCode: latest.buildCode,
             lastCheckedAt: options?.checking ? new Date().toISOString() : null,
           });
         }
@@ -200,10 +217,12 @@ export function useAppUpdate() {
           enabled: true,
           status: 'available',
           message: options?.openIfNewer
-            ? `Opening APK ${latest.version} in your browser for manual update...`
-            : `APK ${latest.version} is available. Tap Check for Updates to download it in your browser.`,
+            ? `Opening APK ${releaseLabel} in your browser for manual update...`
+            : `APK ${releaseLabel} is available. Tap Check for Updates to download it in your browser.`,
           currentVersion: currentVersion ?? null,
-          nextVersion: latest.version,
+          currentBuildCode: currentBuildCode ?? null,
+          nextVersion: releaseLabel,
+          nextBuildCode: latest.buildCode,
           lastCheckedAt: options?.checking ? new Date().toISOString() : null,
         });
       };
@@ -221,15 +240,19 @@ export function useAppUpdate() {
         if (!cancelled) {
           const normalizedInitial = normalizeState('android', initial ?? {});
           setSafeState(normalizedInitial);
-          if (!normalizedInitial.enabled) {
-            resolveAndroidSideloadFallback(normalizedInitial.currentVersion, { openIfNewer: false, checking: false })
-              .then((fallbackState) => {
-                if (!cancelled && fallbackState) {
-                  setSafeState(fallbackState);
-                }
-              })
-              .catch(() => undefined);
-          }
+          resolveAndroidSideloadFallback(normalizedInitial.currentVersion, normalizedInitial.currentBuildCode, { openIfNewer: false, checking: false })
+            .then((fallbackState) => {
+              if (!cancelled && fallbackState && (
+                fallbackState.status === 'available' ||
+                !normalizedInitial.enabled ||
+                normalizedInitial.status === 'idle' ||
+                normalizedInitial.status === 'disabled' ||
+                normalizedInitial.status === 'error'
+              )) {
+                setSafeState(fallbackState);
+              }
+            })
+            .catch(() => undefined);
         }
       } catch (error) {
         if (!cancelled) {
@@ -242,26 +265,30 @@ export function useAppUpdate() {
         }
       }
 
-      void checkNativeAppUpdate({ autoStart: true })
+      void checkNativeAppUpdate({ autoStart: false })
         .then((next) => {
           if (!cancelled) {
             const normalizedNext = normalizeState('android', next ?? {});
             setSafeState(normalizedNext);
-            if (!normalizedNext.enabled) {
-              resolveAndroidSideloadFallback(normalizedNext.currentVersion, { openIfNewer: false, checking: false })
-                .then((fallbackState) => {
-                  if (!cancelled && fallbackState) {
-                    setSafeState(fallbackState);
-                  }
-                })
-                .catch(() => undefined);
-            }
+            resolveAndroidSideloadFallback(normalizedNext.currentVersion, normalizedNext.currentBuildCode, { openIfNewer: false, checking: false })
+              .then((fallbackState) => {
+                if (!cancelled && fallbackState && (
+                  fallbackState.status === 'available' ||
+                  !normalizedNext.enabled ||
+                  normalizedNext.status === 'idle' ||
+                  normalizedNext.status === 'disabled' ||
+                  normalizedNext.status === 'error'
+                )) {
+                  setSafeState(fallbackState);
+                }
+              })
+              .catch(() => undefined);
           }
         })
         .catch((error) => {
           if (!cancelled) {
             const fallbackErrorMessage = error instanceof Error ? error.message : String(error);
-            resolveAndroidSideloadFallback(null, { openIfNewer: false, checking: false })
+            resolveAndroidSideloadFallback(null, null, { openIfNewer: false, checking: false })
               .then((fallbackState) => {
                 if (!cancelled && fallbackState) {
                   setSafeState({
@@ -458,33 +485,47 @@ export function useAppUpdate() {
       return;
     }
     if (state.platform === 'android') {
-      const next = await checkNativeAppUpdate({ autoStart: true });
-      const normalizedNext = normalizeState('android', next);
-      if (normalizedNext.enabled) {
-        setState(normalizedNext);
-        return;
+      let currentAndroidState = state;
+      try {
+        currentAndroidState = normalizeState('android', await getNativeAppUpdateState());
+      } catch {
+        currentAndroidState = state;
       }
       const latest = await fetchLatestAndroidSideloadRelease();
       androidSideloadReleaseRef.current = latest;
-      const isNewer = isNewerAndroidSideloadVersion(normalizedNext.currentVersion, latest.version);
-      if (!isNewer) {
+      const releaseLabel = getAndroidReleaseLabel(latest);
+      const currentVersion = currentAndroidState.currentVersion ?? state.currentVersion ?? null;
+      const currentBuildCode = currentAndroidState.currentBuildCode ?? state.currentBuildCode ?? null;
+      const isNewer = isNewerAndroidSideloadRelease(currentVersion, currentBuildCode, latest);
+      if (isNewer) {
+        openAndroidSideloadDownload(latest.downloadUrl);
         setState(normalizeState('android', {
           enabled: true,
-          status: 'idle',
-          message: 'You already have the latest APK release.',
-          currentVersion: normalizedNext.currentVersion ?? null,
-          nextVersion: latest.version,
+          status: 'available',
+          message: `Opening APK ${releaseLabel} in your browser for manual update...`,
+          currentVersion,
+          currentBuildCode,
+          nextVersion: releaseLabel,
+          nextBuildCode: latest.buildCode,
           lastCheckedAt: new Date().toISOString(),
         }));
         return;
       }
-      openAndroidSideloadDownload(latest.downloadUrl);
+
+      const next = await checkNativeAppUpdate({ autoStart: true });
+      const normalizedNext = normalizeState('android', next);
+      if (normalizedNext.enabled && normalizedNext.status !== 'idle') {
+        setState(normalizedNext);
+        return;
+      }
       setState(normalizeState('android', {
         enabled: true,
-        status: 'available',
-        message: `Opening APK ${latest.version} in your browser for manual update...`,
-        currentVersion: normalizedNext.currentVersion ?? null,
-        nextVersion: latest.version,
+        status: 'idle',
+        message: 'You already have the latest APK release.',
+        currentVersion: normalizedNext.currentVersion ?? state.currentVersion ?? null,
+        currentBuildCode: normalizedNext.currentBuildCode ?? state.currentBuildCode ?? null,
+        nextVersion: releaseLabel,
+        nextBuildCode: latest.buildCode,
         lastCheckedAt: new Date().toISOString(),
       }));
       return;

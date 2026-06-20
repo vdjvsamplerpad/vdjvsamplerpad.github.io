@@ -2165,7 +2165,9 @@ export function AppSettingsDialog({
                             ? appUpdateStatus === 'refresh_ready'
                               ? 'Refresh App Files'
                               : 'Reload to Update'
-                            : 'Restart to Update'}
+                            : appUpdateStatus === 'available'
+                              ? 'Open APK'
+                              : 'Restart to Update'}
                       </Button>
                     ) : null}
                   </div>

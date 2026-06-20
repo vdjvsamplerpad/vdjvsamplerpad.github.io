@@ -529,6 +529,9 @@ export function HeaderControls({
   const stopClickSuppressTimeoutRef = React.useRef<number | null>(null);
   const stopGestureRef = React.useRef<StopGestureState | null>(null);
   const appVersion = (import.meta as any).env?.VITE_APP_VERSION || 'unknown';
+  const appPublicVersion = (import.meta as any).env?.VITE_APP_PUBLIC_VERSION || appVersion;
+  const appBuildVersion = String((import.meta as any).env?.VITE_APP_BUILD_VERSION || '').trim();
+  const appDisplayVersion = appBuildVersion ? `${appPublicVersion} (${appBuildVersion})` : appVersion;
   const isElectronWindowControlsAvailable = typeof window !== 'undefined' && Boolean(window.electronAPI?.onFullscreenChange);
   const { state: appUpdateState, checkForUpdates, installUpdate } = useAppUpdate();
   const updateNoticeShownRef = React.useRef<Set<string>>(new Set());
@@ -1955,7 +1958,7 @@ export function HeaderControls({
             open={settingsOpen}
             onOpenChange={setSettingsOpen}
             displayName={displayName}
-            version={appVersion}
+            version={appDisplayVersion}
             appUpdatePlatform={appUpdateState.platform}
             appUpdateEnabled={appUpdateState.enabled}
             appUpdateStatus={appUpdateState.status}

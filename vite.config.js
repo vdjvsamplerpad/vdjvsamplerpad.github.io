@@ -30,12 +30,18 @@ const getCommitBasedVersion = () => {
 const sanitizeVersionToken = (value) => String(value || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '-');
 
 const writeVersionManifest = (distPublicDir, appVersion) => {
+  const buildVersion = String(process.env.VITE_APP_BUILD_VERSION || '').trim();
+  const buildCode = String(process.env.VITE_APP_BUILD_CODE || '').trim();
+  const publicVersion = String(process.env.VITE_APP_PUBLIC_VERSION || appVersion || '').trim();
   fs.mkdirSync(distPublicDir, { recursive: true });
   fs.writeFileSync(
     path.join(distPublicDir, 'version.json'),
     JSON.stringify(
       {
         appVersion,
+        publicVersion,
+        buildVersion: buildVersion || null,
+        buildCode: buildCode || null,
         builtAt: new Date().toISOString(),
       },
       null,
@@ -169,6 +175,9 @@ export default defineConfig(({ mode }) => {
 
   const base = isElectron ? './' : '/';
   const appVersion = getCommitBasedVersion();
+  const appBuildVersion = String(process.env.VITE_APP_BUILD_VERSION || env.VITE_APP_BUILD_VERSION || '').trim();
+  const appBuildCode = String(process.env.VITE_APP_BUILD_CODE || env.VITE_APP_BUILD_CODE || '').trim();
+  const appPublicVersion = String(process.env.VITE_APP_PUBLIC_VERSION || env.VITE_APP_PUBLIC_VERSION || appVersion).trim();
   const devHttps = resolveDevHttps(env);
   const distPublicDir = path.resolve(__dirname, 'dist/public');
   
@@ -180,6 +189,9 @@ export default defineConfig(({ mode }) => {
     base: base,
     define: {
       'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
+      'import.meta.env.VITE_APP_PUBLIC_VERSION': JSON.stringify(appPublicVersion),
+      'import.meta.env.VITE_APP_BUILD_VERSION': JSON.stringify(appBuildVersion),
+      'import.meta.env.VITE_APP_BUILD_CODE': JSON.stringify(appBuildCode),
       __VDJV_INCLUDE_LANDING__: JSON.stringify(includeLanding),
     },
     

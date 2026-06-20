@@ -288,6 +288,10 @@ public class NativeAppUpdatePlugin extends Plugin {
     state.put("status", status);
     state.put("message", message);
     putNullable(state, "currentVersion", getCurrentVersionName());
+    long currentBuildCode = getCurrentVersionCode();
+    if (currentBuildCode > 0L) {
+      state.put("currentBuildCode", currentBuildCode);
+    }
     putNullable(state, "lastError", lastError);
     return state;
   }
@@ -317,6 +321,25 @@ public class NativeAppUpdatePlugin extends Plugin {
       return packageInfo.versionName;
     } catch (Exception ignored) {
       return null;
+    }
+  }
+
+  private long getCurrentVersionCode() {
+    try {
+      PackageManager packageManager = getContext().getPackageManager();
+      String packageName = getContext().getPackageName();
+      PackageInfo packageInfo;
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        packageInfo = packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0));
+      } else {
+        packageInfo = packageManager.getPackageInfo(packageName, 0);
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        return packageInfo.getLongVersionCode();
+      }
+      return packageInfo.versionCode;
+    } catch (Exception ignored) {
+      return 0L;
     }
   }
 

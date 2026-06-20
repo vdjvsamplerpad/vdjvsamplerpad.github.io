@@ -5,7 +5,9 @@ export interface NativeAppUpdateState {
   status: string;
   message: string;
   currentVersion?: string | null;
+  currentBuildCode?: number | string | null;
   nextVersion?: string | null;
+  nextBuildCode?: number | string | null;
   downloadPercent?: number | null;
   lastCheckedAt?: string | null;
   lastError?: string | null;

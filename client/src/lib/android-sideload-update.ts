@@ -2,6 +2,9 @@ import { Capacitor } from '@capacitor/core';
 
 export interface AndroidSideloadReleaseInfo {
   version: string;
+  publicVersion: string;
+  buildVersion: string | null;
+  buildCode: number | null;
   assetName: string;
   downloadUrl: string;
   releaseUrl: string | null;
@@ -42,6 +45,12 @@ const parseComparableVersion = (value: string | null | undefined): number[] | nu
   return parsed;
 };
 
+const parsePositiveInteger = (value: unknown): number | null => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+};
+
 export const isAndroidSideloadUpdateConfigured = (): boolean => {
   if (!isNativeAndroid()) return false;
   return true;
@@ -62,6 +71,19 @@ export const isNewerAndroidSideloadVersion = (
     if (right < left) return false;
   }
   return false;
+};
+
+export const isNewerAndroidSideloadRelease = (
+  currentVersion: string | null | undefined,
+  currentBuildCode: number | string | null | undefined,
+  nextRelease: Pick<AndroidSideloadReleaseInfo, 'version' | 'buildCode'>
+): boolean => {
+  const currentCode = parsePositiveInteger(currentBuildCode);
+  const nextCode = parsePositiveInteger(nextRelease.buildCode);
+  if (currentCode && nextCode) {
+    return nextCode > currentCode;
+  }
+  return isNewerAndroidSideloadVersion(currentVersion, nextRelease.version);
 };
 
 const getGithubReleaseConfig = () => {
@@ -90,6 +112,43 @@ const resolveBestApkAsset = (
   return apkAssets[0] || null;
 };
 
+const findAssetByName = (
+  assets: Array<Record<string, unknown>>,
+  names: string[]
+): { name: string; browser_download_url: string } | null => {
+  const normalizedNames = new Set(names.map((name) => name.trim().toLowerCase()).filter(Boolean));
+  if (normalizedNames.size === 0) return null;
+  for (const asset of assets) {
+    const name = String(asset?.name || '').trim();
+    const url = String(asset?.browser_download_url || '').trim();
+    if (name && url && normalizedNames.has(name.toLowerCase())) {
+      return { name, browser_download_url: url };
+    }
+  }
+  return null;
+};
+
+const fetchReleaseManifest = async (
+  assets: Array<Record<string, unknown>>
+): Promise<Record<string, unknown> | null> => {
+  const manifestAsset = findAssetByName(assets, ['release-manifest.json', 'android-release-manifest.json']);
+  if (!manifestAsset) return null;
+  try {
+    const response = await fetch(`${manifestAsset.browser_download_url}${manifestAsset.browser_download_url.includes('?') ? '&' : '?'}_vdjv=${Date.now()}`, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json,text/plain,*/*',
+      },
+    });
+    if (!response.ok) return null;
+    const payload = await response.json().catch(() => null);
+    return payload && typeof payload === 'object' ? payload as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+};
+
 export const fetchLatestAndroidSideloadRelease = async (): Promise<AndroidSideloadReleaseInfo> => {
   const { apiBase, owner, repo, preferredPrefix } = getGithubReleaseConfig();
   const response = await fetch(
@@ -111,7 +170,16 @@ export const fetchLatestAndroidSideloadRelease = async (): Promise<AndroidSidelo
   const releaseUrl = String(payload?.html_url || '').trim() || null;
   const publishedAt = String(payload?.published_at || '').trim() || null;
   const assets = Array.isArray(payload?.assets) ? payload.assets as Array<Record<string, unknown>> : [];
-  const apkAsset = resolveBestApkAsset(assets, preferredPrefix);
+  const manifest = await fetchReleaseManifest(assets);
+  const manifestApk = manifest?.apk && typeof manifest.apk === 'object' ? manifest.apk as Record<string, unknown> : null;
+  const manifestAssetName = String(
+    manifestApk?.asset ||
+    manifest?.apkAsset ||
+    manifestApk?.versionedAsset ||
+    ''
+  ).trim();
+  const apkAsset = findAssetByName(assets, manifestAssetName ? [manifestAssetName] : [])
+    || resolveBestApkAsset(assets, preferredPrefix);
 
   if (!tagName) {
     throw new Error('Latest release tag is missing a version.');
@@ -120,8 +188,15 @@ export const fetchLatestAndroidSideloadRelease = async (): Promise<AndroidSidelo
     throw new Error('Latest release does not contain an APK asset.');
   }
 
+  const publicVersion = normalizeVersion(String(manifest?.publicVersion || manifest?.version || tagName));
+  const buildVersion = String(manifest?.buildVersion || '').trim() || null;
+  const buildCode = parsePositiveInteger(manifest?.buildCode);
+
   return {
-    version: tagName,
+    version: publicVersion || tagName,
+    publicVersion: publicVersion || tagName,
+    buildVersion,
+    buildCode,
     assetName: apkAsset.name,
     downloadUrl: apkAsset.browser_download_url,
     releaseUrl,
