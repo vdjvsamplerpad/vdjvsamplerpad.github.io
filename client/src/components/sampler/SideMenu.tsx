@@ -16,7 +16,7 @@ import { normalizeStoredShortcutKey } from '@/lib/keyboard-shortcuts';
 import type { PerformanceTier } from '@/lib/performance-monitor';
 import { type GuestStorePreviewBank } from './hooks/useGuestStorePreviewBanks';
 import { useStorePreviewBadge } from './hooks/useStorePreviewBadge';
-import { countOwnedCountedBanks, isCanonicalDefaultBankIdentity, isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
+import { countOwnedCountedBanks, isCanonicalDefaultBankIdentity, isExplicitDefaultBankIdentity, isProtectedDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { useOnlineStoreDownloadTransfer } from './hooks/useOnlineStoreDownloadTransfer';
 import { deriveSnapshotRestoreStatus } from './hooks/useSamplerStore.snapshotMetadata';
 import type { OnlineBankStoreImportMeta, StoreDownloadedArtifact, StoreItem, TransferState } from './onlineStore.types';
@@ -896,7 +896,7 @@ export function SideMenu({
   }, [banks, editBankRequest, editMode]);
 
   const handleDeleteBank = (bank: SamplerBank) => {
-    if (isExplicitDefaultBankIdentity(bank)) return;
+    if (isProtectedDefaultBankIdentity(bank)) return;
     setBankToDelete(bank);
     setShowDeleteConfirm(true);
   };
@@ -1993,7 +1993,7 @@ export function SideMenu({
               onUpdateBank(editingBank.id, nextUpdates);
             }}
             onDelete={() => {
-              if (isExplicitDefaultBankIdentity(editingBank)) return;
+              if (isProtectedDefaultBankIdentity(editingBank)) return;
               setShowEditDialog(false);
               onDeleteBank(editingBank.id);
             }}

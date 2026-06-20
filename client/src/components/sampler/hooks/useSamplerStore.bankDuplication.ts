@@ -219,6 +219,10 @@ export const runDuplicateBankPipeline = async (
             adminExportTokenExpiresAt: undefined,
             adminExportTokenBankSha256: undefined,
             trustedAdminExport: undefined,
+            defaultBankSource: undefined,
+            defaultBankReleaseVersion: undefined,
+            defaultBankReleasePublishedAt: undefined,
+            defaultBankReleaseSha256: undefined,
             exportable: true,
             password: false,
           }

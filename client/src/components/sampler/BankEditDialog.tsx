@@ -15,7 +15,7 @@ import { BankEditAdminExportDialog } from './BankEditAdminExportDialog';
 import { BankEditUpdateStoreDialog } from './BankEditUpdateStoreDialog';
 import { BankEditCoreForm } from './BankEditCoreForm';
 import { bankColorOptions, extraBankColorOptions, formatBankEditDate, primaryBankColorOptions } from './bankEdit.shared';
-import { isExplicitDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
+import { isProtectedDefaultBankIdentity } from './hooks/useSamplerStore.bankIdentity';
 import { validateManagedImageFile } from '@/lib/image-upload';
 import { deleteBlobFromDB, saveBlobToDB } from './hooks/useSamplerStore.idbStorage';
 import { buildFeatureGateMessage } from '@/lib/account-capabilities';
@@ -110,7 +110,7 @@ export function BankEditDialog({
 }: BankEditDialogProps) {
   type BankWithMidi = SamplerBank & { midiNote?: number; midiCC?: number };
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
-  const canDeleteBank = bank.isLocalDuplicate || !isExplicitDefaultBankIdentity(bank);
+  const canDeleteBank = !isProtectedDefaultBankIdentity(bank);
   const { profile, capabilities } = useAuthState();
   const canEditBankPosition = capabilities.features.bankEditPosition;
   const canEditBankKeyboardMidi = capabilities.features.bankEditKeyboardMidi;

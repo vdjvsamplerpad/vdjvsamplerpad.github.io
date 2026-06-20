@@ -9,19 +9,27 @@ export const normalizeIdentityToken = (value: unknown): string | null => {
   return normalized.length > 0 ? normalized : null;
 };
 
+type BankIdentityInput = Pick<SamplerBank, 'sourceBankId' | 'bankMetadata'> & Partial<Pick<SamplerBank, 'isLocalDuplicate'>>;
+type CanonicalBankIdentityInput = Pick<SamplerBank, 'name' | 'sourceBankId' | 'bankMetadata'> &
+  Partial<Pick<SamplerBank, 'isLocalDuplicate'>>;
+
 export const isExplicitDefaultBankIdentity = (bank: Pick<SamplerBank, 'sourceBankId' | 'bankMetadata'>): boolean =>
   bank.sourceBankId === DEFAULT_BANK_SOURCE_ID || Boolean(bank.bankMetadata?.defaultBankSource);
+
+export const isProtectedDefaultBankIdentity = (bank: BankIdentityInput): boolean =>
+  !bank.isLocalDuplicate && isExplicitDefaultBankIdentity(bank);
 
 export const isDefaultBankIdentity = (bank: Pick<SamplerBank, 'name' | 'sourceBankId'>): boolean =>
   bank.name === LEGACY_DEFAULT_BANK_NAME || bank.sourceBankId === DEFAULT_BANK_SOURCE_ID;
 
 export const isCanonicalDefaultBankIdentity = (
-  bank: Pick<SamplerBank, 'name' | 'sourceBankId' | 'bankMetadata'>,
-  allBanks?: Array<Pick<SamplerBank, 'name' | 'sourceBankId' | 'bankMetadata'>> | null
+  bank: CanonicalBankIdentityInput,
+  allBanks?: CanonicalBankIdentityInput[] | null
 ): boolean => {
+  if (bank.isLocalDuplicate) return false;
   if (isExplicitDefaultBankIdentity(bank)) return true;
   if (!allBanks || allBanks.length === 0) return isDefaultBankIdentity(bank);
-  const hasCanonicalDefault = allBanks.some((candidate) => isExplicitDefaultBankIdentity(candidate));
+  const hasCanonicalDefault = allBanks.some((candidate) => !candidate.isLocalDuplicate && isExplicitDefaultBankIdentity(candidate));
   if (hasCanonicalDefault) return false;
   if (bank.sourceBankId && bank.sourceBankId !== DEFAULT_BANK_SOURCE_ID) return false;
   if (bank.bankMetadata?.catalogItemId || bank.bankMetadata?.bankId || bank.bankMetadata?.trustedAdminExport) {
@@ -39,7 +47,7 @@ export const isTrustedStoreBankForQuota = (bank: SamplerBank): boolean =>
   );
 
 export const isOwnedCountedBankForQuota = (bank: SamplerBank): boolean => {
-  if (isExplicitDefaultBankIdentity(bank)) return false;
+  if (isProtectedDefaultBankIdentity(bank)) return false;
   return !isTrustedStoreBankForQuota(bank);
 };
 
