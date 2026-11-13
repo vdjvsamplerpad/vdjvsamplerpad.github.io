@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Redirecting...</title>
+    <script>
+      (function () {
+        var path = window.location.pathname || '/';
+        var query = window.location.search ? window.location.search.slice(1) : '';
+        var hash = window.location.hash ? window.location.hash.slice(1) : '';
+
+        var next = '/?p=' + encodeURIComponent(path);
+        if (query) {
+          next += '&q=' + encodeURIComponent(query);
+        }
+        if (hash) {
+          next += '&h=' + encodeURIComponent(hash);
+        }
+        window.location.replace(next);
+      })();
+    </script>
+  </head>
+  <body>
+    <noscript>Enable JavaScript to continue.</noscript>
+  </body>
+</html>
